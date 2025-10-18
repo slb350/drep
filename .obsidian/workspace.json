@@ -171,6 +171,7 @@
   },
   "active": "202bc079d4317f49",
   "lastOpenFiles": [
+    "tests/integration/test_docstring_integration.py",
     "drep/docstring/__pycache__/generator.cpython-313.pyc",
     "tests/unit/__pycache__/test_docstring_generator.cpython-313-pytest-8.4.2.pyc",
     "drep/docstring/generator.py",
@@ -181,7 +182,6 @@
     "drep/models/docstring_findings.py",
     "tests/unit/test_docstring_findings.py",
     "drep/docstring/__pycache__/ast_utils.cpython-313.pyc",
-    "drep/docstring/__pycache__/__init__.cpython-313.pyc",
     "docs/implementation-plan.md",
     "docs/llm-production-concerns.md",
     "docs/llm-implementation.md",
