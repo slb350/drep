@@ -385,17 +385,23 @@ async def test_create_issue_handles_unknown_labels():
         )
     )
 
+    # Mock successful issue creation (missing labels are now silently skipped)
+    respx.post("http://192.168.1.14:3000/api/v1/repos/steve/drep/issues").mock(
+        return_value=httpx.Response(201, json={"number": 42})
+    )
+
     adapter = GiteaAdapter("http://192.168.1.14:3000", "token")
 
     try:
-        with pytest.raises(ValueError, match="Label 'nonexistent' not found"):
-            await adapter.create_issue(
-                owner="steve",
-                repo="drep",
-                title="Test",
-                body="Test",
-                labels=["documentation", "nonexistent"],
-            )
+        # Should succeed and only use the valid 'documentation' label
+        issue_number = await adapter.create_issue(
+            owner="steve",
+            repo="drep",
+            title="Test",
+            body="Test",
+            labels=["documentation", "nonexistent"],  # 'nonexistent' is skipped
+        )
+        assert issue_number == 42
     finally:
         await adapter.close()
 

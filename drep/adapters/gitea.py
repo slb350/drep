@@ -18,6 +18,9 @@ class GiteaAdapter:
         self.url = url.rstrip("/")
         self.token = token
         self.client = httpx.AsyncClient(headers={"Authorization": f"token {token}"}, timeout=30.0)
+        # Cache label maps per repository to avoid redundant API calls
+        # Format: {(owner, repo): {label_name: label_id}}
+        self._label_cache: Dict[tuple, Dict[str, int]] = {}
 
     async def close(self):
         """Close HTTP client connection."""
@@ -53,7 +56,7 @@ class GiteaAdapter:
                 raise
 
     async def _get_label_ids(self, owner: str, repo: str, label_names: List[str]) -> List[int]:
-        """Get label IDs from label names.
+        """Get label IDs from label names (with caching).
 
         Args:
             owner: Repository owner
@@ -61,44 +64,48 @@ class GiteaAdapter:
             label_names: List of label names to translate
 
         Returns:
-            List of label IDs corresponding to the label names
+            List of label IDs for labels that exist (skips missing labels)
 
-        Raises:
-            ValueError: If any label name is not found in the repository
+        Note:
+            Missing labels are silently skipped rather than raising errors.
+            This makes the system resilient to missing labels in repositories.
         """
         if not label_names:
             return []
 
-        # Fetch all labels from the repository (handle pagination)
-        base_url = f"{self.url}/api/v1/repos/{owner}/{repo}/labels"
-        all_labels = []
-        page = 1
+        # Check cache first
+        cache_key = (owner, repo)
+        if cache_key not in self._label_cache:
+            # Fetch all labels from the repository (handle pagination)
+            base_url = f"{self.url}/api/v1/repos/{owner}/{repo}/labels"
+            all_labels = []
+            page = 1
 
-        while True:
-            # Fetch current page
-            response = await self.client.get(base_url, params={"page": page})
-            response.raise_for_status()
-            labels = response.json()
+            while True:
+                # Fetch current page
+                response = await self.client.get(base_url, params={"page": page})
+                response.raise_for_status()
+                labels = response.json()
 
-            # If page is empty, we've reached the end
-            if not labels:
-                break
+                # If page is empty, we've reached the end
+                if not labels:
+                    break
 
-            all_labels.extend(labels)
-            page += 1
+                all_labels.extend(labels)
+                page += 1
 
-        # Build name → ID mapping
-        label_map: Dict[str, int] = {label["name"]: label["id"] for label in all_labels}
+            # Build name → ID mapping and cache it
+            self._label_cache[cache_key] = {label["name"]: label["id"] for label in all_labels}
 
-        # Translate names to IDs
+        # Use cached label map
+        label_map = self._label_cache[cache_key]
+
+        # Translate names to IDs (skip missing labels)
         label_ids = []
         for name in label_names:
-            if name not in label_map:
-                raise ValueError(
-                    f"Label '{name}' not found in repository {owner}/{repo}. "
-                    f"Available labels: {', '.join(label_map.keys())}"
-                )
-            label_ids.append(label_map[name])
+            if name in label_map:
+                label_ids.append(label_map[name])
+            # Silently skip missing labels - this is by design for flexibility
 
         return label_ids
 
