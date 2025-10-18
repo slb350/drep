@@ -5,6 +5,20 @@ import pytest
 import respx
 
 
+def mock_labels_response(labels_list):
+    """Helper to create a label mock handler that supports pagination."""
+
+    def handler(request):
+        page = int(request.url.params.get("page", 1))
+        # Return all labels on page 1, empty on subsequent pages
+        if page == 1:
+            return httpx.Response(200, json=labels_list)
+        else:
+            return httpx.Response(200, json=[])
+
+    return handler
+
+
 @pytest.mark.asyncio
 async def test_gitea_adapter_initialization():
     """Test GiteaAdapter initialization with URL and token."""
@@ -191,14 +205,13 @@ async def test_create_issue_success():
     """Test create_issue() successfully creates issue and returns number."""
     from drep.adapters.gitea import GiteaAdapter
 
-    # Mock labels API for label name → ID translation
+    # Mock labels API for label name → ID translation (with pagination support)
     respx.get("http://192.168.1.14:3000/api/v1/repos/steve/drep/labels").mock(
-        return_value=httpx.Response(
-            200,
-            json=[
+        side_effect=mock_labels_response(
+            [
                 {"id": 1, "name": "documentation"},
                 {"id": 2, "name": "automated"},
-            ],
+            ]
         )
     )
 
@@ -250,14 +263,13 @@ async def test_create_issue_sends_correct_payload():
     """Test create_issue() sends correct JSON payload with label IDs."""
     from drep.adapters.gitea import GiteaAdapter
 
-    # Mock labels API
+    # Mock labels API (with pagination support)
     respx.get("http://192.168.1.14:3000/api/v1/repos/steve/drep/labels").mock(
-        return_value=httpx.Response(
-            200,
-            json=[
+        side_effect=mock_labels_response(
+            [
                 {"id": 10, "name": "bug"},
                 {"id": 20, "name": "help wanted"},
-            ],
+            ]
         )
     )
 
@@ -319,15 +331,14 @@ async def test_create_issue_translates_label_names_to_ids():
     """Test create_issue() translates label names to IDs before posting."""
     from drep.adapters.gitea import GiteaAdapter
 
-    # Mock the labels API to return label IDs
+    # Mock the labels API to return label IDs (with pagination support)
     respx.get("http://192.168.1.14:3000/api/v1/repos/steve/drep/labels").mock(
-        return_value=httpx.Response(
-            200,
-            json=[
+        side_effect=mock_labels_response(
+            [
                 {"id": 1, "name": "documentation"},
                 {"id": 2, "name": "automated"},
                 {"id": 3, "name": "bug"},
-            ],
+            ]
         )
     )
 
@@ -367,10 +378,10 @@ async def test_create_issue_handles_unknown_labels():
     """Test create_issue() raises ValueError for unknown label names."""
     from drep.adapters.gitea import GiteaAdapter
 
-    # Mock labels API with limited labels
+    # Mock labels API with limited labels (with pagination support)
     respx.get("http://192.168.1.14:3000/api/v1/repos/steve/drep/labels").mock(
-        return_value=httpx.Response(
-            200, json=[{"id": 1, "name": "documentation"}, {"id": 2, "name": "automated"}]
+        side_effect=mock_labels_response(
+            [{"id": 1, "name": "documentation"}, {"id": 2, "name": "automated"}]
         )
     )
 
@@ -410,5 +421,51 @@ async def test_create_issue_empty_labels_works():
 
         # Verify no labels API call was made (only 1 request to create issue)
         assert len(respx.calls) == 1
+    finally:
+        await adapter.close()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_get_label_ids_handles_pagination():
+    """Test _get_label_ids() fetches all labels across multiple pages."""
+    from drep.adapters.gitea import GiteaAdapter
+
+    # Simulate paginated responses - route will be matched based on page param
+    def label_handler(request):
+        page = int(request.url.params.get("page", 1))
+
+        if page == 1:
+            return httpx.Response(
+                200,
+                json=[
+                    {"id": 1, "name": "bug"},
+                    {"id": 2, "name": "enhancement"},
+                ],
+            )
+        elif page == 2:
+            return httpx.Response(
+                200,
+                json=[
+                    {"id": 3, "name": "documentation"},
+                    {"id": 4, "name": "help wanted"},
+                ],
+            )
+        else:
+            # Page 3 and beyond - empty (end of pagination)
+            return httpx.Response(200, json=[])
+
+    respx.get("http://192.168.1.14:3000/api/v1/repos/steve/drep/labels").mock(
+        side_effect=label_handler
+    )
+
+    adapter = GiteaAdapter("http://192.168.1.14:3000", "token")
+
+    try:
+        # Request a label from page 2 - should be found via pagination
+        label_ids = await adapter._get_label_ids("steve", "drep", ["documentation", "help wanted"])
+
+        # Should find labels from page 2
+        assert label_ids == [3, 4]
     finally:
         await adapter.close()

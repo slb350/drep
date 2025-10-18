@@ -69,14 +69,26 @@ class GiteaAdapter:
         if not label_names:
             return []
 
-        # Fetch all labels from the repository
-        url = f"{self.url}/api/v1/repos/{owner}/{repo}/labels"
-        response = await self.client.get(url)
-        response.raise_for_status()
-        labels = response.json()
+        # Fetch all labels from the repository (handle pagination)
+        base_url = f"{self.url}/api/v1/repos/{owner}/{repo}/labels"
+        all_labels = []
+        page = 1
+
+        while True:
+            # Fetch current page
+            response = await self.client.get(base_url, params={"page": page})
+            response.raise_for_status()
+            labels = response.json()
+
+            # If page is empty, we've reached the end
+            if not labels:
+                break
+
+            all_labels.extend(labels)
+            page += 1
 
         # Build name → ID mapping
-        label_map: Dict[str, int] = {label["name"]: label["id"] for label in labels}
+        label_map: Dict[str, int] = {label["name"]: label["id"] for label in all_labels}
 
         # Translate names to IDs
         label_ids = []
