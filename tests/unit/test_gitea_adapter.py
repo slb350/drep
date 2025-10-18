@@ -2,6 +2,7 @@
 
 import httpx
 import pytest
+import respx
 
 
 @pytest.mark.asyncio
@@ -82,3 +83,103 @@ async def test_gitea_adapter_timeout():
     assert adapter.client.timeout.read == 30.0
 
     await adapter.close()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_get_default_branch_success():
+    """Test get_default_branch() returns branch name on success."""
+    from drep.adapters.gitea import GiteaAdapter
+
+    # Mock the Gitea API response
+    respx.get("http://192.168.1.14:3000/api/v1/repos/steve/drep").mock(
+        return_value=httpx.Response(200, json={"default_branch": "main"})
+    )
+
+    adapter = GiteaAdapter("http://192.168.1.14:3000", "token")
+
+    try:
+        branch = await adapter.get_default_branch("steve", "drep")
+        assert branch == "main"
+    finally:
+        await adapter.close()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_get_default_branch_master():
+    """Test get_default_branch() handles 'master' branch."""
+    from drep.adapters.gitea import GiteaAdapter
+
+    # Mock API response with 'master' branch
+    respx.get("http://192.168.1.14:3000/api/v1/repos/steve/test-repo").mock(
+        return_value=httpx.Response(200, json={"default_branch": "master"})
+    )
+
+    adapter = GiteaAdapter("http://192.168.1.14:3000", "token")
+
+    try:
+        branch = await adapter.get_default_branch("steve", "test-repo")
+        assert branch == "master"
+    finally:
+        await adapter.close()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_get_default_branch_not_found():
+    """Test get_default_branch() raises ValueError for 404."""
+    from drep.adapters.gitea import GiteaAdapter
+
+    # Mock 404 response
+    respx.get("http://192.168.1.14:3000/api/v1/repos/steve/nonexistent").mock(
+        return_value=httpx.Response(404, json={"message": "Not Found"})
+    )
+
+    adapter = GiteaAdapter("http://192.168.1.14:3000", "token")
+
+    try:
+        with pytest.raises(ValueError, match="Repository steve/nonexistent not found"):
+            await adapter.get_default_branch("steve", "nonexistent")
+    finally:
+        await adapter.close()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_get_default_branch_unauthorized():
+    """Test get_default_branch() raises ValueError for 401."""
+    from drep.adapters.gitea import GiteaAdapter
+
+    # Mock 401 response
+    respx.get("http://192.168.1.14:3000/api/v1/repos/steve/drep").mock(
+        return_value=httpx.Response(401, json={"message": "Unauthorized"})
+    )
+
+    adapter = GiteaAdapter("http://192.168.1.14:3000", "token")
+
+    try:
+        with pytest.raises(ValueError, match="Unauthorized - check your Gitea token"):
+            await adapter.get_default_branch("steve", "drep")
+    finally:
+        await adapter.close()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_get_default_branch_server_error():
+    """Test get_default_branch() raises HTTPStatusError for other errors."""
+    from drep.adapters.gitea import GiteaAdapter
+
+    # Mock 500 response
+    respx.get("http://192.168.1.14:3000/api/v1/repos/steve/drep").mock(
+        return_value=httpx.Response(500, json={"message": "Internal Server Error"})
+    )
+
+    adapter = GiteaAdapter("http://192.168.1.14:3000", "token")
+
+    try:
+        with pytest.raises(httpx.HTTPStatusError):
+            await adapter.get_default_branch("steve", "drep")
+    finally:
+        await adapter.close()
