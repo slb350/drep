@@ -50,19 +50,31 @@ class SpellcheckLayer:
         """
         typos = []
 
-        # Remove URLs
-        line_no_urls = re.sub(r"https?://\S+", "", line)
+        # Find all backtick spans (to skip them)
+        backtick_spans = []
+        for match in re.finditer(r"`[^`]+`", line):
+            backtick_spans.append((match.start(), match.end()))
 
-        # Remove inline code `like this`
-        line_no_code = re.sub(r"`[^`]+`", "", line_no_urls)
+        # Find all URL spans (to skip them)
+        url_spans = []
+        for match in re.finditer(r"https?://\S+", line):
+            url_spans.append((match.start(), match.end()))
 
-        # Track occurrences of each word to handle duplicates
-        word_occurrences = {}
+        # Helper to check if a position is in a skip span
+        def in_skip_span(pos):
+            for start, end in backtick_spans + url_spans:
+                if start <= pos < end:
+                    return True
+            return False
 
-        # Use finditer to get each word with its position
-        # This allows us to detect duplicate typos on the same line
-        for match in re.finditer(r"\b[a-zA-Z]+\b", line_no_code):
+        # Iterate over all words in the ORIGINAL line
+        for match in re.finditer(r"\b[a-zA-Z]+\b", line):
             word = match.group(0)
+            column = match.start()
+
+            # Skip if word is inside backticks or URL
+            if in_skip_span(column):
+                continue
 
             # Skip if it looks like an identifier
             if self._is_identifier(word):
@@ -75,22 +87,6 @@ class SpellcheckLayer:
             # Get suggestions
             suggestions = self.spell.candidates(word)
             replacement = list(suggestions)[0] if suggestions else word
-
-            # Find column in ORIGINAL line (not cleaned line)
-            # For duplicate words, find the Nth occurrence
-            occurrence_index = word_occurrences.get(word, 0)
-            word_occurrences[word] = occurrence_index + 1
-
-            # Find the Nth occurrence of this word in the original line
-            column = -1
-            for i, m in enumerate(re.finditer(re.escape(word), line)):
-                if i == occurrence_index:
-                    column = m.start()
-                    break
-
-            if column == -1:
-                # Fallback to first occurrence if something went wrong
-                column = line.find(word)
 
             typos.append(
                 Typo(
@@ -161,17 +157,27 @@ class SpellcheckLayer:
                 ):
                     docstring = ast.get_docstring(node)
                     if docstring:
-                        # Get the function/class definition line
-                        definition_line = node.lineno if hasattr(node, "lineno") else 1
+                        # For Module nodes, use the docstring statement's own line number
+                        # For functions/classes, use the definition line + offset
+                        if isinstance(node, ast.Module):
+                            # Module docstring is in node.body[0], use its line number
+                            docstring_start_line = node.body[0].lineno if node.body else 1
+                        else:
+                            # Function/class: docstring starts after the def line
+                            docstring_start_line = node.lineno
 
                         # Check docstring for typos
                         doc_typos = self._check_plain_text(docstring)
 
                         # Adjust line numbers: _check_plain_text returns lines relative to
                         # the docstring (1, 2, 3...), but we need absolute source lines.
-                        # The docstring starts after the def line, so add the offset.
                         for typo in doc_typos:
-                            typo.line = definition_line + typo.line
+                            if isinstance(node, ast.Module):
+                                # For modules, use docstring start line + relative line - 1
+                                typo.line = docstring_start_line + typo.line - 1
+                            else:
+                                # For functions/classes, add offset (docstring starts after def)
+                                typo.line = docstring_start_line + typo.line
 
                         typos.extend(doc_typos)
         except SyntaxError:

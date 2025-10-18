@@ -284,6 +284,36 @@ def my_function():
     assert line_numbers[1] == 6  # Second "teh" on line 6
 
 
+def test_check_python_comments_module_docstring_line_number():
+    """Test that module-level docstring typo on line 1 reports line 1, not line 2."""
+    layer = SpellcheckLayer(custom_words=["docstring"])
+    code = '"""Teh module docstring."""\n\ndef foo():\n    pass\n'
+    typos = layer._check_python_comments(code)
+
+    # Should find 1 typo
+    assert len(typos) == 1
+    assert typos[0].word == "Teh"
+
+    # CRITICAL: Typo is on line 1 (first line of file), not line 2
+    assert typos[0].line == 1
+
+
+def test_check_line_column_with_inline_code_and_prose():
+    """Test that column tracking points to prose occurrence, not inline code."""
+    layer = SpellcheckLayer()
+    # The word "teh" appears in inline code (ignored) and in prose (detected)
+    # Column should point to the prose occurrence at position 14, not the backtick one at 1
+    line = "`teh` and teh word"
+    typos = layer._check_line(line, 1)
+
+    # Should find 1 typo (the prose occurrence, not the one in backticks)
+    assert len(typos) == 1
+    assert typos[0].word == "teh"
+
+    # CRITICAL: Column should be 10 (prose "teh"), not 1 (backtick "teh")
+    assert typos[0].column == 10
+
+
 # Phase 3.5: Wire up check() method routing
 
 
