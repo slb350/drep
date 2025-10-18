@@ -181,6 +181,16 @@ fi
             )
             findings.extend(code_findings)
 
+            # 3. Docstring analysis (LLM-powered)
+            click.echo("Analyzing docstrings...")
+            docstring_findings = await scanner.analyze_docstrings(
+                repo_path=str(repo_path),
+                files=files,
+                repo_id=repo_id,
+                commit_sha=current_sha,
+            )
+            findings.extend(docstring_findings)
+
         click.echo(f"Found {len(findings)} issues")
 
         # Create issues
