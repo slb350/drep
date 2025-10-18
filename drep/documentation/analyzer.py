@@ -1,44 +1,39 @@
-"""DocumentationAnalyzer - Orchestrates tiered documentation analysis."""
+"""DocumentationAnalyzer - Orchestrates documentation analysis.
 
-from pathlib import Path
+Legacy spellcheck and pattern layers removed in Phase 7.0.
+Will be replaced with LLM-based analysis in Phase 7.2.
+"""
 
-from drep.documentation.patterns import PatternLayer
-from drep.documentation.spellcheck import SpellcheckLayer
 from drep.models.config import DocumentationConfig
 from drep.models.findings import DocumentationFindings
 
 
 class DocumentationAnalyzer:
-    """Orchestrates tiered documentation analysis."""
+    """Orchestrates documentation analysis.
+
+    Note: Legacy tiered analysis (spellcheck/patterns) removed.
+    LLM-based analysis will be added in Phase 7.2.
+    """
 
     def __init__(self, config: DocumentationConfig):
         """Initialize DocumentationAnalyzer with config.
 
         Args:
-            config: DocumentationConfig with enabled status and custom dictionary
+            config: DocumentationConfig with enabled status
         """
-        self.layer1 = SpellcheckLayer(custom_words=config.custom_dictionary)
-        self.layer2 = PatternLayer()
+        self.config = config
 
     async def analyze_file(self, file_path: str, content: str) -> DocumentationFindings:
-        """Run tiered analysis on a file.
+        """Run analysis on a file.
 
         Args:
             file_path: Path to the file (used for routing and reporting)
             content: The file content to analyze
 
         Returns:
-            DocumentationFindings with typos and pattern issues
+            DocumentationFindings (empty for now, LLM analysis in Phase 7.2)
         """
+        # Return empty findings for now
+        # LLM-based analysis will be added in Phase 7.2
         findings = DocumentationFindings(file_path=file_path)
-
-        # Layer 1: Spellcheck (PASS file_path for context)
-        typos = self.layer1.check(content, file_path=file_path)
-        findings.typos = typos
-
-        # Layer 2: Pattern matching
-        file_ext = Path(file_path).suffix.lstrip(".")
-        pattern_issues = self.layer2.check(content, file_ext)
-        findings.pattern_issues = pattern_issues
-
         return findings
