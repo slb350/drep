@@ -1,0 +1,51 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "drep"
+version = "0.1.0"
+description = "Documentation & Review Enhancement Platform"
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [
+    {name = "Steve Brandon", email = "steve@example.com"},
+]
+dependencies = [
+    "fastapi>=0.104.0",
+    "uvicorn[standard]>=0.24.0",
+    "click>=8.1.0",
+    "pydantic>=2.5.0",
+    "pydantic-settings>=2.0.0",
+    "sqlalchemy>=2.0.0",
+    "aiosqlite>=0.19.0",
+    "httpx>=0.25.0",
+    "open-agent-sdk>=0.1.0",
+    "pyspellchecker>=0.7.0",
+    "pyyaml>=6.0",
+    "jinja2>=3.1.0",
+    "gitpython>=3.1.0",
+    "python-multipart>=0.0.6",
+]
+
+[project.scripts]
+drep = "drep.cli:cli"
+
+[tool.black]
+line-length = 100
+target-version = ['py310']
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+ignore = []
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+asyncio_mode = "auto"

@@ -1,0 +1,83 @@
+# Example drep configuration file
+# Copy this to config.yaml and customize for your setup
+
+# Platform configurations
+platforms:
+  # Gitea example (self-hosted)
+  - type: gitea
+    url: http://192.168.1.14:3000
+    token: ${GITEA_TOKEN}  # Use environment variable
+    repositories:
+      - steve/*  # Monitor all repos for user 'steve'
+      # - steve/specific-repo  # Or specify individual repos
+
+  # GitHub example
+  # - type: github
+  #   token: ${GITHUB_TOKEN}
+  #   repositories:
+  #     - myorg/repo1
+  #     - myorg/repo2
+
+  # GitLab example (cloud)
+  # - type: gitlab
+  #   token: ${GITLAB_TOKEN}
+  #   repositories:
+  #     - mygroup/project1
+
+  # GitLab example (self-hosted)
+  # - type: gitlab
+  #   url: https://gitlab.example.com
+  #   token: ${GITLAB_TOKEN}
+  #   repositories:
+  #     - mygroup/*
+
+# LLM configuration
+llm:
+  endpoint: http://localhost:11434  # Ollama default endpoint
+  model: llama3.2                   # Model to use
+  temperature: 0.3                  # Sampling temperature (0.0-1.0)
+  timeout: 120                      # Request timeout in seconds
+
+  # For llama.cpp server:
+  # endpoint: http://localhost:8080
+
+  # For LM Studio:
+  # endpoint: http://localhost:1234/v1
+
+# Documentation analysis settings
+documentation:
+  enabled: true
+  create_draft_prs: true  # Create draft PRs with fixes
+  languages:
+    - python
+    - javascript
+    - typescript
+    - go
+    - rust
+    - java
+  custom_dictionary:
+    # Add project-specific terms to avoid false positives
+    - asyncio
+    - fastapi
+    - gitea
+    - kubernetes
+    - dockerfile
+
+# Code analysis settings
+code_analysis:
+  enabled: true
+  security_checks: true      # Check for security vulnerabilities
+  best_practices: true       # Check for best practice violations
+  create_issues: true        # Create issues for code problems
+
+# Scanning configuration
+scan:
+  interval: 3600  # Scan interval in seconds (1 hour)
+  on_push: true   # Trigger scan on git push events
+
+# Database (optional, defaults to sqlite:///./drep.db)
+# database_url: sqlite:///./data/drep.db
+
+# Logging (optional)
+# log_level: INFO  # DEBUG, INFO, WARNING, ERROR
+# log_file: /app/logs/drep.log

@@ -1,0 +1,42 @@
+version: '3.8'
+
+services:
+  drep:
+    build: .
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./config.yaml:/app/config.yaml:ro
+      - ./data:/app/data
+      - ./repos:/app/repos
+    environment:
+      - DREP_CONFIG=/app/config.yaml
+      - DREP_LLM_ENDPOINT=http://ollama:11434
+    depends_on:
+      - ollama
+    restart: unless-stopped
+    networks:
+      - drep-network
+
+  ollama:
+    image: ollama/ollama:latest
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    restart: unless-stopped
+    networks:
+      - drep-network
+    # Uncomment to pull a model on startup
+    # command: >
+    #   sh -c "ollama serve &
+    #          sleep 5 &&
+    #          ollama pull llama3.2 &&
+    #          wait"
+
+volumes:
+  ollama_data:
+
+networks:
+  drep-network:
+    driver: bridge
