@@ -43,6 +43,7 @@ Transform drep from a basic typo checker into an **intelligent AI code reviewer*
 - File-level analysis (no vector DB required)
 - Python best practices detection
 - Missing/poor documentation detection
+- Retire legacy spellcheck/pattern analyzers entirely and rely on LLM-driven typo/pattern detection
 - Bug and security vulnerability detection
 - PR review with diff analysis
 - Intelligent issue creation with LLM suggestions
@@ -79,27 +80,27 @@ Transform drep from a basic typo checker into an **intelligent AI code reviewer*
 │  Orchestrates: Pattern → Spellcheck → LLM → Issue Creation  │
 └────────────────────┬────────────────────────────────────────┘
                      │
-         ┌───────────┴───────────┐
-         │                       │
-┌────────▼──────────┐   ┌────────▼──────────┐
-│  Layer 1 & 2      │   │   Layer 3: LLM    │
-│  (Fast, No LLM)   │   │   (Intelligent)   │
-│                   │   │                   │
-│ • Spellcheck      │   │ • LLM Client      │
-│ • Pattern Match   │   │ • Code Quality    │
-│ • Linting         │   │ • Docstring Gen   │
-└───────────────────┘   │ • Bug Detection   │
-                        │ • PR Review       │
-                        └────────┬──────────┘
-                                 │
-                        ┌────────▼──────────┐
-                        │   LM Studio       │
-                        │   (Remote)        │
-                        │                   │
-                        │ Qwen3-30B-A3B     │
-                        │ 20k context       │
-                        │ 8k max tokens     │
-                        └───────────────────┘
+         ┌───────────┐
+         │           │
+┌────────▼──────────┐
+│   Layer 3: LLM    │
+│   (Intelligent)   │
+│                   │
+│ • LLM Client      │
+│ • Code Quality    │
+│ • Docstring Gen   │
+│ • Bug Detection   │
+│ • PR Review       │
+└────────┬──────────┘
+         │
+┌────────▼──────────┐
+│   LM Studio       │
+│   (Remote)        │
+│                   │
+│ Qwen3-30B-A3B     │
+│ 20k context       │
+│ 8k max tokens     │
+└───────────────────┘
 ```
 
 ### Component Breakdown
@@ -141,11 +142,9 @@ Transform drep from a basic typo checker into an **intelligent AI code reviewer*
   - Post comments to PR
 
 #### 5. Analysis Coordinator (`drep/core/analysis_coordinator.py`)
-- **Purpose**: Orchestrate multi-layer analysis
+- **Purpose**: Orchestrate LLM-first analysis
 - **Responsibilities**:
-  - Run Layer 1 (patterns) first
-  - Run Layer 2 (spellcheck) on clean code
-  - Run Layer 3 (LLM) on significant functions
+  - Coordinate AST extraction and LLM analyzers
   - Aggregate findings
   - Deduplicate and prioritize
 
@@ -202,9 +201,7 @@ llm:
 
 analysis:
   # Toggle analysis types
-  spellcheck: true           # Layer 1
-  patterns: true             # Layer 2
-  llm_analysis: true         # Layer 3
+  llm_analysis: true         # Primary LLM-powered analysis
 
   # LLM-specific toggles
   missing_docstrings: true   # Generate docstrings
@@ -299,8 +296,6 @@ class AnalysisConfig(BaseModel):
     """Analysis configuration."""
 
     # Toggle analysis types
-    spellcheck: bool = True
-    patterns: bool = True
     llm_analysis: bool = True
 
     # LLM-specific toggles
@@ -866,28 +861,14 @@ await llm.close()
 └────────────┬─────────────────────────────────────────────┘
              │
 ┌────────────▼─────────────────────────────────────────────┐
-│ 3. Layer 1: Pattern Matching (Fast)                     │
-│    • Linting violations                                  │
-│    • Dead code                                           │
-│    • Simple anti-patterns                               │
-└────────────┬─────────────────────────────────────────────┘
-             │
-┌────────────▼─────────────────────────────────────────────┐
-│ 4. Layer 2: Spellcheck (Fast)                           │
-│    • Documentation typos                                 │
-│    • Comment typos                                       │
-│    • Docstring errors                                    │
-└────────────┬─────────────────────────────────────────────┘
-             │
-┌────────────▼─────────────────────────────────────────────┐
-│ 5. Function Filtering                                    │
+│ 3. Function Filtering                                    │
 │    • Min 10 lines                                        │
 │    • Complexity > threshold                              │
 │    • Public functions only                               │
 └────────────┬─────────────────────────────────────────────┘
              │
 ┌────────────▼─────────────────────────────────────────────┐
-│ 6. Layer 3: LLM Analysis (Intelligent)                  │
+│ 4. LLM Analysis (Intelligent)                           │
 │    • Missing docstrings → Generate                       │
 │    • Poor comments → Suggest improvements                │
 │    • Code quality → Find bugs                            │
@@ -895,14 +876,14 @@ await llm.close()
 └────────────┬─────────────────────────────────────────────┘
              │
 ┌────────────▼─────────────────────────────────────────────┐
-│ 7. Finding Aggregation                                   │
+│ 5. Finding Aggregation                                   │
 │    • Deduplicate                                         │
 │    • Prioritize by severity                              │
 │    • Group related issues                                │
 └────────────┬─────────────────────────────────────────────┘
              │
 ┌────────────▼─────────────────────────────────────────────┐
-│ 8. Issue Creation                                        │
+│ 6. Issue Creation                                        │
 │    • Create Gitea issues                                 │
 │    • Include LLM suggestions                             │
 │    • Link to specific lines                              │
@@ -2469,24 +2450,36 @@ class LLMMetrics:
 async def analyze_with_fallback(
     code: str,
     llm_analyzer: CodeQualityAnalyzer,
-    pattern_analyzer: PatternAnalyzer,
 ) -> List[Finding]:
-    """Analyze code with LLM, fall back to patterns if LLM fails."""
+    """Analyze code with LLM and gracefully handle outages."""
 
     try:
-        # Try LLM analysis
         return await llm_analyzer.analyze(code)
     except Exception as e:
         logger.error(f"LLM analysis failed: {e}")
-        logger.info("Falling back to pattern-based analysis")
-
-        # Fall back to pattern matching
-        return pattern_analyzer.analyze(code)
+        logger.info("LLM is authoritative; returning no findings")
+        return []
 ```
 
 ---
 
 ## Implementation Roadmap
+
+### Phase 7.0: Legacy Heuristic Sunset (Week 0)
+
+**Goal:** Remove MVP-only spellcheck/pattern analyzers and shift responsibility to the LLM pipeline.
+
+**Tasks:**
+1. Remove Layer 1/Layer 2 modules (`drep/documentation/spellcheck.py`, `drep/documentation/patterns.py`).
+2. Update the CLI/integration flow to rely exclusively on LLM analyzers.
+3. Adjust tests to drop spellcheck/pattern assertions; replace with LLM-focused fixtures.
+
+**Success Criteria:**
+- ✓ Heuristic analyzers deleted and no longer referenced in code or configuration.
+- ✓ Tests rely solely on LLM fixtures for typo/pattern coverage.
+- ✓ Documentation reflects LLM-only analysis capability.
+
+**Time Estimate:** 2-3 hours
 
 ### Phase 7.1: Foundation (Week 1)
 

@@ -92,7 +92,7 @@ async def _run_scan(owner: str, repo: str, config_path: str):
     # Initialize components
     adapter = GiteaAdapter(config.gitea.url, config.gitea.token)
     session = init_database(config.database_url)
-    scanner = RepositoryScanner(session)
+    scanner = RepositoryScanner(session, config)  # Pass config for LLM support
     analyzer = DocumentationAnalyzer(config.documentation)
     issue_manager = IssueManager(adapter, session)
 
@@ -160,12 +160,26 @@ fi
 
         # Analyze files and collect findings
         findings = []
+
+        # 1. Documentation analysis (legacy)
         for file_path in files:
             full_path = Path(repo_path) / file_path
             if full_path.exists():
                 content = full_path.read_text(errors="ignore")
                 result = await analyzer.analyze_file(file_path, content)
                 findings.extend(result.to_findings())
+
+        # 2. Code quality analysis (LLM-powered)
+        if config.llm and config.llm.enabled:
+            click.echo("Running LLM-powered code quality analysis...")
+            repo_id = f"{owner}/{repo}"
+            code_findings = await scanner.analyze_code_quality(
+                repo_path=str(repo_path),
+                files=files,
+                repo_id=repo_id,
+                commit_sha=current_sha,
+            )
+            findings.extend(code_findings)
 
         click.echo(f"Found {len(findings)} issues")
 
@@ -183,7 +197,8 @@ fi
 
             shutil.rmtree(temp_dir, ignore_errors=True)
 
-        # Close adapter
+        # Close resources
+        await scanner.close()
         await adapter.close()
 
 

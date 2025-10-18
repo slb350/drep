@@ -1,15 +1,13 @@
 """Unit tests for LLM client and rate limiter."""
 
 import asyncio
-import json
 import time
-from unittest.mock import AsyncMock, MagicMock, Mock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from pydantic import BaseModel
 
 from drep.llm.client import LLMClient, LLMResponse, RateLimiter
-
 
 # Test Rate Limiter
 
@@ -209,7 +207,7 @@ async def test_rate_limiter_rolls_back_tokens_on_failure():
 
     # Simulate a failed request (never calls set_actual_tokens)
     try:
-        async with limiter.request(500) as ctx:
+        async with limiter.request(500) as ctx:  # noqa: F841
             # Token reservation should be in place
             assert limiter.tokens_used == initial_tokens + 500
             # Simulate failure - raise exception without calling set_actual_tokens

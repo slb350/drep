@@ -7,9 +7,9 @@ Run with: pytest tests/integration/test_lm_studio.py -v
 """
 
 import pytest
+from pydantic import BaseModel
 
 from drep.llm.client import LLMClient
-from pydantic import BaseModel
 
 
 class TestResponse(BaseModel):
@@ -46,7 +46,7 @@ async def test_lm_studio_connection():
         assert response.latency_ms > 0
         assert response.model == "qwen/qwen3-30b-a3b-2507"
 
-        print(f"\n✓ Connection successful!")
+        print("\n✓ Connection successful!")
         print(f"  Response: {response.content[:100]}...")
         print(f"  Tokens: {response.tokens_used}")
         print(f"  Latency: {response.latency_ms:.0f}ms")
@@ -82,7 +82,7 @@ async def test_lm_studio_json_parsing():
         assert "count" in result
         assert isinstance(result["count"], int)
 
-        print(f"\n✓ JSON parsing successful!")
+        print("\n✓ JSON parsing successful!")
         print(f"  Result: {result}")
 
     except Exception as e:
@@ -121,14 +121,14 @@ async def test_lm_studio_rate_limiting():
 
         total_tokens = sum(tokens)
 
-        print(f"\n✓ Rate limiting test successful!")
+        print("\n✓ Rate limiting test successful!")
         print(f"  Completed 5 requests in {elapsed:.1f}s")
         print(f"  Total tokens: {total_tokens}")
-        print(f"  Rate limiter working correctly")
+        print("  Rate limiter working correctly")
 
         # Get metrics
         metrics = client.get_metrics()
-        print(f"\n  Client metrics:")
+        print("\n  Client metrics:")
         print(f"    Total requests: {metrics['total_requests']}")
         print(f"    Success rate: {metrics['success_rate']:.1%}")
         print(f"    Avg tokens/request: {metrics['avg_tokens_per_request']:.0f}")
@@ -171,7 +171,7 @@ def calculate_total(items):
         assert len(response.content) > 20  # Should be substantive
         assert response.tokens_used > 0
 
-        print(f"\n✓ Code analysis successful!")
+        print("\n✓ Code analysis successful!")
         print(f"  Analysis: {response.content[:200]}...")
         print(f"  Tokens: {response.tokens_used}")
 

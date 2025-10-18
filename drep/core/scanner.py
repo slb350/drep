@@ -1,24 +1,66 @@
 """Repository scanner for file-by-file analysis."""
 
+import logging
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import List, Optional, Tuple
 
 from git import Repo
 
+from drep.code_quality.analyzer import CodeQualityAnalyzer
 from drep.db.models import RepositoryScan
+from drep.llm.cache import IntelligentCache
+from drep.llm.client import LLMClient, get_current_commit_sha  # noqa: F401
+from drep.models.config import Config
+from drep.models.findings import Finding
+
+logger = logging.getLogger(__name__)
 
 
 class RepositoryScanner:
-    """Scans repositories with incremental diff support."""
+    """Scans repositories with incremental diff support and optional LLM-powered analysis."""
 
-    def __init__(self, db_session):
-        """Initialize scanner with database session.
+    def __init__(self, db_session, config: Optional[Config] = None):
+        """Initialize scanner with database session and optional config.
 
         Args:
             db_session: SQLAlchemy database session for querying/storing scan metadata
+            config: Optional Config object for LLM-powered analysis
         """
         self.db = db_session
+        self.config = config
+
+        # Initialize LLM client and code analyzer if enabled
+        if config and config.llm and config.llm.enabled:
+            logger.info("Initializing LLM client for code quality analysis")
+
+            # Create cache if enabled
+            cache = None
+            if config.llm.cache.enabled:
+                cache = IntelligentCache(
+                    cache_dir=config.llm.cache.directory,
+                    ttl_days=config.llm.cache.ttl_days,
+                    max_size_bytes=int(config.llm.cache.max_size_gb * 1024**3),
+                )
+
+            # Create LLM client
+            self.llm_client = LLMClient(
+                endpoint=str(config.llm.endpoint),
+                model=config.llm.model,
+                temperature=config.llm.temperature,
+                max_tokens=config.llm.max_tokens,
+                max_concurrent_global=config.llm.max_concurrent_global,
+                max_concurrent_per_repo=config.llm.max_concurrent_per_repo,
+                requests_per_minute=config.llm.requests_per_minute,
+                max_tokens_per_minute=config.llm.max_tokens_per_minute,
+                cache=cache,
+            )
+
+            # Create code quality analyzer
+            self.code_analyzer = CodeQualityAnalyzer(self.llm_client)
+        else:
+            self.llm_client = None
+            self.code_analyzer = None
 
     async def scan_repository(
         self, repo_path: str, owner: str, repo_name: str
@@ -173,3 +215,69 @@ class RepositoryScanner:
 
         # Deduplicate
         return list(set(changed_files))
+
+    async def analyze_code_quality(
+        self, repo_path: str, files: List[str], repo_id: str, commit_sha: str
+    ) -> List[Finding]:
+        """Analyze Python files for code quality issues using LLM.
+
+        Args:
+            repo_path: Path to repository root
+            files: List of file paths to analyze
+            repo_id: Repository identifier (e.g., "owner/repo")
+            commit_sha: Current commit SHA for cache invalidation
+
+        Returns:
+            List of Finding objects describing code quality issues
+
+        Note:
+            - Only analyzes if code_analyzer is initialized
+            - Only analyzes Python (.py) files
+            - Skips files that cannot be read
+        """
+        if not self.code_analyzer:
+            logger.debug("Code analyzer not initialized, skipping code quality analysis")
+            return []
+
+        findings: List[Finding] = []
+        repo_path_obj = Path(repo_path)
+
+        # Filter to only Python files
+        python_files = [f for f in files if self.code_analyzer.is_supported_file(f)]
+
+        if not python_files:
+            logger.debug("No Python files to analyze for code quality")
+            return []
+
+        logger.info(f"Analyzing {len(python_files)} Python files for code quality")
+
+        # Analyze each file
+        for file_path in python_files:
+            full_path = repo_path_obj / file_path
+
+            # Skip if file doesn't exist
+            if not full_path.exists():
+                logger.warning(f"Skipping {file_path}: file not found")
+                continue
+
+            # Read file content
+            try:
+                content = full_path.read_text(errors="ignore")
+            except Exception as e:
+                logger.error(f"Failed to read {file_path}: {e}")
+                continue
+
+            # Analyze with code analyzer
+            file_findings = await self.code_analyzer.analyze_file(
+                file_path=file_path, content=content, repo_id=repo_id, commit_sha=commit_sha
+            )
+
+            findings.extend(file_findings)
+
+        logger.info(f"Found {len(findings)} code quality issues across {len(python_files)} files")
+        return findings
+
+    async def close(self):
+        """Close LLM client and cleanup resources."""
+        if self.llm_client:
+            await self.llm_client.close()

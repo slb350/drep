@@ -327,7 +327,7 @@ class LLMClient:
         max_concurrent_per_repo: Optional[int] = 3,
         requests_per_minute: int = 60,
         max_tokens_per_minute: int = 100000,
-        cache: Optional["IntelligentCache"] = None,
+        cache: Optional["IntelligentCache"] = None,  # noqa: F821
         repo_path: Optional[Path] = None,
     ):
         """Initialize LLM client.
@@ -651,17 +651,17 @@ class LLMClient:
                 if match:
                     value = match.group(1).strip()
                     # Try to convert to appropriate type
-                    if field_info.annotation == int:
+                    if field_info.annotation is int:
                         try:
                             result[field_name] = int(value)
                         except ValueError:
                             pass
-                    elif field_info.annotation == float:
+                    elif field_info.annotation is float:
                         try:
                             result[field_name] = float(value)
                         except ValueError:
                             pass
-                    elif field_info.annotation == bool:
+                    elif field_info.annotation is bool:
                         result[field_name] = value.lower() in ("true", "1", "yes")
                     else:
                         result[field_name] = value
