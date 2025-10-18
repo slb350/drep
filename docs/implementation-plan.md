@@ -1,7 +1,7 @@
 # Implementation Plan: drep MVP
 
-**Document Version:** 1.3
-**Last Updated:** 2025-10-17
+**Document Version:** 1.4
+**Last Updated:** 2025-10-18
 **Status:** Phase 1, 2 & 3 Complete - Ready for Phase 4
 
 This document provides a detailed, step-by-step implementation plan for building drep MVP (Gitea + Python only).
@@ -36,7 +36,8 @@ This document provides a detailed, step-by-step implementation plan for building
 
 ### Phase 3: Documentation Analysis ✅ COMPLETE
 **Purpose:** Build spellcheck and pattern detection
-**Status:** Complete - All tests passing (109/109, +31 new tests)
+**Status:** Complete - All tests passing (117/117, +39 new tests)
+**Bug Fixes:** 5 additional bugs fixed during code review (4 Medium + 1 High severity)
 
 ### Phase 4: Repository Scanning
 **Purpose:** Clone repos and scan files incrementally
@@ -743,14 +744,15 @@ assert len(typos) == 1  # Only 'teh', not URL
 
 **File:** `drep/documentation/spellcheck.py`
 
-**TODO:**
-- [ ] Add `_check_markdown(text)` method
-- [ ] Split text into lines
-- [ ] Track whether in code block (starts with ```)
-- [ ] Toggle `in_code_block` flag when encountering ```
-- [ ] Only check lines that are NOT in code blocks
-- [ ] Use `_check_line()` for each prose line
-- [ ] Test with sample markdown containing code blocks
+**COMPLETED:**
+- [x] Add `_check_markdown(text)` method
+- [x] Split text into lines
+- [x] Track whether in code block (starts with ```)
+- [x] Toggle `in_code_block` flag when encountering ```
+- [x] Only check lines that are NOT in code blocks
+- [x] Use `_check_line()` for each prose line
+- [x] Test with sample markdown containing code blocks
+- [x] 3 tests passing
 
 **Code to Add:**
 ```python
@@ -808,15 +810,16 @@ assert all(t.word == "teh" for t in typos)
 
 **File:** `drep/documentation/spellcheck.py`
 
-**TODO:**
-- [ ] Add `_check_python_comments(text)` method
-- [ ] Split text into lines
-- [ ] For each line with `#`, extract comment part
-- [ ] Check comment using `_check_line()`
-- [ ] Use AST to extract docstrings
-- [ ] Check docstrings using `_check_plain_text()`
-- [ ] Handle syntax errors gracefully
-- [ ] Test with Python file containing comments and docstrings
+**COMPLETED:**
+- [x] Add `_check_python_comments(text)` method
+- [x] Use tokenize module to extract real comments (not string literals)
+- [x] For each COMMENT token, extract comment text and check
+- [x] Use AST to extract docstrings from Module/Function/Class nodes
+- [x] Check docstrings using `_check_plain_text()`
+- [x] Handle syntax errors and tokenization failures gracefully
+- [x] Accurate line/column tracking for all comments and docstrings
+- [x] Test with Python file containing comments and docstrings
+- [x] 8 tests passing (including edge cases)
 
 **Code to Add:**
 ```python
@@ -891,13 +894,14 @@ assert len(typos) == 3
 
 **File:** `drep/documentation/spellcheck.py`
 
-**TODO:**
-- [ ] Implement `check(text, file_path)` method
-- [ ] Detect file type from `file_path` extension
-- [ ] Route to `_check_markdown()` for `.md` files
-- [ ] Route to `_check_python_comments()` for `.py` files
-- [ ] Route to `_check_plain_text()` for other files
-- [ ] Test with different file types
+**COMPLETED:**
+- [x] Implement `check(text, file_path)` method
+- [x] Detect file type from `file_path` extension
+- [x] Route to `_check_markdown()` for `.md` files
+- [x] Route to `_check_python_comments()` for `.py` files
+- [x] Route to `_check_plain_text()` for other files
+- [x] Test with different file types
+- [x] 3 tests passing
 
 **Code to Update:**
 ```python
@@ -938,16 +942,17 @@ assert len(typos) == 1
 
 **File:** `drep/documentation/patterns.py`
 
-**TODO:**
-- [ ] Import regex, List
-- [ ] Import `PatternIssue` model
-- [ ] Create `PatternLayer` class
-- [ ] Define `PATTERNS` dict with regex patterns
-- [ ] Implement `check(text, file_ext)` method
-- [ ] For each pattern, find all matches
-- [ ] Calculate line and column numbers for each match
-- [ ] Create `PatternIssue` for each match
-- [ ] Test with sample text
+**COMPLETED:**
+- [x] Import regex, List
+- [x] Import `PatternIssue` model
+- [x] Create `PatternLayer` class
+- [x] Define `PATTERNS` dict with regex patterns (double_space, trailing_whitespace)
+- [x] Implement `check(text, file_ext)` method
+- [x] For each pattern, find all matches using re.finditer
+- [x] Calculate accurate line and column numbers for each match
+- [x] Create `PatternIssue` for each match
+- [x] Test with sample text
+- [x] 5 tests passing
 
 **Code Structure:**
 ```python
@@ -1015,16 +1020,17 @@ assert issues[0].type == 'trailing_whitespace'
 
 **File:** `drep/documentation/analyzer.py`
 
-**TODO:**
-- [ ] Import Path, SpellcheckLayer, PatternLayer
-- [ ] Import DocumentationConfig, DocumentationFindings
-- [ ] Create `DocumentationAnalyzer` class
-- [ ] Initialize with config
-- [ ] Create instances of Layer 1 and Layer 2
-- [ ] Implement `analyze_file(file_path, content)` async method
-- [ ] Call Layer 1 and Layer 2
-- [ ] Combine results into DocumentationFindings
-- [ ] Test end-to-end
+**COMPLETED:**
+- [x] Import Path, SpellcheckLayer, PatternLayer
+- [x] Import DocumentationConfig, DocumentationFindings
+- [x] Create `DocumentationAnalyzer` class
+- [x] Initialize with config and custom dictionary
+- [x] Create instances of Layer 1 and Layer 2
+- [x] Implement `analyze_file(file_path, content)` async method
+- [x] Call Layer 1 and Layer 2 in sequence
+- [x] Combine results into DocumentationFindings
+- [x] Test end-to-end with Python and Markdown files
+- [x] 5 tests passing
 
 **Code Structure:**
 ```python
@@ -1097,6 +1103,69 @@ asyncio.run(test())
 - Let layers do the work
 - Pass file_path to spellcheck for context
 - Test with real files
+
+---
+
+### 3.8 Code Review Bug Fixes ✅
+
+**Purpose:** Fix edge cases and bugs identified during thorough code review
+
+**COMPLETED:**
+- [x] Fixed 5 bugs total (4 Medium + 1 High severity)
+- [x] All bugs have comprehensive test coverage
+- [x] All 117 tests passing
+
+#### Bug Fix 1: Module-level docstring line numbers (Medium)
+**Issue:** Module docstrings (e.g., `"""Teh module."""` at top of file) were reported one line too far down. A typo on line 1 was reported as line 2.
+
+**Root Cause:** Used fallback `definition_line=1` for `ast.Module` nodes, then added `typo.line`, resulting in 1+1=2.
+
+**Fix:** For `ast.Module` nodes, use the docstring statement's actual line number (`node.body[0].lineno`) with proper offset calculation.
+
+**Test:** `test_check_python_comments_module_docstring_line_number`
+
+#### Bug Fix 2: Column tracking with inline code (Medium)
+**Issue:** When the same word appears in inline code (`` `teh` ``) and in prose ("teh"), the column could point to the backtick instance instead of the prose instance.
+
+**Root Cause:** Built occurrence index from cleaned line (backticks removed), then searched original line for Nth occurrence—mismatch between cleaned and original positions.
+
+**Fix:** Complete refactor of `_check_line()` - iterate over original line, find backtick/URL spans first, skip words in those spans. Simpler and more accurate.
+
+**Test:** `test_check_line_column_with_inline_code_and_prose`
+
+#### Bug Fix 3: Comment column offset (Medium)
+**Issue:** Typos in Python comments were reported with column positions relative to the comment text, not the original source line. For example: `return x  # This has teh typo` reported column ~10 instead of column 25.
+
+**Root Cause:** Split line on `"#"` and only passed comment text to `_check_line()`, losing the original offset.
+
+**Fix:** Track where the `"#"` appears in the original line and add `comment_start` offset to each typo's column after processing.
+
+**Test:** `test_check_python_comments_inline_comment_column`
+
+#### Bug Fix 4: Single-line docstrings on same line as def (Medium)
+**Issue:** For uncommon but valid single-line docstrings like `def foo(): """Teh doc."""`, typos were reported on line 2 instead of line 1.
+
+**Root Cause:** Used `node.lineno` (the def line) and then added `typo.line`, resulting in 1+1=2.
+
+**Fix:** Use the docstring statement's own line number (`node.body[0].lineno`) for all cases, simplified offset calculation to `start_line + relative - 1`.
+
+**Test:** `test_check_python_comments_single_line_docstring_same_line_as_def`
+
+#### Bug Fix 5: Hash in string literals treated as comments (HIGH) ⚠️
+**Issue:** Using simple string split (`line.split("#", 1)[1]`) to extract comments meant that ANY `#` in the source line was treated as a comment start, including `#` characters inside string literals. This caused three critical problems:
+1. **FALSE POSITIVES:** Strings like `print("# teh string")` flagged "teh" as a comment typo when it's inside a string literal
+2. **MISSED COMMENTS:** Lines like `url = "http://ex.com#anchor"  # Real comment` would extract the wrong text
+3. **WRONG COLUMNS:** Column offsets calculated from the wrong `#` position
+
+**Root Cause:** Naive string-based comment extraction without understanding Python syntax.
+
+**Fix:** Complete refactor to use `tokenize.generate_tokens()` instead of string splitting. Use `tokenize.COMMENT` token type to identify real comments. Only true Python comments are now checked, strings are properly ignored.
+
+**Tests:**
+- `test_check_python_comments_ignores_hash_in_strings`
+- `test_check_python_comments_string_then_real_comment`
+
+**Impact:** This was the most critical bug as it could create incorrect issue reports in production, flagging valid code as having documentation typos.
 
 ---
 
