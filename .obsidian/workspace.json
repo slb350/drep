@@ -13,12 +13,12 @@
             "state": {
               "type": "markdown",
               "state": {
-                "file": "docs/implementation-plan.md",
+                "file": "docs/llm-implementation.md",
                 "mode": "source",
                 "source": false
               },
               "icon": "lucide-file",
-              "title": "implementation-plan"
+              "title": "llm-implementation"
             }
           }
         ]
@@ -94,7 +94,7 @@
             "state": {
               "type": "backlink",
               "state": {
-                "file": "docs/implementation-plan.md",
+                "file": "docs/llm-implementation.md",
                 "collapseAll": false,
                 "extraContext": false,
                 "sortOrder": "alphabetical",
@@ -104,7 +104,7 @@
                 "unlinkedCollapsed": true
               },
               "icon": "links-coming-in",
-              "title": "Backlinks for implementation-plan"
+              "title": "Backlinks for llm-implementation"
             }
           },
           {
@@ -113,12 +113,12 @@
             "state": {
               "type": "outgoing-link",
               "state": {
-                "file": "docs/implementation-plan.md",
+                "file": "docs/llm-implementation.md",
                 "linksCollapsed": false,
                 "unlinkedCollapsed": true
               },
               "icon": "links-going-out",
-              "title": "Outgoing links from implementation-plan"
+              "title": "Outgoing links from llm-implementation"
             }
           },
           {
@@ -142,13 +142,13 @@
             "state": {
               "type": "outline",
               "state": {
-                "file": "docs/implementation-plan.md",
+                "file": "docs/llm-implementation.md",
                 "followCursor": false,
                 "showSearch": false,
                 "searchQuery": ""
               },
               "icon": "lucide-list",
-              "title": "Outline of implementation-plan"
+              "title": "Outline of llm-implementation"
             }
           }
         ]
@@ -171,17 +171,21 @@
   },
   "active": "202bc079d4317f49",
   "lastOpenFiles": [
-    "drep/documentation/__pycache__/spellcheck.cpython-314.pyc",
-    "drep/documentation/__pycache__/__init__.cpython-314.pyc",
-    "drep/__pycache__/__init__.cpython-314.pyc",
-    "docs/implementation-plan.md.tmp.30751.1760768933755",
-    "drep/documentation/__pycache__/analyzer.cpython-313.pyc",
-    "tests/unit/__pycache__/test_documentation_analyzer.cpython-313-pytest-8.4.2.pyc",
-    "tests/unit/test_documentation_analyzer.py",
-    "drep/documentation/__pycache__/patterns.cpython-313.pyc",
-    "tests/unit/__pycache__/test_patterns.cpython-313-pytest-8.4.2.pyc",
-    "tests/unit/test_patterns.py",
-    "tests/unit/test_spellcheck.py.tmp.30751.1760768474777",
+    "tests/integration/test_code_quality_integration.py",
+    "drep/llm/client.py.tmp.63147.1760804370701",
+    "drep/code_quality/__pycache__/analyzer.cpython-313.pyc",
+    "drep/code_quality/__pycache__/__init__.cpython-313.pyc",
+    "drep/code_quality/__pycache__",
+    "tests/unit/__pycache__/test_code_quality_analyzer.cpython-313-pytest-8.4.2.pyc",
+    "tests/unit/test_code_quality_analyzer.py",
+    "drep/code_quality/analyzer.py",
+    "drep/code_quality/__init__.py",
+    "drep/code_quality",
+    "drep/models/__pycache__/llm_findings.cpython-313.pyc",
+    "docs/implementation-plan.md",
+    "docs/llm-production-concerns.md",
+    "docs/llm-implementation.md",
+    "docs/technical-design.md",
     "venv/lib/python3.13/site-packages/respx-0.22.0.dist-info/LICENSE.md",
     "venv/lib/python3.13/site-packages/black-25.9.0.dist-info/licenses/AUTHORS.md",
     "venv/lib/python3.13/site-packages/httpx-0.28.1.dist-info/licenses/LICENSE.md",
@@ -190,8 +194,6 @@
     "venv/lib/python3.13/site-packages/uvicorn-0.37.0.dist-info/licenses/LICENSE.md",
     "venv/lib/python3.13/site-packages/idna-3.11.dist-info/licenses/LICENSE.md",
     "venv/lib/python3.13/site-packages/pip-25.2.dist-info/licenses/src/pip/_vendor/idna/LICENSE.md",
-    "docs/technical-design.md",
-    "docs/implementation-plan.md",
     "docs/implementation-notes.md",
     "docs/bug-fixes.md",
     "README.md",
