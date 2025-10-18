@@ -126,6 +126,124 @@ async def test_rate_limiter_multiple_repos():
     assert limiter.tokens_used >= 0
 
 
+@pytest.mark.asyncio
+async def test_rate_limiter_enforces_per_repo_limit():
+    """Test that per-repo concurrency limits are enforced."""
+    limiter = RateLimiter(
+        max_concurrent=10,  # High global limit
+        requests_per_minute=100,
+        max_tokens_per_minute=100000,
+        max_concurrent_per_repo=2,  # But only 2 per repo
+    )
+
+    # Track concurrent requests per repo
+    repo1_concurrent = 0
+    repo1_max_concurrent = 0
+    lock = asyncio.Lock()
+
+    async def mock_request(repo_id):
+        nonlocal repo1_concurrent, repo1_max_concurrent
+        async with limiter.request(100, repo_id=repo_id) as ctx:
+            if repo_id == "repo1":
+                async with lock:
+                    repo1_concurrent += 1
+                    repo1_max_concurrent = max(repo1_max_concurrent, repo1_concurrent)
+            await asyncio.sleep(0.1)
+            ctx.set_actual_tokens(50)
+            if repo_id == "repo1":
+                async with lock:
+                    repo1_concurrent -= 1
+
+    # Launch 10 requests for repo1 in parallel
+    await asyncio.gather(*[mock_request("repo1") for _ in range(10)])
+
+    # Should never exceed max_concurrent_per_repo=2 for repo1
+    assert repo1_max_concurrent == 2
+
+
+@pytest.mark.asyncio
+async def test_rate_limiter_different_repos_independent():
+    """Test that different repos have independent concurrency limits."""
+    limiter = RateLimiter(
+        max_concurrent=10,
+        requests_per_minute=100,
+        max_tokens_per_minute=100000,
+        max_concurrent_per_repo=2,
+    )
+
+    # Track concurrent requests across all repos
+    total_concurrent = 0
+    max_total_concurrent = 0
+    lock = asyncio.Lock()
+
+    async def mock_request(repo_id):
+        nonlocal total_concurrent, max_total_concurrent
+        async with limiter.request(100, repo_id=repo_id) as ctx:
+            async with lock:
+                total_concurrent += 1
+                max_total_concurrent = max(max_total_concurrent, total_concurrent)
+            await asyncio.sleep(0.1)
+            ctx.set_actual_tokens(50)
+            async with lock:
+                total_concurrent -= 1
+
+    # Launch 2 requests each for 3 different repos (6 total)
+    await asyncio.gather(
+        *[mock_request("repo1") for _ in range(2)],
+        *[mock_request("repo2") for _ in range(2)],
+        *[mock_request("repo3") for _ in range(2)],
+    )
+
+    # Should allow up to 6 concurrent (2 per repo × 3 repos)
+    # But might be less due to timing
+    assert max_total_concurrent >= 3  # At least some parallelism
+
+
+@pytest.mark.asyncio
+async def test_rate_limiter_rolls_back_tokens_on_failure():
+    """Test that failed requests roll back their token reservation."""
+    limiter = RateLimiter(max_concurrent=10, requests_per_minute=100, max_tokens_per_minute=1000)
+
+    initial_tokens = limiter.tokens_used
+
+    # Simulate a failed request (never calls set_actual_tokens)
+    try:
+        async with limiter.request(500) as ctx:
+            # Token reservation should be in place
+            assert limiter.tokens_used == initial_tokens + 500
+            # Simulate failure - raise exception without calling set_actual_tokens
+            raise RuntimeError("Simulated request failure")
+    except RuntimeError:
+        pass
+
+    # After exiting context, tokens should be rolled back
+    assert limiter.tokens_used == initial_tokens
+
+
+@pytest.mark.asyncio
+async def test_rate_limiter_burst_failures_dont_stall():
+    """Test that burst of failures doesn't stall the rate limiter."""
+    limiter = RateLimiter(max_concurrent=5, requests_per_minute=100, max_tokens_per_minute=1000)
+
+    # Simulate 5 failed requests that consume the entire token budget
+    for _ in range(5):
+        try:
+            async with limiter.request(200):  # 5 × 200 = 1000 tokens
+                raise RuntimeError("Simulated failure")
+        except RuntimeError:
+            pass
+
+    # All tokens should be rolled back, allowing new requests
+    assert limiter.tokens_used == 0
+
+    # Should be able to make a successful request immediately
+    async with limiter.request(500) as ctx:
+        ctx.set_actual_tokens(400)
+
+    # Should reflect actual usage, not failures
+    assert limiter.tokens_used == 400
+
+
 # Test LLM Client Initialization
 
 

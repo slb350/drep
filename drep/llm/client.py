@@ -85,11 +85,17 @@ class RateLimitContext:
         self.estimated_tokens = estimated_tokens
         self.repo_id = repo_id
         self.actual_tokens: Optional[int] = None
+        self.repo_semaphore: Optional[asyncio.Semaphore] = None
 
     async def __aenter__(self):
         """Acquire semaphore and check rate limits."""
-        # Acquire semaphore (held until __aexit__)
+        # Acquire global semaphore (held until __aexit__)
         await self.rate_limiter.semaphore.acquire()
+
+        # Acquire per-repo semaphore if repo_id specified
+        if self.repo_id is not None:
+            self.repo_semaphore = await self.rate_limiter._get_repo_semaphore(self.repo_id)
+            await self.repo_semaphore.acquire()
 
         # Check request rate limit
         await self.rate_limiter._check_request_rate_limit()
@@ -100,15 +106,27 @@ class RateLimitContext:
         return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
-        """Update token usage and release semaphore."""
-        # Update actual token usage if set
-        if self.actual_tokens is not None:
-            async with self.rate_limiter.lock:
+        """Update token usage and release semaphores."""
+        async with self.rate_limiter.lock:
+            # Update actual token usage if set
+            if self.actual_tokens is not None:
                 # Adjust token count: remove estimate, add actual
                 self.rate_limiter.tokens_used -= self.estimated_tokens
                 self.rate_limiter.tokens_used += self.actual_tokens
+            else:
+                # Request failed before set_actual_tokens() was called
+                # Roll back the estimated token reservation
+                self.rate_limiter.tokens_used -= self.estimated_tokens
+                logger.debug(
+                    f"Rolling back {self.estimated_tokens} token reservation "
+                    f"(request failed without completion)"
+                )
 
-        # Release semaphore
+        # Release per-repo semaphore if acquired
+        if self.repo_semaphore is not None:
+            self.repo_semaphore.release()
+
+        # Release global semaphore
         self.rate_limiter.semaphore.release()
 
     def set_actual_tokens(self, tokens: int):
@@ -124,9 +142,10 @@ class RateLimiter:
     """Dual-bucket rate limiter with concurrency control.
 
     Enforces:
-    1. Maximum concurrent requests (semaphore)
-    2. Requests per minute limit
-    3. Tokens per minute limit
+    1. Maximum concurrent requests globally (semaphore)
+    2. Maximum concurrent requests per repository (per-repo semaphores)
+    3. Requests per minute limit
+    4. Tokens per minute limit
     """
 
     def __init__(
@@ -134,20 +153,26 @@ class RateLimiter:
         max_concurrent: int,
         requests_per_minute: int,
         max_tokens_per_minute: int,
+        max_concurrent_per_repo: Optional[int] = None,
     ):
         """Initialize rate limiter.
 
         Args:
-            max_concurrent: Maximum concurrent requests
+            max_concurrent: Maximum concurrent requests globally
             requests_per_minute: Request rate limit
             max_tokens_per_minute: Token rate limit
+            max_concurrent_per_repo: Maximum concurrent requests per repository
         """
         self.max_concurrent = max_concurrent
         self.requests_per_minute = requests_per_minute
         self.max_tokens_per_minute = max_tokens_per_minute
+        self.max_concurrent_per_repo = max_concurrent_per_repo
 
         # Concurrency control
         self.semaphore = asyncio.Semaphore(max_concurrent)
+
+        # Per-repository concurrency control
+        self.repo_semaphores: Dict[str, asyncio.Semaphore] = {}
 
         # Request rate limiting
         self.lock = asyncio.Lock()
@@ -156,6 +181,23 @@ class RateLimiter:
         # Token rate limiting
         self.tokens_used = 0
         self.token_reset_time = time.time() + 60
+
+    async def _get_repo_semaphore(self, repo_id: str) -> asyncio.Semaphore:
+        """Get or create semaphore for a repository.
+
+        Args:
+            repo_id: Repository identifier
+
+        Returns:
+            Semaphore for the repository
+        """
+        async with self.lock:
+            if repo_id not in self.repo_semaphores:
+                # Create new semaphore for this repo
+                limit = self.max_concurrent_per_repo or self.max_concurrent
+                self.repo_semaphores[repo_id] = asyncio.Semaphore(limit)
+                logger.debug(f"Created semaphore for repo {repo_id} with limit {limit}")
+            return self.repo_semaphores[repo_id]
 
     async def _check_request_rate_limit(self):
         """Check and enforce request rate limit."""
@@ -248,6 +290,7 @@ class LLMClient:
         retry_delay: int = 2,
         exponential_backoff: bool = True,
         max_concurrent_global: int = 5,
+        max_concurrent_per_repo: Optional[int] = 3,
         requests_per_minute: int = 60,
         max_tokens_per_minute: int = 100000,
         cache: Optional["IntelligentCache"] = None,
@@ -265,7 +308,8 @@ class LLMClient:
             max_retries: Maximum retry attempts
             retry_delay: Initial retry delay in seconds
             exponential_backoff: Use exponential backoff for retries
-            max_concurrent_global: Maximum concurrent requests
+            max_concurrent_global: Maximum concurrent requests globally
+            max_concurrent_per_repo: Maximum concurrent requests per repository
             requests_per_minute: Rate limit for requests
             max_tokens_per_minute: Rate limit for tokens
             cache: Optional cache instance for response caching
@@ -294,6 +338,7 @@ class LLMClient:
             max_concurrent=max_concurrent_global,
             requests_per_minute=requests_per_minute,
             max_tokens_per_minute=max_tokens_per_minute,
+            max_concurrent_per_repo=max_concurrent_per_repo,
         )
 
         # Metrics
