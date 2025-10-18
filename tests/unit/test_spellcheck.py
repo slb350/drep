@@ -259,6 +259,41 @@ class MyClass:
     assert all(t.word == "teh" for t in typos)
 
 
+def test_check_python_comments_inline_comment_column():
+    """Test that inline comments report column relative to original line, not comment text."""
+    layer = SpellcheckLayer()
+    code = """def foo():
+    return x  # This has teh typo
+"""
+    typos = layer._check_python_comments(code)
+
+    # Should find 1 typo in the inline comment
+    assert len(typos) == 1
+    assert typos[0].word == "teh"
+    assert typos[0].line == 2
+
+    # CRITICAL: Column should be relative to the original line,
+    # not relative to the comment text (which would be 10)
+    # The "#" is at position 14, so comment starts at 15 (after the "#")
+    # "teh" is at position 10 in the comment " This has teh typo"
+    # So absolute column should be 15 + 10 = 25
+    assert typos[0].column == 25
+
+
+def test_check_python_comments_single_line_docstring_same_line_as_def():
+    """Test single-line docstring on same line as function definition."""
+    layer = SpellcheckLayer(custom_words=["docstring"])
+    code = 'def foo(): """Teh single-line docstring."""\n'
+    typos = layer._check_python_comments(code)
+
+    # Should find 1 typo
+    assert len(typos) == 1
+    assert typos[0].word == "Teh"
+
+    # CRITICAL: Typo is on line 1 (same line as def), not line 2
+    assert typos[0].line == 1
+
+
 def test_check_python_comments_multiline_docstring_line_numbers():
     """Test that typos in multi-line docstrings report correct line numbers."""
     layer = SpellcheckLayer(custom_words=["docstring", "multiline"])

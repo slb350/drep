@@ -143,8 +143,15 @@ class SpellcheckLayer:
         lines = text.split("\n")
         for line_num, line in enumerate(lines, 1):
             if "#" in line:
+                # Find where the comment starts in the original line
+                comment_start = line.index("#") + 1  # +1 to skip the "#" itself
                 comment = line.split("#", 1)[1]
                 comment_typos = self._check_line(comment, line_num)
+
+                # Adjust column to be relative to original line, not comment text
+                for typo in comment_typos:
+                    typo.column += comment_start
+
                 typos.extend(comment_typos)
 
         # Extract docstrings using AST
@@ -157,27 +164,25 @@ class SpellcheckLayer:
                 ):
                     docstring = ast.get_docstring(node)
                     if docstring:
-                        # For Module nodes, use the docstring statement's own line number
-                        # For functions/classes, use the definition line + offset
+                        # Use the docstring statement's own line number for accurate reporting
+                        # This works for both single-line (def foo(): """doc.""") and
+                        # multi-line docstrings
                         if isinstance(node, ast.Module):
-                            # Module docstring is in node.body[0], use its line number
+                            # Module docstring is in node.body[0]
                             docstring_start_line = node.body[0].lineno if node.body else 1
                         else:
-                            # Function/class: docstring starts after the def line
-                            docstring_start_line = node.lineno
+                            # Function/class docstring is in node.body[0]
+                            docstring_start_line = node.body[0].lineno if node.body else node.lineno
 
                         # Check docstring for typos
                         doc_typos = self._check_plain_text(docstring)
 
                         # Adjust line numbers: _check_plain_text returns lines relative to
                         # the docstring (1, 2, 3...), but we need absolute source lines.
+                        # Use (start_line + relative - 1) for all cases to handle both
+                        # single-line and multi-line docstrings correctly.
                         for typo in doc_typos:
-                            if isinstance(node, ast.Module):
-                                # For modules, use docstring start line + relative line - 1
-                                typo.line = docstring_start_line + typo.line - 1
-                            else:
-                                # For functions/classes, add offset (docstring starts after def)
-                                typo.line = docstring_start_line + typo.line
+                            typo.line = docstring_start_line + typo.line - 1
 
                         typos.extend(doc_typos)
         except SyntaxError:
