@@ -124,23 +124,23 @@ def test_finding_cache_create(session):
     assert isinstance(cache.created_at, datetime)
 
 
-def test_finding_cache_hash_unique(session):
-    """Test that finding_hash must be unique."""
+def test_finding_cache_hash_unique_per_repository(session):
+    """Test that finding_hash must be unique within a repository (scoped deduplication)."""
     from sqlalchemy.exc import IntegrityError
 
     from drep.db.models import FindingCache
 
-    # Create first entry
+    # Create first entry in steve/drep
     cache1 = FindingCache(
         owner="steve", repo="drep", file_path="test.py", finding_hash="abc123", issue_number=42
     )
     session.add(cache1)
     session.commit()
 
-    # Try to create second entry with same hash
+    # Try to create second entry with same hash in SAME repository - should fail
     cache2 = FindingCache(
         owner="steve",
-        repo="drep2",
+        repo="drep",  # Same repo
         file_path="test2.py",
         finding_hash="abc123",  # Same hash
         issue_number=43,
@@ -149,6 +149,42 @@ def test_finding_cache_hash_unique(session):
 
     with pytest.raises(IntegrityError):
         session.commit()
+
+
+def test_finding_cache_hash_allowed_across_repositories(session):
+    """Test that same finding_hash is allowed in different repositories (CRITICAL BUG FIX).
+
+    This prevents cross-repository collision where repo B's findings are skipped
+    because repo A already has the same hash.
+    """
+    from drep.db.models import FindingCache
+
+    # Create first entry in alice/repo-a
+    cache1 = FindingCache(
+        owner="alice",
+        repo="repo-a",
+        file_path="README.md",
+        finding_hash="same_hash",
+        issue_number=42,
+    )
+    session.add(cache1)
+    session.commit()
+
+    # Create second entry with same hash in DIFFERENT repository - should succeed
+    cache2 = FindingCache(
+        owner="bob",
+        repo="repo-b",  # Different repo
+        file_path="README.md",
+        finding_hash="same_hash",  # Same hash - this is OK across different repos
+        issue_number=99,
+    )
+    session.add(cache2)
+    session.commit()  # Should NOT raise IntegrityError
+
+    # Verify both entries exist
+    all_caches = session.query(FindingCache).filter_by(finding_hash="same_hash").all()
+    assert len(all_caches) == 2
+    assert {(c.owner, c.repo) for c in all_caches} == {("alice", "repo-a"), ("bob", "repo-b")}
 
 
 def test_finding_cache_index_exists(engine):

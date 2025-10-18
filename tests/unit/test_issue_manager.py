@@ -601,3 +601,74 @@ async def test_create_issues_for_findings_with_none_suggestion(mock_adapter, moc
 
     # Should not have Suggestion section
     assert "**Suggestion:**" not in body
+
+
+@pytest.mark.asyncio
+async def test_create_issues_for_findings_scoped_to_repository(mock_adapter, mock_db):
+    """Test deduplication is scoped per repository (CRITICAL BUG FIX).
+
+    The same finding hash in different repositories should create separate issues.
+    This prevents cross-repository collision where repo B's findings are skipped
+    because repo A already created an issue with the same hash.
+    """
+    # Setup: Finding exists in alice/repo-a but NOT in bob/repo-b
+    from drep.db.models import FindingCache
+
+    existing_cache = FindingCache(
+        owner="alice",
+        repo="repo-a",
+        file_path="README.md",
+        finding_hash="same_hash_123",
+        issue_number=42,
+    )
+
+    # Mock query to return existing only when querying alice/repo-a
+    query_mock = MagicMock()
+    filter_by_mock = MagicMock()
+    mock_db.query.return_value = query_mock
+    query_mock.filter_by.return_value = filter_by_mock
+
+    # Track filter_by calls to return appropriate results
+    filter_by_calls = []
+
+    def filter_by_side_effect(**kwargs):
+        filter_by_calls.append(kwargs)
+        # If querying alice/repo-a with this hash, return existing
+        if (
+            kwargs.get("owner") == "alice"
+            and kwargs.get("repo") == "repo-a"
+            and kwargs.get("finding_hash") == "same_hash_123"
+        ):
+            filter_by_mock.first.return_value = existing_cache
+        else:
+            # Otherwise return None (not found)
+            filter_by_mock.first.return_value = None
+        return filter_by_mock
+
+    query_mock.filter_by = filter_by_side_effect
+    mock_adapter.create_issue.return_value = 99
+
+    manager = IssueManager(mock_adapter, mock_db)
+
+    # Same finding (will generate same hash)
+    finding = Finding(
+        type="typo",
+        severity="info",
+        file_path="README.md",
+        line=10,
+        message="Typo: 'teh'",
+    )
+
+    # Scan bob/repo-b (different repository)
+    await manager.create_issues_for_findings("bob", "repo-b", [finding])
+
+    # CRITICAL: Should CREATE issue for bob/repo-b despite alice/repo-a having same hash
+    mock_adapter.create_issue.assert_called_once()
+
+    # Verify query included owner and repo (not just hash)
+    assert len(filter_by_calls) > 0
+    last_filter = filter_by_calls[-1]
+    assert "owner" in last_filter, "Query must include owner to scope deduplication"
+    assert "repo" in last_filter, "Query must include repo to scope deduplication"
+    assert last_filter["owner"] == "bob"
+    assert last_filter["repo"] == "repo-b"

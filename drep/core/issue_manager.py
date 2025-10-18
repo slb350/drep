@@ -76,11 +76,15 @@ class IssueManager:
             # Generate hash for deduplication
             finding_hash = self._generate_hash(finding)
 
-            # Check if we've already created this issue
-            existing = self.db.query(FindingCache).filter_by(finding_hash=finding_hash).first()
+            # Check if we've already created this issue (scoped to this repository)
+            existing = (
+                self.db.query(FindingCache)
+                .filter_by(owner=owner, repo=repo, finding_hash=finding_hash)
+                .first()
+            )
 
             if existing:
-                # Skip duplicate - we've already created an issue for this exact finding
+                # Skip duplicate - already created issue for this finding in this repo
                 continue
 
             # Create issue via adapter

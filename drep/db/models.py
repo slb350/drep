@@ -27,7 +27,7 @@ class RepositoryScan(Base):
 
 
 class FindingCache(Base):
-    """Prevents duplicate issues."""
+    """Prevents duplicate issues (scoped per repository)."""
 
     __tablename__ = "finding_cache"
 
@@ -35,8 +35,12 @@ class FindingCache(Base):
     owner = Column(String, nullable=False)
     repo = Column(String, nullable=False)
     file_path = Column(String, nullable=False)
-    finding_hash = Column(String, nullable=False, unique=True)
+    finding_hash = Column(String, nullable=False)  # Not globally unique
     issue_number = Column(Integer, nullable=True)
     created_at = Column(DateTime, default=lambda: datetime.now(UTC))
 
-    __table_args__ = (Index("idx_finding_hash", "finding_hash"),)
+    # Deduplication is scoped to repository: same hash can exist across different repos
+    __table_args__ = (
+        Index("idx_finding_hash", "finding_hash"),
+        UniqueConstraint("owner", "repo", "finding_hash", name="uq_owner_repo_hash"),
+    )
