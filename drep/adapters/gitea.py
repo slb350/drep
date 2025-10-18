@@ -1,5 +1,7 @@
 """Gitea platform adapter implementation."""
 
+from typing import List, Optional
+
 import httpx
 
 
@@ -49,3 +51,32 @@ class GiteaAdapter:
                 raise ValueError("Unauthorized - check your Gitea token")
             else:
                 raise
+
+    async def create_issue(
+        self, owner: str, repo: str, title: str, body: str, labels: Optional[List[str]] = None
+    ) -> int:
+        """Create an issue and return issue number.
+
+        Args:
+            owner: Repository owner
+            repo: Repository name
+            title: Issue title
+            body: Issue body (markdown supported)
+            labels: Optional list of label names
+
+        Returns:
+            Created issue number
+
+        Raises:
+            ValueError: If issue creation fails
+        """
+        url = f"{self.url}/api/v1/repos/{owner}/{repo}/issues"
+        payload = {"title": title, "body": body, "labels": labels or []}
+
+        try:
+            response = await self.client.post(url, json=payload)
+            response.raise_for_status()
+            data = response.json()
+            return data["number"]
+        except httpx.HTTPStatusError as e:
+            raise ValueError(f"Failed to create issue: {e.response.text}")

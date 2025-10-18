@@ -183,3 +183,109 @@ async def test_get_default_branch_server_error():
             await adapter.get_default_branch("steve", "drep")
     finally:
         await adapter.close()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_create_issue_success():
+    """Test create_issue() successfully creates issue and returns number."""
+    from drep.adapters.gitea import GiteaAdapter
+
+    # Mock successful issue creation
+    respx.post("http://192.168.1.14:3000/api/v1/repos/steve/drep/issues").mock(
+        return_value=httpx.Response(201, json={"number": 42})
+    )
+
+    adapter = GiteaAdapter("http://192.168.1.14:3000", "token")
+
+    try:
+        issue_number = await adapter.create_issue(
+            owner="steve",
+            repo="drep",
+            title="[Test] Issue title",
+            body="Issue body content",
+            labels=["documentation", "automated"],
+        )
+        assert issue_number == 42
+    finally:
+        await adapter.close()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_create_issue_without_labels():
+    """Test create_issue() works without labels."""
+    from drep.adapters.gitea import GiteaAdapter
+
+    # Mock successful issue creation
+    respx.post("http://192.168.1.14:3000/api/v1/repos/steve/drep/issues").mock(
+        return_value=httpx.Response(201, json={"number": 43})
+    )
+
+    adapter = GiteaAdapter("http://192.168.1.14:3000", "token")
+
+    try:
+        issue_number = await adapter.create_issue(
+            owner="steve", repo="drep", title="[Test] Issue without labels", body="Body content"
+        )
+        assert issue_number == 43
+    finally:
+        await adapter.close()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_create_issue_sends_correct_payload():
+    """Test create_issue() sends correct JSON payload."""
+    from drep.adapters.gitea import GiteaAdapter
+
+    # Track the request payload
+    request_data = {}
+
+    def capture_request(request):
+        import json
+
+        request_data["payload"] = json.loads(request.content)
+        return httpx.Response(201, json={"number": 44})
+
+    respx.post("http://192.168.1.14:3000/api/v1/repos/steve/drep/issues").mock(
+        side_effect=capture_request
+    )
+
+    adapter = GiteaAdapter("http://192.168.1.14:3000", "token")
+
+    try:
+        await adapter.create_issue(
+            owner="steve",
+            repo="drep",
+            title="Test Title",
+            body="Test Body",
+            labels=["bug", "help wanted"],
+        )
+
+        # Verify payload structure
+        assert request_data["payload"]["title"] == "Test Title"
+        assert request_data["payload"]["body"] == "Test Body"
+        assert request_data["payload"]["labels"] == ["bug", "help wanted"]
+    finally:
+        await adapter.close()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_create_issue_error_handling():
+    """Test create_issue() raises ValueError with response text on error."""
+    from drep.adapters.gitea import GiteaAdapter
+
+    # Mock error response
+    respx.post("http://192.168.1.14:3000/api/v1/repos/steve/drep/issues").mock(
+        return_value=httpx.Response(403, text="Forbidden: Permission denied")
+    )
+
+    adapter = GiteaAdapter("http://192.168.1.14:3000", "token")
+
+    try:
+        with pytest.raises(ValueError, match="Failed to create issue"):
+            await adapter.create_issue(owner="steve", repo="drep", title="Test", body="Test")
+    finally:
+        await adapter.close()
