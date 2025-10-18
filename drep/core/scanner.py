@@ -63,15 +63,31 @@ class RepositoryScanner:
     def record_scan(self, owner: str, repo_name: str, commit_sha: str):
         """Record successful scan in database.
 
+        Updates existing record if one exists for this owner/repo,
+        otherwise creates a new record.
+
         Args:
             owner: Repository owner
             repo_name: Repository name
             commit_sha: Git commit SHA that was scanned
         """
-        new_scan = RepositoryScan(
-            owner=owner, repo=repo_name, commit_sha=commit_sha, scanned_at=datetime.now(UTC)
-        )
-        self.db.add(new_scan)
+        # Check if record already exists
+        existing = self.db.query(RepositoryScan).filter_by(owner=owner, repo=repo_name).first()
+
+        if existing:
+            # Update existing record
+            existing.commit_sha = commit_sha
+            existing.scanned_at = datetime.now(UTC)
+        else:
+            # Create new record
+            new_scan = RepositoryScan(
+                owner=owner,
+                repo=repo_name,
+                commit_sha=commit_sha,
+                scanned_at=datetime.now(UTC),
+            )
+            self.db.add(new_scan)
+
         self.db.commit()
 
     def _get_all_python_files(self, repo_path: str) -> List[str]:
@@ -100,13 +116,16 @@ class RepositoryScanner:
     def _should_ignore(self, file_path: Path) -> bool:
         """Check if file should be ignored.
 
+        Checks if any path component matches ignore patterns.
+        Uses exact directory name matching to avoid false positives.
+
         Args:
             file_path: Path object to check
 
         Returns:
             True if file should be ignored, False otherwise
         """
-        ignore_patterns = [
+        ignore_dirs = {
             "__pycache__",
             ".git",
             "venv",
@@ -116,14 +135,23 @@ class RepositoryScanner:
             "build",
             "dist",
             ".eggs",
-            "*.egg-info",
-        ]
+        }
 
-        file_str = str(file_path)
-        return any(pattern in file_str for pattern in ignore_patterns)
+        # Check if any path component is an ignored directory
+        for part in file_path.parts:
+            if part in ignore_dirs:
+                return True
+            # Check for .egg-info directories (e.g., drep.egg-info)
+            if part.endswith(".egg-info"):
+                return True
+
+        return False
 
     def _get_changed_files(self, repo: Repo, old_sha: str, new_sha: str) -> List[str]:
         """Get files changed between two commits.
+
+        Only returns files that exist in the new commit (excludes deleted files
+        and old names of renamed files).
 
         Args:
             repo: GitPython Repo object
@@ -137,10 +165,11 @@ class RepositoryScanner:
 
         changed_files = []
         for diff_item in diff:
-            # Check both a_path and b_path (for renames)
-            for path in [diff_item.a_path, diff_item.b_path]:
-                if path and (path.endswith(".py") or path.endswith(".md")):
-                    changed_files.append(path)
+            # Only use b_path (the file path in the new commit)
+            # This excludes deleted files (b_path is None) and old names of renames
+            path = diff_item.b_path
+            if path and (path.endswith(".py") or path.endswith(".md")):
+                changed_files.append(path)
 
         # Deduplicate
         return list(set(changed_files))

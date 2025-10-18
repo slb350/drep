@@ -346,19 +346,23 @@ class TestScanRepositoryMainLogic:
             assert sha == "new_sha"
 
     def test_record_scan_creates_database_entry(self):
-        """Test that record_scan creates a RepositoryScan entry."""
+        """Test that record_scan creates a RepositoryScan entry when none exists."""
         db_session = Mock()
+        # Mock query to return None (no existing record)
+        db_session.query.return_value.filter_by.return_value.first.return_value = None
         scanner = RepositoryScanner(db_session)
 
         scanner.record_scan("owner", "repo", "abc123")
 
-        # Should add entry to database
+        # Should add entry to database (new record)
         db_session.add.assert_called_once()
         db_session.commit.assert_called_once()
 
     def test_record_scan_stores_correct_data(self):
         """Test that record_scan stores owner, repo, and commit_sha."""
         db_session = Mock()
+        # Mock query to return None (no existing record)
+        db_session.query.return_value.filter_by.return_value.first.return_value = None
         scanner = RepositoryScanner(db_session)
 
         scanner.record_scan("test_owner", "test_repo", "commit_sha_123")
@@ -372,3 +376,110 @@ class TestScanRepositoryMainLogic:
         assert scan_obj.owner == "test_owner"
         assert scan_obj.repo == "test_repo"
         assert scan_obj.commit_sha == "commit_sha_123"
+
+
+class TestBugFixes:
+    """Tests for bug fixes identified in code review."""
+
+    def test_record_scan_handles_duplicate_owner_repo(self):
+        """Test that record_scan updates existing record instead of violating unique constraint.
+
+        Bug: record_scan always creates new RepositoryScan, violating uq_owner_repo
+        unique constraint on subsequent scans.
+        """
+        from drep.db import init_database
+        from drep.db.models import RepositoryScan as RepoScan
+
+        # Use real database to test unique constraint
+        db = init_database("sqlite:///:memory:")
+        scanner = RepositoryScanner(db)
+
+        # First scan - should succeed
+        scanner.record_scan("owner", "repo", "sha1")
+
+        # Second scan with same owner/repo - should update, not crash
+        scanner.record_scan("owner", "repo", "sha2")
+
+        # Should have exactly one record with latest SHA
+        scans = db.query(RepoScan).filter_by(owner="owner", repo="repo").all()
+        assert len(scans) == 1
+        assert scans[0].commit_sha == "sha2"
+
+    def test_get_changed_files_filters_deleted_files(self):
+        """Test that _get_changed_files excludes deleted files.
+
+        Bug: _get_changed_files returns deleted/renamed-away files that cause
+        FileNotFoundError when trying to read them.
+        """
+        db_session = Mock()
+        scanner = RepositoryScanner(db_session)
+
+        # Mock git repo with deleted file
+        mock_repo = Mock()
+
+        # Mock diff item for deleted file (exists in a_path but not b_path)
+        mock_deleted = Mock()
+        mock_deleted.a_path = "deleted.py"
+        mock_deleted.b_path = None
+        mock_deleted.deleted_file = True
+
+        # Mock diff item for renamed file (old name in a_path, new in b_path)
+        mock_renamed = Mock()
+        mock_renamed.a_path = "old_name.py"
+        mock_renamed.b_path = "new_name.py"
+        mock_renamed.renamed_file = True
+
+        # Mock diff item for modified file (exists in both)
+        mock_modified = Mock()
+        mock_modified.a_path = "modified.py"
+        mock_modified.b_path = "modified.py"
+
+        mock_commit = Mock()
+        mock_commit.diff.return_value = [mock_deleted, mock_renamed, mock_modified]
+        mock_repo.commit.return_value = mock_commit
+
+        files = scanner._get_changed_files(mock_repo, "sha1", "sha2")
+
+        # Should NOT include deleted.py or old_name.py
+        # Should include new_name.py and modified.py
+        assert "deleted.py" not in files
+        assert "old_name.py" not in files
+        assert "new_name.py" in files or "modified.py" in files
+
+    def test_should_ignore_no_false_positives_for_env(self):
+        """Test that _should_ignore doesn't match 'env' in environment.py.
+
+        Bug: Substring matching causes false positives - 'env' matches
+        'environment.py', 'build' matches 'building.md', etc.
+        """
+        db_session = Mock()
+        scanner = RepositoryScanner(db_session)
+
+        # These should NOT be ignored (false positives in original code)
+        assert scanner._should_ignore(Path("src/environment.py")) is False
+        assert scanner._should_ignore(Path("docs/building.md")) is False
+        assert scanner._should_ignore(Path("src/config/development.py")) is False
+
+    def test_should_ignore_matches_actual_directories(self):
+        """Test that _should_ignore correctly matches directory names."""
+        db_session = Mock()
+        scanner = RepositoryScanner(db_session)
+
+        # These SHOULD be ignored
+        assert scanner._should_ignore(Path("venv/lib/test.py")) is True
+        assert scanner._should_ignore(Path("env/bin/test.py")) is True
+        assert scanner._should_ignore(Path("build/lib/test.py")) is True
+        assert scanner._should_ignore(Path("__pycache__/test.pyc")) is True
+
+    def test_should_ignore_handles_egg_info_wildcard(self):
+        """Test that _should_ignore matches .egg-info directories.
+
+        Bug: Literal '*.egg-info' string never matches because * isn't
+        treated as a wildcard.
+        """
+        db_session = Mock()
+        scanner = RepositoryScanner(db_session)
+
+        # Should match actual .egg-info directories
+        assert scanner._should_ignore(Path("drep.egg-info/PKG-INFO")) is True
+        assert scanner._should_ignore(Path("my_package.egg-info/SOURCES.txt")) is True
