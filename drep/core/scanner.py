@@ -9,6 +9,7 @@ from git import Repo
 
 from drep.code_quality.analyzer import CodeQualityAnalyzer
 from drep.db.models import RepositoryScan
+from drep.docstring.generator import DocstringGenerator
 from drep.llm.cache import IntelligentCache
 from drep.llm.client import LLMClient, get_current_commit_sha  # noqa: F401
 from drep.models.config import Config
@@ -63,9 +64,13 @@ class RepositoryScanner:
 
             # Create code quality analyzer
             self.code_analyzer = CodeQualityAnalyzer(self.llm_client)
+
+            # Create docstring generator
+            self.docstring_generator = DocstringGenerator(self.llm_client)
         else:
             self.llm_client = None
             self.code_analyzer = None
+            self.docstring_generator = None
 
     async def scan_repository(
         self, repo_path: str, owner: str, repo_name: str
@@ -280,6 +285,67 @@ class RepositoryScanner:
             findings.extend(file_findings)
 
         logger.info(f"Found {len(findings)} code quality issues across {len(python_files)} files")
+        return findings
+
+    async def analyze_docstrings(
+        self, repo_path: str, files: List[str], repo_id: str, commit_sha: str
+    ) -> List[Finding]:
+        """Analyze Python files for missing/poor docstrings using LLM.
+
+        Args:
+            repo_path: Path to repository root
+            files: List of file paths to analyze
+            repo_id: Repository identifier (e.g., "owner/repo")
+            commit_sha: Current commit SHA for cache invalidation
+
+        Returns:
+            List of Finding objects for docstring issues
+
+        Note:
+            - Only analyzes if docstring_generator is initialized
+            - Only analyzes Python (.py) files
+            - Skips files that cannot be read
+        """
+        if not self.docstring_generator:
+            logger.debug("Docstring generator not initialized, skipping docstring analysis")
+            return []
+
+        findings: List[Finding] = []
+        repo_path_obj = Path(repo_path)
+
+        # Filter to only Python files
+        python_files = [f for f in files if f.endswith(".py")]
+
+        if not python_files:
+            logger.debug("No Python files to analyze for docstrings")
+            return []
+
+        logger.info(f"Analyzing {len(python_files)} Python files for docstrings")
+
+        # Analyze each file
+        for file_path in python_files:
+            full_path = repo_path_obj / file_path
+
+            # Skip if file doesn't exist
+            if not full_path.exists():
+                logger.warning(f"Skipping {file_path}: file not found")
+                continue
+
+            # Read file content
+            try:
+                content = full_path.read_text(errors="ignore")
+            except Exception as e:
+                logger.error(f"Failed to read {file_path}: {e}")
+                continue
+
+            # Analyze with docstring generator
+            file_findings = await self.docstring_generator.analyze_file(
+                file_path=file_path, content=content, repo_id=repo_id, commit_sha=commit_sha
+            )
+
+            findings.extend(file_findings)
+
+        logger.info(f"Found {len(findings)} docstring issues across {len(python_files)} files")
         return findings
 
     async def close(self):

@@ -483,3 +483,76 @@ class TestBugFixes:
         # Should match actual .egg-info directories
         assert scanner._should_ignore(Path("drep.egg-info/PKG-INFO")) is True
         assert scanner._should_ignore(Path("my_package.egg-info/SOURCES.txt")) is True
+
+
+class TestDocstringAnalysis:
+    """Tests for docstring analysis integration in scanner."""
+
+    @pytest.mark.asyncio
+    async def test_analyze_docstrings_without_llm(self):
+        """Test that analyze_docstrings returns empty list when LLM not enabled."""
+        db_session = Mock()
+        scanner = RepositoryScanner(db_session)  # No config = no LLM
+
+        findings = await scanner.analyze_docstrings(
+            repo_path="/fake/path",
+            files=["module.py"],
+            repo_id="test/repo",
+            commit_sha="abc123",
+        )
+
+        assert findings == []
+
+    @pytest.mark.asyncio
+    async def test_analyze_docstrings_filters_python_files(self, tmp_path):
+        """Test that analyze_docstrings only processes Python files."""
+        from unittest.mock import AsyncMock
+
+        from drep.models.config import Config, LLMConfig
+
+        db_session = Mock()
+
+        # Create minimal config with LLM enabled
+        config = Mock(spec=Config)
+        config.llm = Mock(spec=LLMConfig)
+        config.llm.enabled = True
+        config.llm.endpoint = "http://localhost:8000"
+        config.llm.model = "test-model"
+        config.llm.cache = Mock()
+        config.llm.cache.enabled = False
+        config.llm.api_key = None
+        config.llm.temperature = 0.2
+        config.llm.max_tokens = 1000
+        config.llm.timeout = 60
+        config.llm.max_retries = 3
+        config.llm.retry_delay = 1
+        config.llm.exponential_backoff = True
+        config.llm.max_concurrent_global = 5
+        config.llm.max_concurrent_per_repo = 3
+        config.llm.requests_per_minute = 60
+        config.llm.max_tokens_per_minute = 100000
+
+        scanner = RepositoryScanner(db_session, config)
+
+        # Mock the docstring_generator.analyze_file method
+        scanner.docstring_generator.analyze_file = AsyncMock(return_value=[])
+
+        # Create test files
+        py_file = tmp_path / "test.py"
+        py_file.write_text("def func(): pass")
+        md_file = tmp_path / "README.md"
+        md_file.write_text("# Readme")
+
+        # Analyze with mixed file types
+        files = ["test.py", "README.md"]
+        await scanner.analyze_docstrings(
+            repo_path=str(tmp_path),
+            files=files,
+            repo_id="test/repo",
+            commit_sha="abc123",
+        )
+
+        # Should only call analyze_file for Python file
+        assert scanner.docstring_generator.analyze_file.call_count == 1
+        call_args = scanner.docstring_generator.analyze_file.call_args
+        assert call_args.kwargs["file_path"] == "test.py"
