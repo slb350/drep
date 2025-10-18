@@ -211,3 +211,164 @@ database_url: ${DATABASE_URL}
         # Clean up
         for key in ["GITEA_URL", "GITEA_TOKEN", "REPO_PATTERN", "CUSTOM_WORD", "DATABASE_URL"]:
             del os.environ[key]
+
+
+def test_load_config_empty_yaml_file(tmp_path):
+    """Test that empty YAML file raises clear error."""
+    from drep.config import load_config
+
+    config_path = tmp_path / "empty.yaml"
+    config_path.write_text("")  # Completely empty file
+
+    with pytest.raises(ValueError) as exc_info:
+        load_config(str(config_path))
+
+    assert "empty" in str(exc_info.value).lower()
+    assert str(config_path) in str(exc_info.value)
+
+
+def test_load_config_yaml_with_only_comments(tmp_path):
+    """Test that YAML with only comments is treated as empty."""
+    from drep.config import load_config
+
+    config_path = tmp_path / "comments.yaml"
+    config_path.write_text("# Just a comment\n# Another comment\n")
+
+    with pytest.raises(ValueError) as exc_info:
+        load_config(str(config_path))
+
+    assert "empty" in str(exc_info.value).lower()
+
+
+def test_load_config_non_dict_yaml_string(tmp_path):
+    """Test that YAML containing just a string raises clear error."""
+    from drep.config import load_config
+
+    config_path = tmp_path / "string.yaml"
+    config_path.write_text("just a string value")
+
+    with pytest.raises(ValueError) as exc_info:
+        load_config(str(config_path))
+
+    assert "mapping" in str(exc_info.value).lower() or "dict" in str(exc_info.value).lower()
+
+
+def test_load_config_non_dict_yaml_list(tmp_path):
+    """Test that YAML containing just a list raises clear error."""
+    from drep.config import load_config
+
+    config_path = tmp_path / "list.yaml"
+    config_path.write_text("- item1\n- item2\n")
+
+    with pytest.raises(ValueError) as exc_info:
+        load_config(str(config_path))
+
+    assert "mapping" in str(exc_info.value).lower() or "dict" in str(exc_info.value).lower()
+
+
+def test_load_config_strict_mode_missing_env_var(tmp_path):
+    """Test that strict mode raises error for missing env vars."""
+    from drep.config import load_config
+
+    config_path = tmp_path / "config.yaml"
+    config_content = """gitea:
+  url: ${GITEA_URL}
+  token: ${GITEA_TOKEN}
+  repositories:
+    - steve/*
+
+documentation:
+  enabled: true
+"""
+    config_path.write_text(config_content)
+
+    # Make sure env vars are NOT set
+    os.environ.pop("GITEA_URL", None)
+    os.environ.pop("GITEA_TOKEN", None)
+
+    with pytest.raises(ValueError) as exc_info:
+        load_config(str(config_path), strict=True)
+
+    error_msg = str(exc_info.value).lower()
+    assert "environment variable" in error_msg or "missing" in error_msg
+    # Should mention at least one of the missing vars
+    assert "gitea_url" in error_msg or "gitea_token" in error_msg
+
+
+def test_load_config_strict_mode_all_env_vars_set(tmp_path):
+    """Test that strict mode passes when all env vars are set."""
+    from drep.config import load_config
+
+    config_path = tmp_path / "config.yaml"
+    config_content = """gitea:
+  url: ${GITEA_URL}
+  token: ${GITEA_TOKEN}
+  repositories:
+    - steve/*
+
+documentation:
+  enabled: true
+"""
+    config_path.write_text(config_content)
+
+    # Set all env vars
+    os.environ["GITEA_URL"] = "http://test.com:3000"
+    os.environ["GITEA_TOKEN"] = "test_token"
+
+    try:
+        config = load_config(str(config_path), strict=True)
+
+        # Should succeed and substitute correctly
+        assert config.gitea.url == "http://test.com:3000"
+        assert config.gitea.token == "test_token"
+    finally:
+        del os.environ["GITEA_URL"]
+        del os.environ["GITEA_TOKEN"]
+
+
+def test_load_config_non_strict_mode_allows_missing_env_vars(config_with_env_vars):
+    """Test that non-strict mode (default) allows missing env vars."""
+    from drep.config import load_config
+
+    # Make sure env vars are NOT set
+    os.environ.pop("GITEA_URL", None)
+    os.environ.pop("GITEA_TOKEN", None)
+
+    # Should not raise - this is the current behavior
+    config = load_config(str(config_with_env_vars), strict=False)
+
+    # Placeholders remain
+    assert config.gitea.url == "${GITEA_URL}"
+    assert config.gitea.token == "${GITEA_TOKEN}"
+
+
+def test_load_config_strict_mode_partial_substitution(tmp_path):
+    """Test that strict mode catches even one missing var among many."""
+    from drep.config import load_config
+
+    config_path = tmp_path / "config.yaml"
+    config_content = """gitea:
+  url: ${GITEA_URL}
+  token: ${GITEA_TOKEN}
+  repositories:
+    - ${REPO_PATTERN}
+
+documentation:
+  enabled: true
+"""
+    config_path.write_text(config_content)
+
+    # Set only some vars
+    os.environ["GITEA_URL"] = "http://test.com"
+    os.environ.pop("GITEA_TOKEN", None)
+    os.environ.pop("REPO_PATTERN", None)
+
+    try:
+        with pytest.raises(ValueError) as exc_info:
+            load_config(str(config_path), strict=True)
+
+        # Should mention the missing vars
+        error_msg = str(exc_info.value).lower()
+        assert "gitea_token" in error_msg or "repo_pattern" in error_msg
+    finally:
+        del os.environ["GITEA_URL"]
