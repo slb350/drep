@@ -171,6 +171,7 @@
   },
   "active": "202bc079d4317f49",
   "lastOpenFiles": [
+    "docs/implementation-plan.md.tmp.30751.1760766864797",
     "drep/adapters/gitea.py.tmp.30751.1760766651030",
     "drep/adapters/gitea.py.tmp.30751.1760766643186",
     "venv/lib/python3.13/site-packages/respx/__pycache__/plugin.cpython-313-pytest-8.4.2.pyc",
@@ -181,7 +182,6 @@
     "venv/lib/python3.13/site-packages/respx/__pycache__/types.cpython-313-pytest-8.4.2.pyc",
     "venv/lib/python3.13/site-packages/respx/__pycache__/patterns.cpython-313-pytest-8.4.2.pyc",
     "venv/lib/python3.13/site-packages/respx/__pycache__/utils.cpython-313-pytest-8.4.2.pyc",
-    "venv/lib/python3.13/site-packages/respx/__pycache__/models.cpython-313-pytest-8.4.2.pyc",
     "venv/lib/python3.13/site-packages/respx-0.22.0.dist-info/LICENSE.md",
     "venv/lib/python3.13/site-packages/black-25.9.0.dist-info/licenses/AUTHORS.md",
     "venv/lib/python3.13/site-packages/httpx-0.28.1.dist-info/licenses/LICENSE.md",

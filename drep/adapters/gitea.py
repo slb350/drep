@@ -1,6 +1,6 @@
 """Gitea platform adapter implementation."""
 
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 import httpx
 
@@ -52,6 +52,44 @@ class GiteaAdapter:
             else:
                 raise
 
+    async def _get_label_ids(self, owner: str, repo: str, label_names: List[str]) -> List[int]:
+        """Get label IDs from label names.
+
+        Args:
+            owner: Repository owner
+            repo: Repository name
+            label_names: List of label names to translate
+
+        Returns:
+            List of label IDs corresponding to the label names
+
+        Raises:
+            ValueError: If any label name is not found in the repository
+        """
+        if not label_names:
+            return []
+
+        # Fetch all labels from the repository
+        url = f"{self.url}/api/v1/repos/{owner}/{repo}/labels"
+        response = await self.client.get(url)
+        response.raise_for_status()
+        labels = response.json()
+
+        # Build name → ID mapping
+        label_map: Dict[str, int] = {label["name"]: label["id"] for label in labels}
+
+        # Translate names to IDs
+        label_ids = []
+        for name in label_names:
+            if name not in label_map:
+                raise ValueError(
+                    f"Label '{name}' not found in repository {owner}/{repo}. "
+                    f"Available labels: {', '.join(label_map.keys())}"
+                )
+            label_ids.append(label_map[name])
+
+        return label_ids
+
     async def create_issue(
         self, owner: str, repo: str, title: str, body: str, labels: Optional[List[str]] = None
     ) -> int:
@@ -62,16 +100,19 @@ class GiteaAdapter:
             repo: Repository name
             title: Issue title
             body: Issue body (markdown supported)
-            labels: Optional list of label names
+            labels: Optional list of label names (will be translated to IDs)
 
         Returns:
             Created issue number
 
         Raises:
-            ValueError: If issue creation fails
+            ValueError: If issue creation fails or label names are invalid
         """
+        # Translate label names to IDs
+        label_ids = await self._get_label_ids(owner, repo, labels or [])
+
         url = f"{self.url}/api/v1/repos/{owner}/{repo}/issues"
-        payload = {"title": title, "body": body, "labels": labels or []}
+        payload = {"title": title, "body": body, "labels": label_ids}
 
         try:
             response = await self.client.post(url, json=payload)

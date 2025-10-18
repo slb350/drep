@@ -191,6 +191,17 @@ async def test_create_issue_success():
     """Test create_issue() successfully creates issue and returns number."""
     from drep.adapters.gitea import GiteaAdapter
 
+    # Mock labels API for label name → ID translation
+    respx.get("http://192.168.1.14:3000/api/v1/repos/steve/drep/labels").mock(
+        return_value=httpx.Response(
+            200,
+            json=[
+                {"id": 1, "name": "documentation"},
+                {"id": 2, "name": "automated"},
+            ],
+        )
+    )
+
     # Mock successful issue creation
     respx.post("http://192.168.1.14:3000/api/v1/repos/steve/drep/issues").mock(
         return_value=httpx.Response(201, json={"number": 42})
@@ -236,8 +247,19 @@ async def test_create_issue_without_labels():
 @pytest.mark.asyncio
 @respx.mock
 async def test_create_issue_sends_correct_payload():
-    """Test create_issue() sends correct JSON payload."""
+    """Test create_issue() sends correct JSON payload with label IDs."""
     from drep.adapters.gitea import GiteaAdapter
+
+    # Mock labels API
+    respx.get("http://192.168.1.14:3000/api/v1/repos/steve/drep/labels").mock(
+        return_value=httpx.Response(
+            200,
+            json=[
+                {"id": 10, "name": "bug"},
+                {"id": 20, "name": "help wanted"},
+            ],
+        )
+    )
 
     # Track the request payload
     request_data = {}
@@ -263,10 +285,10 @@ async def test_create_issue_sends_correct_payload():
             labels=["bug", "help wanted"],
         )
 
-        # Verify payload structure
+        # Verify payload structure - labels should be IDs (integers), not names
         assert request_data["payload"]["title"] == "Test Title"
         assert request_data["payload"]["body"] == "Test Body"
-        assert request_data["payload"]["labels"] == ["bug", "help wanted"]
+        assert request_data["payload"]["labels"] == [10, 20]
     finally:
         await adapter.close()
 
@@ -287,5 +309,106 @@ async def test_create_issue_error_handling():
     try:
         with pytest.raises(ValueError, match="Failed to create issue"):
             await adapter.create_issue(owner="steve", repo="drep", title="Test", body="Test")
+    finally:
+        await adapter.close()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_create_issue_translates_label_names_to_ids():
+    """Test create_issue() translates label names to IDs before posting."""
+    from drep.adapters.gitea import GiteaAdapter
+
+    # Mock the labels API to return label IDs
+    respx.get("http://192.168.1.14:3000/api/v1/repos/steve/drep/labels").mock(
+        return_value=httpx.Response(
+            200,
+            json=[
+                {"id": 1, "name": "documentation"},
+                {"id": 2, "name": "automated"},
+                {"id": 3, "name": "bug"},
+            ],
+        )
+    )
+
+    # Track the actual payload sent to create issue
+    request_data = {}
+
+    def capture_request(request):
+        import json
+
+        request_data["payload"] = json.loads(request.content)
+        return httpx.Response(201, json={"number": 50})
+
+    respx.post("http://192.168.1.14:3000/api/v1/repos/steve/drep/issues").mock(
+        side_effect=capture_request
+    )
+
+    adapter = GiteaAdapter("http://192.168.1.14:3000", "token")
+
+    try:
+        await adapter.create_issue(
+            owner="steve",
+            repo="drep",
+            title="Test",
+            body="Test",
+            labels=["documentation", "automated"],
+        )
+
+        # Verify that label IDs (integers) were sent, not names
+        assert request_data["payload"]["labels"] == [1, 2]
+    finally:
+        await adapter.close()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_create_issue_handles_unknown_labels():
+    """Test create_issue() raises ValueError for unknown label names."""
+    from drep.adapters.gitea import GiteaAdapter
+
+    # Mock labels API with limited labels
+    respx.get("http://192.168.1.14:3000/api/v1/repos/steve/drep/labels").mock(
+        return_value=httpx.Response(
+            200, json=[{"id": 1, "name": "documentation"}, {"id": 2, "name": "automated"}]
+        )
+    )
+
+    adapter = GiteaAdapter("http://192.168.1.14:3000", "token")
+
+    try:
+        with pytest.raises(ValueError, match="Label 'nonexistent' not found"):
+            await adapter.create_issue(
+                owner="steve",
+                repo="drep",
+                title="Test",
+                body="Test",
+                labels=["documentation", "nonexistent"],
+            )
+    finally:
+        await adapter.close()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_create_issue_empty_labels_works():
+    """Test create_issue() works with empty labels (no API call needed)."""
+    from drep.adapters.gitea import GiteaAdapter
+
+    # Mock successful issue creation
+    respx.post("http://192.168.1.14:3000/api/v1/repos/steve/drep/issues").mock(
+        return_value=httpx.Response(201, json={"number": 51})
+    )
+
+    adapter = GiteaAdapter("http://192.168.1.14:3000", "token")
+
+    try:
+        issue_number = await adapter.create_issue(
+            owner="steve", repo="drep", title="Test", body="Test", labels=[]
+        )
+        assert issue_number == 51
+
+        # Verify no labels API call was made (only 1 request to create issue)
+        assert len(respx.calls) == 1
     finally:
         await adapter.close()
