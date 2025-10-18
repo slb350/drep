@@ -234,3 +234,75 @@ class Outer:
         # Should extract both Outer and Inner
         assert len(classes) >= 1
         assert any(c.name == "Outer" for c in classes)
+
+    def test_extract_function_with_varargs(self):
+        """Test extracting function with *args."""
+        code = """
+def process(*args):
+    pass
+"""
+        functions = extract_functions(code)
+
+        assert len(functions) == 1
+        func = functions[0]
+        # Should include *args
+        assert "*args" in func.args
+
+    def test_extract_function_with_kwargs(self):
+        """Test extracting function with **kwargs."""
+        code = """
+def configure(**kwargs):
+    pass
+"""
+        functions = extract_functions(code)
+
+        assert len(functions) == 1
+        func = functions[0]
+        # Should include **kwargs
+        assert "**kwargs" in func.args
+
+    def test_extract_function_with_kwonly_args(self):
+        """Test extracting function with keyword-only arguments."""
+        code = """
+def calculate(x, y, *, precision=2):
+    pass
+"""
+        functions = extract_functions(code)
+
+        assert len(functions) == 1
+        func = functions[0]
+        # Should include all args including keyword-only
+        assert "x" in func.args
+        assert "y" in func.args
+        assert "precision" in func.args
+
+    def test_extract_function_with_posonly_args(self):
+        """Test extracting function with positional-only arguments (PEP 570)."""
+        code = """
+def foo(a, b, /, c, d):
+    pass
+"""
+        functions = extract_functions(code)
+
+        assert len(functions) == 1
+        func = functions[0]
+        # Should include positional-only args
+        assert "a" in func.args
+        assert "b" in func.args
+        assert "c" in func.args
+        assert "d" in func.args
+
+    def test_extract_function_with_all_arg_types(self):
+        """Test extracting function with all argument types combined."""
+        code = """
+def complex_sig(a, b, /, c, d, *args, e, f=10, **kwargs):
+    pass
+"""
+        functions = extract_functions(code)
+
+        assert len(functions) == 1
+        func = functions[0]
+        # Should include ALL argument types
+        expected_args = ["a", "b", "c", "d", "*args", "e", "f", "**kwargs"]
+        for arg in expected_args:
+            assert arg in func.args, f"Missing {arg} from {func.args}"

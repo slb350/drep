@@ -209,11 +209,11 @@ class DocstringGenerator:
         Returns:
             Finding with suggested docstring, or None if generation fails
         """
-        # Extract function code (with some context)
+        # Extract function code
         lines = full_content.split("\n")
         start = max(0, func_info.line_number - 1)
-        # Ensure we don't go past file end
-        end = min(len(lines), func_info.line_number + func_info.complexity)
+        # Use start + complexity to get exact function bounds (no spillover)
+        end = min(len(lines), start + func_info.complexity)
         function_code = "\n".join(lines[start:end])
 
         # Prepare prompt

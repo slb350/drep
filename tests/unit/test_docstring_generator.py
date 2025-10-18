@@ -363,3 +363,116 @@ def getter(self):
 
         # Should skip simple functions
         assert len(findings) == 0
+
+    @pytest.mark.asyncio
+    async def test_back_to_back_functions_no_spillover(self, docstring_generator, mock_llm_client):
+        """Test that back-to-back functions don't capture next function's code.
+
+        Regression test for bug where function extraction captured one extra line,
+        causing the LLM to see blended function definitions.
+        """
+        code = """
+def first_function(x: int) -> int:
+    result = x * 2
+    result += 1
+    return result
+
+def second_function(y: int) -> int:
+    value = y + 10
+    value *= 2
+    return value
+"""
+
+        # Track what code was sent to LLM
+        captured_code = []
+
+        async def capture_code(*args, **kwargs):
+            # Extract the code from system_prompt
+            prompt = kwargs.get("system_prompt", "")
+            if "```python" in prompt:
+                import re
+
+                match = re.search(r"```python\n(.*?)\n```", prompt, re.DOTALL)
+                if match:
+                    captured_code.append(match.group(1))
+            return {
+                "docstring": "Test docstring",
+                "quality": "high",
+                "reasoning": "Test",
+            }
+
+        mock_llm_client.analyze_code_json.side_effect = capture_code
+
+        await docstring_generator.analyze_file(
+            file_path="test.py",
+            content=code,
+            repo_id="test/repo",
+            commit_sha="abc123",
+        )
+
+        # Should have analyzed 2 functions
+        assert len(captured_code) == 2
+
+        # First function code should NOT contain "def second_function"
+        assert (
+            "def second_function" not in captured_code[0]
+        ), f"First function code contains spillover: {captured_code[0]}"
+
+        # Second function code should only contain second_function
+        assert "def second_function" in captured_code[1]
+        assert "def first_function" not in captured_code[1]
+
+    @pytest.mark.asyncio
+    async def test_no_blank_line_between_functions_causes_spillover(
+        self, docstring_generator, mock_llm_client
+    ):
+        """Test that functions with NO blank line between them cause spillover bug.
+
+        This demonstrates the actual bug: when functions are directly adjacent,
+        the extraction captures the next function's def line.
+        """
+        code = """
+def first_function(x: int) -> int:
+    result = x * 2
+    result += 1
+    return result
+def second_function(y: int) -> int:
+    value = y + 10
+    value *= 2
+    return value
+"""
+
+        # Track what code was sent to LLM
+        captured_code = []
+
+        async def capture_code(*args, **kwargs):
+            prompt = kwargs.get("system_prompt", "")
+            if "```python" in prompt:
+                import re
+
+                match = re.search(r"```python\n(.*?)\n```", prompt, re.DOTALL)
+                if match:
+                    captured_code.append(match.group(1))
+            return {
+                "docstring": "Test docstring",
+                "quality": "high",
+                "reasoning": "Test",
+            }
+
+        mock_llm_client.analyze_code_json.side_effect = capture_code
+
+        await docstring_generator.analyze_file(
+            file_path="test.py",
+            content=code,
+            repo_id="test/repo",
+            commit_sha="abc123",
+        )
+
+        # Should have analyzed 2 functions
+        assert len(captured_code) == 2
+
+        # THIS SHOULD FAIL: First function code WILL contain "def second_function"
+        # because we extract one line too many
+        assert (
+            "def second_function" not in captured_code[0]
+        ), f"BUG: First function code contains spillover!\nCaptured:\n{captured_code[0]}"
