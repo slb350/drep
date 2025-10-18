@@ -171,6 +171,8 @@
   },
   "active": "202bc079d4317f49",
   "lastOpenFiles": [
+    "README.md.tmp.30751.1760765605437",
+    "docs/implementation-plan.md.tmp.30751.1760765572254",
     "drep/__pycache__/config.cpython-313.pyc",
     "drep/config.py",
     "tests/unit/__pycache__/test_config_loader.cpython-313-pytest-8.4.2.pyc",
@@ -180,8 +182,6 @@
     "tests/unit/test_db_init.py",
     "drep/db/__pycache__/models.cpython-313.pyc",
     "drep/db/__pycache__/__init__.cpython-313.pyc",
-    "drep/db/__pycache__",
-    "tests/unit/__pycache__/test_db_models.cpython-313-pytest-8.4.2.pyc",
     "venv/lib/python3.13/site-packages/black-25.9.0.dist-info/licenses/AUTHORS.md",
     "venv/lib/python3.13/site-packages/httpx-0.28.1.dist-info/licenses/LICENSE.md",
     "venv/lib/python3.13/site-packages/starlette-0.48.0.dist-info/licenses/LICENSE.md",

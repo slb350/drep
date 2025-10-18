@@ -11,13 +11,13 @@ Automated code review and documentation improvement tool for **Gitea**, **GitHub
 
 ## Features
 
-### 🤖 Proactive Code Analysis
+### Proactive Code Analysis
 Unlike reactive tools, drep continuously monitors repositories and automatically:
 - Detects bugs, security vulnerabilities, and best practice violations
 - Opens issues with detailed findings and suggested fixes
 - No manual intervention required
 
-### 📝 Documentation Specialist
+### Documentation Specialist
 Three-tiered analysis for comprehensive documentation quality:
 - **Layer 1**: Dictionary spellcheck (instant typo detection)
 - **Layer 2**: Pattern matching (formatting, syntax, consistency)
@@ -29,26 +29,26 @@ Three-tiered analysis for comprehensive documentation quality:
 - Low-quality comments (generic, outdated, or redundant)
 - Markdown syntax issues (broken links, malformed tables)
 
-### 🔍 Automated PR/MR Reviews
+### Automated PR/MR Reviews
 Intelligent code review when pull requests or merge requests are opened:
 - Analyzes changed files for issues
 - Posts line-specific review comments
 - Suggests improvements with explanations
 
-### 🎯 Draft PR Creation
+### Draft PR Creation
 All documentation fixes are automatically applied and submitted as draft PRs:
 - Categorized changes (typos, missing comments, improvements)
 - Human review before merge
 - Non-intrusive workflow
 
-### 🏠 Local LLM Powered
+### Local LLM Powered
 Complete privacy and control:
 - Uses your local LLM (Ollama, llama.cpp, LM Studio)
 - No external API calls
 - No cloud dependencies
 - No usage costs
 
-### 🌐 Platform Agnostic
+### Platform Agnostic
 Single tool for all your git platforms:
 - **Gitea** (self-hosted)
 - **GitHub**
@@ -220,17 +220,17 @@ PR Opened → Analyze changed files
 ```markdown
 # [drep] Documentation improvements
 
-## 🔤 Typo Fixes (12)
+## Typo Fixes (12)
 - README.md:15: recieve → receive
 - docs/setup.md:42: teh → the
 
-## 📝 Missing Comments Added (5)
+## Missing Comments Added (5)
 - api/handlers.py:78: Added docstring to create_user method
 
-## ✨ Comment Quality Improvements (3)
+## Comment Quality Improvements (3)
 - utils/helpers.py:45: Improved "does stuff" → "Validates user input format"
 
-## 📖 Markdown Formatting (8)
+## Markdown Formatting (8)
 - CHANGELOG.md:22: Added language spec to code fence
 ```
 
