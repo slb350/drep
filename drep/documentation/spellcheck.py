@@ -56,37 +56,45 @@ class SpellcheckLayer:
         # Remove inline code `like this`
         line_no_code = re.sub(r"`[^`]+`", "", line_no_urls)
 
-        # Extract words (alphabetic only) - preserves case
-        words = re.findall(r"\b[a-zA-Z]+\b", line_no_code)
+        # Track occurrences of each word to handle duplicates
+        word_occurrences = {}
 
-        # Filter out identifiers BEFORE spell checking (preserve original case)
-        words_to_check = [w for w in words if not self._is_identifier(w)]
+        # Use finditer to get each word with its position
+        # This allows us to detect duplicate typos on the same line
+        for match in re.finditer(r"\b[a-zA-Z]+\b", line_no_code):
+            word = match.group(0)
 
-        # Check for misspellings
-        misspelled = self.spell.unknown(words_to_check)
-
-        for misspelled_word in misspelled:
-            # Find the original case version in words_to_check
-            # (spell checker might lowercase the word)
-            original_word = None
-            for w in words_to_check:
-                if w.lower() == misspelled_word.lower():
-                    original_word = w
-                    break
-
-            if not original_word:
+            # Skip if it looks like an identifier
+            if self._is_identifier(word):
                 continue
 
-            # Get suggestions
-            suggestions = self.spell.candidates(misspelled_word)
-            replacement = list(suggestions)[0] if suggestions else original_word
+            # Check if misspelled
+            if not self.spell.unknown([word]):
+                continue  # Word is correctly spelled
 
-            # Find column
-            column = line.find(original_word)
+            # Get suggestions
+            suggestions = self.spell.candidates(word)
+            replacement = list(suggestions)[0] if suggestions else word
+
+            # Find column in ORIGINAL line (not cleaned line)
+            # For duplicate words, find the Nth occurrence
+            occurrence_index = word_occurrences.get(word, 0)
+            word_occurrences[word] = occurrence_index + 1
+
+            # Find the Nth occurrence of this word in the original line
+            column = -1
+            for i, m in enumerate(re.finditer(re.escape(word), line)):
+                if i == occurrence_index:
+                    column = m.start()
+                    break
+
+            if column == -1:
+                # Fallback to first occurrence if something went wrong
+                column = line.find(word)
 
             typos.append(
                 Typo(
-                    word=original_word,
+                    word=word,
                     replacement=replacement,
                     line=line_num,
                     column=column,
@@ -153,11 +161,18 @@ class SpellcheckLayer:
                 ):
                     docstring = ast.get_docstring(node)
                     if docstring:
-                        # Simple line number estimate (not perfect)
-                        line_num = node.lineno if hasattr(node, "lineno") else 1
+                        # Get the function/class definition line
+                        definition_line = node.lineno if hasattr(node, "lineno") else 1
+
+                        # Check docstring for typos
                         doc_typos = self._check_plain_text(docstring)
+
+                        # Adjust line numbers: _check_plain_text returns lines relative to
+                        # the docstring (1, 2, 3...), but we need absolute source lines.
+                        # The docstring starts after the def line, so add the offset.
                         for typo in doc_typos:
-                            typo.line = line_num
+                            typo.line = definition_line + typo.line
+
                         typos.extend(doc_typos)
         except SyntaxError:
             pass  # Skip files with syntax errors

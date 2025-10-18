@@ -171,6 +171,7 @@
   },
   "active": "202bc079d4317f49",
   "lastOpenFiles": [
+    "docs/implementation-plan.md.tmp.30751.1760768933755",
     "drep/documentation/__pycache__/analyzer.cpython-313.pyc",
     "tests/unit/__pycache__/test_documentation_analyzer.cpython-313-pytest-8.4.2.pyc",
     "tests/unit/test_documentation_analyzer.py",
@@ -181,7 +182,6 @@
     "drep/documentation/spellcheck.py.tmp.30751.1760768432834",
     "drep/documentation/__pycache__/spellcheck.cpython-313.pyc",
     "drep/documentation/__pycache__/__init__.cpython-313.pyc",
-    "drep/documentation/__pycache__",
     "venv/lib/python3.13/site-packages/respx-0.22.0.dist-info/LICENSE.md",
     "venv/lib/python3.13/site-packages/black-25.9.0.dist-info/licenses/AUTHORS.md",
     "venv/lib/python3.13/site-packages/httpx-0.28.1.dist-info/licenses/LICENSE.md",

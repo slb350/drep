@@ -95,6 +95,19 @@ def test_check_line_with_typo_and_inline_code():
     assert typos[0].word == "teh"
 
 
+def test_check_line_finds_duplicate_typos():
+    """Test that _check_line finds the same typo appearing multiple times."""
+    layer = SpellcheckLayer()
+    typos = layer._check_line("This has teh error and teh mistake", 1)
+
+    # Should find BOTH occurrences of 'teh'
+    assert len(typos) == 2
+    assert all(t.word == "teh" for t in typos)
+    # Verify different column positions
+    assert typos[0].column == 9  # First 'teh'
+    assert typos[1].column == 23  # Second 'teh'
+
+
 # Phase 3.3: _check_markdown() tests
 
 
@@ -244,6 +257,31 @@ class MyClass:
     # Should find 4 typos total (all "teh")
     assert len(typos) == 4
     assert all(t.word == "teh" for t in typos)
+
+
+def test_check_python_comments_multiline_docstring_line_numbers():
+    """Test that typos in multi-line docstrings report correct line numbers."""
+    layer = SpellcheckLayer(custom_words=["docstring", "multiline"])
+    code = '''
+def my_function():
+    """This is a multiline docstring.
+
+    This line has teh first typo.
+    And this line has teh second typo.
+    """
+    return 1
+'''
+    typos = layer._check_python_comments(code)
+
+    # Should find 2 typos
+    assert len(typos) == 2
+    assert all(t.word == "teh" for t in typos)
+
+    # CRITICAL: Line numbers should be the actual lines in the source,
+    # not all reported as line 2 (the function definition line)
+    line_numbers = sorted([t.line for t in typos])
+    assert line_numbers[0] == 5  # First "teh" on line 5
+    assert line_numbers[1] == 6  # Second "teh" on line 6
 
 
 # Phase 3.5: Wire up check() method routing
