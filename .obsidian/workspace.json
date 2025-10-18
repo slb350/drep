@@ -171,6 +171,7 @@
   },
   "active": "202bc079d4317f49",
   "lastOpenFiles": [
+    "drep/llm/cache.py.tmp.63147.1760804828622",
     "tests/integration/test_code_quality_integration.py",
     "drep/llm/client.py.tmp.63147.1760804370701",
     "drep/code_quality/__pycache__/analyzer.cpython-313.pyc",
@@ -181,7 +182,6 @@
     "drep/code_quality/analyzer.py",
     "drep/code_quality/__init__.py",
     "drep/code_quality",
-    "drep/models/__pycache__/llm_findings.cpython-313.pyc",
     "docs/implementation-plan.md",
     "docs/llm-production-concerns.md",
     "docs/llm-implementation.md",

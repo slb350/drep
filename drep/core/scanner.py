@@ -47,8 +47,13 @@ class RepositoryScanner:
             self.llm_client = LLMClient(
                 endpoint=str(config.llm.endpoint),
                 model=config.llm.model,
+                api_key=config.llm.api_key,
                 temperature=config.llm.temperature,
                 max_tokens=config.llm.max_tokens,
+                timeout=config.llm.timeout,
+                max_retries=config.llm.max_retries,
+                retry_delay=config.llm.retry_delay,
+                exponential_backoff=config.llm.exponential_backoff,
                 max_concurrent_global=config.llm.max_concurrent_global,
                 max_concurrent_per_repo=config.llm.max_concurrent_per_repo,
                 requests_per_minute=config.llm.requests_per_minute,

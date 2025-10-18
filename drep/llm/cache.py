@@ -50,6 +50,10 @@ class IntelligentCache:
         self.ttl_days = ttl_days
         self.max_size_bytes = max_size_bytes
 
+        # Cache statistics
+        self.hits = 0
+        self.misses = 0
+
         # Create cache directory if it doesn't exist
         self.cache_dir.mkdir(parents=True, exist_ok=True)
 
@@ -123,6 +127,7 @@ class IntelligentCache:
 
             # Check if cache files exist
             if not cache_file.exists() or not meta_file.exists():
+                self.misses += 1
                 return None
 
             # Load metadata
@@ -134,6 +139,7 @@ class IntelligentCache:
             if metadata.model != model:
                 logger.debug(f"Cache miss: model mismatch ({metadata.model} != {model})")
                 self._invalidate(cache_key)
+                self.misses += 1
                 return None
 
             # Validate temperature (allow small tolerance)
@@ -142,6 +148,7 @@ class IntelligentCache:
                     f"Cache miss: temperature mismatch ({metadata.temperature} != {temperature})"
                 )
                 self._invalidate(cache_key)
+                self.misses += 1
                 return None
 
             # Validate commit SHA
@@ -150,6 +157,7 @@ class IntelligentCache:
                     f"Cache miss: commit SHA changed ({metadata.commit_sha[:8]} -> {commit_sha[:8]})"
                 )
                 self._invalidate(cache_key)
+                self.misses += 1
                 return None
 
             # Validate TTL
@@ -157,6 +165,7 @@ class IntelligentCache:
             if age_days > self.ttl_days:
                 logger.debug(f"Cache miss: expired ({age_days:.1f} days old)")
                 self._invalidate(cache_key)
+                self.misses += 1
                 return None
 
             # Load cached response
@@ -164,10 +173,12 @@ class IntelligentCache:
                 response = json.load(f)
 
             logger.debug(f"Cache hit: {cache_key[:8]}... (age: {age_days:.1f} days)")
+            self.hits += 1
             return response
 
         except Exception as e:
             logger.warning(f"Cache read error: {e}")
+            self.misses += 1
             return None
 
     def set(
@@ -333,6 +344,11 @@ class IntelligentCache:
                 "total_size_bytes": total_size,
                 "total_size_mb": total_size / 1024 / 1024,
                 "cache_dir": str(self.cache_dir),
+                "hits": self.hits,
+                "misses": self.misses,
+                "hit_rate": (
+                    self.hits / (self.hits + self.misses) if (self.hits + self.misses) > 0 else 0.0
+                ),
             }
         except Exception as e:
             logger.warning(f"Cache stats error: {e}")
@@ -341,4 +357,7 @@ class IntelligentCache:
                 "total_size_bytes": 0,
                 "total_size_mb": 0.0,
                 "cache_dir": str(self.cache_dir),
+                "hits": self.hits,
+                "misses": self.misses,
+                "hit_rate": 0.0,
             }
