@@ -2,7 +2,7 @@
 
 from typing import List, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class Typo(BaseModel):
@@ -13,7 +13,7 @@ class Typo(BaseModel):
     line: int
     column: int
     context: str  # Surrounding text
-    suggestions: List[str] = []  # Alternative corrections
+    suggestions: List[str] = Field(default_factory=list)  # Alternative corrections
 
 
 class PatternIssue(BaseModel):
@@ -48,8 +48,8 @@ class DocumentationFindings(BaseModel):
     """Results from documentation analysis."""
 
     file_path: str
-    typos: List[Typo] = []
-    pattern_issues: List[PatternIssue] = []
+    typos: List[Typo] = Field(default_factory=list)
+    pattern_issues: List[PatternIssue] = Field(default_factory=list)
 
     def to_findings(self) -> List[Finding]:
         """Convert to generic Finding objects."""

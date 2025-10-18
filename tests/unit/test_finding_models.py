@@ -191,3 +191,56 @@ def test_documentation_findings_to_findings_combined():
     assert generic_findings[0].type == "typo"
     # Second should be pattern
     assert generic_findings[1].type == "pattern"
+
+
+def test_typo_suggestions_not_shared_between_instances():
+    """Test that Typo instances don't share the same suggestions list."""
+    from drep.models.findings import Typo
+
+    # Create first typo with no suggestions specified (uses default)
+    typo1 = Typo(word="teh", replacement="the", line=1, column=0, context="teh test")
+
+    # Create second typo with no suggestions specified
+    typo2 = Typo(word="recieve", replacement="receive", line=2, column=0, context="recieve mail")
+
+    # Modify first typo's suggestions
+    typo1.suggestions.append("the")
+    typo1.suggestions.append("tea")
+
+    # Second typo should NOT have been affected
+    assert typo2.suggestions == []
+    assert typo1.suggestions == ["the", "tea"]
+
+
+def test_documentation_findings_typos_not_shared():
+    """Test that DocumentationFindings instances don't share typos list."""
+    from drep.models.findings import DocumentationFindings
+
+    findings1 = DocumentationFindings(file_path="test1.py")
+    findings2 = DocumentationFindings(file_path="test2.py")
+
+    # Add to first
+    from drep.models.findings import Typo
+
+    typo = Typo(word="teh", replacement="the", line=1, column=0, context="test")
+    findings1.typos.append(typo)
+
+    # Second should not be affected
+    assert len(findings1.typos) == 1
+    assert len(findings2.typos) == 0
+
+
+def test_documentation_findings_patterns_not_shared():
+    """Test that DocumentationFindings instances don't share pattern_issues list."""
+    from drep.models.findings import DocumentationFindings, PatternIssue
+
+    findings1 = DocumentationFindings(file_path="test1.py")
+    findings2 = DocumentationFindings(file_path="test2.py")
+
+    # Add to first
+    issue = PatternIssue(type="double_space", line=1, column=0, matched_text="  ", replacement=" ")
+    findings1.pattern_issues.append(issue)
+
+    # Second should not be affected
+    assert len(findings1.pattern_issues) == 1
+    assert len(findings2.pattern_issues) == 0

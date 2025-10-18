@@ -219,3 +219,23 @@ def test_finding_cache_query_by_hash(session):
 
     assert result.file_path == "test.py"
     assert result.issue_number == 1
+
+
+def test_repository_scan_owner_repo_unique(session):
+    """Test that (owner, repo) combination must be unique."""
+    from sqlalchemy.exc import IntegrityError
+
+    from drep.db.models import RepositoryScan
+
+    # Create first scan
+    scan1 = RepositoryScan(owner="steve", repo="drep", commit_sha="abc123")
+    session.add(scan1)
+    session.commit()
+
+    # Try to create second scan with same owner/repo
+    scan2 = RepositoryScan(owner="steve", repo="drep", commit_sha="def456")
+    session.add(scan2)
+
+    # Should raise IntegrityError due to unique constraint
+    with pytest.raises(IntegrityError):
+        session.commit()

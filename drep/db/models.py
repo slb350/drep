@@ -2,7 +2,7 @@
 
 from datetime import UTC, datetime
 
-from sqlalchemy import Column, DateTime, Index, Integer, String
+from sqlalchemy import Column, DateTime, Index, Integer, String, UniqueConstraint
 from sqlalchemy.orm import declarative_base
 
 Base = declarative_base()
@@ -19,8 +19,11 @@ class RepositoryScan(Base):
     commit_sha = Column(String, nullable=False)
     scanned_at = Column(DateTime, default=lambda: datetime.now(UTC))
 
-    # Index for faster lookups
-    __table_args__ = (Index("idx_owner_repo", "owner", "repo"),)
+    # Index for faster lookups and uniqueness constraint
+    __table_args__ = (
+        Index("idx_owner_repo", "owner", "repo"),
+        UniqueConstraint("owner", "repo", name="uq_owner_repo"),
+    )
 
 
 class FindingCache(Base):
