@@ -280,6 +280,37 @@ def test_check_python_comments_inline_comment_column():
     assert typos[0].column == 25
 
 
+def test_check_python_comments_ignores_hash_in_strings():
+    """Test that # inside string literals is not treated as a comment."""
+    layer = SpellcheckLayer()
+    code = """def foo():
+    msg = "# teh is inside a string literal"
+    return msg
+"""
+    typos = layer._check_python_comments(code)
+
+    # Should find NO typos (the "teh" is inside a string, not a comment)
+    assert len(typos) == 0
+
+
+def test_check_python_comments_string_then_real_comment():
+    """Test that real comments are found even when string contains #."""
+    layer = SpellcheckLayer()
+    code = """def foo():
+    url = "http://example.com#anchor"  # Real teh comment
+"""
+    typos = layer._check_python_comments(code)
+
+    # Should find 1 typo in the REAL comment, not the string
+    assert len(typos) == 1
+    assert typos[0].word == "teh"
+    assert typos[0].line == 2
+
+    # Column should point to the real comment, not the # in the string
+    # The real comment starts after the second # (the one outside the string)
+    assert typos[0].column > 30  # Should be well after the string
+
+
 def test_check_python_comments_single_line_docstring_same_line_as_def():
     """Test single-line docstring on same line as function definition."""
     layer = SpellcheckLayer(custom_words=["docstring"])

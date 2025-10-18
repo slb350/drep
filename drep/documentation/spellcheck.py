@@ -136,23 +136,34 @@ class SpellcheckLayer:
             List of Typo objects found in comments and docstrings
         """
         import ast
+        import io
+        import tokenize
 
         typos = []
 
-        # Extract comments (lines with #)
-        lines = text.split("\n")
-        for line_num, line in enumerate(lines, 1):
-            if "#" in line:
-                # Find where the comment starts in the original line
-                comment_start = line.index("#") + 1  # +1 to skip the "#" itself
-                comment = line.split("#", 1)[1]
-                comment_typos = self._check_line(comment, line_num)
+        # Extract comments using tokenize (correctly handles strings with #)
+        try:
+            tokens = tokenize.generate_tokens(io.StringIO(text).readline)
+            for token in tokens:
+                if token.type == tokenize.COMMENT:
+                    # token.string is the full comment including "#"
+                    # token.start is (line, col) where the comment starts
+                    comment_text = token.string[1:]  # Remove the "#"
+                    line_num = token.start[0]
+                    comment_col = token.start[1]
 
-                # Adjust column to be relative to original line, not comment text
-                for typo in comment_typos:
-                    typo.column += comment_start
+                    comment_typos = self._check_line(comment_text, line_num)
 
-                typos.extend(comment_typos)
+                    # Adjust column to be relative to original line
+                    # comment_col is where "#" starts, so add 1 to skip it
+                    for typo in comment_typos:
+                        typo.column += comment_col + 1
+
+                    typos.extend(comment_typos)
+        except tokenize.TokenError:
+            # If tokenization fails, skip comment extraction
+            # (docstrings below might still work)
+            pass
 
         # Extract docstrings using AST
         try:
