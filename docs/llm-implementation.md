@@ -363,32 +363,125 @@ class LLMResponse(BaseModel):
     model: str
 
 
-class RateLimiter:
-    """Token bucket rate limiter for LLM requests."""
+class RateLimitContext:
+    """Context manager for rate-limited request."""
 
-    def __init__(self, max_concurrent: int, requests_per_minute: int):
+    def __init__(self, limiter: "RateLimiter", estimated_tokens: int):
+        self.limiter = limiter
+        self.estimated_tokens = estimated_tokens
+        self.actual_tokens = 0
+
+    async def __aenter__(self):
+        # Hold semaphore for entire request duration
+        await self.limiter.semaphore.acquire()
+
+        # Wait for rate limits
+        await self.limiter._check_request_rate_limit()
+        await self.limiter._check_token_rate_limit(self.estimated_tokens)
+
+        # Record estimated token usage (updated later with actual)
+        self.limiter.token_times.append((datetime.now(), self.estimated_tokens))
+
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        # Update token record with actual usage
+        if self.actual_tokens > 0 and self.limiter.token_times:
+            timestamp, _ = self.limiter.token_times[-1]
+            self.limiter.token_times[-1] = (timestamp, self.actual_tokens)
+
+        # Release semaphore (held for entire request)
+        self.limiter.semaphore.release()
+        return False
+
+    def set_actual_tokens(self, tokens: int):
+        """Update with actual token usage from response."""
+        self.actual_tokens = tokens
+
+
+class RateLimiter:
+    """Dual-bucket rate limiter enforcing both request and token limits."""
+
+    def __init__(
+        self,
+        max_concurrent: int,
+        requests_per_minute: int,
+        max_tokens_per_minute: int,
+    ):
+        """Initialize rate limiter.
+
+        Args:
+            max_concurrent: Max parallel requests (semaphore)
+            requests_per_minute: Request-based rate limit
+            max_tokens_per_minute: Token-based rate limit
+        """
         self.semaphore = asyncio.Semaphore(max_concurrent)
         self.requests_per_minute = requests_per_minute
+        self.max_tokens_per_minute = max_tokens_per_minute
+
+        # Request tracking
         self.request_times: List[datetime] = []
 
-    async def acquire(self):
-        """Acquire rate limit slot."""
-        async with self.semaphore:
-            # Remove requests older than 1 minute
-            now = datetime.now()
-            cutoff = now - timedelta(minutes=1)
-            self.request_times = [t for t in self.request_times if t > cutoff]
+        # Token tracking: (timestamp, token_count)
+        self.token_times: List[tuple[datetime, int]] = []
 
-            # Check if we've hit rate limit
-            if len(self.request_times) >= self.requests_per_minute:
-                oldest = self.request_times[0]
-                wait_time = 60 - (now - oldest).total_seconds()
+    def request(self, estimated_tokens: int = 4000) -> RateLimitContext:
+        """Create rate-limited request context.
+
+        Args:
+            estimated_tokens: Expected token usage
+
+        Returns:
+            Async context manager that enforces limits
+        """
+        return RateLimitContext(self, estimated_tokens)
+
+    async def _check_request_rate_limit(self):
+        """Enforce request rate limit."""
+        now = datetime.now()
+        cutoff = now - timedelta(minutes=1)
+
+        # Remove old requests
+        self.request_times = [t for t in self.request_times if t > cutoff]
+
+        # Check if at limit
+        if len(self.request_times) >= self.requests_per_minute:
+            oldest = self.request_times[0]
+            wait_time = 60 - (now - oldest).total_seconds()
+
+            if wait_time > 0:
+                logger.debug(f"Request rate limit hit, waiting {wait_time:.1f}s")
+                await asyncio.sleep(wait_time)
+
+        # Record this request
+        self.request_times.append(now)
+
+    async def _check_token_rate_limit(self, estimated_tokens: int):
+        """Enforce token rate limit."""
+        now = datetime.now()
+        cutoff = now - timedelta(minutes=1)
+
+        # Remove old token records
+        self.token_times = [
+            (t, tokens) for t, tokens in self.token_times if t > cutoff
+        ]
+
+        # Calculate current token usage
+        current_tokens = sum(tokens for _, tokens in self.token_times)
+
+        # Check if adding this request exceeds limit
+        if current_tokens + estimated_tokens > self.max_tokens_per_minute:
+            if self.token_times:
+                oldest_time, _ = self.token_times[0]
+                wait_time = 60 - (now - oldest_time).total_seconds()
+
                 if wait_time > 0:
-                    logger.debug(f"Rate limit hit, waiting {wait_time:.1f}s")
+                    logger.info(
+                        f"Token rate limit hit "
+                        f"({current_tokens}/{self.max_tokens_per_minute} tokens/min), "
+                        f"waiting {wait_time:.1f}s"
+                    )
                     await asyncio.sleep(wait_time)
-
-            # Record this request
-            self.request_times.append(now)
 
 
 class LLMClient:
@@ -406,6 +499,7 @@ class LLMClient:
         retry_delay: int = 2,
         max_concurrent: int = 5,
         requests_per_minute: int = 60,
+        max_tokens_per_minute: int = 100000,
     ):
         """Initialize LLM client.
 
@@ -419,7 +513,8 @@ class LLMClient:
             max_retries: Number of retries on failure
             retry_delay: Seconds between retries
             max_concurrent: Max parallel requests
-            requests_per_minute: Rate limit
+            requests_per_minute: Request-based rate limit
+            max_tokens_per_minute: Token-based rate limit
         """
         self.endpoint = endpoint.rstrip("/")
         self.model = model
@@ -436,8 +531,12 @@ class LLMClient:
             timeout=httpx.Timeout(timeout),
         )
 
-        # Rate limiting
-        self.rate_limiter = RateLimiter(max_concurrent, requests_per_minute)
+        # Rate limiting (dual-bucket: requests + tokens)
+        self.rate_limiter = RateLimiter(
+            max_concurrent,
+            requests_per_minute,
+            max_tokens_per_minute,
+        )
 
         # Metrics
         self.total_requests = 0
@@ -451,7 +550,7 @@ class LLMClient:
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
     ) -> LLMResponse:
-        """Send code to LLM for analysis.
+        """Send code to LLM for analysis with rate limiting.
 
         Args:
             system_prompt: System prompt with instructions
@@ -465,58 +564,64 @@ class LLMClient:
         Raises:
             Exception: If all retries fail
         """
-        await self.rate_limiter.acquire()
-
         temp = temperature if temperature is not None else self.temperature
         max_tok = max_tokens if max_tokens is not None else self.max_tokens
 
-        start_time = datetime.now()
+        # Estimate tokens (rough: 4 chars per token)
+        estimated_tokens = (len(system_prompt) + len(code) + max_tok) // 4
 
-        for attempt in range(self.max_retries):
-            try:
-                response = await self.client.chat.completions.create(
-                    model=self.model,
-                    messages=[
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": code},
-                    ],
-                    temperature=temp,
-                    max_tokens=max_tok,
-                )
+        # Use context manager to hold semaphore for entire request
+        async with self.rate_limiter.request(estimated_tokens) as ctx:
+            start_time = datetime.now()
 
-                end_time = datetime.now()
-                latency_ms = (end_time - start_time).total_seconds() * 1000
-
-                content = response.choices[0].message.content
-                tokens_used = response.usage.total_tokens
-
-                # Update metrics
-                self.total_requests += 1
-                self.total_tokens += tokens_used
-
-                logger.debug(
-                    f"LLM request successful: {tokens_used} tokens, "
-                    f"{latency_ms:.0f}ms latency"
-                )
-
-                return LLMResponse(
-                    content=content,
-                    tokens_used=tokens_used,
-                    latency_ms=latency_ms,
-                    model=self.model,
-                )
-
-            except Exception as e:
-                self.failed_requests += 1
-
-                if attempt < self.max_retries - 1:
-                    logger.warning(
-                        f"LLM request failed (attempt {attempt + 1}/{self.max_retries}): {e}"
+            for attempt in range(self.max_retries):
+                try:
+                    response = await self.client.chat.completions.create(
+                        model=self.model,
+                        messages=[
+                            {"role": "system", "content": system_prompt},
+                            {"role": "user", "content": code},
+                        ],
+                        temperature=temp,
+                        max_tokens=max_tok,
                     )
-                    await asyncio.sleep(self.retry_delay * (attempt + 1))
-                else:
-                    logger.error(f"LLM request failed after {self.max_retries} attempts: {e}")
-                    raise
+
+                    end_time = datetime.now()
+                    latency_ms = (end_time - start_time).total_seconds() * 1000
+
+                    content = response.choices[0].message.content
+                    tokens_used = response.usage.total_tokens
+
+                    # Update context with actual token usage
+                    ctx.set_actual_tokens(tokens_used)
+
+                    # Update metrics
+                    self.total_requests += 1
+                    self.total_tokens += tokens_used
+
+                    logger.debug(
+                        f"LLM request successful: {tokens_used} tokens, "
+                        f"{latency_ms:.0f}ms latency"
+                    )
+
+                    return LLMResponse(
+                        content=content,
+                        tokens_used=tokens_used,
+                        latency_ms=latency_ms,
+                        model=self.model,
+                    )
+
+                except Exception as e:
+                    self.failed_requests += 1
+
+                    if attempt < self.max_retries - 1:
+                        logger.warning(
+                            f"LLM request failed (attempt {attempt + 1}/{self.max_retries}): {e}"
+                        )
+                        await asyncio.sleep(self.retry_delay * (attempt + 1))
+                    else:
+                        logger.error(f"LLM request failed after {self.max_retries} attempts: {e}")
+                        raise
 
     async def analyze_code_json(
         self,
