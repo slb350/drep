@@ -46,6 +46,7 @@ htmlcov/
 # Config
 config.yaml
 .env
+.tokens
 
 # Repos
 repos/
