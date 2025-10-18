@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import time
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
@@ -242,6 +243,93 @@ async def test_rate_limiter_burst_failures_dont_stall():
 
     # Should reflect actual usage, not failures
     assert limiter.tokens_used == 400
+
+
+@pytest.mark.asyncio
+async def test_rate_limiter_tokens_never_go_negative():
+    """Test that token counter is clamped to 0, preventing negatives."""
+    limiter = RateLimiter(max_concurrent=5, requests_per_minute=100, max_tokens_per_minute=1000)
+
+    # Simulate a long-running request that spans bucket reset
+    async with limiter.request(500) as ctx:
+        # Manually trigger bucket reset (simulating time passing)
+        limiter.tokens_used = 0
+        limiter.token_reset_time = time.time() + 60
+
+        # Request completes after bucket reset
+        ctx.set_actual_tokens(400)
+
+    # Token counter should be clamped to 0, not negative
+    # (400 - 500 would be -100 without clamping)
+    assert limiter.tokens_used >= 0
+    assert limiter.tokens_used == 400  # Should reflect actual usage
+
+
+@pytest.mark.asyncio
+async def test_rate_limiter_cleanup_idle_semaphores():
+    """Test that idle repo semaphores are cleaned up."""
+    limiter = RateLimiter(
+        max_concurrent=10,
+        requests_per_minute=100,
+        max_tokens_per_minute=100000,
+        max_concurrent_per_repo=2,
+    )
+    limiter.repo_semaphore_ttl = 0.1  # 100ms TTL for testing
+
+    # Create semaphores for 3 repos
+    await limiter._get_repo_semaphore("repo1")
+    await limiter._get_repo_semaphore("repo2")
+    await limiter._get_repo_semaphore("repo3")
+
+    # Should have 3 semaphores
+    assert len(limiter.repo_semaphores) == 3
+
+    # Wait for TTL to expire
+    await asyncio.sleep(0.15)
+
+    # Access one repo to keep it alive
+    await limiter._get_repo_semaphore("repo1")
+
+    # repo2 and repo3 should be evicted (idle), repo1 should remain
+    # (Cleanup happens on next _get_repo_semaphore call)
+    assert "repo1" in limiter.repo_semaphores
+    # repo2 and repo3 might still be present until next cleanup
+    # So let's trigger cleanup by accessing a new repo
+    await limiter._get_repo_semaphore("repo4")
+
+    # Now repo1 and repo4 should exist, repo2/repo3 should be evicted
+    assert "repo1" in limiter.repo_semaphores
+    assert "repo4" in limiter.repo_semaphores
+    # Total should be <= 3 (might have repo2/repo3 if not yet evicted)
+    assert len(limiter.repo_semaphores) <= 3
+
+
+@pytest.mark.asyncio
+async def test_rate_limiter_doesnt_evict_active_semaphores():
+    """Test that active (in-use) semaphores are not evicted."""
+    limiter = RateLimiter(
+        max_concurrent=10,
+        requests_per_minute=100,
+        max_tokens_per_minute=100000,
+        max_concurrent_per_repo=2,
+    )
+    limiter.repo_semaphore_ttl = 0.1  # 100ms TTL for testing
+
+    # Create and hold a semaphore
+    sem = await limiter._get_repo_semaphore("repo1")
+    await sem.acquire()  # Hold one permit
+
+    # Wait for TTL to expire
+    await asyncio.sleep(0.15)
+
+    # Try to trigger cleanup by accessing another repo
+    await limiter._get_repo_semaphore("repo2")
+
+    # repo1 should NOT be evicted because it's in use
+    assert "repo1" in limiter.repo_semaphores
+
+    # Release the semaphore
+    sem.release()
 
 
 # Test LLM Client Initialization

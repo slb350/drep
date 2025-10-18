@@ -111,12 +111,18 @@ class RateLimitContext:
             # Update actual token usage if set
             if self.actual_tokens is not None:
                 # Adjust token count: remove estimate, add actual
-                self.rate_limiter.tokens_used -= self.estimated_tokens
+                # Clamp to 0 to prevent negatives (e.g., if bucket reset while request was running)
+                self.rate_limiter.tokens_used = max(
+                    0, self.rate_limiter.tokens_used - self.estimated_tokens
+                )
                 self.rate_limiter.tokens_used += self.actual_tokens
             else:
                 # Request failed before set_actual_tokens() was called
                 # Roll back the estimated token reservation
-                self.rate_limiter.tokens_used -= self.estimated_tokens
+                # Clamp to 0 to prevent negatives
+                self.rate_limiter.tokens_used = max(
+                    0, self.rate_limiter.tokens_used - self.estimated_tokens
+                )
                 logger.debug(
                     f"Rolling back {self.estimated_tokens} token reservation "
                     f"(request failed without completion)"
@@ -173,6 +179,8 @@ class RateLimiter:
 
         # Per-repository concurrency control
         self.repo_semaphores: Dict[str, asyncio.Semaphore] = {}
+        self.repo_last_used: Dict[str, float] = {}  # Track last use for cleanup
+        self.repo_semaphore_ttl = 600  # Evict idle semaphores after 10 minutes
 
         # Request rate limiting
         self.lock = asyncio.Lock()
@@ -185,6 +193,8 @@ class RateLimiter:
     async def _get_repo_semaphore(self, repo_id: str) -> asyncio.Semaphore:
         """Get or create semaphore for a repository.
 
+        Also performs cleanup of idle semaphores to prevent unbounded growth.
+
         Args:
             repo_id: Repository identifier
 
@@ -192,11 +202,35 @@ class RateLimiter:
             Semaphore for the repository
         """
         async with self.lock:
+            now = time.time()
+
+            # Cleanup: remove idle semaphores that haven't been used recently
+            idle_repos = [
+                rid
+                for rid, last_used in self.repo_last_used.items()
+                if now - last_used > self.repo_semaphore_ttl
+            ]
+            for rid in idle_repos:
+                # Only evict if semaphore is not currently held
+                # (Check if all permits available = not in use)
+                sem = self.repo_semaphores.get(rid)
+                if sem is not None and sem._value == (
+                    self.max_concurrent_per_repo or self.max_concurrent
+                ):
+                    del self.repo_semaphores[rid]
+                    del self.repo_last_used[rid]
+                    logger.debug(f"Evicted idle semaphore for repo {rid}")
+
+            # Get or create semaphore for this repo
             if repo_id not in self.repo_semaphores:
                 # Create new semaphore for this repo
                 limit = self.max_concurrent_per_repo or self.max_concurrent
                 self.repo_semaphores[repo_id] = asyncio.Semaphore(limit)
                 logger.debug(f"Created semaphore for repo {repo_id} with limit {limit}")
+
+            # Update last used time
+            self.repo_last_used[repo_id] = now
+
             return self.repo_semaphores[repo_id]
 
     async def _check_request_rate_limit(self):
