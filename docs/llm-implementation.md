@@ -1142,7 +1142,7 @@ Return JSON only (no markdown, no explanation):
             result_json = await self.llm.analyze_code_json(
                 system_prompt=prompt,
                 code=func_info.body,
-                expected_schema=CodeQualityResult,
+                schema=CodeQualityResult,
             )
 
             result = CodeQualityResult(**result_json)
@@ -1320,7 +1320,7 @@ Return JSON only:
             result_json = await self.llm.analyze_code_json(
                 system_prompt=prompt,
                 code=func_info.body,
-                expected_schema=DocstringResult,
+                schema=DocstringResult,
             )
 
             result = DocstringResult(**result_json)
@@ -1534,7 +1534,7 @@ Return JSON only:
         result_json = await self.llm.analyze_code_json(
             system_prompt=prompt,
             code="",  # Diff is in prompt
-            expected_schema=PRReviewResult,
+            schema=PRReviewResult,
         )
 
         result = PRReviewResult(**result_json)

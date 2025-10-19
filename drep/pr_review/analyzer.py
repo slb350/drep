@@ -208,7 +208,7 @@ class PRReviewAnalyzer:
         result_json = await self.llm.analyze_code_json(
             system_prompt=prompt,
             code="",  # Diff is in prompt
-            expected_schema=PRReviewResult,
+            schema=PRReviewResult,
         )
 
         # Convert to Pydantic model
