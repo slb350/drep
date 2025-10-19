@@ -238,9 +238,11 @@ class GiteaAdapter:
         url = f"{self.url}/api/v1/repos/{owner}/{repo}/pulls/{pr_number}/reviews"
 
         # Gitea review API format: create a review with inline comments
+        # Note: Leave top-level body empty to avoid duplicate comments
+        # The body appears in the inline comment only
         payload = {
             "commit_id": commit_sha,
-            "body": body,
+            "body": "",  # Empty to prevent duplicating the inline comment
             "comments": [
                 {
                     "path": file_path,

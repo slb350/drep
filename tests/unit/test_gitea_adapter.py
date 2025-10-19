@@ -698,7 +698,7 @@ async def test_create_pr_review_comment_sends_correct_payload():
         # Verify payload structure
         payload = request_data["payload"]
         assert payload["commit_id"] == "abc123def456"
-        assert payload["body"] == "Consider adding error handling here"
+        assert payload["body"] == ""  # Empty to prevent duplicate comments
         assert len(payload["comments"]) == 1
         assert payload["comments"][0]["path"] == "src/module.py"
         assert payload["comments"][0]["new_position"] == 15

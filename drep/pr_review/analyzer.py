@@ -92,6 +92,7 @@ class PRReviewAnalyzer:
         """
         self.llm = llm_client
         self.gitea = gitea_adapter
+        self._current_hunks: List[DiffHunk] = []  # Store hunks for validation
 
     async def review_pr(
         self,
@@ -133,6 +134,9 @@ class PRReviewAnalyzer:
         hunks = parse_diff(diff_text)
         logger.info(f"Parsed {len(hunks)} diff hunks")
 
+        # Store hunks for line number validation during posting
+        self._current_hunks = hunks
+
         # Analyze with LLM
         repo_id = f"{owner}/{repo}"
         result = await self._analyze_diff_with_llm(pr_data, hunks, repo_id)
@@ -142,6 +146,24 @@ class PRReviewAnalyzer:
         )
 
         return result
+
+    def _is_valid_comment_line(self, file_path: str, line: int) -> bool:
+        """Validate that a line number corresponds to an added line in the diff.
+
+        Args:
+            file_path: File path from comment
+            line: Line number from comment
+
+        Returns:
+            True if line is valid (exists in diff as added line), False otherwise
+        """
+        for hunk in self._current_hunks:
+            if hunk.file_path == file_path:
+                added_lines = hunk.get_added_lines()
+                valid_lines = {line_num for line_num, _ in added_lines}
+                if line in valid_lines:
+                    return True
+        return False
 
     async def _analyze_diff_with_llm(
         self,
@@ -256,9 +278,21 @@ class PRReviewAnalyzer:
             body=summary_body,
         )
 
-        # Post inline comments
+        # Post inline comments with validation
         logger.info(f"Posting {len(result.comments)} inline comments")
+        posted_count = 0
+        skipped_count = 0
+
         for comment in result.comments:
+            # Validate that the line number exists in the diff
+            if not self._is_valid_comment_line(comment.file_path, comment.line):
+                logger.warning(
+                    f"Skipping comment for {comment.file_path}:{comment.line} - "
+                    f"line not found in diff (LLM may have miscounted or diff was truncated)"
+                )
+                skipped_count += 1
+                continue
+
             # Format comment with severity
             severity_emoji = {
                 "info": "ℹ️",
@@ -273,14 +307,19 @@ class PRReviewAnalyzer:
             if comment.suggestion:
                 comment_body += f"\n\n**Suggested fix:**\n```python\n{comment.suggestion}\n```"
 
-            await self.gitea.create_pr_review_comment(
-                owner=owner,
-                repo=repo,
-                pr_number=pr_number,
-                commit_sha=commit_sha,
-                file_path=comment.file_path,
-                line=comment.line,
-                body=comment_body,
-            )
+            try:
+                await self.gitea.create_pr_review_comment(
+                    owner=owner,
+                    repo=repo,
+                    pr_number=pr_number,
+                    commit_sha=commit_sha,
+                    file_path=comment.file_path,
+                    line=comment.line,
+                    body=comment_body,
+                )
+                posted_count += 1
+            except ValueError as e:
+                logger.error(f"Failed to post comment for {comment.file_path}:{comment.line}: {e}")
+                skipped_count += 1
 
-        logger.info(f"Review posted successfully to PR #{pr_number}")
+        logger.info(f"Review posted: {posted_count} comments posted, {skipped_count} skipped")

@@ -1,6 +1,7 @@
 """LLM-powered docstring generator."""
 
 import logging
+import textwrap
 from typing import List, Optional
 
 from drep.docstring.ast_utils import FunctionInfo, extract_functions
@@ -272,12 +273,16 @@ class DocstringGenerator:
         Returns:
             Formatted suggestion with code block and reasoning
         """
+        # Properly indent the docstring content to align with function indentation
+        # Each line of the docstring should be indented by 4 spaces
+        indented_docstring = textwrap.indent(docstring, "    ")
+
         return f"""Suggested docstring for `{func_name}()`:
 
 ```python
 def {func_name}(...):
     \"\"\"
-    {docstring}
+{indented_docstring}
     \"\"\"
 ```
 
