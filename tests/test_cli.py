@@ -208,14 +208,15 @@ class TestScanWorkflow:
         scanner = MagicMock()
         scanner.scan_repository = AsyncMock(return_value=(["test.py"], "abc123"))
         scanner.record_scan = MagicMock()
+        # Mock the LLM-powered analysis methods
+        mock_finding = MagicMock()
+        scanner.analyze_code_quality = AsyncMock(return_value=[mock_finding])
+        scanner.analyze_docstrings = AsyncMock(return_value=[])
+        scanner.close = AsyncMock()
         mock_scanner_class.return_value = scanner
 
         analyzer = MagicMock()
-        analysis_result = MagicMock()
-        # Create a mock finding
-        mock_finding = MagicMock()
-        analysis_result.to_findings.return_value = [mock_finding]
-        analyzer.analyze_file = AsyncMock(return_value=analysis_result)
+        analyzer.analyze_file = AsyncMock(return_value=MagicMock(to_findings=lambda: []))
         mock_analyzer_class.return_value = analyzer
 
         issue_manager = MagicMock()
@@ -247,7 +248,9 @@ class TestScanWorkflow:
             adapter.get_default_branch.assert_called_once_with("owner", "repo")
             mock_repo_class.clone_from.assert_called_once()
             scanner.scan_repository.assert_called_once()
-            analyzer.analyze_file.assert_called_once()
+            scanner.analyze_code_quality.assert_called_once()
+            scanner.analyze_docstrings.assert_called_once()
             issue_manager.create_issues_for_findings.assert_called_once()
             scanner.record_scan.assert_called_once_with("owner", "repo", "abc123")
+            scanner.close.assert_called_once()
             adapter.close.assert_called_once()

@@ -168,8 +168,12 @@ def format_currency(amount: float, currency: str = "USD") -> str:
 async def test_cache_works_for_repeat_analysis(generator, llm_client):
     """Test that cache prevents duplicate LLM calls."""
     code = """
-def add(a: int, b: int) -> int:
-    return a + b
+def calculate_total(items: list) -> float:
+    total = 0.0
+    for item in items:
+        if item > 0:
+            total += item
+    return total
 """
 
     # First analysis - should hit LLM
@@ -193,9 +197,9 @@ def add(a: int, b: int) -> int:
     )
 
     after_second = llm_client.total_requests
+    final_stats = llm_client.cache.get_stats()
 
     # Verify cache hit
-    final_stats = llm_client.cache.get_stats()
     assert final_stats["hits"] > initial_stats["hits"], "Cache should have hit on second call"
 
     # Second call should not increase request count (cache hit)

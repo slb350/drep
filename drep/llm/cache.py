@@ -6,7 +6,7 @@ import logging
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +21,70 @@ class CacheMetadata:
     tokens_used: int
     latency_ms: float
     timestamp: float
+
+
+@dataclass
+class CacheAnalytics:
+    """Track cache performance metrics.
+
+    Attributes:
+        hits: Number of cache hits
+        misses: Number of cache misses
+        evictions: Number of evicted entries
+        size_bytes: Current cache size in bytes
+    """
+
+    hits: int = 0
+    misses: int = 0
+    evictions: int = 0
+    size_bytes: int = 0
+
+    def record_hit(self):
+        """Record a cache hit."""
+        self.hits += 1
+
+    def record_miss(self):
+        """Record a cache miss."""
+        self.misses += 1
+
+    def record_eviction(self):
+        """Record a cache eviction."""
+        self.evictions += 1
+
+    def record_size(self, size: int):
+        """Update cache size.
+
+        Args:
+            size: Size in bytes to add to current size
+        """
+        self.size_bytes += size
+
+    @property
+    def total_requests(self) -> int:
+        """Calculate total number of requests."""
+        return self.hits + self.misses
+
+    @property
+    def hit_rate(self) -> float:
+        """Calculate cache hit rate.
+
+        Returns:
+            Hit rate as a float between 0.0 and 1.0
+        """
+        total = self.total_requests
+        return self.hits / total if total > 0 else 0.0
+
+    def report(self) -> str:
+        """Generate human-readable analytics report.
+
+        Returns:
+            Formatted string with cache metrics
+        """
+        return f"""Cache Analytics:
+  Hit rate: {self.hit_rate * 100:.1f}%
+  Requests: {self.total_requests} (hits: {self.hits}, misses: {self.misses})
+  Evictions: {self.evictions}
+  Size: {self.size_bytes / 1024 / 1024:.1f} MB"""
 
 
 class IntelligentCache:
@@ -50,9 +114,12 @@ class IntelligentCache:
         self.ttl_days = ttl_days
         self.max_size_bytes = max_size_bytes
 
-        # Cache statistics
+        # Cache statistics (legacy, for backward compatibility)
         self.hits = 0
         self.misses = 0
+
+        # Enhanced analytics
+        self.analytics = CacheAnalytics()
 
         # Create cache directory if it doesn't exist
         self.cache_dir.mkdir(parents=True, exist_ok=True)
@@ -128,6 +195,7 @@ class IntelligentCache:
             # Check if cache files exist
             if not cache_file.exists() or not meta_file.exists():
                 self.misses += 1
+                self.analytics.record_miss()
                 return None
 
             # Load metadata
@@ -140,6 +208,7 @@ class IntelligentCache:
                 logger.debug(f"Cache miss: model mismatch ({metadata.model} != {model})")
                 self._invalidate(cache_key)
                 self.misses += 1
+                self.analytics.record_miss()
                 return None
 
             # Validate temperature (allow small tolerance)
@@ -149,15 +218,18 @@ class IntelligentCache:
                 )
                 self._invalidate(cache_key)
                 self.misses += 1
+                self.analytics.record_miss()
                 return None
 
             # Validate commit SHA
             if metadata.commit_sha != commit_sha:
                 logger.debug(
-                    f"Cache miss: commit SHA changed ({metadata.commit_sha[:8]} -> {commit_sha[:8]})"
+                    f"Cache miss: commit SHA changed "
+                    f"({metadata.commit_sha[:8]} -> {commit_sha[:8]})"
                 )
                 self._invalidate(cache_key)
                 self.misses += 1
+                self.analytics.record_miss()
                 return None
 
             # Validate TTL
@@ -166,6 +238,7 @@ class IntelligentCache:
                 logger.debug(f"Cache miss: expired ({age_days:.1f} days old)")
                 self._invalidate(cache_key)
                 self.misses += 1
+                self.analytics.record_miss()
                 return None
 
             # Load cached response
@@ -174,11 +247,13 @@ class IntelligentCache:
 
             logger.debug(f"Cache hit: {cache_key[:8]}... (age: {age_days:.1f} days)")
             self.hits += 1
+            self.analytics.record_hit()
             return response
 
         except Exception as e:
             logger.warning(f"Cache read error: {e}")
             self.misses += 1
+            self.analytics.record_miss()
             return None
 
     def set(
@@ -361,3 +436,164 @@ class IntelligentCache:
                 "misses": self.misses,
                 "hit_rate": 0.0,
             }
+
+    def get_analytics(self) -> CacheAnalytics:
+        """Get enhanced cache analytics.
+
+        Returns:
+            CacheAnalytics object with current metrics
+        """
+        # Update size in analytics
+        try:
+            cache_files = list(self.cache_dir.glob("*.json"))
+            total_size = sum(f.stat().st_size for f in cache_files)
+            # Reset and update size
+            self.analytics.size_bytes = total_size
+        except Exception as e:
+            logger.warning(f"Analytics size calculation error: {e}")
+
+        return self.analytics
+
+    def _calculate_file_priority(self, file_info: Dict[str, Any]) -> float:
+        """Calculate priority for cache warming.
+
+        Higher priority = warm first
+
+        Factors:
+        - File size (larger = higher priority, more expensive to analyze)
+        - Complexity (more functions = higher priority)
+
+        Args:
+            file_info: Dict with 'size' and 'complexity' keys
+
+        Returns:
+            Priority score (higher = more important)
+        """
+        priority = 0.0
+
+        # Size factor (up to 100 points)
+        size = file_info.get("size", 0)
+        priority += min(size / 1000, 100)
+
+        # Complexity factor (10 points per function/complexity unit)
+        complexity = file_info.get("complexity", 0)
+        priority += complexity * 10
+
+        return priority
+
+    async def warm_cache(
+        self,
+        files: List[Dict[str, Any]],
+        analyzer: Any,
+        prompt: str,
+        model: str,
+        temperature: float,
+        commit_sha: str,
+    ) -> int:
+        """Pre-populate cache for common operations.
+
+        Strategy:
+        1. Check which files already cached
+        2. Prioritize files by size/complexity
+        3. Pre-analyze top N files
+
+        Args:
+            files: List of dicts with 'path', 'code' keys (optionally 'size', 'complexity')
+            analyzer: Analyzer object with analyze_file method
+            prompt: System prompt for analysis
+            model: Model name
+            temperature: Sampling temperature
+            commit_sha: Git commit SHA
+
+        Returns:
+            Number of files warmed (excluding already cached)
+        """
+        warmed_count = 0
+
+        for file_info in files:
+            code = file_info.get("code", "")
+            file_path = file_info.get("path", "")
+
+            # Skip if already cached
+            cached = self.get(prompt, code, model, temperature, commit_sha)
+            if cached is not None:
+                logger.debug(f"Skipping {file_path}, already cached")
+                continue
+
+            # Analyze and cache
+            try:
+                await analyzer.analyze_file(file_path)
+                warmed_count += 1
+                logger.debug(f"Warmed cache for {file_path}")
+            except Exception as e:
+                logger.warning(f"Failed to warm cache for {file_path}: {e}")
+
+        logger.info(f"Cache warming complete: {warmed_count} files analyzed")
+        return warmed_count
+
+    def optimize(self) -> int:
+        """Run cache optimization.
+
+        - Remove expired entries
+        - Clean up orphaned metadata files
+        - Return count of removed entries
+
+        Returns:
+            Number of entries removed
+        """
+        removed_count = 0
+
+        try:
+            cache_files = list(self.cache_dir.glob("*.json"))
+
+            for cache_file in cache_files:
+                # Skip metadata files
+                if cache_file.name.endswith(".meta.json"):
+                    continue
+
+                meta_file = self.cache_dir / f"{cache_file.stem}.meta.json"
+
+                # Remove if metadata missing
+                if not meta_file.exists():
+                    logger.debug(f"Removing orphaned cache file: {cache_file.name}")
+                    cache_file.unlink()
+                    removed_count += 1
+                    self.analytics.record_eviction()
+                    continue
+
+                # Check if expired
+                try:
+                    with open(meta_file, "r") as f:
+                        meta_data = json.load(f)
+                        metadata = CacheMetadata(**meta_data)
+
+                    age_days = (time.time() - metadata.timestamp) / 86400
+                    if age_days > self.ttl_days:
+                        logger.debug(
+                            f"Removing expired cache entry: {cache_file.stem[:8]}... "
+                            f"({age_days:.1f} days old)"
+                        )
+                        cache_file.unlink()
+                        meta_file.unlink()
+                        removed_count += 1
+                        self.analytics.record_eviction()
+
+                except Exception as e:
+                    logger.warning(f"Error checking cache entry {cache_file.name}: {e}")
+                    # Remove corrupted entry
+                    cache_file.unlink()
+                    if meta_file.exists():
+                        meta_file.unlink()
+                    removed_count += 1
+                    self.analytics.record_eviction()
+
+            if removed_count > 0:
+                logger.info(f"Cache optimization complete: {removed_count} entries removed")
+            else:
+                logger.debug("Cache optimization complete: no entries removed")
+
+            return removed_count
+
+        except Exception as e:
+            logger.error(f"Cache optimization error: {e}")
+            return removed_count
