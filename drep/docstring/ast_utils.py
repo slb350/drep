@@ -45,13 +45,30 @@ def extract_functions(code: str) -> List[FunctionInfo]:
     tree = ast.parse(code)
     functions = []
 
-    for node in ast.walk(tree):
+    # Only iterate over top-level nodes (tree.body), NOT nested functions
+    # ast.walk() would recursively find ALL functions including nested helpers
+    for node in tree.body:
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             # Extract docstring
             docstring = ast.get_docstring(node)
 
-            # Get argument names
-            args = [arg.arg for arg in node.args.args]
+            # Get ALL argument names (positional-only, regular, *args, kw-only, **kwargs)
+            args = []
+            # Positional-only args (PEP 570: def foo(a, b, /, c))
+            for arg in node.args.posonlyargs:
+                args.append(arg.arg)
+            # Regular positional/keyword args
+            for arg in node.args.args:
+                args.append(arg.arg)
+            # *args (varargs)
+            if node.args.vararg:
+                args.append(f"*{node.args.vararg.arg}")
+            # Keyword-only args (after * or *args)
+            for arg in node.args.kwonlyargs:
+                args.append(arg.arg)
+            # **kwargs (keyword arguments)
+            if node.args.kwarg:
+                args.append(f"**{node.args.kwarg.arg}")
 
             # Get return annotation
             returns = ast.unparse(node.returns) if node.returns else None
@@ -106,7 +123,8 @@ def extract_classes(code: str) -> List[ClassInfo]:
     tree = ast.parse(code)
     classes = []
 
-    for node in ast.walk(tree):
+    # Only iterate over top-level nodes (tree.body), NOT nested classes
+    for node in tree.body:
         if isinstance(node, ast.ClassDef):
             # Extract docstring
             docstring = ast.get_docstring(node)
@@ -119,7 +137,18 @@ def extract_classes(code: str) -> List[ClassInfo]:
             for item in node.body:
                 if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
                     method_docstring = ast.get_docstring(item)
-                    method_args = [arg.arg for arg in item.args.args]
+                    # Get ALL method argument names (same as function extraction)
+                    method_args = []
+                    for arg in item.args.posonlyargs:
+                        method_args.append(arg.arg)
+                    for arg in item.args.args:
+                        method_args.append(arg.arg)
+                    if item.args.vararg:
+                        method_args.append(f"*{item.args.vararg.arg}")
+                    for arg in item.args.kwonlyargs:
+                        method_args.append(arg.arg)
+                    if item.args.kwarg:
+                        method_args.append(f"**{item.args.kwarg.arg}")
                     method_returns = ast.unparse(item.returns) if item.returns else None
                     method_is_public = not item.name.startswith("_")
 

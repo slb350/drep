@@ -306,3 +306,27 @@ def complex_sig(a, b, /, c, d, *args, e, f=10, **kwargs):
         expected_args = ["a", "b", "c", "d", "*args", "e", "f", "**kwargs"]
         for arg in expected_args:
             assert arg in func.args, f"Missing {arg} from {func.args}"
+
+    def test_extract_skips_nested_functions(self):
+        """Test that nested functions are NOT extracted (only top-level)."""
+        code = """
+def outer_function():
+    '''Outer function docstring.'''
+    def inner_helper():
+        '''Should NOT be extracted.'''
+        pass
+    return inner_helper()
+
+def another_top_level():
+    '''This should be extracted.'''
+    pass
+"""
+        functions = extract_functions(code)
+
+        # Should only extract top-level functions, NOT nested ones
+        assert len(functions) == 2
+        names = [f.name for f in functions]
+        assert "outer_function" in names
+        assert "another_top_level" in names
+        # Nested function should NOT be in the list
+        assert "inner_helper" not in names
