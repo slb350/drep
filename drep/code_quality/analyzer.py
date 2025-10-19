@@ -115,6 +115,7 @@ class CodeQualityAnalyzer:
                 schema=CodeAnalysisResult,
                 repo_id=repo_id,
                 commit_sha=commit_sha,
+                analyzer="code_quality",
             )
 
             # Convert dict to Pydantic model

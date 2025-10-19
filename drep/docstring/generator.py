@@ -233,6 +233,7 @@ class DocstringGenerator:
                 schema=DocstringGenerationResult,
                 repo_id=repo_id,
                 commit_sha=commit_sha,
+                analyzer="docstring",
             )
 
             result = DocstringGenerationResult(**result_dict)

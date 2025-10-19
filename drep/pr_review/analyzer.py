@@ -209,6 +209,7 @@ class PRReviewAnalyzer:
             system_prompt=prompt,
             code="",  # Diff is in prompt
             schema=PRReviewResult,
+            analyzer="pr_review",
         )
 
         # Convert to Pydantic model

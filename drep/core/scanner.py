@@ -3,7 +3,7 @@
 import logging
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import Callable, List, Optional, Tuple
 
 from git import Repo
 
@@ -242,7 +242,12 @@ class RepositoryScanner:
         return list(set(changed_files))
 
     async def analyze_code_quality(
-        self, repo_path: str, files: List[str], repo_id: str, commit_sha: str
+        self,
+        repo_path: str,
+        files: List[str],
+        repo_id: str,
+        commit_sha: str,
+        progress_callback: Optional[Callable[["ProgressTracker"], None]] = None,
     ) -> List[Finding]:
         """Analyze Python files for code quality issues using LLM.
 
@@ -251,6 +256,7 @@ class RepositoryScanner:
             files: List of file paths to analyze
             repo_id: Repository identifier (e.g., "owner/repo")
             commit_sha: Current commit SHA for cache invalidation
+            progress_callback: Optional callback for progress updates
 
         Returns:
             List of Finding objects describing code quality issues
@@ -276,6 +282,11 @@ class RepositoryScanner:
 
         logger.info(f"Analyzing {len(python_files)} Python files for code quality")
 
+        # Initialize progress tracker
+        from drep.core.performance import ProgressTracker
+
+        tracker = ProgressTracker(total=len(python_files))
+
         # Analyze each file
         for file_path in python_files:
             full_path = repo_path_obj / file_path
@@ -283,6 +294,9 @@ class RepositoryScanner:
             # Skip if file doesn't exist
             if not full_path.exists():
                 logger.warning(f"Skipping {file_path}: file not found")
+                tracker.update(skipped=1)
+                if progress_callback:
+                    progress_callback(tracker)
                 continue
 
             # Read file content
@@ -290,20 +304,36 @@ class RepositoryScanner:
                 content = full_path.read_text(errors="ignore")
             except Exception as e:
                 logger.error(f"Failed to read {file_path}: {e}")
+                tracker.update(failed=1)
+                if progress_callback:
+                    progress_callback(tracker)
                 continue
 
             # Analyze with code analyzer
-            file_findings = await self.code_analyzer.analyze_file(
-                file_path=file_path, content=content, repo_id=repo_id, commit_sha=commit_sha
-            )
+            try:
+                file_findings = await self.code_analyzer.analyze_file(
+                    file_path=file_path, content=content, repo_id=repo_id, commit_sha=commit_sha
+                )
+                findings.extend(file_findings)
+                tracker.update(completed=1)
+            except Exception as e:
+                logger.error(f"Failed to analyze {file_path}: {e}")
+                tracker.update(failed=1)
 
-            findings.extend(file_findings)
+            # Call progress callback
+            if progress_callback:
+                progress_callback(tracker)
 
         logger.info(f"Found {len(findings)} code quality issues across {len(python_files)} files")
         return findings
 
     async def analyze_docstrings(
-        self, repo_path: str, files: List[str], repo_id: str, commit_sha: str
+        self,
+        repo_path: str,
+        files: List[str],
+        repo_id: str,
+        commit_sha: str,
+        progress_callback: Optional[Callable[["ProgressTracker"], None]] = None,
     ) -> List[Finding]:
         """Analyze Python files for missing/poor docstrings using LLM.
 
@@ -312,6 +342,7 @@ class RepositoryScanner:
             files: List of file paths to analyze
             repo_id: Repository identifier (e.g., "owner/repo")
             commit_sha: Current commit SHA for cache invalidation
+            progress_callback: Optional callback for progress updates
 
         Returns:
             List of Finding objects for docstring issues
@@ -337,6 +368,11 @@ class RepositoryScanner:
 
         logger.info(f"Analyzing {len(python_files)} Python files for docstrings")
 
+        # Initialize progress tracker
+        from drep.core.performance import ProgressTracker
+
+        tracker = ProgressTracker(total=len(python_files))
+
         # Analyze each file
         for file_path in python_files:
             full_path = repo_path_obj / file_path
@@ -344,6 +380,9 @@ class RepositoryScanner:
             # Skip if file doesn't exist
             if not full_path.exists():
                 logger.warning(f"Skipping {file_path}: file not found")
+                tracker.update(skipped=1)
+                if progress_callback:
+                    progress_callback(tracker)
                 continue
 
             # Read file content
@@ -351,14 +390,25 @@ class RepositoryScanner:
                 content = full_path.read_text(errors="ignore")
             except Exception as e:
                 logger.error(f"Failed to read {file_path}: {e}")
+                tracker.update(failed=1)
+                if progress_callback:
+                    progress_callback(tracker)
                 continue
 
             # Analyze with docstring generator
-            file_findings = await self.docstring_generator.analyze_file(
-                file_path=file_path, content=content, repo_id=repo_id, commit_sha=commit_sha
-            )
+            try:
+                file_findings = await self.docstring_generator.analyze_file(
+                    file_path=file_path, content=content, repo_id=repo_id, commit_sha=commit_sha
+                )
+                findings.extend(file_findings)
+                tracker.update(completed=1)
+            except Exception as e:
+                logger.error(f"Failed to analyze {file_path}: {e}")
+                tracker.update(failed=1)
 
-            findings.extend(file_findings)
+            # Call progress callback
+            if progress_callback:
+                progress_callback(tracker)
 
         logger.info(f"Found {len(findings)} docstring issues across {len(python_files)} files")
         return findings
