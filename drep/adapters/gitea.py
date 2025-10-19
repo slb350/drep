@@ -140,3 +140,118 @@ class GiteaAdapter:
             return data["number"]
         except httpx.HTTPStatusError as e:
             raise ValueError(f"Failed to create issue: {e.response.text}")
+
+    # ===== PR Review Methods =====
+
+    async def get_pr(self, owner: str, repo: str, pr_number: int) -> Dict:
+        """Get pull request details.
+
+        Args:
+            owner: Repository owner
+            repo: Repository name
+            pr_number: Pull request number
+
+        Returns:
+            PR data dictionary with keys: number, title, body, state, base, head, user
+
+        Raises:
+            ValueError: If PR not found (404)
+            httpx.HTTPStatusError: For other HTTP errors
+        """
+        url = f"{self.url}/api/v1/repos/{owner}/{repo}/pulls/{pr_number}"
+
+        try:
+            response = await self.client.get(url)
+            response.raise_for_status()
+            return response.json()
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 404:
+                raise ValueError(f"Pull request #{pr_number} not found")
+            else:
+                raise
+
+    async def get_pr_diff(self, owner: str, repo: str, pr_number: int) -> str:
+        """Get pull request diff in unified diff format.
+
+        Args:
+            owner: Repository owner
+            repo: Repository name
+            pr_number: Pull request number
+
+        Returns:
+            Unified diff string (can be very large)
+
+        Raises:
+            httpx.HTTPStatusError: For HTTP errors
+        """
+        url = f"{self.url}/api/v1/repos/{owner}/{repo}/pulls/{pr_number}.diff"
+
+        response = await self.client.get(url)
+        response.raise_for_status()
+        return response.text
+
+    async def create_pr_comment(self, owner: str, repo: str, pr_number: int, body: str) -> None:
+        """Post a general comment on the PR (not line-specific).
+
+        Args:
+            owner: Repository owner
+            repo: Repository name
+            pr_number: Pull request number
+            body: Comment body (markdown supported)
+
+        Raises:
+            ValueError: If comment creation fails
+        """
+        url = f"{self.url}/api/v1/repos/{owner}/{repo}/issues/{pr_number}/comments"
+        payload = {"body": body}
+
+        try:
+            response = await self.client.post(url, json=payload)
+            response.raise_for_status()
+        except httpx.HTTPStatusError as e:
+            raise ValueError(f"Failed to create PR comment: {e.response.text}")
+
+    async def create_pr_review_comment(
+        self,
+        owner: str,
+        repo: str,
+        pr_number: int,
+        commit_sha: str,
+        file_path: str,
+        line: int,
+        body: str,
+    ) -> None:
+        """Post an inline review comment on specific line.
+
+        Args:
+            owner: Repository owner
+            repo: Repository name
+            pr_number: Pull request number
+            commit_sha: Commit SHA to comment on (usually PR head)
+            file_path: File path relative to repo root
+            line: Line number in new version (after changes)
+            body: Comment body (markdown supported)
+
+        Raises:
+            ValueError: If review comment creation fails
+        """
+        url = f"{self.url}/api/v1/repos/{owner}/{repo}/pulls/{pr_number}/reviews"
+
+        # Gitea review API format: create a review with inline comments
+        payload = {
+            "commit_id": commit_sha,
+            "body": body,
+            "comments": [
+                {
+                    "path": file_path,
+                    "new_position": line,
+                    "body": body,
+                }
+            ],
+        }
+
+        try:
+            response = await self.client.post(url, json=payload)
+            response.raise_for_status()
+        except httpx.HTTPStatusError as e:
+            raise ValueError(f"Failed to create review comment: {e.response.text}")
