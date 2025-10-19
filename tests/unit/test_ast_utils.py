@@ -78,6 +78,27 @@ def helper():
             "@staticmethod" in functions[1].decorators or "staticmethod" in functions[1].decorators
         )
 
+    def test_extract_includes_class_methods(self):
+        """Test that class methods and instance methods are included."""
+        code = """
+class Service:
+    def run(self):
+        return True
+
+class Manager:
+    @classmethod
+    def build(cls, config):
+        return cls()
+"""
+        functions = extract_functions(code)
+
+        assert len(functions) == 2
+
+        # Should include both instance and class methods
+        names = {func.name for func in functions}
+        assert "run" in names
+        assert "build" in names
+
     def test_extract_filters_private_functions(self):
         """Test that private functions are marked as is_public=False."""
         code = """

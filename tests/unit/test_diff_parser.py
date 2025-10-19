@@ -1,7 +1,6 @@
 """Unit tests for diff parser."""
 
 
-
 def test_parse_simple_diff():
     """Test parsing a simple diff with one file and one hunk."""
     from drep.pr_review.diff_parser import parse_diff

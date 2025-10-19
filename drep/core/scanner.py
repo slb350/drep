@@ -9,6 +9,7 @@ from git import Repo
 
 from drep.adapters.gitea import GiteaAdapter
 from drep.code_quality.analyzer import CodeQualityAnalyzer
+from drep.core.performance import ProgressTracker
 from drep.db.models import RepositoryScan
 from drep.docstring.generator import DocstringGenerator
 from drep.llm.cache import IntelligentCache

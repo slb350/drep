@@ -734,7 +734,6 @@ class LLMClient:
 
         return None
 
-
     def get_metrics(self) -> Dict[str, Any]:
         """Get current metrics (legacy dict format for backward compatibility).
 

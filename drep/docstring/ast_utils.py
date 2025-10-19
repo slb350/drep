@@ -2,7 +2,7 @@
 
 import ast
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 
 @dataclass
@@ -30,6 +30,18 @@ class ClassInfo:
     is_public: bool
 
 
+def _collect_function_nodes(node: ast.AST) -> List[Tuple[ast.AST, ast.AST]]:
+    """Collect all function and async function nodes with their parent node."""
+    function_nodes: List[Tuple[ast.AST, ast.AST]] = []
+
+    for child in ast.iter_child_nodes(node):
+        if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            function_nodes.append((child, node))
+        function_nodes.extend(_collect_function_nodes(child))
+
+    return function_nodes
+
+
 def extract_functions(code: str) -> List[FunctionInfo]:
     """Extract all function definitions from Python code.
 
@@ -45,65 +57,66 @@ def extract_functions(code: str) -> List[FunctionInfo]:
     tree = ast.parse(code)
     functions = []
 
-    # Only iterate over top-level nodes (tree.body), NOT nested functions
-    # ast.walk() would recursively find ALL functions including nested helpers
-    for node in tree.body:
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            # Extract docstring
-            docstring = ast.get_docstring(node)
+    # Collect all functions but skip nested helpers (parent is another function)
+    for node, parent in _collect_function_nodes(tree):
+        if isinstance(parent, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
 
-            # Get ALL argument names (positional-only, regular, *args, kw-only, **kwargs)
-            args = []
-            # Positional-only args (PEP 570: def foo(a, b, /, c))
-            for arg in node.args.posonlyargs:
-                args.append(arg.arg)
-            # Regular positional/keyword args
-            for arg in node.args.args:
-                args.append(arg.arg)
-            # *args (varargs)
-            if node.args.vararg:
-                args.append(f"*{node.args.vararg.arg}")
-            # Keyword-only args (after * or *args)
-            for arg in node.args.kwonlyargs:
-                args.append(arg.arg)
-            # **kwargs (keyword arguments)
-            if node.args.kwarg:
-                args.append(f"**{node.args.kwarg.arg}")
+        # Extract docstring
+        docstring = ast.get_docstring(node)
 
-            # Get return annotation
-            returns = ast.unparse(node.returns) if node.returns else None
+        # Get ALL argument names (positional-only, regular, *args, kw-only, **kwargs)
+        args = []
+        # Positional-only args (PEP 570: def foo(a, b, /, c))
+        for arg in node.args.posonlyargs:
+            args.append(arg.arg)
+        # Regular positional/keyword args
+        for arg in node.args.args:
+            args.append(arg.arg)
+        # *args (varargs)
+        if node.args.vararg:
+            args.append(f"*{node.args.vararg.arg}")
+        # Keyword-only args (after * or *args)
+        for arg in node.args.kwonlyargs:
+            args.append(arg.arg)
+        # **kwargs (keyword arguments)
+        if node.args.kwarg:
+            args.append(f"**{node.args.kwarg.arg}")
 
-            # Check if public (not starting with _)
-            is_public = not node.name.startswith("_")
+        # Get return annotation
+        returns = ast.unparse(node.returns) if node.returns else None
 
-            # Calculate complexity (line count)
-            if node.end_lineno is not None:
-                complexity = node.end_lineno - node.lineno + 1
-            else:
-                complexity = 1
+        # Check if public (not starting with _)
+        is_public = not node.name.startswith("_")
 
-            # Get decorators
-            decorators = []
-            for decorator in node.decorator_list:
-                try:
-                    decorators.append(ast.unparse(decorator))
-                except Exception:
-                    # Fallback for complex decorators
-                    if isinstance(decorator, ast.Name):
-                        decorators.append(decorator.id)
+        # Calculate complexity (line count)
+        if node.end_lineno is not None:
+            complexity = node.end_lineno - node.lineno + 1
+        else:
+            complexity = 1
 
-            functions.append(
-                FunctionInfo(
-                    name=node.name,
-                    line_number=node.lineno,
-                    docstring=docstring,
-                    args=args,
-                    returns=returns,
-                    is_public=is_public,
-                    complexity=complexity,
-                    decorators=decorators,
-                )
+        # Get decorators
+        decorators = []
+        for decorator in node.decorator_list:
+            try:
+                decorators.append(ast.unparse(decorator))
+            except Exception:
+                # Fallback for complex decorators
+                if isinstance(decorator, ast.Name):
+                    decorators.append(decorator.id)
+
+        functions.append(
+            FunctionInfo(
+                name=node.name,
+                line_number=node.lineno,
+                docstring=docstring,
+                args=args,
+                returns=returns,
+                is_public=is_public,
+                complexity=complexity,
+                decorators=decorators,
             )
+        )
 
     return functions
 
