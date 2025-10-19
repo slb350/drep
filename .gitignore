@@ -28,6 +28,7 @@ ENV/
 # IDE
 .vscode/
 .idea/
+.obsidian/
 *.swp
 *.swo
 *~
@@ -54,3 +55,10 @@ repos/
 # Temp files
 *.log
 .DS_Store
+*.tmp.*
+.cache/
+__pycache__/
+
+# LLM cache and metrics
+.drep/
+*.metrics.json
