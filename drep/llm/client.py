@@ -13,6 +13,9 @@ from typing import Any, Dict, Optional, Type
 from openai import AsyncOpenAI
 from pydantic import BaseModel
 
+from drep.llm.circuit_breaker import CircuitBreaker
+from drep.llm.metrics import LLMMetrics
+
 logger = logging.getLogger(__name__)
 
 
@@ -275,7 +278,8 @@ class RateLimiter:
                 wait_time = self.token_reset_time - now
                 if wait_time > 0:
                     logger.debug(
-                        f"Token rate limit reached ({self.tokens_used}/{self.max_tokens_per_minute}), "
+                        f"Token rate limit reached "
+                        f"({self.tokens_used}/{self.max_tokens_per_minute}), "
                         f"waiting {wait_time:.1f}s"
                     )
                     await asyncio.sleep(wait_time)
@@ -329,6 +333,9 @@ class LLMClient:
         max_tokens_per_minute: int = 100000,
         cache: Optional["IntelligentCache"] = None,  # noqa: F821
         repo_path: Optional[Path] = None,
+        enable_circuit_breaker: bool = True,
+        circuit_breaker_threshold: int = 5,
+        circuit_breaker_timeout: int = 60,
     ):
         """Initialize LLM client.
 
@@ -348,6 +355,9 @@ class LLMClient:
             max_tokens_per_minute: Rate limit for tokens
             cache: Optional cache instance for response caching
             repo_path: Optional repository path for commit SHA retrieval
+            enable_circuit_breaker: Enable circuit breaker pattern
+            circuit_breaker_threshold: Failures before opening circuit
+            circuit_breaker_timeout: Recovery timeout in seconds
         """
         self.endpoint = endpoint
         self.model = model
@@ -375,10 +385,21 @@ class LLMClient:
             max_concurrent_per_repo=max_concurrent_per_repo,
         )
 
-        # Metrics
+        # Metrics tracking
+        self.metrics = LLMMetrics()
+
+        # Legacy metrics (for backward compatibility)
         self.total_requests = 0
         self.total_tokens = 0
         self.failed_requests = 0
+
+        # Circuit breaker (optional)
+        self.circuit_breaker = None
+        if enable_circuit_breaker:
+            self.circuit_breaker = CircuitBreaker(
+                failure_threshold=circuit_breaker_threshold,
+                recovery_timeout=circuit_breaker_timeout,
+            )
 
     async def analyze_code(
         self,
@@ -386,6 +407,7 @@ class LLMClient:
         code: str,
         repo_id: Optional[str] = None,
         commit_sha: Optional[str] = None,
+        analyzer: str = "unknown",
     ) -> LLMResponse:
         """Analyze code with LLM.
 
@@ -394,6 +416,7 @@ class LLMClient:
             code: Code to analyze
             repo_id: Optional repository identifier
             commit_sha: Optional commit SHA (auto-detected if not provided)
+            analyzer: Name of the analyzer making the request
 
         Returns:
             LLMResponse with content and metadata
@@ -416,6 +439,15 @@ class LLMClient:
             )
             if cached:
                 logger.debug("Cache hit for analyze_code")
+                # Record cached request
+                self.metrics.record_request(
+                    analyzer=analyzer,
+                    success=True,
+                    cached=True,
+                    tokens_prompt=0,
+                    tokens_completion=cached["tokens_used"],
+                    latency_ms=0,
+                )
                 return LLMResponse(
                     content=cached["content"],
                     tokens_used=cached["tokens_used"],
@@ -453,9 +485,19 @@ class LLMClient:
                     # Update actual tokens
                     ctx.set_actual_tokens(tokens_used)
 
-                    # Update metrics
+                    # Update legacy metrics
                     self.total_requests += 1
                     self.total_tokens += tokens_used
+
+                    # Record metrics
+                    self.metrics.record_request(
+                        analyzer=analyzer,
+                        success=True,
+                        cached=False,
+                        tokens_prompt=response.usage.prompt_tokens,
+                        tokens_completion=response.usage.completion_tokens,
+                        latency_ms=latency_ms,
+                    )
 
                     # Create response object
                     llm_response = LLMResponse(
@@ -489,6 +531,16 @@ class LLMClient:
                 last_exception = e
                 self.failed_requests += 1
 
+                # Record failed request
+                self.metrics.record_request(
+                    analyzer=analyzer,
+                    success=False,
+                    cached=False,
+                    tokens_prompt=0,
+                    tokens_completion=0,
+                    latency_ms=0,
+                )
+
                 if attempt < self.max_retries - 1:
                     # Calculate backoff delay
                     if self.exponential_backoff:
@@ -514,6 +566,7 @@ class LLMClient:
         schema: Optional[Type[BaseModel]] = None,
         repo_id: Optional[str] = None,
         commit_sha: Optional[str] = None,
+        analyzer: str = "unknown",
     ) -> Dict[str, Any]:
         """Analyze code and parse JSON response with fallback strategies.
 
@@ -544,6 +597,7 @@ class LLMClient:
                 code=code,
                 repo_id=repo_id,
                 commit_sha=commit_sha,
+                analyzer=analyzer,
             )
             content = response.content
 
@@ -611,7 +665,10 @@ class LLMClient:
 
             # Retry with stricter prompt
             if attempt < 2:
-                system_prompt += "\n\nIMPORTANT: Return ONLY valid, well-formed JSON. No explanations, no markdown fences."
+                system_prompt += (
+                    "\n\nIMPORTANT: Return ONLY valid, well-formed JSON. "
+                    "No explanations, no markdown fences."
+                )
 
         raise ValueError(f"Failed to parse JSON after 3 attempts. Last content: {content[:200]}...")
 
@@ -677,11 +734,12 @@ class LLMClient:
 
         return None
 
+
     def get_metrics(self) -> Dict[str, Any]:
-        """Get client metrics.
+        """Get current metrics (legacy dict format for backward compatibility).
 
         Returns:
-            Dict with metrics
+            Dict with metrics including legacy fields
         """
         success_rate = (
             (self.total_requests - self.failed_requests) / self.total_requests
@@ -691,13 +749,25 @@ class LLMClient:
 
         avg_tokens = self.total_tokens / self.total_requests if self.total_requests > 0 else 0
 
+        # Return merged dict with both legacy and new metrics
         return {
+            # Legacy fields
             "total_requests": self.total_requests,
             "failed_requests": self.failed_requests,
             "total_tokens": self.total_tokens,
             "success_rate": success_rate,
             "avg_tokens_per_request": avg_tokens,
+            # New metrics object for advanced usage
+            "metrics_object": self.metrics,
         }
+
+    def get_llm_metrics(self) -> LLMMetrics:
+        """Get LLMMetrics object with detailed statistics.
+
+        Returns:
+            LLMMetrics object with comprehensive usage statistics
+        """
+        return self.metrics
 
     async def close(self):
         """Close the client and release resources."""
