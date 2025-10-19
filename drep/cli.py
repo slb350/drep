@@ -212,5 +212,110 @@ fi
         await adapter.close()
 
 
+@cli.command()
+@click.argument("repository")
+@click.argument("pr_number", type=int)
+@click.option("--config", default="config.yaml", help="Config file path")
+@click.option("--post/--no-post", default=True, help="Post comments to PR (default: yes)")
+def review(repository, pr_number, config, post):
+    """Review a pull request with LLM analysis.
+
+    Examples:
+        drep review steve/drep 42
+        drep review steve/drep 42 --no-post  # Dry run
+    """
+    if "/" not in repository:
+        click.echo("Error: Repository must be in format 'owner/repo'", err=True)
+        return
+
+    owner, repo_name = repository.split("/", 1)
+
+    click.echo(f"Reviewing PR #{pr_number} in {owner}/{repo_name}...")
+
+    try:
+        # Run async review
+        asyncio.run(_run_review(owner, repo_name, pr_number, config, post))
+        click.echo("✓ Review complete")
+    except FileNotFoundError:
+        click.echo(f"Config file not found: {config}", err=True)
+        click.echo("Run 'drep init' to create a config file.", err=True)
+    except Exception as e:
+        click.echo(f"Error during review: {e}", err=True)
+
+
+async def _run_review(
+    owner: str,
+    repo: str,
+    pr_number: int,
+    config_path: str,
+    post_comments: bool,
+):
+    """Run the PR review workflow.
+
+    Args:
+        owner: Repository owner
+        repo: Repository name
+        pr_number: PR number to review
+        config_path: Path to config file
+        post_comments: Whether to post comments to PR
+    """
+    # Load config
+    config = load_config(config_path)
+
+    # Check LLM is enabled
+    if not config.llm or not config.llm.enabled:
+        click.echo("Error: LLM must be enabled in config for PR reviews", err=True)
+        return
+
+    # Initialize components
+    adapter = GiteaAdapter(config.gitea.url, config.gitea.token)
+    scanner = RepositoryScanner(init_database(config.database_url), config, gitea_adapter=adapter)
+
+    try:
+        # Check PR analyzer is available
+        if not scanner.pr_analyzer:
+            click.echo("Error: PR analyzer not initialized (LLM required)", err=True)
+            return
+
+        # Review PR
+        click.echo(f"Fetching PR #{pr_number}...")
+        result = await scanner.pr_analyzer.review_pr(owner, repo, pr_number)
+
+        # Display results
+        click.echo("\n=== Review Summary ===")
+        click.echo(result.summary)
+        click.echo(f"\nFound {len(result.comments)} comments")
+        click.echo(f"Recommendation: {'✅ Approve' if result.approve else '🔍 Request Changes'}")
+
+        if result.concerns:
+            click.echo("\nConcerns:")
+            for concern in result.concerns:
+                click.echo(f"  - {concern}")
+
+        # Show comments summary
+        if result.comments:
+            click.echo("\nComment breakdown:")
+            severity_counts = {}
+            for comment in result.comments:
+                severity_counts[comment.severity] = severity_counts.get(comment.severity, 0) + 1
+            for severity, count in sorted(severity_counts.items()):
+                click.echo(f"  {severity}: {count}")
+
+        # Post to PR (if enabled)
+        if post_comments:
+            click.echo("\nPosting review to PR...")
+            pr_data = await adapter.get_pr(owner, repo, pr_number)
+            commit_sha = pr_data["head"]["sha"]
+            await scanner.pr_analyzer.post_review(owner, repo, pr_number, commit_sha, result)
+            click.echo("✓ Review posted!")
+        else:
+            click.echo("\n(Dry run - not posting to PR)")
+
+    finally:
+        # Cleanup
+        await scanner.close()
+        await adapter.close()
+
+
 if __name__ == "__main__":
     cli()

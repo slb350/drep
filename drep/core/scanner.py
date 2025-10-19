@@ -7,6 +7,7 @@ from typing import List, Optional, Tuple
 
 from git import Repo
 
+from drep.adapters.gitea import GiteaAdapter
 from drep.code_quality.analyzer import CodeQualityAnalyzer
 from drep.db.models import RepositoryScan
 from drep.docstring.generator import DocstringGenerator
@@ -14,6 +15,7 @@ from drep.llm.cache import IntelligentCache
 from drep.llm.client import LLMClient, get_current_commit_sha  # noqa: F401
 from drep.models.config import Config
 from drep.models.findings import Finding
+from drep.pr_review.analyzer import PRReviewAnalyzer
 
 logger = logging.getLogger(__name__)
 
@@ -21,12 +23,18 @@ logger = logging.getLogger(__name__)
 class RepositoryScanner:
     """Scans repositories with incremental diff support and optional LLM-powered analysis."""
 
-    def __init__(self, db_session, config: Optional[Config] = None):
+    def __init__(
+        self,
+        db_session,
+        config: Optional[Config] = None,
+        gitea_adapter: Optional[GiteaAdapter] = None,
+    ):
         """Initialize scanner with database session and optional config.
 
         Args:
             db_session: SQLAlchemy database session for querying/storing scan metadata
             config: Optional Config object for LLM-powered analysis
+            gitea_adapter: Optional GiteaAdapter for PR review functionality
         """
         self.db = db_session
         self.config = config
@@ -67,10 +75,17 @@ class RepositoryScanner:
 
             # Create docstring generator
             self.docstring_generator = DocstringGenerator(self.llm_client)
+
+            # Create PR review analyzer if gitea adapter provided
+            if gitea_adapter:
+                self.pr_analyzer = PRReviewAnalyzer(self.llm_client, gitea_adapter)
+            else:
+                self.pr_analyzer = None
         else:
             self.llm_client = None
             self.code_analyzer = None
             self.docstring_generator = None
+            self.pr_analyzer = None
 
     async def scan_repository(
         self, repo_path: str, owner: str, repo_name: str
