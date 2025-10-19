@@ -124,7 +124,7 @@ class TestScanCommand:
 
             assert result.exit_code == 0
             assert "Scanning steve/drep" in result.output
-            mock_scan.assert_called_once_with("steve", "drep", str(temp_config_file))
+            mock_scan.assert_called_once_with("steve", "drep", str(temp_config_file), False, True)
 
     def test_scan_uses_default_config_path(self, runner, tmp_path):
         """Test that scan uses default config.yaml path."""
@@ -144,7 +144,7 @@ class TestScanCommand:
                 result = runner.invoke(cli, ["scan", "owner/repo"])
 
                 assert result.exit_code == 0
-                mock_scan.assert_called_once_with("owner", "repo", "config.yaml")
+                mock_scan.assert_called_once_with("owner", "repo", "config.yaml", False, True)
 
     def test_scan_respects_config_option(self, runner, temp_config_file):
         """Test that scan respects --config option."""
@@ -152,7 +152,7 @@ class TestScanCommand:
             result = runner.invoke(cli, ["scan", "owner/repo", "--config", str(temp_config_file)])
 
             assert result.exit_code == 0
-            mock_scan.assert_called_once_with("owner", "repo", str(temp_config_file))
+            mock_scan.assert_called_once_with("owner", "repo", str(temp_config_file), False, True)
 
     def test_scan_handles_missing_config_file(self, runner):
         """Test that scan shows helpful error when config file missing."""

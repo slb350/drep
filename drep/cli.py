@@ -56,7 +56,9 @@ database_url: sqlite:///./drep.db
 @cli.command()
 @click.argument("repository")
 @click.option("--config", default="config.yaml", help="Config file path")
-def scan(repository, config):
+@click.option("--show-metrics/--no-metrics", default=False, help="Show LLM metrics after scan")
+@click.option("--show-progress/--no-progress", default=True, help="Show progress during scan")
+def scan(repository, config, show_metrics, show_progress):
     """Scan a repository: drep scan owner/repo"""
 
     if "/" not in repository:
@@ -69,7 +71,7 @@ def scan(repository, config):
 
     try:
         # Run async scan
-        asyncio.run(_run_scan(owner, repo_name, config))
+        asyncio.run(_run_scan(owner, repo_name, config, show_metrics, show_progress))
         click.echo("✓ Scan complete")
     except FileNotFoundError:
         click.echo(f"Config file not found: {config}", err=True)
@@ -78,13 +80,21 @@ def scan(repository, config):
         click.echo(f"Error during scan: {e}", err=True)
 
 
-async def _run_scan(owner: str, repo: str, config_path: str):
+async def _run_scan(
+    owner: str,
+    repo: str,
+    config_path: str,
+    show_metrics: bool,
+    show_progress: bool,
+):
     """Run the actual scan workflow.
 
     Args:
         owner: Repository owner
         repo: Repository name
         config_path: Path to config file
+        show_metrics: Whether to show LLM metrics after scan
+        show_progress: Whether to show progress during scan
     """
     # Load config
     config = load_config(config_path)
@@ -158,6 +168,13 @@ fi
         else:
             click.echo(f"Analyzing {len(files)} files...")
 
+        # Progress callback for real-time updates
+        def update_progress(tracker):
+            """Update progress display in terminal."""
+            if show_progress:
+                # Use \r for in-place updates, no newline
+                click.echo(f"\r{tracker.report()}", nl=False)
+
         # Analyze files and collect findings
         findings = []
 
@@ -171,14 +188,19 @@ fi
 
         # 2. Code quality analysis (LLM-powered)
         if config.llm and config.llm.enabled:
-            click.echo("Running LLM-powered code quality analysis...")
+            click.echo("Analyzing code quality...")
             repo_id = f"{owner}/{repo}"
             code_findings = await scanner.analyze_code_quality(
                 repo_path=str(repo_path),
                 files=files,
                 repo_id=repo_id,
                 commit_sha=current_sha,
+                progress_callback=update_progress if show_progress else None,
             )
+
+            if show_progress:
+                click.echo("")  # New line after progress bar completes
+
             findings.extend(code_findings)
 
             # 3. Docstring analysis (LLM-powered)
@@ -188,7 +210,12 @@ fi
                 files=files,
                 repo_id=repo_id,
                 commit_sha=current_sha,
+                progress_callback=update_progress if show_progress else None,
             )
+
+            if show_progress:
+                click.echo("")  # New line after progress bar completes
+
             findings.extend(docstring_findings)
 
         click.echo(f"Found {len(findings)} issues")
@@ -199,6 +226,13 @@ fi
 
         # Record scan
         scanner.record_scan(owner, repo, current_sha)
+
+        # Show metrics at end (if requested)
+        if show_metrics and scanner.llm_client:
+            click.echo("\n" + "=" * 60)
+            metrics = scanner.llm_client.get_llm_metrics()
+            click.echo(metrics.report(detailed=True))
+            click.echo("=" * 60)
 
     finally:
         # Cleanup
@@ -315,6 +349,46 @@ async def _run_review(
         # Cleanup
         await scanner.close()
         await adapter.close()
+
+
+@cli.command()
+@click.option("--days", default=30, help="Days of history to show")
+@click.option("--export", type=click.Path(), help="Export metrics to JSON file")
+@click.option("--detailed/--summary", default=False, help="Show detailed breakdown")
+def metrics(days, export, detailed):
+    """Display LLM usage metrics and cost estimation.
+
+    Examples:
+        drep metrics --days 7
+        drep metrics --detailed
+        drep metrics --export metrics.json
+    """
+    import json
+    from pathlib import Path
+
+    from drep.llm.metrics import MetricsCollector
+
+    # Load metrics
+    metrics_file = Path.home() / ".drep" / "metrics.json"
+
+    if not metrics_file.exists():
+        click.echo("No metrics found. Run 'drep scan' first to generate metrics.")
+        return
+
+    collector = MetricsCollector(metrics_file)
+
+    # Get aggregated metrics
+    aggregated = collector.aggregate_history(days=days)
+
+    # Display report
+    click.echo(aggregated.report(detailed=detailed))
+
+    # Export if requested
+    if export:
+        export_path = Path(export)
+        with open(export_path, "w") as f:
+            json.dump(aggregated.to_dict(), f, indent=2)
+        click.echo(f"\n✓ Metrics exported to {export_path}")
 
 
 if __name__ == "__main__":
