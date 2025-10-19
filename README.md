@@ -54,6 +54,84 @@ Single tool for all your git platforms:
 - **GitHub**
 - **GitLab** (cloud or self-hosted)
 
+## LLM-Powered Analysis
+
+drep includes intelligent code analysis powered by local LLMs via LM Studio.
+
+### Features
+
+- **Code Quality Analysis**: Detects bugs, security issues, and best practice violations
+- **Docstring Generation**: Automatically generates Google-style docstrings
+- **PR Reviews**: Context-aware code review comments
+- **Smart Caching**: 80%+ cache hit rate on repeated scans
+- **Cost Tracking**: Monitor token usage and estimated costs
+- **Circuit Breaker**: Graceful degradation when LLM unavailable
+- **Progress Reporting**: Real-time feedback during analysis
+
+### Quick Start
+
+1. Install LM Studio: https://lmstudio.ai/
+2. Download a model (Qwen3-30B-A3B recommended)
+3. Configure drep:
+
+```yaml
+llm:
+  enabled: true
+  endpoint: http://localhost:1234/v1
+  model: qwen3-30b-a3b
+  temperature: 0.2
+  max_tokens: 8000
+
+  # Rate limiting
+  max_concurrent_global: 5
+  requests_per_minute: 60
+
+  # Caching
+  cache:
+    enabled: true
+    ttl_days: 30
+```
+
+4. Run analysis:
+
+```bash
+drep scan owner/repo --show-progress --show-metrics
+```
+
+### View Metrics
+
+```bash
+# Show detailed usage statistics
+drep metrics --detailed
+
+# Export to JSON
+drep metrics --export metrics.json
+
+# Last 7 days only
+drep metrics --days 7
+```
+
+**Example output:**
+```
+===== LLM Usage Report =====
+Session duration: 0h 5m 32s
+Total requests: 127 (115 successful, 12 failed, 95 cached)
+Success rate: 90.6%
+Cache hit rate: 74.8%
+
+Tokens used: 45,230 prompt + 12,560 completion = 57,790 total
+Estimated cost: $0.29 USD (or $0 with LM Studio)
+
+Performance:
+  Average latency: 1250ms
+  Min/Max: 450ms / 3200ms
+
+By Analyzer:
+  code_quality: 45 requests (12,345 tokens)
+  docstring: 38 requests (8,901 tokens)
+  pr_review: 44 requests (36,544 tokens)
+```
+
 ## Quick Start
 
 ### Installation
