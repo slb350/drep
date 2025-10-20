@@ -22,8 +22,7 @@ class DocumentationConfig(BaseModel):
     markdown_checks: bool = Field(
         default=False,
         description=(
-            "Enable basic Markdown lint checks "
-            "(headings, trailing whitespace, code fences)"
+            "Enable basic Markdown lint checks " "(headings, trailing whitespace, code fences)"
         ),
     )
 

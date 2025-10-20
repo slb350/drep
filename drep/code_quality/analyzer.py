@@ -130,7 +130,7 @@ class CodeQualityAnalyzer:
 
             # Log analysis results
             critical_high_count = sum(
-                1 for i in result.issues if i.severity in ['critical', 'high']
+                1 for i in result.issues if i.severity in ["critical", "high"]
             )
             logger.info(
                 f"Analyzed {file_path}: found {len(result.issues)} issues "
