@@ -372,6 +372,7 @@ class LLMClient:
 
         # Try to use open-agent-sdk if available (preferred)
         self._using_open_agent = False
+        self.client = None
         try:
             from open_agent.types import AgentOptions  # type: ignore
             from open_agent.utils import create_client  # type: ignore
@@ -385,15 +386,20 @@ class LLMClient:
             )
             self.client = create_client(options)  # AsyncOpenAI instance
             self._using_open_agent = True
-        except Exception:
-            self.client = None
+            logger.info("LLM backend: open-agent-sdk (OpenAI-compatible)")
+        except ImportError:
+            logger.info("LLM backend: HTTP (OpenAI-compatible), open-agent-sdk not installed")
+        except Exception as e:
+            logger.warning(f"open-agent-sdk initialization failed, falling back to HTTP: {e}")
 
         # Initialize HTTP client for OpenAI-compatible endpoints (fallback)
-        headers = {}
-        if api_key:
-            headers["Authorization"] = f"Bearer {api_key}"
-        headers["Content-Type"] = "application/json"
-        self.http = httpx.AsyncClient(base_url=self.endpoint, headers=headers, timeout=timeout)
+        self.http = None
+        if not self._using_open_agent:
+            headers = {}
+            if api_key:
+                headers["Authorization"] = f"Bearer {api_key}"
+            headers["Content-Type"] = "application/json"
+            self.http = httpx.AsyncClient(base_url=self.endpoint, headers=headers, timeout=timeout)
 
         # Back-compat shim: expose client.chat.completions.create like OpenAI SDK
         # so unit tests and existing code paths can mock/patch consistently.
@@ -431,6 +437,8 @@ class LLMClient:
                 self._parent = parent
 
             async def create(self, model: str, messages: list, temperature: float, max_tokens: int):
+                if not self._parent.http:
+                    raise RuntimeError("HTTP client not initialized")
                 url = f"{self._parent.endpoint}/chat/completions"
                 payload = {
                     "model": model,
@@ -451,7 +459,8 @@ class LLMClient:
                 self.chat = _CompatChat(parent)
 
             async def close(self):
-                await parent.http.aclose()
+                if parent.http:
+                    await parent.http.aclose()
 
         parent = self
         if not self._using_open_agent:
@@ -535,8 +544,9 @@ class LLMClient:
                     model=cached["model"],
                 )
 
-        # Estimate tokens (rough: 4 chars per token)
+        # Estimate tokens (rough: 4 chars per token), clamp to avoid over-reservation
         estimated_tokens = (len(system_prompt) + len(code) + self.max_tokens) // 4
+        estimated_tokens = max(1, min(estimated_tokens, 50000))
 
         # Retry logic
         last_exception = None

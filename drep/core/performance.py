@@ -13,6 +13,7 @@ logger = logging.getLogger(__name__)
 try:  # Python 3.11+
     from asyncio import timeout as _asyncio_timeout
 except Exception:  # Python 3.10 fallback
+
     @asynccontextmanager
     async def _asyncio_timeout(delay: float):
         """A minimal context manager emulating asyncio.timeout for 3.10.
@@ -190,7 +191,7 @@ async def timeout_with_partial_results(timeout_seconds: float, partial_results: 
         partial_results: List to collect results in
 
     Raises:
-        asyncio.TimeoutError: If timeout is exceeded
+        TimeoutError (asyncio.TimeoutError): If timeout is exceeded
     """
     try:
         async with _asyncio_timeout(timeout_seconds):

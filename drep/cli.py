@@ -139,7 +139,8 @@ else
 fi
 """
         askpass_script.write_text(askpass_content)
-        askpass_script.chmod(0o755)
+        # Restrict to owner only; contains sensitive token usage
+        askpass_script.chmod(0o700)
 
         # Build git environment
         git_env = {
@@ -253,8 +254,6 @@ fi
                 metrics_file = _Path.home() / ".drep" / "metrics.json"
                 collector = MetricsCollector(metrics_file)
                 collector.current_session = metrics
-                import asyncio as _asyncio
-
                 await collector.save()
             except Exception as e:
                 click.echo(f"Warning: failed to persist metrics: {e}")

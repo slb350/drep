@@ -240,20 +240,31 @@ class GiteaAdapter:
         # Gitea review API format: create a review with inline comments
         # Note: Leave top-level body empty to avoid duplicate comments
         # The body appears in the inline comment only
-        payload = {
+        # First attempt: use new_position (works on newer Gitea versions)
+        payload_new = {
             "commit_id": commit_sha,
-            "body": "",  # Empty to prevent duplicating the inline comment
-            "comments": [
-                {
-                    "path": file_path,
-                    "new_position": line,
-                    "body": body,
-                }
-            ],
+            "body": "",
+            "comments": [{"path": file_path, "new_position": line, "body": body}],
         }
 
         try:
-            response = await self.client.post(url, json=payload)
-            response.raise_for_status()
-        except httpx.HTTPStatusError as e:
-            raise ValueError(f"Failed to create review comment: {e.response.text}")
+            resp = await self.client.post(url, json=payload_new)
+            resp.raise_for_status()
+            return
+        except httpx.HTTPStatusError as e1:
+            # Fallback: try "position" for compatibility with other versions
+            payload_pos = {
+                "commit_id": commit_sha,
+                "body": "",
+                "comments": [{"path": file_path, "position": line, "body": body}],
+            }
+            try:
+                resp2 = await self.client.post(url, json=payload_pos)
+                resp2.raise_for_status()
+                return
+            except httpx.HTTPStatusError as e2:
+                # Propagate detailed error from both attempts
+                raise ValueError(
+                    f"Failed to create review comment. new_position error: {e1.response.text}; "
+                    f"position error: {e2.response.text}"
+                )

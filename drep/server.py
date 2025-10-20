@@ -48,7 +48,9 @@ def _extract_owner_repo(payload: Dict[str, Any]) -> Optional[Tuple[str, str]]:
 
 
 @app.post("/webhooks/gitea")
-async def webhook_gitea(request: Request, x_gitea_event: str | None = Header(default=None)) -> Dict[str, Any]:
+async def webhook_gitea(
+    request: Request, x_gitea_event: str | None = Header(default=None)
+) -> Dict[str, Any]:
     """Receive Gitea webhooks and trigger background scan/review."""
     try:
         payload = await request.json()
@@ -66,7 +68,9 @@ async def webhook_gitea(request: Request, x_gitea_event: str | None = Header(def
     if event == "push" and owner_repo:
         owner, repo = owner_repo
         # Fire-and-forget scan (no metrics printing/progress)
-        asyncio.create_task(_run_scan(owner, repo, config_path, show_metrics=False, show_progress=False))
+        asyncio.create_task(
+            _run_scan(owner, repo, config_path, show_metrics=False, show_progress=False)
+        )
         scheduled = True
         details = {"action": "scan", "owner": owner, "repo": repo}
 
@@ -75,7 +79,9 @@ async def webhook_gitea(request: Request, x_gitea_event: str | None = Header(def
         pr = payload.get("pull_request") or {}
         pr_number = pr.get("number") or pr.get("index")
         if isinstance(pr_number, int):
-            asyncio.create_task(_run_review(owner, repo, pr_number, config_path, post_comments=True))
+            asyncio.create_task(
+                _run_review(owner, repo, pr_number, config_path, post_comments=True)
+            )
             scheduled = True
             details = {"action": "review", "owner": owner, "repo": repo, "pr": pr_number}
 

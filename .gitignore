@@ -29,6 +29,9 @@ ENV/
 .vscode/
 .idea/
 .obsidian/
+.claude/
+CLAUDE.md
+AGENTS.md
 *.swp
 *.swo
 *~

@@ -13,7 +13,7 @@ from drep.core.performance import ProgressTracker
 from drep.db.models import RepositoryScan
 from drep.docstring.generator import DocstringGenerator
 from drep.llm.cache import IntelligentCache
-from drep.llm.client import LLMClient, get_current_commit_sha  # noqa: F401
+from drep.llm.client import LLMClient  # noqa: F401
 from drep.models.config import Config
 from drep.models.findings import Finding
 from drep.pr_review.analyzer import PRReviewAnalyzer
