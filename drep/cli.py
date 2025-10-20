@@ -248,8 +248,9 @@ fi
 
             # Save metrics to ~/.drep/metrics.json
             try:
-                from drep.llm.metrics import MetricsCollector
                 from pathlib import Path as _Path
+
+                from drep.llm.metrics import MetricsCollector
 
                 metrics_file = _Path.home() / ".drep" / "metrics.json"
                 collector = MetricsCollector(metrics_file)
@@ -379,8 +380,9 @@ async def _run_review(
         # Persist metrics if available
         if scanner.llm_client:
             try:
-                from drep.llm.metrics import MetricsCollector
                 from pathlib import Path as _Path
+
+                from drep.llm.metrics import MetricsCollector
 
                 metrics_file = _Path.home() / ".drep" / "metrics.json"
                 collector = MetricsCollector(metrics_file)

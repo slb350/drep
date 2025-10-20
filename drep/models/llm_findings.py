@@ -20,7 +20,10 @@ class CodeIssue(BaseModel):
     )
     category: str = Field(
         ...,
-        description="Issue category (e.g., 'bug', 'security', 'best-practice', 'performance', 'style')",
+        description=(
+            "Issue category "
+            "(e.g., 'bug', 'security', 'best-practice', 'performance', 'style')"
+        ),
     )
     message: str = Field(..., description="Clear description of the issue")
     suggestion: str = Field(..., description="Specific recommendation for fixing the issue")

@@ -124,19 +124,21 @@ By Analyzer:
 
 #### Via pip (Recommended)
 ```bash
-pip install drep
+pip install drep-ai
 ```
 
-#### From source (until PyPI release)
+**Note**: The PyPI package is named `drep-ai` (the name `drep` was already taken). After installation, the command-line tool is still `drep`.
+
+#### From source
 ```bash
-git clone https://github.com/stephenbrandon/drep.git
+git clone https://github.com/slb350/drep.git
 cd drep
 pip install -e ".[dev]"
 ```
 
 #### Via Docker
 ```bash
-docker pull ghcr.io/stephenbrandon/drep:latest
+docker pull ghcr.io/slb350/drep:latest
 ```
 
 ### Configuration
@@ -205,7 +207,7 @@ drep review owner/repository 42 --no-post
 version: '3.8'
 services:
   drep:
-    image: ghcr.io/stephenbrandon/drep:latest
+    image: ghcr.io/slb350/drep:latest
     ports:
       - "8000:8000"
     volumes:
@@ -423,7 +425,7 @@ See [docs/technical-design.md](docs/technical-design.md) for complete architectu
 
 ```bash
 # Clone repository
-git clone https://github.com/stephenbrandon/drep.git
+git clone https://github.com/slb350/drep.git
 cd drep
 
 # Create virtual environment
@@ -503,8 +505,8 @@ MIT License - see [LICENSE](LICENSE) for details.
 ## Support
 
 - **Documentation**: [docs/](docs/)
-- **Issues**: https://github.com/stephenbrandon/drep/issues
-- **Discussions**: https://github.com/stephenbrandon/drep/discussions
+- **Issues**: https://github.com/slb350/drep/issues
+- **Discussions**: https://github.com/slb350/drep/discussions
 
 ## Acknowledgments
 

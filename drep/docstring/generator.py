@@ -81,7 +81,8 @@ Output JSON only with exactly these keys:
 }}
 
 Notes:
-- The docstring value must use \\n+ for newlines and must not include code fences or extra commentary.
+- The docstring value must use \\n+ for newlines and must not include code
+  fences or extra commentary.
 - Return ONLY the JSON object.
 """
 

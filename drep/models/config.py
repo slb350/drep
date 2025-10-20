@@ -21,7 +21,10 @@ class DocumentationConfig(BaseModel):
     custom_dictionary: List[str] = Field(default_factory=list)
     markdown_checks: bool = Field(
         default=False,
-        description="Enable basic Markdown lint checks (headings, trailing whitespace, code fences)",
+        description=(
+            "Enable basic Markdown lint checks "
+            "(headings, trailing whitespace, code fences)"
+        ),
     )
 
 

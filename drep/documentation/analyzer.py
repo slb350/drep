@@ -46,7 +46,8 @@ class DocumentationAnalyzer:
         # Track code fence state
         in_fence = False
 
-        # Per-line checks: trailing whitespace, tabs, empty headings, missing space after heading, long lines
+        # Per-line checks: trailing whitespace, tabs, empty headings,
+        # missing space after heading, long lines
         for idx, line in enumerate(lines, start=1):
             stripped = line.rstrip("\n")
             if stripped.strip().startswith("```"):
@@ -188,7 +189,7 @@ class DocumentationAnalyzer:
                 )
 
         # Unclosed code fence: odd number of ```
-        fence_count = sum(1 for l in lines if l.strip().startswith("```"))
+        fence_count = sum(1 for line in lines if line.strip().startswith("```"))
         if fence_count % 2 == 1:
             for idx in range(len(lines), 0, -1):
                 if lines[idx - 1].strip().startswith("```"):

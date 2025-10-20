@@ -14,16 +14,23 @@ logger = logging.getLogger(__name__)
 # Approximately 8k tokens (assuming ~4 chars per token)
 MAX_FILE_SIZE = 32000
 
-PYTHON_ANALYSIS_PROMPT = """You are an expert Python code reviewer. Analyze the following code and identify issues in these categories:
+PYTHON_ANALYSIS_PROMPT = """You are an expert Python code reviewer.
+Analyze the following code and identify issues in these categories:
 
-1. **Bugs & Logic Errors**: Incorrect logic, unhandled edge cases, potential crashes, undefined variables, type errors
-2. **Security Issues**: SQL injection, command injection, path traversal, unsafe deserialization, hardcoded secrets, weak cryptography
-3. **Best Practices**: PEP 8 violations, missing docstrings, poor naming conventions, code smells, anti-patterns
-4. **Performance**: Inefficient algorithms, unnecessary loops, blocking I/O operations, memory leaks
+1. **Bugs & Logic Errors**: Incorrect logic, unhandled edge cases,
+   potential crashes, undefined variables, type errors
+2. **Security Issues**: SQL injection, command injection, path traversal,
+   unsafe deserialization, hardcoded secrets, weak cryptography
+3. **Best Practices**: PEP 8 violations, missing docstrings,
+   poor naming conventions, code smells, anti-patterns
+4. **Performance**: Inefficient algorithms, unnecessary loops,
+   blocking I/O operations, memory leaks
 
 For each issue found, provide:
 - Line number (approximate if exact line is unclear)
-- Severity: critical (security vulnerabilities, crashes), high (bugs, serious issues), medium (best practices, moderate issues), low (minor improvements), info (suggestions)
+- Severity: critical (security vulnerabilities, crashes), high (bugs,
+  serious issues), medium (best practices, moderate issues), low (minor
+  improvements), info (suggestions)
 - Category: bug, security, best-practice, performance, style, maintainability
 - Clear message explaining the issue
 - Specific, actionable suggestion for fixing it
@@ -122,9 +129,12 @@ class CodeQualityAnalyzer:
             result = CodeAnalysisResult(**result_dict)
 
             # Log analysis results
+            critical_high_count = sum(
+                1 for i in result.issues if i.severity in ['critical', 'high']
+            )
             logger.info(
                 f"Analyzed {file_path}: found {len(result.issues)} issues "
-                f"({sum(1 for i in result.issues if i.severity in ['critical', 'high'])} critical/high)"
+                f"({critical_high_count} critical/high)"
             )
 
             # Convert to Finding objects
