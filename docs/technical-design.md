@@ -12,7 +12,7 @@
 
 ### MVP Scope
 
-- **Platform:** Gitea only (self-hosted at 192.168.1.14)
+- **Platform:** Gitea only (self-hosted or cloud)
 - **Language:** Python only
 - **Features:**
   - Typo detection in comments, docstrings, and markdown
@@ -37,7 +37,7 @@
 ```
 ┌─────────────────────────────────────────┐
 │            Gitea Server                 │
-│        (192.168.1.14:3000)             │
+│        (gitea.example.com)              │
 └──────────────┬──────────────────────────┘
                │ API Calls
                ▼
@@ -700,7 +700,7 @@ class IssueManager:
         if finding.suggestion:
             body += f"\n**Suggestion:** {finding.suggestion}\n"
 
-        body += "\n---\n*Automatically created by [drep](https://github.com/stephenbrandon/drep)*"
+        body += "\n---\n*Automatically created by [drep](https://github.com/slb350/drep)*"
 
         return body
 ```
@@ -729,10 +729,10 @@ def init():
 
     # Create example config
     example = """gitea:
-  url: http://192.168.1.14:3000
+  url: https://gitea.example.com
   token: ${GITEA_TOKEN}
   repositories:
-    - steve/*
+    - user/*
 
 documentation:
   enabled: true
@@ -921,11 +921,11 @@ if __name__ == '__main__':
 
 ```yaml
 gitea:
-  url: http://192.168.1.14:3000
+  url: https://gitea.example.com
   token: your-gitea-token-here
   repositories:
-    - steve/drep
-    - steve/my-app
+    - user/drep
+    - user/my-app
 
 documentation:
   enabled: true
@@ -951,10 +951,10 @@ drep init
 vim config.yaml
 
 # Scan a repository
-drep scan steve/drep
+drep scan user/drep
 
 # Output:
-# Scanning steve/drep...
+# Scanning user/drep...
 # Analyzing 25 files...
 # Found 12 issues
 # ✓ Scan complete
@@ -967,7 +967,7 @@ drep scan steve/drep
 
 MVP is complete when:
 
-1. ✅ `drep scan steve/drep` runs without errors
+1. ✅ `drep scan user/drep` runs without errors
 2. ✅ Finds typos in Python comments and docstrings
 3. ✅ Finds typos in markdown files
 4. ✅ Skips code blocks in markdown
