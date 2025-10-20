@@ -65,5 +65,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Rate limiting considerations
 - Sanitized LLM prompts to prevent injection
 
-[Unreleased]: https://github.com/stephenbrandon/drep/compare/v0.1.0...HEAD
-[0.1.0]: https://github.com/stephenbrandon/drep/releases/tag/v0.1.0
+[Unreleased]: https://github.com/slb350/drep/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/slb350/drep/releases/tag/v0.1.0
