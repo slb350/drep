@@ -50,6 +50,41 @@ IMPORTANT: Use \\n for newlines in the docstring field.
 Be specific about what the function does, not generic.
 """
 
+# Tightened prompt (preferred) for robust JSON output
+DOCSTRING_GENERATION_PROMPT_V2 = """You are an expert Python documentation writer.
+Generate a precise Google-style docstring for the given function.
+
+Requirements:
+- Google-style format only (no NumPy or Sphinx)
+- Start with a concise, specific summary (1–2 sentences)
+- Args: list each parameter with type and clear description
+- Returns: describe return value and type (omit if None)
+- Raises: list exceptions if applicable (omit if none)
+- Use present tense; be technical and non-generic
+
+Function Information:
+- Name: {function_name}
+- Arguments: {args}
+- Return type: {returns}
+- Decorators: {decorators}
+
+Function Code:
+```python
+{function_code}
+```
+
+Output JSON only with exactly these keys:
+{{
+  "docstring": "...",
+  "quality": "high|medium|low",
+  "reasoning": "Short explanation of the function's behavior"
+}}
+
+Notes:
+- The docstring value must use \\n+ for newlines and must not include code fences or extra commentary.
+- Return ONLY the JSON object.
+"""
+
 
 class DocstringGenerator:
     """Generates and evaluates docstrings for Python functions."""
@@ -218,7 +253,7 @@ class DocstringGenerator:
         function_code = "\n".join(lines[start:end])
 
         # Prepare prompt
-        prompt = DOCSTRING_GENERATION_PROMPT.format(
+        prompt = DOCSTRING_GENERATION_PROMPT_V2.format(
             function_name=func_info.name,
             args=", ".join(func_info.args) if func_info.args else "None",
             returns=func_info.returns if func_info.returns else "None",

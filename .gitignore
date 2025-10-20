@@ -62,3 +62,6 @@ __pycache__/
 # LLM cache and metrics
 .drep/
 *.metrics.json
+
+# External dependencies
+external/

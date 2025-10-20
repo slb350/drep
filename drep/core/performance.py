@@ -8,6 +8,27 @@ from typing import Any, Callable, List, Optional
 
 logger = logging.getLogger(__name__)
 
+# Compatibility: asyncio.timeout is only available in Python 3.11+
+# Provide a minimal polyfill for Python 3.10 environments.
+try:  # Python 3.11+
+    from asyncio import timeout as _asyncio_timeout
+except Exception:  # Python 3.10 fallback
+    @asynccontextmanager
+    async def _asyncio_timeout(delay: float):
+        """A minimal context manager emulating asyncio.timeout for 3.10.
+
+        Cancels the current task after the specified delay, raising TimeoutError.
+        """
+        task = asyncio.current_task()
+        loop = asyncio.get_event_loop()
+        handle = loop.call_later(delay, task.cancel)
+        try:
+            yield
+        except asyncio.CancelledError as e:  # Normalize to TimeoutError
+            raise asyncio.TimeoutError() from e
+        finally:
+            handle.cancel()
+
 
 @dataclass
 class ProgressTracker:
@@ -172,7 +193,7 @@ async def timeout_with_partial_results(timeout_seconds: float, partial_results: 
         asyncio.TimeoutError: If timeout is exceeded
     """
     try:
-        async with asyncio.timeout(timeout_seconds):
+        async with _asyncio_timeout(timeout_seconds):
             yield
     except TimeoutError:
         # Partial results are already in the list

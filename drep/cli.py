@@ -32,19 +32,33 @@ def init():
 
     # Create example config
     example = """gitea:
-  url: http://192.168.1.14:3000
+  url: http://localhost:3000
   token: ${GITEA_TOKEN}
   repositories:
-    - steve/*
+    - your-org/*
 
 documentation:
   enabled: true
-  custom_dictionary:
-    - asyncio
-    - fastapi
-    - gitea
+  custom_dictionary: []
 
 database_url: sqlite:///./drep.db
+
+llm:
+  enabled: true
+  endpoint: http://localhost:1234/v1  # LM Studio / Ollama (with OpenAI compatible API)
+  model: qwen3-30b-a3b
+  temperature: 0.2
+  max_tokens: 8000
+  timeout: 120
+  max_retries: 3
+  retry_delay: 2
+  max_concurrent_global: 5
+  max_concurrent_per_repo: 3
+  requests_per_minute: 60
+  max_tokens_per_minute: 80000
+  cache:
+    enabled: true
+    ttl_days: 30
 """
 
     config_path.write_text(example)
@@ -227,12 +241,28 @@ fi
         # Record scan
         scanner.record_scan(owner, repo, current_sha)
 
-        # Show metrics at end (if requested)
-        if show_metrics and scanner.llm_client:
-            click.echo("\n" + "=" * 60)
+        # Persist and/or show metrics at end
+        if scanner.llm_client:
             metrics = scanner.llm_client.get_llm_metrics()
-            click.echo(metrics.report(detailed=True))
-            click.echo("=" * 60)
+
+            # Save metrics to ~/.drep/metrics.json
+            try:
+                from drep.llm.metrics import MetricsCollector
+                from pathlib import Path as _Path
+
+                metrics_file = _Path.home() / ".drep" / "metrics.json"
+                collector = MetricsCollector(metrics_file)
+                collector.current_session = metrics
+                import asyncio as _asyncio
+
+                await collector.save()
+            except Exception as e:
+                click.echo(f"Warning: failed to persist metrics: {e}")
+
+            if show_metrics:
+                click.echo("\n" + "=" * 60)
+                click.echo(metrics.report(detailed=True))
+                click.echo("=" * 60)
 
     finally:
         # Cleanup
@@ -347,8 +377,47 @@ async def _run_review(
 
     finally:
         # Cleanup
+        # Persist metrics if available
+        if scanner.llm_client:
+            try:
+                from drep.llm.metrics import MetricsCollector
+                from pathlib import Path as _Path
+
+                metrics_file = _Path.home() / ".drep" / "metrics.json"
+                collector = MetricsCollector(metrics_file)
+                collector.current_session = scanner.llm_client.get_llm_metrics()
+                await collector.save()
+            except Exception:
+                pass
         await scanner.close()
         await adapter.close()
+
+
+@cli.command()
+@click.option("--config", default="config.yaml", help="Config file path")
+def validate(config):
+    """Validate configuration file and environment variables.
+
+    Loads the config in strict mode (env var placeholders must be set).
+    """
+    try:
+        _ = load_config(config, strict=True)
+        click.echo(f"✓ Config valid: {config}")
+    except Exception as e:
+        click.echo(f"Invalid config: {e}", err=True)
+
+
+@cli.command()
+@click.option("--host", default="0.0.0.0", help="Host to bind")
+@click.option("--port", default=8000, type=int, help="Port to listen on")
+def serve(host, port):
+    """Start the FastAPI server for webhooks and health checks."""
+    try:
+        import uvicorn
+
+        uvicorn.run("drep.server:app", host=host, port=port, reload=False)
+    except Exception as e:
+        click.echo(f"Failed to start server: {e}", err=True)
 
 
 @cli.command()

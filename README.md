@@ -5,7 +5,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 
-Automated code review and documentation improvement tool for **Gitea** (initial release). Powered by local LLM via [open-agent-sdk](https://pypi.org/project/open-agent-sdk/).
+Automated code review and documentation improvement tool for **Gitea** (initial release). Powered by your local LLM via an OpenAI-compatible API (LM Studio, Ollama, open-agent-sdk).
 
 > **Initial Release Scope:** Python repositories on Gitea. Support for GitHub, GitLab, and additional languages is in active development.
 
@@ -42,7 +42,7 @@ Complete privacy and control:
 
 ## LLM-Powered Analysis
 
-drep includes intelligent code analysis powered by local LLMs via LM Studio.
+drep includes intelligent code analysis powered by local LLMs via OpenAI-compatible backends (LM Studio, Ollama, open-agent-sdk).
 
 ### Features
 
@@ -63,7 +63,7 @@ drep includes intelligent code analysis powered by local LLMs via LM Studio.
 ```yaml
 llm:
   enabled: true
-  endpoint: http://localhost:1234/v1
+  endpoint: http://localhost:1234/v1  # LM Studio / OpenAI-compatible API (also works with open-agent-sdk)
   model: qwen3-30b-a3b
   temperature: 0.2
   max_tokens: 8000
@@ -127,6 +127,13 @@ By Analyzer:
 pip install drep
 ```
 
+#### From source (until PyPI release)
+```bash
+git clone https://github.com/stephenbrandon/drep.git
+cd drep
+pip install -e ".[dev]"
+```
+
 #### Via Docker
 ```bash
 docker pull ghcr.io/stephenbrandon/drep:latest
@@ -158,7 +165,8 @@ database_url: sqlite:///./drep.db
 
 llm:
   enabled: true
-  endpoint: http://localhost:11434  # Ollama / LM Studio endpoint
+  endpoint: http://localhost:1234/v1  # LM Studio (OpenAI-compatible)
+  # Or for Ollama's OpenAI-compatible API: http://localhost:11434/v1
   model: qwen3-30b-a3b
   temperature: 0.2
   max_tokens: 8000
@@ -175,15 +183,13 @@ llm:
 drep serve --host 0.0.0.0 --port 8000
 ```
 
-Configure webhooks in your git platform to point to:
+Configure Gitea webhooks to point to:
 - Gitea: `http://your-server:8000/webhooks/gitea`
-- GitHub: `http://your-server:8000/webhooks/github`
-- GitLab: `http://your-server:8000/webhooks/gitlab`
 
 #### Manual Scan
 ```bash
 # Scan a specific repository
-drep scan owner/repository --platform gitea
+drep scan owner/repository
 ```
 
 #### Review a Pull Request
@@ -320,10 +326,10 @@ def calculate_total(...):
 
 ```yaml
 gitea:
-  url: http://192.168.1.14:3000
+  url: http://localhost:3000
   token: ${GITEA_TOKEN}
   repositories:
-    - steve/*
+    - your-org/*
 
 documentation:
   enabled: true
@@ -379,7 +385,7 @@ drep init [--config config.yaml]
 drep validate [--config config.yaml]
 
 # Start web server
-drep serve [--host 0.0.0.0] [--port 8000] [--config config.yaml]
+drep serve [--host 0.0.0.0] [--port 8000]
 
 # Manual repository scan
 drep scan owner/repo [--platform gitea] [--config config.yaml]
@@ -409,7 +415,7 @@ See [docs/technical-design.md](docs/technical-design.md) for complete architectu
 
 ```bash
 # Clone repository
-git clone ssh://steve@192.168.1.14:22/steve/drep.git
+git clone https://github.com/stephenbrandon/drep.git
 cd drep
 
 # Create virtual environment
@@ -494,7 +500,7 @@ MIT License - see [LICENSE](LICENSE) for details.
 
 ## Acknowledgments
 
-- Built with [open-agent-sdk](https://pypi.org/project/open-agent-sdk/)
+- Uses OpenAI-compatible local LLMs (LM Studio, Ollama)
 - Inspired by tools like Greptile, PR-Agent, and Codedog
 - Thanks to the open-source community
 

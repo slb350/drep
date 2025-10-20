@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Optional, Type
 
-from openai import AsyncOpenAI
+import httpx
 from pydantic import BaseModel
 
 from drep.llm.circuit_breaker import CircuitBreaker
@@ -359,7 +359,7 @@ class LLMClient:
             circuit_breaker_threshold: Failures before opening circuit
             circuit_breaker_timeout: Recovery timeout in seconds
         """
-        self.endpoint = endpoint
+        self.endpoint = endpoint.rstrip("/")
         self.model = model
         self.temperature = temperature
         self.max_tokens = max_tokens
@@ -370,12 +370,92 @@ class LLMClient:
         self.cache = cache
         self.repo_path = repo_path
 
-        # Initialize OpenAI client
-        self.client = AsyncOpenAI(
-            base_url=endpoint,
-            api_key=api_key or "dummy-key",  # Some endpoints don't need a key
-            timeout=timeout,
-        )
+        # Try to use open-agent-sdk if available (preferred)
+        self._using_open_agent = False
+        try:
+            from open_agent.types import AgentOptions  # type: ignore
+            from open_agent.utils import create_client  # type: ignore
+
+            options = AgentOptions(
+                system_prompt="",  # Not used here; prompt is provided per request
+                model=self.model,
+                base_url=self.endpoint,
+                timeout=self.timeout,
+                api_key=api_key or "not-needed",
+            )
+            self.client = create_client(options)  # AsyncOpenAI instance
+            self._using_open_agent = True
+        except Exception:
+            self.client = None
+
+        # Initialize HTTP client for OpenAI-compatible endpoints (fallback)
+        headers = {}
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+        headers["Content-Type"] = "application/json"
+        self.http = httpx.AsyncClient(base_url=self.endpoint, headers=headers, timeout=timeout)
+
+        # Back-compat shim: expose client.chat.completions.create like OpenAI SDK
+        # so unit tests and existing code paths can mock/patch consistently.
+        client_self = self
+
+        class _CompatMessage:
+            def __init__(self, content: str):
+                self.content = content
+
+        class _CompatChoice:
+            def __init__(self, content: str):
+                self.message = _CompatMessage(content)
+
+        class _CompatUsage:
+            def __init__(self, usage: Dict[str, Any]):
+                prompt = usage.get("prompt_tokens") or usage.get("input_tokens") or 0
+                completion = usage.get("completion_tokens") or usage.get("output_tokens") or 0
+                self.prompt_tokens = prompt
+                self.completion_tokens = completion
+                self.total_tokens = usage.get("total_tokens") or (prompt + completion)
+
+        class _CompatResponse:
+            def __init__(self, data: Dict[str, Any]):
+                self.model = data.get("model", client_self.model)
+                content = (
+                    ((data.get("choices") or [{}])[0].get("message") or {}).get("content")
+                    or data.get("content")
+                    or ""
+                )
+                self.choices = [_CompatChoice(content)]
+                self.usage = _CompatUsage(data.get("usage", {}))
+
+        class _CompatCompletions:
+            def __init__(self, parent: "LLMClient"):
+                self._parent = parent
+
+            async def create(self, model: str, messages: list, temperature: float, max_tokens: int):
+                url = f"{self._parent.endpoint}/chat/completions"
+                payload = {
+                    "model": model,
+                    "messages": messages,
+                    "temperature": temperature,
+                    "max_tokens": max_tokens,
+                }
+                resp = await self._parent.http.post(url, json=payload)
+                resp.raise_for_status()
+                return _CompatResponse(resp.json())
+
+        class _CompatChat:
+            def __init__(self, parent: "LLMClient"):
+                self.completions = _CompatCompletions(parent)
+
+        class _CompatClient:
+            def __init__(self, parent: "LLMClient"):
+                self.chat = _CompatChat(parent)
+
+            async def close(self):
+                await parent.http.aclose()
+
+        parent = self
+        if not self._using_open_agent:
+            self.client = _CompatClient(self)
 
         # Initialize rate limiter
         self.rate_limiter = RateLimiter(
@@ -770,4 +850,11 @@ class LLMClient:
 
     async def close(self):
         """Close the client and release resources."""
-        await self.client.close()
+        # Prefer closing compat client to satisfy tests that patch client.close
+        if hasattr(self, "client") and hasattr(self.client, "close"):
+            try:
+                await self.client.close()
+                return
+            except Exception:
+                pass
+        await self.http.aclose()
