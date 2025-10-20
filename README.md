@@ -5,9 +5,9 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 
-Automated code review and documentation improvement tool for **Gitea**, **GitHub**, and **GitLab**. Powered by local LLM via [open-agent-sdk](https://pypi.org/project/open-agent-sdk/).
+Automated code review and documentation improvement tool for **Gitea** (initial release). Powered by local LLM via [open-agent-sdk](https://pypi.org/project/open-agent-sdk/).
 
-> **MVP Status:** Currently supports **Gitea** with **Python** repositories. GitHub/GitLab and additional languages coming in future releases.
+> **Initial Release Scope:** Python repositories on Gitea. Support for GitHub, GitLab, and additional languages is in active development.
 
 ## Features
 
@@ -17,29 +17,17 @@ Unlike reactive tools, drep continuously monitors repositories and automatically
 - Opens issues with detailed findings and suggested fixes
 - No manual intervention required
 
-### Documentation Specialist
-Three-tiered analysis for comprehensive documentation quality:
-- **Layer 1**: Dictionary spellcheck (instant typo detection)
-- **Layer 2**: Pattern matching (formatting, syntax, consistency)
-- **Layer 3**: LLM analysis (grammar, clarity, technical accuracy)
-
-**Automated improvements for:**
-- Typos and grammar errors in markdown, comments, and docstrings
-- Missing documentation on functions, methods, and classes
-- Low-quality comments (generic, outdated, or redundant)
-- Markdown syntax issues (broken links, malformed tables)
+### Docstring Intelligence
+LLM-powered docstring analysis purpose-built for Python:
+- Generates Google-style docstrings for public APIs
+- Flags TODOs, placeholders, and low-signal docstrings
+- Respects decorators (e.g., `@property`, `@classmethod`) and skips simple helpers
 
 ### Automated PR/MR Reviews
-Intelligent code review when pull requests or merge requests are opened:
-- Analyzes changed files for issues
-- Posts line-specific review comments
-- Suggests improvements with explanations
-
-### Draft PR Creation
-All documentation fixes are automatically applied and submitted as draft PRs:
-- Categorized changes (typos, missing comments, improvements)
-- Human review before merge
-- Non-intrusive workflow
+Intelligent review workflow for Gitea pull requests:
+- Parses diffs into structured hunks
+- Generates inline comments tied to added lines
+- Produces a high-level summary with approval signal
 
 ### Local LLM Powered
 Complete privacy and control:
@@ -48,11 +36,9 @@ Complete privacy and control:
 - No cloud dependencies
 - No usage costs
 
-### Platform Agnostic
-Single tool for all your git platforms:
-- **Gitea** (self-hosted)
-- **GitHub**
-- **GitLab** (cloud or self-hosted)
+### Platform Support & Roadmap
+- **Available now:** Gitea + Python repositories
+- **Planned:** GitHub, GitLab, additional languages, advanced draft PR workflows
 
 ## LLM-Powered Analysis
 
@@ -158,23 +144,27 @@ vim config.yaml
 
 **Minimal config.yaml:**
 ```yaml
-platforms:
-  - type: gitea
-    url: http://localhost:3000
-    token: your-gitea-token
-    repositories:
-      - owner/*  # Monitor all repos for this owner
-
-llm:
-  endpoint: http://localhost:11434  # Ollama endpoint
-  model: llama3.2
+gitea:
+  url: http://localhost:3000
+  token: ${GITEA_TOKEN}
+  repositories:
+    - owner/*  # Monitor all repos for this owner
 
 documentation:
   enabled: true
-  create_draft_prs: true
+  custom_dictionary: []
 
-code_analysis:
+database_url: sqlite:///./drep.db
+
+llm:
   enabled: true
+  endpoint: http://localhost:11434  # Ollama / LM Studio endpoint
+  model: qwen3-30b-a3b
+  temperature: 0.2
+  max_tokens: 8000
+  cache:
+    enabled: true
+    ttl_days: 30
 ```
 
 ### Run drep
@@ -194,6 +184,12 @@ Configure webhooks in your git platform to point to:
 ```bash
 # Scan a specific repository
 drep scan owner/repository --platform gitea
+```
+
+#### Review a Pull Request
+```bash
+# Analyze PR #42 on owner/repository without posting comments
+drep review owner/repository 42 --no-post
 ```
 
 #### Docker Compose (with Ollama)
@@ -237,20 +233,18 @@ Push Event → drep receives webhook
            ↓
    ┌──────┴──────┐
    ▼             ▼
-Doc Analysis  Code Analysis
-   ↓             ↓
-Draft PR      Issues Created
+Doc Analysis        Code Analysis
+   ↓                    ↓
+Docstring Findings   Code Quality Findings
+           ↘          ↙
+         Issues / Review Comments
 ```
 
-### Documentation Analysis
+### Docstring Analysis (Python)
 ```
-File → Layer 1: Spellcheck (instant)
-       ↓
-     Layer 2: Pattern matching (regex)
-       ↓
-     Layer 3: LLM analysis (complex cases)
-       ↓
-     Draft PR with fixes
+File → Function extraction → Filtering (public ≥3 lines) → LLM docstring review
+                                                    ↓
+                                          Suggestions & findings
 ```
 
 ### PR Review
@@ -265,15 +259,10 @@ PR Opened → Analyze changed files
 ## What drep Detects
 
 ### Documentation Issues
-- Typos and spelling errors
-- Grammar and sentence structure
-- Inconsistent capitalization/formatting
-- Broken markdown links
-- Missing code fence language specifications
-- Functions without docstrings
-- Generic comments ("this function does stuff")
-- Outdated comments (contradicting code)
-- Redundant comments ("i += 1  # increment i")
+- Missing docstrings on public functions and methods
+- Placeholder docstrings containing TODO/FIXME text
+- Generic descriptions that fail to explain purpose or behavior
+- Decorated accessors without documentation (`@property`, `@classmethod`)
 
 ### Code Issues
 - Bare except clauses
@@ -284,92 +273,84 @@ PR Opened → Analyze changed files
 - Performance issues
 
 ### Supported Languages
-- Python (Google/NumPy/Sphinx docstrings)
-- JavaScript/TypeScript (JSDoc)
-- Go (standard comments)
-- Rust (doc comments)
-- Java
-- C/C++
+- Python (Google-style docstrings)
+
+*Additional language support is planned for upcoming releases.*
 
 ## Example Output
 
-### Draft PR Created by drep
+### Example PR Review Summary
 
 ```markdown
-# [drep] Documentation improvements
+## 🤖 drep AI Code Review
 
-## Typo Fixes (12)
-- README.md:15: recieve → receive
-- docs/setup.md:42: teh → the
+Looks great overall! Tests cover the new behavior and naming is clear.
 
-## Missing Comments Added (5)
-- api/handlers.py:78: Added docstring to create_user method
+**Recommendation:** ✅ Approve
 
-## Comment Quality Improvements (3)
-- utils/helpers.py:45: Improved "does stuff" → "Validates user input format"
-
-## Markdown Formatting (8)
-- CHANGELOG.md:22: Added language spec to code fence
+---
+*Generated by drep using qwen3-30b-a3b*
 ```
+
+### Example Docstring Suggestion
+
+````markdown
+Suggested docstring for `calculate_total()`:
+
+```python
+def calculate_total(...):
+    """
+    Compute the final invoice total including tax.
+
+    Args:
+        prices: Individual line-item amounts.
+        tax_rate: Tax rate expressed as a decimal.
+
+    Returns:
+        Total amount with tax applied.
+    """
+```
+
+**Reasoning:** Summarizes the calculation inputs and highlights tax handling.
+````
 
 ## Configuration
 
 ### Full config.yaml Example
 
 ```yaml
-# Platform configurations
-platforms:
-  - type: gitea
-    url: http://192.168.1.14:3000
-    token: ${GITEA_TOKEN}
-    repositories:
-      - steve/*
+gitea:
+  url: http://192.168.1.14:3000
+  token: ${GITEA_TOKEN}
+  repositories:
+    - steve/*
 
-  - type: github
-    token: ${GITHUB_TOKEN}
-    repositories:
-      - myorg/repo1
-      - myorg/repo2
-
-  - type: gitlab
-    url: https://gitlab.com  # Optional for cloud GitLab
-    token: ${GITLAB_TOKEN}
-    repositories:
-      - mygroup/project1
-
-# LLM configuration
-llm:
-  endpoint: http://localhost:11434
-  model: llama3.2
-  temperature: 0.3
-  timeout: 120
-
-# Documentation analysis
 documentation:
   enabled: true
-  create_draft_prs: true
-  languages:
-    - python
-    - javascript
-    - typescript
-    - go
-    - rust
   custom_dictionary:
     - asyncio
     - fastapi
     - kubernetes
 
-# Code analysis
-code_analysis:
-  enabled: true
-  security_checks: true
-  best_practices: true
-  create_issues: true
+database_url: sqlite:///./drep.db
 
-# Scanning configuration
-scan:
-  interval: 3600  # Scan every hour
-  on_push: true   # Also scan on git push
+llm:
+  enabled: true
+  endpoint: http://localhost:1234/v1  # LM Studio / Ollama endpoint
+  model: qwen3-30b-a3b
+  temperature: 0.2
+  timeout: 120
+  max_retries: 3
+  retry_delay: 2
+  max_concurrent_global: 5
+  max_concurrent_per_repo: 3
+  requests_per_minute: 60
+  max_tokens_per_minute: 80000
+  cache:
+    enabled: true
+    directory: ~/.cache/drep/llm
+    ttl_days: 30
+    max_size_gb: 10
 ```
 
 ### Environment Variables
@@ -377,8 +358,9 @@ scan:
 ```bash
 # Platform tokens (recommended over hardcoding)
 export GITEA_TOKEN="your-token"
-export GITHUB_TOKEN="your-token"
-export GITLAB_TOKEN="your-token"
+# Future adapters will also respect:
+# export GITHUB_TOKEN="your-token"
+# export GITLAB_TOKEN="your-token"
 
 # Override config file location
 export DREP_CONFIG="/path/to/config.yaml"
@@ -464,35 +446,37 @@ pytest tests/unit/test_adapters.py
 ## Roadmap
 
 ### MVP (Current)
-- ✅ Platform adapters (Gitea, GitHub, GitLab)
-- ✅ Documentation analyzer (3-layer)
-- ✅ Code analyzer (AST + LLM)
-- ✅ Draft PR creation
-- ✅ Webhook server
+- ✅ Gitea adapter
+- ✅ LLM-powered code quality analyzer
+- ✅ Docstring generator for Python
+- ✅ PR review CLI workflow
 - ✅ SQLite database
 - ✅ CLI interface
 
 ### Post-MVP
+- [ ] GitHub and GitLab adapters
+- [ ] Draft PR automation
 - [ ] Vector database integration (cross-file context)
 - [ ] Custom rule definitions
 - [ ] Integration with existing linters
 - [ ] Metrics dashboard
 - [ ] Notification system (Slack, Discord)
+- [ ] Multi-language docstring and code support
 - [ ] Multi-repository analysis
 
 ## Comparison with Existing Tools
 
-| Feature | drep | Greptile | PR-Agent | Codedog |
-|---------|------|----------|----------|---------|
-| **Proactive Scanning** | ✅ | ❌ | ❌ | ❌ |
-| **Documentation Specialist** | ✅ | ❌ | ❌ | ❌ |
-| **Draft PR Creation** | ✅ | ❌ | ❌ | ❌ |
-| **PR Reviews** | ✅ | ❌ | ✅ | ✅ |
+| Feature | drep (current) | Greptile | PR-Agent | Codedog |
+|---------|----------------|----------|----------|---------|
+| **CLI repository scans** | ✅ | ❌ | ❌ | ❌ |
+| **Docstring suggestions (Python)** | ✅ | ❌ | ❌ | ❌ |
+| **Gitea PR reviews** | ✅ | ❌ | ❌ | ❌ |
 | **Local LLM** | ✅ | ❌ | Partial | Partial |
-| **Multi-Platform** | ✅ | ✅ | ✅ | ✅ |
-| **Self-Hosted** | ✅ | ❌ | ✅ | ✅ |
+| **Gitea support** | ✅ | ❌ | ❌ | ❌ |
+| **Draft PR automation** | 🚧 Planned | ❌ | ❌ | ❌ |
+| **GitHub/GitLab support** | 🚧 Planned | ✅ | ✅ | ✅ |
 
-**Key Differentiator**: drep is the only tool that proactively scans repositories, specializes in documentation, and automatically creates draft PRs with fixes.
+**Key Differentiator**: drep focuses on local, privacy-preserving analysis with docstring intelligence and PR reviews powered by your own LLM. Broader platform and language support is in progress.
 
 ## Contributing
 
