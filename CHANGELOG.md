@@ -15,10 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Notification system (Slack, Discord)
 - Multi-repository analysis features
 
-## [0.1.0] - TBD
+## [0.1.0] - 2025-10-19
 
 ### Added
-- Initial release of drep
+- Initial release of drep (PyPI package: drep-ai)
 - Platform adapters for Gitea, GitHub, and GitLab
 - Three-tiered documentation analysis:
   - Layer 1: Dictionary spellcheck
