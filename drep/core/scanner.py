@@ -1,7 +1,7 @@
 """Repository scanner for file-by-file analysis."""
 
 import logging
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, List, Optional, Tuple
 
@@ -145,14 +145,14 @@ class RepositoryScanner:
         if existing:
             # Update existing record
             existing.commit_sha = commit_sha
-            existing.scanned_at = datetime.now(UTC)
+            existing.scanned_at = datetime.now(timezone.utc)
         else:
             # Create new record
             new_scan = RepositoryScan(
                 owner=owner,
                 repo=repo_name,
                 commit_sha=commit_sha,
-                scanned_at=datetime.now(UTC),
+                scanned_at=datetime.now(timezone.utc),
             )
             self.db.add(new_scan)
 

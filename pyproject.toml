@@ -75,6 +75,7 @@ dev = [
   "types-PyYAML>=6.0.12",
   "build>=1.0.0",
   "twine>=4.0.0",
+  "respx>=0.20.0",
 ]
 
 [project.urls]

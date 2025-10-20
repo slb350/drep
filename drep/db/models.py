@@ -1,6 +1,6 @@
 """SQLAlchemy database models."""
 
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 
 from sqlalchemy import Column, DateTime, Index, Integer, String, UniqueConstraint
 from sqlalchemy.orm import declarative_base
@@ -17,7 +17,7 @@ class RepositoryScan(Base):
     owner = Column(String, nullable=False)
     repo = Column(String, nullable=False)
     commit_sha = Column(String, nullable=False)
-    scanned_at = Column(DateTime, default=lambda: datetime.now(UTC))
+    scanned_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     # Index for faster lookups and uniqueness constraint
     __table_args__ = (
@@ -37,7 +37,7 @@ class FindingCache(Base):
     file_path = Column(String, nullable=False)
     finding_hash = Column(String, nullable=False)  # Not globally unique
     issue_number = Column(Integer, nullable=True)
-    created_at = Column(DateTime, default=lambda: datetime.now(UTC))
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     # Deduplication is scoped to repository: same hash can exist across different repos
     __table_args__ = (
