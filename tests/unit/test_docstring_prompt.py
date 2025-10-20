@@ -44,4 +44,3 @@ async def test_docstring_generator_uses_v2_prompt(monkeypatch):
 
     assert captured["system_prompt"] is not None
     assert "Output JSON only with exactly these keys" in captured["system_prompt"]
-

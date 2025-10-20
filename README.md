@@ -160,6 +160,8 @@ gitea:
 documentation:
   enabled: true
   custom_dictionary: []
+  # Enable lightweight Markdown checks (non-LLM)
+  markdown_checks: false
 
 database_url: sqlite:///./drep.db
 
@@ -269,6 +271,12 @@ PR Opened → Analyze changed files
 - Placeholder docstrings containing TODO/FIXME text
 - Generic descriptions that fail to explain purpose or behavior
 - Decorated accessors without documentation (`@property`, `@classmethod`)
+ - Optional Markdown checks (when `documentation.markdown_checks` = true):
+   - Trailing whitespace, tabs
+   - Empty or malformed headings (e.g., missing space after `#`)
+   - Unclosed code fences (```)
+   - Long lines (>120 chars), multiple blank lines, trailing blank lines
+   - Bare URLs (suggest wrapping in `[text](url)`) and basic broken link syntax
 
 ### Code Issues
 - Bare except clauses

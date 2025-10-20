@@ -10,6 +10,7 @@ from drep.llm.client import LLMClient
 @pytest.mark.asyncio
 async def test_llmclient_uses_open_agent_sdk(monkeypatch):
     """LLMClient should prefer open-agent-sdk client if import succeeds."""
+
     # Build a dummy client shape that mimics AsyncOpenAI
     class DummyMsg:
         def __init__(self, content: str):
@@ -56,4 +57,3 @@ async def test_llmclient_uses_open_agent_sdk(monkeypatch):
     assert result.content == "hello from open-agent-sdk"
     assert result.tokens_used == 30
     await client.close()
-

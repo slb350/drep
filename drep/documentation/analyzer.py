@@ -43,8 +43,15 @@ class DocumentationAnalyzer:
         issues: List[PatternIssue] = []
         lines = content.splitlines()
 
-        # trailing whitespace + tabs + empty headings + long lines
+        # Track code fence state
+        in_fence = False
+
+        # Per-line checks: trailing whitespace, tabs, empty headings, missing space after heading, long lines
         for idx, line in enumerate(lines, start=1):
+            stripped = line.rstrip("\n")
+            if stripped.strip().startswith("```"):
+                in_fence = not in_fence
+
             # Trailing whitespace
             if re.search(r"[ \t]+$", line):
                 issues.append(
@@ -83,8 +90,22 @@ class DocumentationAnalyzer:
                     )
                 )
 
-            # Long lines (>120)
-            if len(line) > 120:
+            # Missing space after heading marker, e.g. '#Heading'
+            if re.match(r"^#{1,6}\S", line):
+                level = len(line) - len(line.lstrip("#"))
+                replacement = ("#" * level) + " " + line[level:]
+                issues.append(
+                    PatternIssue(
+                        type="missing_space_after_heading",
+                        line=idx,
+                        column=level + 1,
+                        matched_text=line,
+                        replacement=replacement,
+                    )
+                )
+
+            # Long lines (>120) - skip inside code fences
+            if not in_fence and len(line) > 120:
                 issues.append(
                     PatternIssue(
                         type="long_line",
@@ -95,10 +116,80 @@ class DocumentationAnalyzer:
                     )
                 )
 
+        # Multiple blank lines (>=3) outside code fences
+        in_fence = False
+        blank_run = 0
+        for idx, line in enumerate(lines, start=1):
+            if line.strip().startswith("```"):
+                in_fence = not in_fence
+                blank_run = 0
+                continue
+            if in_fence:
+                continue
+            if line.strip() == "":
+                blank_run += 1
+                if blank_run == 3:
+                    issues.append(
+                        PatternIssue(
+                            type="multiple_blank_lines",
+                            line=idx - 2,
+                            column=1,
+                            matched_text="",
+                            replacement="Reduce consecutive blank lines",
+                        )
+                    )
+            else:
+                blank_run = 0
+
+        # Trailing blank lines at end of file
+        if len(lines) > 0 and lines[-1].strip() == "":
+            issues.append(
+                PatternIssue(
+                    type="trailing_blank_lines",
+                    line=len(lines),
+                    column=1,
+                    matched_text="",
+                    replacement="Remove trailing blank lines",
+                )
+            )
+
+        # Basic link syntax checks and bare URL detection (outside fences)
+        in_fence = False
+        for idx, line in enumerate(lines, start=1):
+            if line.strip().startswith("```"):
+                in_fence = not in_fence
+                continue
+            if in_fence:
+                continue
+
+            # Bare URL not wrapped in markdown link
+            m = re.search(r"(?<!\()https?://\S+", line)
+            if m and not re.search(r"\[[^\]]+\]\(https?://", line):
+                issues.append(
+                    PatternIssue(
+                        type="bare_url",
+                        line=idx,
+                        column=m.start() + 1,
+                        matched_text=line,
+                        replacement="Wrap URL in [text](https://example.com)",
+                    )
+                )
+
+            # Unmatched brackets/parentheses hinting broken link syntax
+            if line.count("[") != line.count("]") or line.count("(") != line.count(")"):
+                issues.append(
+                    PatternIssue(
+                        type="link_syntax_invalid",
+                        line=idx,
+                        column=1,
+                        matched_text=line,
+                        replacement="Fix markdown link syntax [text](url)",
+                    )
+                )
+
         # Unclosed code fence: odd number of ```
         fence_count = sum(1 for l in lines if l.strip().startswith("```"))
         if fence_count % 2 == 1:
-            # Find last fence line as location
             for idx in range(len(lines), 0, -1):
                 if lines[idx - 1].strip().startswith("```"):
                     issues.append(
@@ -107,7 +198,7 @@ class DocumentationAnalyzer:
                             line=idx,
                             column=1,
                             matched_text=lines[idx - 1],
-                            replacement="```",  # Suggest closing fence
+                            replacement="```",
                         )
                     )
                     break

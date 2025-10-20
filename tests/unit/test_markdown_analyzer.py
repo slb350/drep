@@ -68,3 +68,61 @@ code block
     findings = await analyzer.analyze_file("README.md", md)
     issues = [i for i in findings.pattern_issues if i.type == "unclosed_code_fence"]
     assert len(issues) == 1
+
+
+@pytest.mark.asyncio
+async def test_markdown_missing_space_after_heading():
+    config = DocumentationConfig(enabled=True, custom_dictionary=[], markdown_checks=True)
+    analyzer = DocumentationAnalyzer(config)
+
+    md = "#NoSpace\n##AlsoNoSpace\n"
+    findings = await analyzer.analyze_file("README.md", md)
+    issues = [i for i in findings.pattern_issues if i.type == "missing_space_after_heading"]
+    assert len(issues) == 2
+    assert issues[0].line == 1
+    assert issues[1].line == 2
+
+
+@pytest.mark.asyncio
+async def test_markdown_multiple_blank_lines():
+    config = DocumentationConfig(enabled=True, custom_dictionary=[], markdown_checks=True)
+    analyzer = DocumentationAnalyzer(config)
+
+    md = "Line 1\n\n\n\nLine 2\n"  # 4 blank lines between Line 1 and Line 2
+    findings = await analyzer.analyze_file("README.md", md)
+    issues = [i for i in findings.pattern_issues if i.type == "multiple_blank_lines"]
+    assert len(issues) >= 1
+
+
+@pytest.mark.asyncio
+async def test_markdown_trailing_blank_lines():
+    config = DocumentationConfig(enabled=True, custom_dictionary=[], markdown_checks=True)
+    analyzer = DocumentationAnalyzer(config)
+
+    md = "Content\n\n"  # Trailing blank line at end
+    findings = await analyzer.analyze_file("README.md", md)
+    issues = [i for i in findings.pattern_issues if i.type == "trailing_blank_lines"]
+    assert len(issues) == 1
+    assert issues[0].line == 2
+
+
+@pytest.mark.asyncio
+async def test_markdown_bare_url():
+    config = DocumentationConfig(enabled=True, custom_dictionary=[], markdown_checks=True)
+    analyzer = DocumentationAnalyzer(config)
+
+    md = "Visit https://example.com for more info\n"
+    findings = await analyzer.analyze_file("README.md", md)
+    issues = [i for i in findings.pattern_issues if i.type == "bare_url"]
+    assert len(issues) == 1
+
+
+@pytest.mark.asyncio
+async def test_markdown_bare_url_ignores_proper_links():
+    config = DocumentationConfig(enabled=True, custom_dictionary=[], markdown_checks=True)
+    analyzer = DocumentationAnalyzer(config)
+
+    md = "Visit [our site](https://example.com) for more\n"
+    findings = await analyzer.analyze_file("README.md", md)
+    issues = [i for i in findings.pattern_issues if i.type == "bare_url"]
+    assert len(issues) == 0  # Should not flag properly formatted links
