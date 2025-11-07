@@ -211,13 +211,10 @@ class BaseAdapter(ABC):
         clean up HTTP clients and other resources.
 
         Example:
-            async with adapter:
-                # Use adapter
-                pass
-            # Or explicitly:
+            adapter = GiteaAdapter(url="...", token="...")
             try:
                 # Use adapter
-                pass
+                await adapter.create_issue(...)
             finally:
                 await adapter.close()
         """

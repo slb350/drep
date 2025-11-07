@@ -7,7 +7,7 @@ and other credentials.
 
 import re
 from typing import List, Optional
-from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
+from urllib.parse import urlparse, urlunparse
 
 
 def get_secret_patterns() -> List[str]:

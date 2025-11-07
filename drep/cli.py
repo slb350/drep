@@ -503,8 +503,12 @@ def lint_docs(path, output):
             if findings.pattern_issues:
                 total_issues += len(findings.pattern_issues)
                 results.append((md_file, findings))
+        except (IOError, OSError, UnicodeDecodeError) as e:
+            click.echo(f"Error reading {md_file}: {e}", err=True)
         except Exception as e:
-            click.echo(f"Error analyzing {md_file}: {e}", err=True)
+            # Unexpected error - show details and re-raise for debugging
+            click.echo(f"Unexpected error analyzing {md_file}: {e}", err=True)
+            raise
 
     # Output results
     if output == "json":

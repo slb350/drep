@@ -48,7 +48,7 @@ Usage Example:
         max_concurrent_global=5,
         max_concurrent_per_repo=3,
         requests_per_minute=60,
-        max_tokens_per_minute=100000,
+        max_tokens_per_minute=MAX_TOKENS_PER_MINUTE,
     )
 
     # Simple text analysis
@@ -79,7 +79,12 @@ from typing import Any, Dict, Optional, Type  # Type hints for better IDE suppor
 import httpx  # Modern async HTTP client (fallback when open-agent-sdk unavailable)
 from pydantic import BaseModel  # For JSON schema validation and type safety
 
-from drep.constants import MAX_ESTIMATED_TOKENS, REPO_SEMAPHORE_TTL_SECONDS
+from drep.constants import (
+    DEFAULT_MAX_TOKENS_PER_REQUEST,
+    MAX_ESTIMATED_TOKENS,
+    MAX_TOKENS_PER_MINUTE,
+    REPO_SEMAPHORE_TTL_SECONDS,
+)
 from drep.llm.circuit_breaker import CircuitBreaker  # Prevents cascade failures
 from drep.llm.metrics import LLMMetrics  # Tracks usage statistics for cost monitoring
 
@@ -405,7 +410,7 @@ class RateLimiter:
         limiter = RateLimiter(
             max_concurrent=5,              # 5 requests in flight max
             requests_per_minute=60,        # 60 reqs/min = 1 req/sec average
-            max_tokens_per_minute=100000,  # 100K tokens/min limit
+            max_tokens_per_minute=MAX_TOKENS_PER_MINUTE,  # 100K tokens/min limit
             max_concurrent_per_repo=3,     # Each repo limited to 3 concurrent
         )
     """
@@ -771,7 +776,7 @@ class LLMClient:
         api_key="not-needed",  # Many local LLMs don't need keys
         max_concurrent_global=5,
         requests_per_minute=60,
-        max_tokens_per_minute=100000,
+        max_tokens_per_minute=MAX_TOKENS_PER_MINUTE,
     )
 
     # Simple text analysis
@@ -806,7 +811,7 @@ class LLMClient:
         model: str,
         api_key: Optional[str] = None,
         temperature: float = 0.2,
-        max_tokens: int = 8000,
+        max_tokens: int = DEFAULT_MAX_TOKENS_PER_REQUEST,
         timeout: int = 60,
         max_retries: int = 3,
         retry_delay: int = 2,
@@ -814,7 +819,7 @@ class LLMClient:
         max_concurrent_global: int = 5,
         max_concurrent_per_repo: Optional[int] = 3,
         requests_per_minute: int = 60,
-        max_tokens_per_minute: int = 100000,
+        max_tokens_per_minute: int = MAX_TOKENS_PER_MINUTE,
         cache: Optional["IntelligentCache"] = None,  # noqa: F821
         repo_path: Optional[Path] = None,
         enable_circuit_breaker: bool = True,
@@ -1165,8 +1170,8 @@ class LLMClient:
                     error_msg = re.sub(r"://[^:]+:[^@]+@", r"://***:***@", error_msg)
 
                     logger.warning(
-                        f"LLM request failed (attempt {attempt + 1}/{self.max_retries}): {error_msg}. "
-                        f"Retrying in {delay}s..."
+                        f"LLM request failed (attempt {attempt + 1}/"
+                        f"{self.max_retries}): {error_msg}. Retrying in {delay}s..."
                     )
                     await asyncio.sleep(delay)
                 else:
