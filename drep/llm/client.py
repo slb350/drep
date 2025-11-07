@@ -72,6 +72,7 @@ import logging  # For structured logging throughout the module
 import re  # For regex-based JSON extraction and cleaning
 import subprocess  # For executing git commands to get commit SHA
 import time  # For rate limiting time calculations
+import warnings  # For deprecation warnings on legacy properties
 from dataclasses import dataclass  # For simple data classes (LLMResponse)
 from pathlib import Path  # For cross-platform file path handling
 from typing import Any, Dict, Optional, Type  # Type hints for better IDE support and clarity
@@ -1018,8 +1019,6 @@ class LLMClient:
         Returns:
             Total number of requests made to the LLM
         """
-        import warnings
-
         warnings.warn(
             "total_requests is deprecated. Use client.metrics.total_requests instead.",
             DeprecationWarning,
@@ -1030,8 +1029,6 @@ class LLMClient:
     @total_requests.setter
     def total_requests(self, value: int):
         """Set total request count (DEPRECATED)."""
-        import warnings
-
         warnings.warn(
             "total_requests is deprecated. Use client.metrics directly instead.",
             DeprecationWarning,
@@ -1049,8 +1046,6 @@ class LLMClient:
         Returns:
             Total number of tokens consumed across all requests
         """
-        import warnings
-
         warnings.warn(
             "total_tokens is deprecated. Use client.metrics.total_tokens instead.",
             DeprecationWarning,
@@ -1061,8 +1056,6 @@ class LLMClient:
     @total_tokens.setter
     def total_tokens(self, value: int):
         """Set total token count (DEPRECATED)."""
-        import warnings
-
         warnings.warn(
             "total_tokens is deprecated. Use client.metrics directly instead.",
             DeprecationWarning,
@@ -1080,8 +1073,6 @@ class LLMClient:
         Returns:
             Number of requests that failed after all retries
         """
-        import warnings
-
         warnings.warn(
             "failed_requests is deprecated. Use client.metrics.failed_requests instead.",
             DeprecationWarning,
@@ -1092,8 +1083,6 @@ class LLMClient:
     @failed_requests.setter
     def failed_requests(self, value: int):
         """Set failed request count (DEPRECATED)."""
-        import warnings
-
         warnings.warn(
             "failed_requests is deprecated. Use client.metrics directly instead.",
             DeprecationWarning,
