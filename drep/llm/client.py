@@ -1151,13 +1151,37 @@ class LLMClient:
                     else:
                         delay = self.retry_delay
 
+                    # Sanitize error message to avoid logging tokens in URLs
+                    error_msg = str(e)
+                    # Basic sanitization: remove common token patterns from error messages
+                    import re
+
+                    error_msg = re.sub(
+                        r"(token|api_?key|password|secret)=[^&\s]+",
+                        r"\1=***",
+                        error_msg,
+                        flags=re.IGNORECASE,
+                    )
+                    error_msg = re.sub(r"://[^:]+:[^@]+@", r"://***:***@", error_msg)
+
                     logger.warning(
-                        f"LLM request failed (attempt {attempt + 1}/{self.max_retries}): {e}. "
+                        f"LLM request failed (attempt {attempt + 1}/{self.max_retries}): {error_msg}. "
                         f"Retrying in {delay}s..."
                     )
                     await asyncio.sleep(delay)
                 else:
-                    logger.error(f"LLM request failed after {self.max_retries} attempts: {e}")
+                    # Sanitize error message to avoid logging tokens
+                    error_msg = str(e)
+                    error_msg = re.sub(
+                        r"(token|api_?key|password|secret)=[^&\s]+",
+                        r"\1=***",
+                        error_msg,
+                        flags=re.IGNORECASE,
+                    )
+                    error_msg = re.sub(r"://[^:]+:[^@]+@", r"://***:***@", error_msg)
+                    logger.error(
+                        f"LLM request failed after {self.max_retries} attempts: {error_msg}"
+                    )
 
         # All retries failed
         raise last_exception
