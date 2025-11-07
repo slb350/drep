@@ -1,7 +1,59 @@
-"""Circuit breaker pattern for LLM resilience.
+"""Circuit breaker pattern implementation for LLM client fault tolerance.
 
-Prevents cascading failures by tracking error rates and temporarily
-blocking requests when failure threshold is exceeded.
+The circuit breaker pattern prevents cascade failures when the LLM service is down or
+degrading. Instead of continuing to make failing requests (wasting time and resources),
+the circuit "opens" after a threshold of failures, immediately rejecting requests until
+the service recovers.
+
+Circuit States:
+---------------
+1. **CLOSED** (normal operation):
+   - All requests are attempted
+   - Failures are counted
+   - If failure_threshold exceeded → transition to OPEN
+
+2. **OPEN** (service is down):
+   - All requests are immediately rejected (fail-fast)
+   - Saves time and resources (no waiting for timeouts)
+   - After recovery_timeout seconds → transition to HALF_OPEN
+
+3. **HALF_OPEN** (testing recovery):
+   - Single test request is allowed
+   - If successful → transition to CLOSED (service recovered)
+   - If fails → transition back to OPEN (still down)
+
+Benefits:
+---------
+- Fast failure: Don't wait for timeouts when service is known to be down
+- Resource conservation: Don't overwhelm failing service with requests
+- Automatic recovery: Periodically tests if service has recovered
+- Better UX: Fail immediately with clear error vs hanging for timeout
+
+Example:
+--------
+    # LLM server is down
+    breaker = CircuitBreaker(failure_threshold=5, recovery_timeout=60)
+
+    # Requests 1-5 fail, breaker opens after 5th failure
+    for i in range(10):
+        if not breaker.allow_request():
+            print(f"Request {i+1}: Circuit open, failing fast")
+            continue
+
+        try:
+            response = await llm_client.request()
+            breaker.record_success()
+        except Exception:
+            breaker.record_failure()
+
+    # After 60 seconds, breaker transitions to HALF_OPEN
+    # Next request is a test - if it succeeds, circuit closes
+
+Usage in drep:
+--------------
+When enabled in LLMClient, prevents wasted time retrying a down LLM service. Instead of
+each request waiting for timeout (e.g., 60s), the circuit breaker fails immediately once
+the service is determined to be down, then periodically tests recovery.
 """
 
 import logging

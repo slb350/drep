@@ -1,19 +1,119 @@
-"""LLM-powered docstring generator."""
+"""LLM-powered docstring generator."""LLM-powered Python docstring generator with quality assessment.
 
-import logging
-import textwrap
-from typing import List, Optional
+Generates Google-style docstrings for Python functions that are missing or inadequate
+documentation. Uses LLMs to understand function purpose from:
+- Function signature (parameters, return type)
+- Function body (implementation logic)
+- Surrounding context (class, module)
+- Variable names and types
 
-from drep.docstring.ast_utils import FunctionInfo, extract_functions
-from drep.llm.client import LLMClient
-from drep.models.docstring_findings import DocstringGenerationResult
-from drep.models.findings import Finding
+Docstring Style:
+----------------
+Generates Google-style docstrings (preferred for Python):
 
-logger = logging.getLogger(__name__)
+    def example_function(param1: str, param2: int) -> bool:
+        """Brief one-line summary.
 
+        Longer description explaining what the function does, its purpose,
+        and any important details about its behavior.
 
-# System prompt for docstring generation
-DOCSTRING_GENERATION_PROMPT = """You are an expert Python documentation writer.
+        Args:
+            param1: Description of first parameter
+            param2: Description of second parameter
+
+        Returns:
+            Description of return value
+
+        Raises:
+            ValueError: When input validation fails
+            IOError: When file operations fail
+
+        Example:
+            >>> result = example_function("test", 42)
+            >>> print(result)
+            True
+        """
+        pass
+
+Why Docstrings Matter:
+----------------------
+Good docstrings improve:
+1. **Discoverability**: Other devs (and AI) can understand APIs without reading code
+2. **Maintainability**: Future you will thank present you for documenting intent
+3. **IDE Support**: Most IDEs show docstrings on hover/autocomplete
+4. **Documentation**: Tools like Sphinx can generate docs from docstrings
+5. **AI Understanding**: LLMs use docstrings to better understand code context
+
+Quality Assessment:
+-------------------
+After generating docstrings, the analyzer assesses quality (0-100 score):
+- **90-100**: Excellent - comprehensive, clear, with examples
+- **75-89**: Good - complete but could use more detail
+- **60-74**: Acceptable - covers basics but lacks depth
+- **Below 60**: Needs improvement - incomplete or unclear
+
+Factors considered:
+- Completeness (all params, return value, exceptions documented)
+- Clarity (easy to understand, no jargon without explanation)
+- Examples (code examples for complex functions)
+- Type information (consistent with type hints)
+
+Analysis Process:
+-----------------
+1. Parse Python file into AST (Abstract Syntax Tree)
+2. Extract all function definitions using ast_utils
+3. For each function:
+   a. Check if docstring exists and is adequate
+   b. If not, extract function context (signature, body, class)
+   c. Send to LLM with prompt requesting Google-style docstring
+   d. Parse LLM response and validate format
+   e. Assess quality of generated docstring
+4. Return structured findings with suggested docstrings
+
+Integration with drep:
+----------------------
+Called by RepositoryScanner for .py files. Findings suggest docstring additions
+and are posted as Gitea issues with "documentation" label.
+
+Example Generated Docstring:
+-----------------------------
+    Before:
+        def calculate_discount(price, customer_type):
+            if customer_type == "premium":
+                return price * 0.8
+            return price * 0.9
+
+    After:
+        def calculate_discount(price, customer_type):
+            """Calculate discounted price based on customer type.
+
+            Applies a discount rate depending on the customer's membership level.
+            Premium customers receive 20% off, while regular customers receive 10% off.
+
+            Args:
+                price: Original price before discount (must be positive)
+                customer_type: Customer membership level ("premium" or "regular")
+
+            Returns:
+                Discounted price as a float
+
+            Example:
+                >>> calculate_discount(100, "premium")
+                80.0
+                >>> calculate_discount(100, "regular")
+                90.0
+            """
+            if customer_type == "premium":
+                return price * 0.8
+            return price * 0.9
+
+Configuration:
+--------------
+From config.yaml:
+- docstring.enabled: Enable/disable docstring generation
+- docstring.min_quality_score: Only report if quality below this threshold
+- docstring.skip_private: Skip functions starting with _ (private)
+"""You are an expert Python documentation writer.
 Analyze the following function and generate a high-quality Google-style docstring.
 
 **Requirements:**
