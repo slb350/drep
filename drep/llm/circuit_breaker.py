@@ -18,9 +18,9 @@ Circuit States:
    - After recovery_timeout seconds → transition to HALF_OPEN
 
 3. **HALF_OPEN** (testing recovery):
-   - Single test request is allowed
-   - If successful → transition to CLOSED (service recovered)
-   - If fails → transition back to OPEN (still down)
+   - Requests are allowed again but monitored closely
+   - The first successful request closes the circuit
+   - Any failure immediately re-opens the circuit
 
 Benefits:
 ---------
@@ -31,23 +31,13 @@ Benefits:
 
 Example:
 --------
-    # LLM server is down
     breaker = CircuitBreaker(failure_threshold=5, recovery_timeout=60)
 
-    # Requests 1-5 fail, breaker opens after 5th failure
-    for i in range(10):
-        if not breaker.allow_request():
-            print(f"Request {i+1}: Circuit open, failing fast")
-            continue
+    async def guarded_request():
+        return await breaker.call(llm_client.request_with_payload, payload)
 
-        try:
-            response = await llm_client.request()
-            breaker.record_success()
-        except Exception:
-            breaker.record_failure()
-
-    # After 60 seconds, breaker transitions to HALF_OPEN
-    # Next request is a test - if it succeeds, circuit closes
+    # Repeated failures trip the breaker; subsequent calls raise
+    # CircuitBreakerOpenError until the recovery timeout elapses.
 
 Usage in drep:
 --------------
@@ -92,7 +82,7 @@ class CircuitBreaker:
     Transitions:
     - CLOSED → OPEN: After failure_threshold consecutive failures
     - OPEN → HALF_OPEN: After recovery_timeout seconds
-    - HALF_OPEN → CLOSED: After half_open_max_calls successes
+    - HALF_OPEN → CLOSED: Immediately on first successful call
     - HALF_OPEN → OPEN: On any failure in HALF_OPEN state
     """
 
@@ -107,7 +97,9 @@ class CircuitBreaker:
         Args:
             failure_threshold: Consecutive failures before opening circuit
             recovery_timeout: Seconds to wait before attempting recovery
-            half_open_max_calls: Successful calls in HALF_OPEN before closing
+            half_open_max_calls: ⚠️ NOT IMPLEMENTED - Reserved for future use to allow
+                                multiple test calls in HALF_OPEN state. Currently the
+                                circuit closes immediately on the first successful call.
         """
         self.failure_threshold = failure_threshold
         self.recovery_timeout = recovery_timeout

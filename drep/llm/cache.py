@@ -67,7 +67,7 @@ Usage Example:
 
     if cached:
         print("Cache hit!")
-        return cached["content"]
+        return cached  # Full LLM response dict
 
     # Cache miss - make LLM request and cache result
     response = await llm_client.analyze(...)
@@ -585,7 +585,11 @@ class IntelligentCache:
         return self.analytics
 
     def _calculate_file_priority(self, file_info: Dict[str, Any]) -> float:
-        """Calculate priority for cache warming.
+        """Calculate priority for cache warming (RESERVED FOR FUTURE USE).
+
+        ⚠️ Currently unused by warm_cache() method. The warm_cache() method does not
+        reorder or prioritize files—callers should pre-sort the input list if
+        prioritization is needed.
 
         Higher priority = warm first
 
@@ -620,12 +624,12 @@ class IntelligentCache:
         temperature: float,
         commit_sha: str,
     ) -> int:
-        """Pre-populate cache for common operations.
+        """Pre-populate cache for the supplied files.
 
-        Strategy:
-        1. Check which files already cached
-        2. Prioritize files by size/complexity
-        3. Pre-analyze top N files
+        The current implementation walks the provided list sequentially, skips entries
+        that already have cached results, and invokes the analyzer for the rest. It does
+        not reorder or prioritize files—callers that need prioritization should sort the
+        input list ahead of time.
 
         Args:
             files: List of dicts with 'path', 'code' keys (optionally 'size', 'complexity')
