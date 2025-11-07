@@ -48,7 +48,7 @@ Usage Example:
         max_concurrent_global=5,
         max_concurrent_per_repo=3,
         requests_per_minute=60,
-        max_tokens_per_minute=100000,
+        max_tokens_per_minute=MAX_TOKENS_PER_MINUTE,
     )
 
     # Simple text analysis
@@ -79,6 +79,12 @@ from typing import Any, Dict, Optional, Type  # Type hints for better IDE suppor
 import httpx  # Modern async HTTP client (fallback when open-agent-sdk unavailable)
 from pydantic import BaseModel  # For JSON schema validation and type safety
 
+from drep.constants import (
+    DEFAULT_MAX_TOKENS_PER_REQUEST,
+    MAX_ESTIMATED_TOKENS,
+    MAX_TOKENS_PER_MINUTE,
+    REPO_SEMAPHORE_TTL_SECONDS,
+)
 from drep.llm.circuit_breaker import CircuitBreaker  # Prevents cascade failures
 from drep.llm.metrics import LLMMetrics  # Tracks usage statistics for cost monitoring
 
@@ -404,7 +410,7 @@ class RateLimiter:
         limiter = RateLimiter(
             max_concurrent=5,              # 5 requests in flight max
             requests_per_minute=60,        # 60 reqs/min = 1 req/sec average
-            max_tokens_per_minute=100000,  # 100K tokens/min limit
+            max_tokens_per_minute=MAX_TOKENS_PER_MINUTE,  # 100K tokens/min limit
             max_concurrent_per_repo=3,     # Each repo limited to 3 concurrent
         )
     """
@@ -461,7 +467,7 @@ class RateLimiter:
         # Time-to-live for idle repo semaphores: 10 minutes
         # After 10 minutes of inactivity, a repo's semaphore is eligible for eviction
         # This prevents memory leaks when scanning many repos over time
-        self.repo_semaphore_ttl = 600  # seconds
+        self.repo_semaphore_ttl = REPO_SEMAPHORE_TTL_SECONDS
 
         # Request rate limiting: Sliding window algorithm
         # Lock protects all shared state from concurrent access
@@ -770,7 +776,7 @@ class LLMClient:
         api_key="not-needed",  # Many local LLMs don't need keys
         max_concurrent_global=5,
         requests_per_minute=60,
-        max_tokens_per_minute=100000,
+        max_tokens_per_minute=MAX_TOKENS_PER_MINUTE,
     )
 
     # Simple text analysis
@@ -805,7 +811,7 @@ class LLMClient:
         model: str,
         api_key: Optional[str] = None,
         temperature: float = 0.2,
-        max_tokens: int = 8000,
+        max_tokens: int = DEFAULT_MAX_TOKENS_PER_REQUEST,
         timeout: int = 60,
         max_retries: int = 3,
         retry_delay: int = 2,
@@ -813,7 +819,7 @@ class LLMClient:
         max_concurrent_global: int = 5,
         max_concurrent_per_repo: Optional[int] = 3,
         requests_per_minute: int = 60,
-        max_tokens_per_minute: int = 100000,
+        max_tokens_per_minute: int = MAX_TOKENS_PER_MINUTE,
         cache: Optional["IntelligentCache"] = None,  # noqa: F821
         repo_path: Optional[Path] = None,
         enable_circuit_breaker: bool = True,
@@ -1058,7 +1064,7 @@ class LLMClient:
 
         # Estimate tokens (rough: 4 chars per token), clamp to avoid over-reservation
         estimated_tokens = (len(system_prompt) + len(code) + self.max_tokens) // 4
-        estimated_tokens = max(1, min(estimated_tokens, 50000))
+        estimated_tokens = max(1, min(estimated_tokens, MAX_ESTIMATED_TOKENS))
 
         # Retry logic
         last_exception = None
@@ -1150,13 +1156,37 @@ class LLMClient:
                     else:
                         delay = self.retry_delay
 
+                    # Sanitize error message to avoid logging tokens in URLs
+                    error_msg = str(e)
+                    # Basic sanitization: remove common token patterns from error messages
+                    import re
+
+                    error_msg = re.sub(
+                        r"(token|api_?key|password|secret)=[^&\s]+",
+                        r"\1=***",
+                        error_msg,
+                        flags=re.IGNORECASE,
+                    )
+                    error_msg = re.sub(r"://[^:]+:[^@]+@", r"://***:***@", error_msg)
+
                     logger.warning(
-                        f"LLM request failed (attempt {attempt + 1}/{self.max_retries}): {e}. "
-                        f"Retrying in {delay}s..."
+                        f"LLM request failed (attempt {attempt + 1}/"
+                        f"{self.max_retries}): {error_msg}. Retrying in {delay}s..."
                     )
                     await asyncio.sleep(delay)
                 else:
-                    logger.error(f"LLM request failed after {self.max_retries} attempts: {e}")
+                    # Sanitize error message to avoid logging tokens
+                    error_msg = str(e)
+                    error_msg = re.sub(
+                        r"(token|api_?key|password|secret)=[^&\s]+",
+                        r"\1=***",
+                        error_msg,
+                        flags=re.IGNORECASE,
+                    )
+                    error_msg = re.sub(r"://[^:]+:[^@]+@", r"://***:***@", error_msg)
+                    logger.error(
+                        f"LLM request failed after {self.max_retries} attempts: {error_msg}"
+                    )
 
         # All retries failed
         raise last_exception

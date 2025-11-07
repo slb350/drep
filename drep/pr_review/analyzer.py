@@ -319,7 +319,20 @@ class PRReviewAnalyzer:
                 )
                 posted_count += 1
             except ValueError as e:
-                logger.error(f"Failed to post comment for {comment.file_path}:{comment.line}: {e}")
+                # Sanitize error message to avoid logging tokens in URLs
+                import re
+
+                error_msg = str(e)
+                error_msg = re.sub(
+                    r"(token|api_?key|password|secret)=[^&\s]+",
+                    r"\1=***",
+                    error_msg,
+                    flags=re.IGNORECASE,
+                )
+                error_msg = re.sub(r"://[^:]+:[^@]+@", r"://***:***@", error_msg)
+                logger.error(
+                    f"Failed to post comment for {comment.file_path}:{comment.line}: {error_msg}"
+                )
                 skipped_count += 1
 
         logger.info(f"Review posted: {posted_count} comments posted, {skipped_count} skipped")

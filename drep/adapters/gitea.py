@@ -1,11 +1,14 @@
 """Gitea platform adapter implementation."""
 
+import base64
 from typing import Dict, List, Optional
 
 import httpx
 
+from drep.adapters.base import BaseAdapter
 
-class GiteaAdapter:
+
+class GiteaAdapter(BaseAdapter):
     """Gitea API adapter."""
 
     def __init__(self, url: str, token: str):
@@ -268,3 +271,82 @@ class GiteaAdapter:
                     f"Failed to create review comment. new_position error: {e1.response.text}; "
                     f"position error: {e2.response.text}"
                 )
+
+    async def post_review_comment(
+        self,
+        owner: str,
+        repo: str,
+        pr_number: int,
+        file_path: str,
+        line: int,
+        body: str,
+    ) -> None:
+        """Post a line-specific review comment on a PR (BaseAdapter interface).
+
+        This method implements the BaseAdapter interface by wrapping the
+        create_pr_review_comment method and automatically fetching the commit SHA.
+
+        Args:
+            owner: Repository owner
+            repo: Repository name
+            pr_number: Pull request number
+            file_path: Path to file being commented on (relative to repo root)
+            line: Line number in the file (must be part of PR diff)
+            body: Comment body (markdown supported)
+
+        Raises:
+            ValueError: If line number is invalid (not in PR diff)
+            httpx.HTTPStatusError: For HTTP errors
+        """
+        # Get PR details to extract commit SHA
+        pr = await self.get_pr(owner, repo, pr_number)
+        commit_sha = pr["head"]["sha"]
+
+        # Delegate to existing implementation
+        await self.create_pr_review_comment(
+            owner=owner,
+            repo=repo,
+            pr_number=pr_number,
+            commit_sha=commit_sha,
+            file_path=file_path,
+            line=line,
+            body=body,
+        )
+
+    async def get_file_content(self, owner: str, repo: str, file_path: str, ref: str) -> str:
+        """Get file content at a specific git reference.
+
+        Args:
+            owner: Repository owner
+            repo: Repository name
+            file_path: Path to file (relative to repo root)
+            ref: Git reference (branch name, tag, or commit SHA)
+
+        Returns:
+            File content as string
+
+        Raises:
+            ValueError: If file not found
+            httpx.HTTPStatusError: For HTTP errors
+        """
+        url = f"{self.url}/api/v1/repos/{owner}/{repo}/contents/{file_path}"
+        params = {"ref": ref}
+
+        try:
+            response = await self.client.get(url, params=params)
+            response.raise_for_status()
+            data = response.json()
+
+            # Gitea returns base64-encoded content
+            content = data.get("content", "")
+            if content:
+                # Decode base64 and return as string
+                return base64.b64decode(content).decode("utf-8")
+            else:
+                # Empty file
+                return ""
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 404:
+                raise ValueError(f"File {file_path} not found at ref {ref}")
+            else:
+                raise

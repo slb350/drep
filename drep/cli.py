@@ -461,5 +461,84 @@ def metrics(days, export, detailed):
         click.echo(f"\n✓ Metrics exported to {export_path}")
 
 
+@cli.command()
+@click.argument("path", type=click.Path(exists=True))
+@click.option("--output", type=click.Choice(["text", "json"]), default="text", help="Output format")
+def lint_docs(path, output):
+    """Lint markdown documentation files for style and formatting issues.
+
+    Examples:
+        drep lint-docs docs/
+        drep lint-docs README.md
+        drep lint-docs docs/ --output json
+    """
+    from pathlib import Path
+
+    from drep.models.config import DocumentationConfig
+
+    # Create analyzer with markdown checks enabled
+    config = DocumentationConfig(enabled=True, markdown_checks=True)
+    analyzer = DocumentationAnalyzer(config)
+
+    # Find markdown files
+    path_obj = Path(path)
+    if path_obj.is_file():
+        md_files = [path_obj] if path_obj.suffix == ".md" else []
+    else:
+        md_files = list(path_obj.rglob("*.md"))
+
+    if not md_files:
+        click.echo("No markdown files found.")
+        return
+
+    # Analyze all files
+    total_issues = 0
+    results = []
+
+    for md_file in sorted(md_files):
+        try:
+            content = md_file.read_text(encoding="utf-8")
+            findings = asyncio.run(analyzer.analyze_file(str(md_file), content))
+
+            if findings.pattern_issues:
+                total_issues += len(findings.pattern_issues)
+                results.append((md_file, findings))
+        except (IOError, OSError, UnicodeDecodeError) as e:
+            click.echo(f"Error reading {md_file}: {e}", err=True)
+        except Exception as e:
+            # Unexpected error - show details and re-raise for debugging
+            click.echo(f"Unexpected error analyzing {md_file}: {e}", err=True)
+            raise
+
+    # Output results
+    if output == "json":
+        import json
+
+        json_output = []
+        for md_file, findings in results:
+            for issue in findings.pattern_issues:
+                json_output.append(
+                    {
+                        "file": str(md_file),
+                        "line": issue.line,
+                        "column": issue.column,
+                        "type": issue.type,
+                        "message": issue.matched_text[:50],
+                    }
+                )
+        click.echo(json.dumps(json_output, indent=2))
+    else:
+        # Text output
+        if total_issues == 0:
+            click.echo(f"✓ No issues found in {len(md_files)} markdown files.")
+        else:
+            click.echo(f"Found {total_issues} issues in {len(results)} files:\n")
+            for md_file, findings in results:
+                click.echo(f"{md_file}:")
+                for issue in findings.pattern_issues:
+                    click.echo(f"  Line {issue.line}:{issue.column} [{issue.type}]")
+                click.echo()
+
+
 if __name__ == "__main__":
     cli()
