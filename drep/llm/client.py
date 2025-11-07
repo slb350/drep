@@ -524,8 +524,8 @@ class RateLimiter:
             for rid in idle_repos:
                 sem = self.repo_semaphores.get(rid)
                 if sem is not None:
-                    # Check if semaphore is idle: _value == initial value means all permits available
-                    # i.e., no requests currently using this repo's semaphore
+                    # Check if semaphore is idle: _value == initial value means
+                    # all permits available (no requests using this repo's semaphore)
                     expected_idle_value = self.max_concurrent_per_repo or self.max_concurrent
                     if sem._value == expected_idle_value:
                         # Safe to evict - no requests in flight for this repo

@@ -48,8 +48,10 @@ jobs:
             type=semver,pattern={{version}}
             # Tag with major.minor on release tags (v1.2.3 -> 1.2)
             type=semver,pattern={{major}}.{{minor}}
-            # Tag with SHA for every commit
-            type=sha,prefix={{branch}}-
+            # Tag with SHA for branches (not PRs)
+            type=sha,prefix={{branch}}-,enable=${{ github.event_name != 'pull_request' }}
+            # Tag with pr-NUMBER-SHA for pull requests
+            type=ref,event=pr,prefix=pr-
 
       - name: Build and push Docker image
         uses: docker/build-push-action@v6
