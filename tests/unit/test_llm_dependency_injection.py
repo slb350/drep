@@ -4,8 +4,6 @@ This test module verifies that LLMClient supports dependency injection
 for RateLimiter and CircuitBreaker, improving testability and flexibility.
 """
 
-import pytest
-
 from drep.llm.circuit_breaker import CircuitBreaker
 from drep.llm.client import LLMClient, RateLimiter
 

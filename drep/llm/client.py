@@ -844,17 +844,25 @@ class LLMClient:
             max_retries: Maximum retry attempts
             retry_delay: Initial retry delay in seconds
             exponential_backoff: Use exponential backoff for retries
-            max_concurrent_global: Maximum concurrent requests globally (ignored if rate_limiter provided)
-            max_concurrent_per_repo: Maximum concurrent requests per repository (ignored if rate_limiter provided)
-            requests_per_minute: Rate limit for requests (ignored if rate_limiter provided)
-            max_tokens_per_minute: Rate limit for tokens (ignored if rate_limiter provided)
+            max_concurrent_global: Maximum concurrent requests globally
+                (ignored if rate_limiter provided)
+            max_concurrent_per_repo: Maximum concurrent requests per repository
+                (ignored if rate_limiter provided)
+            requests_per_minute: Rate limit for requests
+                (ignored if rate_limiter provided)
+            max_tokens_per_minute: Rate limit for tokens
+                (ignored if rate_limiter provided)
             cache: Optional cache instance for response caching
             repo_path: Optional repository path for commit SHA retrieval
             rate_limiter: Optional RateLimiter instance (creates default if None)
-            enable_circuit_breaker: Enable circuit breaker pattern (ignored if circuit_breaker provided)
-            circuit_breaker: Optional CircuitBreaker instance (None to disable, creates default if not provided)
-            circuit_breaker_threshold: Failures before opening circuit (ignored if circuit_breaker provided)
-            circuit_breaker_timeout: Recovery timeout in seconds (ignored if circuit_breaker provided)
+            enable_circuit_breaker: Enable circuit breaker pattern
+                (ignored if circuit_breaker provided)
+            circuit_breaker: Optional CircuitBreaker instance
+                (None to disable, creates default if not provided)
+            circuit_breaker_threshold: Failures before opening circuit
+                (ignored if circuit_breaker provided)
+            circuit_breaker_timeout: Recovery timeout in seconds
+                (ignored if circuit_breaker provided)
         """
         # Store configuration parameters
         self.endpoint = endpoint.rstrip("/")  # Remove trailing slash for consistent URL building
