@@ -91,6 +91,9 @@ from drep.llm.metrics import LLMMetrics  # Tracks usage statistics for cost moni
 
 logger = logging.getLogger(__name__)
 
+# Sentinel value for distinguishing "not provided" from "explicitly None"
+_UNSET = object()
+
 
 def get_current_commit_sha(repo_path: Optional[Path] = None) -> str:
     """Get current git commit SHA for cache invalidation.
@@ -823,7 +826,9 @@ class LLMClient:
         max_tokens_per_minute: int = MAX_TOKENS_PER_MINUTE,
         cache: Optional["IntelligentCache"] = None,  # noqa: F821
         repo_path: Optional[Path] = None,
+        rate_limiter: Optional[RateLimiter] = None,
         enable_circuit_breaker: bool = True,
+        circuit_breaker: Optional[CircuitBreaker] = _UNSET,  # type: ignore
         circuit_breaker_threshold: int = 5,
         circuit_breaker_timeout: int = 60,
     ):
@@ -839,15 +844,17 @@ class LLMClient:
             max_retries: Maximum retry attempts
             retry_delay: Initial retry delay in seconds
             exponential_backoff: Use exponential backoff for retries
-            max_concurrent_global: Maximum concurrent requests globally
-            max_concurrent_per_repo: Maximum concurrent requests per repository
-            requests_per_minute: Rate limit for requests
-            max_tokens_per_minute: Rate limit for tokens
+            max_concurrent_global: Maximum concurrent requests globally (ignored if rate_limiter provided)
+            max_concurrent_per_repo: Maximum concurrent requests per repository (ignored if rate_limiter provided)
+            requests_per_minute: Rate limit for requests (ignored if rate_limiter provided)
+            max_tokens_per_minute: Rate limit for tokens (ignored if rate_limiter provided)
             cache: Optional cache instance for response caching
             repo_path: Optional repository path for commit SHA retrieval
-            enable_circuit_breaker: Enable circuit breaker pattern
-            circuit_breaker_threshold: Failures before opening circuit
-            circuit_breaker_timeout: Recovery timeout in seconds
+            rate_limiter: Optional RateLimiter instance (creates default if None)
+            enable_circuit_breaker: Enable circuit breaker pattern (ignored if circuit_breaker provided)
+            circuit_breaker: Optional CircuitBreaker instance (None to disable, creates default if not provided)
+            circuit_breaker_threshold: Failures before opening circuit (ignored if circuit_breaker provided)
+            circuit_breaker_timeout: Recovery timeout in seconds (ignored if circuit_breaker provided)
         """
         # Store configuration parameters
         self.endpoint = endpoint.rstrip("/")  # Remove trailing slash for consistent URL building
@@ -985,13 +992,18 @@ class LLMClient:
         if not self._using_open_agent:
             self.client = _CompatClient(self)
 
-        # Initialize rate limiter
-        self.rate_limiter = RateLimiter(
-            max_concurrent=max_concurrent_global,
-            requests_per_minute=requests_per_minute,
-            max_tokens_per_minute=max_tokens_per_minute,
-            max_concurrent_per_repo=max_concurrent_per_repo,
-        )
+        # Initialize rate limiter (use injected or create default)
+        if rate_limiter is not None:
+            # Use injected RateLimiter (dependency injection)
+            self.rate_limiter = rate_limiter
+        else:
+            # Create default RateLimiter (backward compatibility)
+            self.rate_limiter = RateLimiter(
+                max_concurrent=max_concurrent_global,
+                requests_per_minute=requests_per_minute,
+                max_tokens_per_minute=max_tokens_per_minute,
+                max_concurrent_per_repo=max_concurrent_per_repo,
+            )
 
         # Metrics tracking
         self.metrics = LLMMetrics()
@@ -1001,13 +1013,20 @@ class LLMClient:
         self._total_tokens = 0
         self._failed_requests = 0
 
-        # Circuit breaker (optional)
-        self.circuit_breaker = None
-        if enable_circuit_breaker:
+        # Circuit breaker (optional, use injected or create default)
+        if circuit_breaker is not _UNSET:
+            # Explicitly provided (can be an instance or None to disable)
+            # This takes precedence over enable_circuit_breaker flag
+            self.circuit_breaker = circuit_breaker  # type: ignore
+        elif enable_circuit_breaker:
+            # Not provided, use enable_circuit_breaker flag (backward compatibility)
             self.circuit_breaker = CircuitBreaker(
                 failure_threshold=circuit_breaker_threshold,
                 recovery_timeout=circuit_breaker_timeout,
             )
+        else:
+            # Circuit breaker disabled via flag
+            self.circuit_breaker = None
 
     @property
     def total_requests(self) -> int:
