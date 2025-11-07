@@ -94,6 +94,8 @@ from dataclasses import dataclass  # For simple data classes
 from pathlib import Path  # For cross-platform file path handling
 from typing import Any, Dict, List, Optional  # Type hints for clarity
 
+from drep.constants import TEMPERATURE_TOLERANCE
+
 logger = logging.getLogger(__name__)
 
 
@@ -286,7 +288,7 @@ class IntelligentCache:
 
         Validates:
         - Model matches
-        - Temperature matches (within 0.01)
+        - Temperature matches (within tolerance for floating-point comparison)
         - Commit SHA matches
         - Not expired (TTL)
 
@@ -332,8 +334,8 @@ class IntelligentCache:
             # STEP 5: Validate temperature (with small tolerance for floating point)
             # Temperature affects output randomness. Same code + prompt with different
             # temperature should produce different responses.
-            # Tolerance of 0.01 handles floating point rounding: 0.2 vs 0.200001
-            if abs(metadata.temperature - temperature) > 0.01:
+            # TEMPERATURE_TOLERANCE handles floating point rounding: 0.2 vs 0.200001
+            if abs(metadata.temperature - temperature) > TEMPERATURE_TOLERANCE:
                 logger.debug(
                     f"Cache miss: temperature mismatch ({metadata.temperature} != {temperature})"
                 )

@@ -79,6 +79,7 @@ from typing import Any, Dict, Optional, Type  # Type hints for better IDE suppor
 import httpx  # Modern async HTTP client (fallback when open-agent-sdk unavailable)
 from pydantic import BaseModel  # For JSON schema validation and type safety
 
+from drep.constants import MAX_ESTIMATED_TOKENS, REPO_SEMAPHORE_TTL_SECONDS
 from drep.llm.circuit_breaker import CircuitBreaker  # Prevents cascade failures
 from drep.llm.metrics import LLMMetrics  # Tracks usage statistics for cost monitoring
 
@@ -461,7 +462,7 @@ class RateLimiter:
         # Time-to-live for idle repo semaphores: 10 minutes
         # After 10 minutes of inactivity, a repo's semaphore is eligible for eviction
         # This prevents memory leaks when scanning many repos over time
-        self.repo_semaphore_ttl = 600  # seconds
+        self.repo_semaphore_ttl = REPO_SEMAPHORE_TTL_SECONDS
 
         # Request rate limiting: Sliding window algorithm
         # Lock protects all shared state from concurrent access
@@ -1058,7 +1059,7 @@ class LLMClient:
 
         # Estimate tokens (rough: 4 chars per token), clamp to avoid over-reservation
         estimated_tokens = (len(system_prompt) + len(code) + self.max_tokens) // 4
-        estimated_tokens = max(1, min(estimated_tokens, 50000))
+        estimated_tokens = max(1, min(estimated_tokens, MAX_ESTIMATED_TOKENS))
 
         # Retry logic
         last_exception = None
