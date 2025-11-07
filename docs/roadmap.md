@@ -82,6 +82,48 @@ estimated_tokens = max(1, min(estimated_tokens, MAX_ESTIMATED_TOKENS))
 
 ---
 
+### 1.4 Enhanced Markdown Linting
+**Effort:** Small | **Impact:** Medium | **Status:** Not Started
+
+Integrate markdownlint for comprehensive documentation quality checks.
+
+**Tasks:**
+- [ ] Add markdownlint-cli2 or py-gfm as dependency
+- [ ] Create `.markdownlint.json` configuration:
+  - Enable all standard rules
+  - Disable MD013 (line length) - let content flow naturally
+  - Configure MD033 (allow HTML for badges/images)
+  - Configure MD041 (first line heading)
+- [ ] Integrate into existing markdown analyzer
+- [ ] Add `drep lint-docs` CLI command
+- [ ] Include in CI/CD pipeline
+- [ ] Update documentation quality reports
+
+**Configuration example:**
+```json
+{
+  "default": true,
+  "MD013": false,
+  "MD033": {
+    "allowed_elements": ["img", "br", "details", "summary"]
+  },
+  "MD041": false
+}
+```
+
+**Benefits:**
+- Consistent documentation style across project
+- Catches formatting issues (headings, lists, code blocks)
+- Improves readability and professional appearance
+- Complements existing 10 basic markdown checks
+
+**Integration:**
+- Extends `drep/documentation/markdown_analyzer.py`
+- Results appear in same findings list as other checks
+- Optional via `documentation.markdown_lint: true` config
+
+---
+
 ## 🔧 Phase 2: Quality & Testing (Sprint 3-4)
 
 Medium-effort improvements to testing and code quality.
