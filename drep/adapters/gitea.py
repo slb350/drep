@@ -1,5 +1,6 @@
 """Gitea platform adapter implementation."""
 
+import base64
 from typing import Dict, List, Optional
 
 import httpx
@@ -337,8 +338,6 @@ class GiteaAdapter(BaseAdapter):
             data = response.json()
 
             # Gitea returns base64-encoded content
-            import base64
-
             content = data.get("content", "")
             if content:
                 # Decode base64 and return as string

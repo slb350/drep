@@ -21,11 +21,28 @@ def test_detect_secrets_in_logs_basic_patterns():
     assert detect_secrets_in_logs("password=MyP@ssw0rd") is True
     assert detect_secrets_in_logs("secret=confidential") is True
 
+    # Should detect OAuth tokens (CRITICAL for OAuth flows)
+    assert detect_secrets_in_logs("access_token=ya29.abc123") is True
+    assert detect_secrets_in_logs("oauth_token=oauth_xyz") is True
+    assert detect_secrets_in_logs("refresh_token=1//abc") is True
+    assert detect_secrets_in_logs("client_secret=secret123") is True
+    assert detect_secrets_in_logs("client_id=12345") is True
+
+    # Should detect standalone Bearer tokens
+    assert detect_secrets_in_logs("Bearer abc123") is True
+    assert detect_secrets_in_logs("Using Bearer xyz789") is True
+
+    # Should detect private keys
+    assert detect_secrets_in_logs("private_key=-----BEGIN") is True
+    assert detect_secrets_in_logs("privatekey=xxx") is True
+
     # Should NOT detect safe logging
     assert detect_secrets_in_logs("Processing request ID: 12345") is False
     assert detect_secrets_in_logs("HTTP status code: 200") is False
     assert detect_secrets_in_logs("File path: /tmp/file.txt") is False
     assert detect_secrets_in_logs("User logged in successfully") is False
+    # Note: Mentions of sensitive field names ARE flagged (conservative approach)
+    # This is intentionally strict to avoid false negatives
 
 
 def test_detect_secrets_case_insensitive():
@@ -70,6 +87,23 @@ def test_sanitize_url_removes_secrets():
     assert sanitize_url("http://api.com?token=abc123") == "http://api.com?token=***"
     assert (
         sanitize_url("http://api.com?api_key=secret&page=1") == "http://api.com?api_key=***&page=1"
+    )
+
+    # OAuth tokens (CRITICAL - very common in API calls)
+    assert sanitize_url("https://api.com?access_token=secret") == "https://api.com?access_token=***"
+    assert sanitize_url("https://api.com?oauth_token=xyz") == "https://api.com?oauth_token=***"
+    assert (
+        sanitize_url("https://api.com?refresh_token=abc&page=1")
+        == "https://api.com?refresh_token=***&page=1"
+    )
+    assert (
+        sanitize_url("https://api.com?client_secret=secret") == "https://api.com?client_secret=***"
+    )
+    assert sanitize_url("https://api.com?client_id=12345") == "https://api.com?client_id=***"
+
+    # Private keys
+    assert (
+        sanitize_url("https://api.com?private_key=-----BEGIN") == "https://api.com?private_key=***"
     )
 
     # Password in auth

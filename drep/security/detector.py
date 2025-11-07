@@ -19,22 +19,27 @@ def get_secret_patterns() -> List[str]:
     Patterns detect:
     - Variable assignments: token=value, api_key=value
     - HTTP headers: Authorization: Bearer xxx
+    - Standalone Bearer tokens: Bearer abc123
+    - OAuth tokens: access_token, oauth_token, refresh_token, client_secret
     - URL components: ?token=xxx, user:password@host
     - Variable names in messages: self.token, {password}
+    - Private keys: private_key=xxx
     """
     return [
-        # Assignment patterns: token=xxx, api_key=xxx
-        r"\b(?:token|api_?key|password|secret|auth)\s*[=:]",
+        # Assignment patterns: token=xxx, api_key=xxx, access_token=xxx
+        r"\b(?:token|api_?key|password|secret|auth|access_token|oauth_token|refresh_token|client_secret|client_id|private_?key)\s*[=:]",
         # Authorization header
         r"authorization\s*:\s*bearer",
-        # URL with sensitive params
-        r"[?&](?:token|api_?key|key|password|secret)=",
+        # Standalone Bearer tokens
+        r"\bbearer\s+[a-zA-Z0-9_\-]+",
+        # URL with sensitive params (including OAuth)
+        r"[?&](?:token|api_?key|key|password|secret|access_token|oauth_token|refresh_token|client_secret|client_id)=",
         # Password in URL auth
         r"://[^:]+:[^@]+@",
         # Variable references that suggest secrets
-        r"(?:self\.|this\.)?(?:token|api_?key|password|secret)\b",
+        r"(?:self\.|this\.)?(?:token|api_?key|password|secret|access_token|oauth_token|refresh_token|client_secret|private_?key)\b",
         # String formatting with sensitive vars
-        r"\{(?:token|api_?key|password|secret)\}",
+        r"\{(?:token|api_?key|password|secret|access_token|oauth_token|refresh_token|client_secret|private_?key)\}",
     ]
 
 
@@ -93,6 +98,15 @@ def sanitize_url(url: Optional[str]) -> str:
         "secret",
         "auth",
         "authorization",
+        # OAuth tokens (CRITICAL - commonly used in API calls)
+        "access_token",
+        "oauth_token",
+        "refresh_token",
+        "client_secret",
+        "client_id",
+        # SSH/Private keys
+        "private_key",
+        "privatekey",
     }
 
     try:
