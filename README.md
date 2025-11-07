@@ -461,24 +461,35 @@ pytest tests/unit/test_adapters.py
 
 ## Roadmap
 
-### MVP (Current)
-- ✅ Gitea adapter
-- ✅ LLM-powered code quality analyzer
-- ✅ Docstring generator for Python
-- ✅ PR review CLI workflow
-- ✅ SQLite database
-- ✅ CLI interface
+See **[docs/roadmap.md](docs/roadmap.md)** for the complete development roadmap with priorities, timelines, and contribution opportunities.
 
-### Post-MVP
-- [ ] GitHub and GitLab adapters
-- [ ] Draft PR automation
-- [ ] Vector database integration (cross-file context)
-- [ ] Custom rule definitions
-- [ ] Integration with existing linters
-- [ ] Metrics dashboard
-- [ ] Notification system (Slack, Discord)
-- [ ] Multi-language docstring and code support
-- [ ] Multi-repository analysis
+### Current Status (v0.1.0)
+- ✅ Gitea adapter with full PR review support
+- ✅ LLM-powered code quality analysis (Python)
+- ✅ Intelligent caching (80%+ hit rate)
+- ✅ Circuit breaker & rate limiting
+- ✅ Docstring generator for Python
+- ✅ CLI interface with metrics tracking
+
+### Coming Soon (5 Development Phases)
+
+**🎯 Phase 1: Quick Wins** (Sprint 1-2)
+- Security audit, BaseAdapter interface, extract constants
+
+**🔧 Phase 2: Quality & Testing** (Sprint 3-4)
+- E2E integration tests, API documentation, dependency injection
+
+**🚀 Phase 3: Platform Expansion** (Sprint 5-8)
+- GitHub and GitLab adapter support
+
+**🌟 Phase 4: Feature Expansion** (Sprint 9-12)
+- Multi-language support (JavaScript, TypeScript, Go, Rust)
+- Web UI dashboard for viewing findings and metrics
+
+**🔬 Phase 5: Advanced Features** (Backlog)
+- Custom rules engine, performance optimizations, vector database for cross-file context
+
+**Want to help?** Good first issues: extracting constants, adding benchmarks, writing E2E tests. See [docs/roadmap.md](docs/roadmap.md#-contributing) for details.
 
 ## Comparison with Existing Tools
 

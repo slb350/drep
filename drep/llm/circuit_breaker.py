@@ -1,7 +1,49 @@
-"""Circuit breaker pattern for LLM resilience.
+"""Circuit breaker pattern implementation for LLM client fault tolerance.
 
-Prevents cascading failures by tracking error rates and temporarily
-blocking requests when failure threshold is exceeded.
+The circuit breaker pattern prevents cascade failures when the LLM service is down or
+degrading. Instead of continuing to make failing requests (wasting time and resources),
+the circuit "opens" after a threshold of failures, immediately rejecting requests until
+the service recovers.
+
+Circuit States:
+---------------
+1. **CLOSED** (normal operation):
+   - All requests are attempted
+   - Failures are counted
+   - If failure_threshold exceeded → transition to OPEN
+
+2. **OPEN** (service is down):
+   - All requests are immediately rejected (fail-fast)
+   - Saves time and resources (no waiting for timeouts)
+   - After recovery_timeout seconds → transition to HALF_OPEN
+
+3. **HALF_OPEN** (testing recovery):
+   - Requests are allowed again but monitored closely
+   - The first successful request closes the circuit
+   - Any failure immediately re-opens the circuit
+
+Benefits:
+---------
+- Fast failure: Don't wait for timeouts when service is known to be down
+- Resource conservation: Don't overwhelm failing service with requests
+- Automatic recovery: Periodically tests if service has recovered
+- Better UX: Fail immediately with clear error vs hanging for timeout
+
+Example:
+--------
+    breaker = CircuitBreaker(failure_threshold=5, recovery_timeout=60)
+
+    async def guarded_request():
+        return await breaker.call(llm_client.request_with_payload, payload)
+
+    # Repeated failures trip the breaker; subsequent calls raise
+    # CircuitBreakerOpenError until the recovery timeout elapses.
+
+Usage in drep:
+--------------
+When enabled in LLMClient, prevents wasted time retrying a down LLM service. Instead of
+each request waiting for timeout (e.g., 60s), the circuit breaker fails immediately once
+the service is determined to be down, then periodically tests recovery.
 """
 
 import logging
@@ -40,7 +82,7 @@ class CircuitBreaker:
     Transitions:
     - CLOSED → OPEN: After failure_threshold consecutive failures
     - OPEN → HALF_OPEN: After recovery_timeout seconds
-    - HALF_OPEN → CLOSED: After half_open_max_calls successes
+    - HALF_OPEN → CLOSED: Immediately on first successful call
     - HALF_OPEN → OPEN: On any failure in HALF_OPEN state
     """
 
@@ -55,7 +97,9 @@ class CircuitBreaker:
         Args:
             failure_threshold: Consecutive failures before opening circuit
             recovery_timeout: Seconds to wait before attempting recovery
-            half_open_max_calls: Successful calls in HALF_OPEN before closing
+            half_open_max_calls: ⚠️ NOT IMPLEMENTED - Reserved for future use to allow
+                                multiple test calls in HALF_OPEN state. Currently the
+                                circuit closes immediately on the first successful call.
         """
         self.failure_threshold = failure_threshold
         self.recovery_timeout = recovery_timeout

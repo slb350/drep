@@ -1,4 +1,19 @@
-"""LLM-powered docstring generator."""
+"""LLM-powered docstring generator.
+
+This module detects public Python functions that are missing docstrings (or whose
+existing docstrings look obviously low quality) and asks the configured LLM to return
+Google-style documentation. The LLM response gives us both the docstring text and a
+qualitative quality flag (`high|medium|low`). We surface the suggestion to the user as
+an info-level finding rather than modifying files automatically.
+
+Current capabilities:
+1. Parse Python files with `ast` utilities to find functions and their metadata.
+2. Skip private helpers unless they are decorated as properties/classmethods/etc.
+3. Re-run the LLM for obviously poor docstrings (short/generic strings).
+4. Use only the qualitative quality rating emitted by the LLM response. There is no
+   numeric scoring or dedicated `docstring.*` configuration block—behavior is governed
+   by the standard LLM settings already present in the main config.
+"""
 
 import logging
 import textwrap
@@ -10,7 +25,6 @@ from drep.models.docstring_findings import DocstringGenerationResult
 from drep.models.findings import Finding
 
 logger = logging.getLogger(__name__)
-
 
 # System prompt for docstring generation
 DOCSTRING_GENERATION_PROMPT = """You are an expert Python documentation writer.
@@ -157,8 +171,10 @@ class DocstringGenerator:
         """Check if function should be analyzed for docstrings.
 
         Only analyze:
-        - Public functions (not starting with _) AND complex (>= 3 lines)
+        - Public functions (not starting with _) AND complex (>= 3 AST complexity units)
         - Or functions with decorators like @property, @classmethod, @staticmethod
+
+        Note: Complexity is measured by AST nodes/statements, not literal line count.
 
         Args:
             func_info: Function information from AST
@@ -249,7 +265,8 @@ class DocstringGenerator:
         # Extract function code
         lines = full_content.split("\n")
         start = max(0, func_info.line_number - 1)
-        # Use start + complexity to get exact function bounds (no spillover)
+        # Approximate end using complexity as a proxy for function length
+        # Note: This may capture slightly more/fewer lines than the actual function body
         end = min(len(lines), start + func_info.complexity)
         function_code = "\n".join(lines[start:end])
 
