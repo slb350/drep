@@ -167,27 +167,32 @@ async def _run_scan(
         # Setup git authentication
         temp_dir = tempfile.mkdtemp(prefix="drep_git_")
         askpass_script = Path(temp_dir) / "askpass.sh"
+        token_file = Path(temp_dir) / ".git-token"
 
-        # Create askpass script
-        askpass_content = """#!/bin/sh
+        # Write token to temporary file with owner-only read permissions
+        # This prevents token exposure in process environment variables
+        token_file.write_text(git_token)
+        token_file.chmod(0o600)  # Owner read/write only
+
+        # Create askpass script that reads token from file
+        askpass_content = f"""#!/bin/sh
 if echo "$1" | grep -qi "username"; then
     echo "token"
 elif echo "$1" | grep -qi "password"; then
-    echo "$DREP_GIT_TOKEN"
+    cat {token_file}
 else
-    echo "$DREP_GIT_TOKEN"
+    cat {token_file}
 fi
 """
         askpass_script.write_text(askpass_content)
-        # Restrict to owner only; contains sensitive token usage
+        # Restrict to owner only; contains sensitive file path
         askpass_script.chmod(0o700)
 
-        # Build git environment
+        # Build git environment (no token in environment!)
         git_env = {
             **os.environ,
             "GIT_ASKPASS": str(askpass_script),
             "GIT_TERMINAL_PROMPT": "0",
-            "DREP_GIT_TOKEN": git_token,
         }
 
         # Repository path
