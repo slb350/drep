@@ -250,6 +250,7 @@ class TestScanCommand:
             class MockConfig:
                 gitea = None
                 github = None
+                gitlab = None
                 database_url = "sqlite:///./test.db"
                 documentation = None
                 llm = None
