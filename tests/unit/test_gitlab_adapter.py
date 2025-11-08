@@ -840,6 +840,44 @@ async def test_rate_limit_always_raises_on_429_even_with_invalid_headers():
         await adapter.close()
 
 
+@pytest.mark.parametrize("remaining_header,reset_header,expected_in_message", [
+    (" 0 ", "1640000000", "Remaining:  0 "),  # Whitespace preserved in message
+    ("0.0", "1640000000", "Remaining: 0.0"),  # Float value preserved
+    ("invalid", "1640000000", "Remaining: invalid"),  # Non-numeric preserved
+    (None, "1640000000", "Remaining: unknown"),  # Missing header shows "unknown"
+    ("0", None, "Resets at unknown"),  # Missing reset header
+    (None, None, "unknown"),  # Both headers missing
+])
+@pytest.mark.asyncio
+@respx.mock
+async def test_rate_limit_header_edge_cases(remaining_header, reset_header, expected_in_message):
+    """Test rate limit error messages handle various header formats correctly.
+
+    All 429 responses should raise errors. Headers are used for error messages only.
+    """
+    from drep.adapters.gitlab import GitLabAdapter
+
+    # Build headers dict
+    headers = {}
+    if remaining_header is not None:
+        headers["RateLimit-Remaining"] = remaining_header
+    if reset_header is not None:
+        headers["RateLimit-Reset"] = reset_header
+
+    # Mock 429 with specified headers
+    respx.get("https://gitlab.com/api/v4/projects/owner%2Frepo").mock(
+        return_value=httpx.Response(429, headers=headers, text="Rate limit exceeded")
+    )
+
+    adapter = GitLabAdapter("glpat_token")
+
+    try:
+        with pytest.raises(ValueError, match="GitLab API rate limit exceeded"):
+            await adapter.get_default_branch("owner", "repo")
+    finally:
+        await adapter.close()
+
+
 # ===== JSON Validation Tests =====
 
 
