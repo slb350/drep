@@ -174,51 +174,42 @@ class GitLabAdapter(BaseAdapter):
             repo: Repository name (for error context)
 
         Raises:
-            ValueError: If rate limit is exceeded
+            ValueError: If rate limit is exceeded (429 status)
 
         Note:
             GitLab returns rate limit info in RateLimit-* headers:
             - RateLimit-Limit: Maximum requests per time window
             - RateLimit-Remaining: Requests remaining
             - RateLimit-Reset: Unix timestamp when limit resets
+
+            If we get a 429 status, we ALWAYS raise an error, regardless of
+            what the headers say (they might be malformed or inconsistent).
         """
         if response.status_code != 429:
             return  # Not a rate limit error
 
-        remaining_str = response.headers.get("RateLimit-Remaining")
-        if remaining_str is None:
-            # Generic 429 without rate limit headers
-            reset_time = response.headers.get("RateLimit-Reset", "unknown")
-            context = f" for {owner}/{repo}" if owner and repo else ""
-            repo_id = f"{owner}/{repo}" if owner and repo else None
-            logger.warning(
-                f"GitLab API rate limit exceeded{context}",
-                extra={"repo_id": repo_id, "reset_time": reset_time},
-            )
-            raise ValueError(
-                f"GitLab API rate limit exceeded. Resets at {reset_time}. "
-                "Wait or use a different token."
-            )
+        # If we got 429, we're rate limited - always raise
+        # Parse headers for better error message, but don't depend on them
+        reset_time = response.headers.get("RateLimit-Reset", "unknown")
+        remaining_str = response.headers.get("RateLimit-Remaining", "unknown")
 
-        # Parse remaining count robustly
-        try:
-            remaining = int(float(remaining_str.strip()))
-        except (ValueError, TypeError):
-            # Can't parse - treat as rate limited
-            remaining = 0
+        context = f" for {owner}/{repo}" if owner and repo else ""
+        repo_id = f"{owner}/{repo}" if owner and repo else None
 
-        if remaining == 0:
-            reset_time = response.headers.get("RateLimit-Reset", "unknown")
-            context = f" for {owner}/{repo}" if owner and repo else ""
-            repo_id = f"{owner}/{repo}" if owner and repo else None
-            logger.warning(
-                f"GitLab API rate limit exceeded{context}",
-                extra={"repo_id": repo_id, "reset_time": reset_time},
-            )
-            raise ValueError(
-                f"GitLab API rate limit exceeded. Resets at {reset_time}. "
-                "Wait or use a different token."
-            )
+        logger.warning(
+            f"GitLab API rate limit exceeded{context}",
+            extra={
+                "repo_id": repo_id,
+                "reset_time": reset_time,
+                "remaining": remaining_str,
+            },
+        )
+
+        raise ValueError(
+            f"GitLab API rate limit exceeded. "
+            f"Remaining: {remaining_str}, Resets at {reset_time}. "
+            "Wait or use a different token."
+        )
 
     # ===== Repository Methods =====
 

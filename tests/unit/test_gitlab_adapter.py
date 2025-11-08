@@ -782,6 +782,38 @@ async def test_rate_limit_detection():
         await adapter.close()
 
 
+@pytest.mark.asyncio
+@respx.mock
+async def test_rate_limit_always_raises_on_429_even_with_invalid_headers():
+    """Test that 429 status always raises error, even with malformed headers.
+
+    Edge case: GitLab might return 429 with RateLimit-Remaining != 0 or
+    with malformed/missing headers. We should always raise on 429.
+    """
+    from drep.adapters.gitlab import GitLabAdapter
+
+    # Mock 429 with non-zero remaining (shouldn't happen, but handle it)
+    respx.get("https://gitlab.com/api/v4/projects/owner%2Frepo").mock(
+        return_value=httpx.Response(
+            429,
+            headers={
+                "RateLimit-Remaining": "5",  # Non-zero!
+                "RateLimit-Reset": "1234567890",
+            },
+            text="Rate limit exceeded",
+        )
+    )
+
+    adapter = GitLabAdapter("glpat_token")
+
+    try:
+        # Should raise even though RateLimit-Remaining is not 0
+        with pytest.raises(ValueError, match="GitLab API rate limit exceeded"):
+            await adapter.get_default_branch("owner", "repo")
+    finally:
+        await adapter.close()
+
+
 # ===== Timeout Tests =====
 
 
