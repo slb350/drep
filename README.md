@@ -463,8 +463,9 @@ pytest tests/unit/test_adapters.py
 
 See **[docs/roadmap.md](docs/roadmap.md)** for the complete development roadmap with priorities, timelines, and contribution opportunities.
 
-### Current Status (v0.1.0)
+### Current Status (v0.1.0+)
 - ✅ Gitea adapter with full PR review support
+- ✅ GitHub adapter with issue creation and PR review (CLI integration in progress)
 - ✅ LLM-powered code quality analysis (Python)
 - ✅ Intelligent caching (80%+ hit rate)
 - ✅ Circuit breaker & rate limiting
@@ -481,8 +482,10 @@ See **[docs/roadmap.md](docs/roadmap.md)** for the complete development roadmap 
 - E2E integration tests, API documentation, dependency injection
 - 18 new tests added, 411 total tests passing
 
-**🚀 Phase 3: Platform Expansion** (Sprint 5-8)
-- GitHub and GitLab adapter support
+**🚀 Phase 3: Platform Expansion** (Sprint 5-8) - IN PROGRESS
+- ✅ Phase 3.1: GitHub adapter (API complete, 51 unit + 5 integration tests)
+- 🚧 Phase 3.2: CLI integration for GitHub repository scanning
+- 🔜 Phase 3.3: GitLab adapter support
 
 **🌟 Phase 4: Feature Expansion** (Sprint 9-12)
 - Multi-language support (JavaScript, TypeScript, Go, Rust)
@@ -501,11 +504,14 @@ See **[docs/roadmap.md](docs/roadmap.md)** for the complete development roadmap 
 | **Docstring suggestions (Python)** | ✅ | ❌ | ❌ | ❌ |
 | **Gitea PR reviews** | ✅ | ❌ | ❌ | ❌ |
 | **Local LLM** | ✅ | ❌ | Partial | Partial |
-| **Gitea support** | ✅ | ❌ | ❌ | ❌ |
+| **Gitea support** | ✅ Full | ❌ | ❌ | ❌ |
+| **GitHub support** | ⚠️ API only* | ✅ | ✅ | ✅ |
+| **GitLab support** | 🚧 Planned | ✅ | ✅ | ✅ |
 | **Draft PR automation** | 🚧 Planned | ❌ | ❌ | ❌ |
-| **GitHub/GitLab support** | 🚧 Planned | ✅ | ✅ | ✅ |
 
-**Key Differentiator**: drep focuses on local, privacy-preserving analysis with docstring intelligence and PR reviews powered by your own LLM. Broader platform and language support is in progress.
+\* GitHub adapter complete with issue creation and PR reviews. CLI integration for repository scanning in progress.
+
+**Key Differentiator**: drep focuses on local, privacy-preserving analysis with docstring intelligence and PR reviews powered by your own LLM. GitHub CLI integration and GitLab support are in active development.
 
 ## Contributing
 

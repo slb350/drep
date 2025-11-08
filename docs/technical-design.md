@@ -1,8 +1,18 @@
 # Technical Design: drep
 
-**Document Version:** 3.1
-**Last Updated:** 2025-11-07
+**Document Version:** 3.2
+**Last Updated:** 2025-11-08
 **Status:** Phase 1 & 2 Complete, Phase 3.1 (GitHub Adapter) Complete
+
+## Recent Updates
+
+**v3.2 (2025-11-08):**
+- Phase 3.1 GitHub Adapter implementation completed
+- 51 unit tests + 5 integration tests (all passing)
+- Full BaseAdapter compliance with all 7 abstract methods
+- Comprehensive error handling, rate limiting, and logging
+- CLI validation added to prevent GitHub-only config errors
+- P1 bug fix: Guard against missing Gitea configuration
 
 ---
 
@@ -308,6 +318,17 @@ class GiteaAdapter:
 ---
 
 ### 2. GitHub Adapter
+
+**Status:** ✅ IMPLEMENTED (Phase 3.1 - November 2025)
+
+See `drep/adapters/github.py` for the complete production implementation with:
+- 51 unit tests covering all methods and edge cases
+- 5 integration tests against real GitHub API
+- Comprehensive error handling and logging
+- Rate limit detection and reporting
+- Robust base64 and JSON parsing
+
+Below is the original design specification (actual implementation may have improvements):
 
 ```python
 import httpx
@@ -1133,8 +1154,46 @@ MVP is complete when:
 - **Deliverables:** `tests/integration/`, `docs/api/`, dependency injection support
 - **Tests:** 18 new tests added, 411 total tests passing
 
-### Phase 3: Platform Expansion (Sprint 5-8)
-- GitHub adapter implementation
+### Phase 3: Platform Expansion (Sprint 5-8) - IN PROGRESS
+**Phase 3.1: GitHub Adapter** ✅ COMPLETE (2025-11-08)
+- Complete GitHub REST API v3 adapter implementation
+- All 7 BaseAdapter abstract methods implemented:
+  - `create_issue()` - Create issues with labels
+  - `get_pr()` - Fetch pull request details
+  - `get_pr_diff()` - Get PR diff using media type negotiation
+  - `create_pr_comment()` - Post general PR comments
+  - `post_review_comment()` - Post line-specific review comments
+  - `get_file_content()` - Fetch file content (base64 decoded)
+  - `close()` - Clean HTTP client shutdown
+- Comprehensive error handling:
+  - Network timeout and connection failure detection
+  - Rate limit detection with X-RateLimit headers
+  - JSON validation and required field checking
+  - Base64 decode error handling
+  - Proper exception propagation (KeyboardInterrupt, SystemExit, asyncio.CancelledError)
+- Robust implementation:
+  - Helper method for rate limit checking (DRY principle)
+  - Detailed structured logging with context
+  - Input validation in constructor
+  - Empty file vs missing field disambiguation
+- Test coverage:
+  - 51 unit tests with respx mocking
+  - 5 integration tests against real GitHub API (slb350/drep-test)
+  - Edge cases: Unicode, whitespace, malformed responses, rate limits
+- CLI validation:
+  - Guards against GitHub-only configurations
+  - Clear error messages explaining current limitations
+  - Graceful degradation with helpful guidance
+- **Deliverables:** `drep/adapters/github.py`, comprehensive test suite, integration tests
+- **Tests:** 56 new tests added, 466 total tests passing
+
+**Phase 3.2: CLI Integration for GitHub** (Next)
+- Implement `get_default_branch()` for GitHub adapter
+- Support GitHub repository cloning in scan workflow
+- Support GitHub PR review in review workflow
+- Update CLI to detect and use appropriate adapter
+
+**Phase 3.3: GitLab Adapter** (Planned)
 - GitLab adapter implementation
 - Cross-platform testing and validation
 - Webhook support for all platforms
