@@ -1,10 +1,16 @@
 # Technical Design: drep
 
-**Document Version:** 3.5
+**Document Version:** 3.6
 **Last Updated:** 2025-11-08
 **Status:** Phase 1 & 2 Complete, Phase 3.1, 3.2, & 3.3 Complete, Phase 3.4 Planned
 
 ## Recent Updates
+
+**v3.6 (2025-11-08):**
+- Added Homebrew distribution via custom tap
+- Created homebrew-drep repository at slb350/homebrew-drep
+- Formula installation: `brew tap slb350/drep && brew install drep-ai`
+- Supports macOS and Linux via Homebrew package manager
 
 **v3.5 (2025-11-08):**
 - Phase 3.3 AWS Bedrock LLM Provider completed
@@ -1147,6 +1153,43 @@ drep scan user/drep
 # ✓ Scan complete
 # Created 12 issues on Gitea
 ```
+
+---
+
+## Distribution
+
+drep is distributed through multiple channels to accommodate different user preferences:
+
+### PyPI Package
+- **Package Name:** `drep-ai` (PyPI), `drep` (repository)
+- **Installation:** `pip install drep-ai`
+- **URL:** https://pypi.org/project/drep-ai/
+- **Note:** Package name is `drep-ai` on PyPI (original `drep` name taken), but command remains `drep`
+
+### Homebrew Tap
+- **Repository:** https://github.com/slb350/homebrew-drep
+- **Installation:**
+  ```bash
+  brew tap slb350/drep
+  brew install drep-ai
+  ```
+- **Platforms:** macOS, Linux
+- **Formula:** Ruby-based Homebrew formula with Python virtualenv
+- **Benefits:**
+  - System-level package management
+  - Automatic dependency handling
+  - Easy updates via `brew upgrade`
+
+### Docker Image
+- **Registry:** GitHub Container Registry (ghcr.io)
+- **Image:** `ghcr.io/slb350/drep:latest`
+- **Installation:** `docker pull ghcr.io/slb350/drep:latest`
+- **Automated:** Built and pushed via GitHub Actions on releases
+
+### Source Installation
+- **Repository:** https://github.com/slb350/drep
+- **Installation:** `pip install -e ".[dev]"`
+- **For:** Development, testing, contributions
 
 ---
 

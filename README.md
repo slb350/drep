@@ -152,7 +152,13 @@ By Analyzer:
 
 ### Installation
 
-#### Via pip (Recommended)
+#### Via Homebrew (macOS/Linux)
+```bash
+brew tap slb350/drep
+brew install drep-ai
+```
+
+#### Via pip
 ```bash
 pip install drep-ai
 ```
