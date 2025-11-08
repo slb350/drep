@@ -1088,3 +1088,26 @@ async def test_check_rate_limit_invalid_header_value():
     adapter._check_rate_limit(response, "owner", "repo")
 
     await adapter.close()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_get_file_content_missing_content_field():
+    """Test get_file_content() validates 'content' field exists in API response."""
+    from drep.adapters.github import GitHubAdapter
+
+    # API response missing 'content' field (malformed response)
+    respx.get("https://api.github.com/repos/owner/repo/contents/test.py").mock(
+        return_value=httpx.Response(
+            200,
+            json={"name": "test.py", "path": "test.py", "type": "file"}  # Missing 'content'
+        )
+    )
+
+    adapter = GitHubAdapter("ghp_token")
+
+    try:
+        with pytest.raises(ValueError, match="missing 'content' field"):
+            await adapter.get_file_content("owner", "repo", "test.py", "main")
+    finally:
+        await adapter.close()

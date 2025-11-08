@@ -654,11 +654,21 @@ class GitHubAdapter(BaseAdapter):
                     f"{response.text[:200]}"
                 )
 
-            # GitHub returns base64-encoded content
-            content = data.get("content", "")
+            # GitHub returns base64-encoded content - validate field exists
+            if "content" not in data:
+                logger.error(
+                    f"GitHub API response missing 'content' field for {file_path} in {owner}/{repo}",
+                    extra={"repo_id": f"{owner}/{repo}", "file_path": file_path, "ref": ref, "response": data}
+                )
+                raise ValueError(
+                    f"GitHub API response missing 'content' field for {file_path} in {owner}/{repo}@{ref}. "
+                    "API response may be malformed."
+                )
 
-            if not content:
-                # Empty file
+            content = data["content"]
+
+            # Empty file - valid case
+            if not content or content.strip() == "":
                 logger.debug(
                     f"Retrieved empty file {file_path} from {owner}/{repo}@{ref}",
                     extra={"repo_id": f"{owner}/{repo}", "file_path": file_path, "ref": ref},
