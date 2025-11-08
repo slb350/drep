@@ -258,6 +258,9 @@ class BedrockClient:
                 logger.error("Bedrock response missing 'body' field")
                 raise ValueError("Invalid Bedrock response: missing 'body' field")
             finally:
+                # Only close if body_stream was successfully assigned.
+                # KeyError on response["body"] means it never enters locals(),
+                # preventing NameError on body_stream.close()
                 if "body_stream" in locals():
                     body_stream.close()  # Always close the StreamingBody
 
@@ -290,11 +293,6 @@ class BedrockClient:
             # Provide user-friendly error message
             user_message = ERROR_MESSAGES.get(error_code, error_message)
             raise Exception(f"Bedrock request failed: {user_message}") from e
-
-        except json.JSONDecodeError as e:
-            # Already handled above, but catch explicitly for clarity
-            logger.error(f"Failed to parse Bedrock response as JSON: {e}")
-            raise ValueError(f"Bedrock returned invalid JSON: {e}") from e
 
         except (KeyError, AttributeError) as e:
             # Response structure errors

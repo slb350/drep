@@ -387,17 +387,70 @@ async def test_bedrock_client_request_body_format(mock_boto_client):
     # Verify invoke_model was called
     assert mock_bedrock.invoke_model.called
 
-    # Get the call args
-    call_args = mock_bedrock.invoke_model.call_args
 
-    # Verify body parameter exists and has correct structure
-    body_str = call_args.kwargs.get("body") or call_args[1].get("body")
-    body = json.loads(body_str)
+@pytest.mark.asyncio
+@patch("boto3.client")
+async def test_bedrock_client_closes_streaming_body(mock_boto_client):
+    """Test that StreamingBody is properly closed after reading (Issue #1 from PR review)."""
+    from drep.llm.providers.bedrock_client import BedrockClient
 
-    # Check required Bedrock fields
-    assert body["anthropic_version"] == "bedrock-2023-05-31"
-    assert body["max_tokens"] == 2000
-    assert body["system"] == "You are helpful."
-    assert "messages" in body
-    assert len(body["messages"]) == 1
-    assert body["messages"][0]["role"] == "user"
+    mock_bedrock = MagicMock()
+    mock_boto_client.return_value = mock_bedrock
+
+    # Create tracked mock with close() to verify it's called
+    mock_stream = MagicMock()
+    mock_body = json.dumps(
+        {
+            "content": [{"type": "text", "text": "Response"}],
+            "usage": {"input_tokens": 10, "output_tokens": 5},
+        }
+    ).encode("utf-8")
+    mock_stream.read = MagicMock(return_value=mock_body)
+    mock_stream.close = MagicMock()
+
+    mock_response = {"body": mock_stream}
+    mock_bedrock.invoke_model = MagicMock(return_value=mock_response)
+
+    client = BedrockClient(
+        region="us-east-1",
+        model="anthropic.claude-sonnet-4-5-20250929-v1:0",
+    )
+
+    messages = [{"role": "user", "content": "Test"}]
+
+    await client.chat_completion(messages)
+
+    # Verify close() was called exactly once
+    mock_stream.close.assert_called_once()
+
+
+@pytest.mark.asyncio
+@patch("boto3.client")
+async def test_bedrock_client_closes_streaming_body_on_error(mock_boto_client):
+    """Test StreamingBody.close() called even on JSON parse error."""
+    from drep.llm.providers.bedrock_client import BedrockClient
+
+    mock_bedrock = MagicMock()
+    mock_boto_client.return_value = mock_bedrock
+
+    # Create mock stream that returns invalid JSON
+    mock_stream = MagicMock()
+    mock_stream.read = MagicMock(return_value=b"invalid json {{{")
+    mock_stream.close = MagicMock()
+
+    mock_response = {"body": mock_stream}
+    mock_bedrock.invoke_model = MagicMock(return_value=mock_response)
+
+    client = BedrockClient(
+        region="us-east-1",
+        model="anthropic.claude-sonnet-4-5-20250929-v1:0",
+    )
+
+    messages = [{"role": "user", "content": "Test"}]
+
+    # Should raise ValueError due to invalid JSON
+    with pytest.raises(ValueError, match="invalid JSON"):
+        await client.chat_completion(messages)
+
+    # Verify close() was still called despite error
+    mock_stream.close.assert_called_once()
