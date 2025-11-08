@@ -17,10 +17,32 @@ class GitHubAdapter(BaseAdapter):
 
     Uses GitHub REST API v3 for all operations. GitHub has different API
     patterns compared to Gitea:
-    - Authentication: Bearer token instead of token
-    - Labels: Use names directly (not IDs)
-    - Review comments: Different endpoint structure
-    - Line numbers: Uses line + side instead of position
+
+    Authentication:
+        - GitHub: 'Authorization: Bearer {token}' header
+        - Gitea: 'Authorization: token {token}' header
+
+    Labels:
+        - GitHub: Use label names directly (strings)
+        - Gitea: Translate names to integer IDs via label cache
+
+    Review Comments:
+        - GitHub: Uses 'line' + 'side' (LEFT/RIGHT) fields
+        - Gitea: Uses 'new_position' or 'position' fields (multi-version support)
+
+    PR Diff Format:
+        - GitHub: Accept header negotiation (application/vnd.github.v3.diff)
+        - Gitea: Direct diff endpoint
+
+    Limitations:
+        - get_file_content() only supports UTF-8 text files
+        - Binary files will raise ValueError
+        - Review comments only support added lines (side="RIGHT"), not deleted lines
+
+    Design Notes:
+        - Constructor parameter order (token, url) differs from GiteaAdapter (url, token)
+        - GitHub.com default URL makes token-first more ergonomic for common case
+        - Consider standardizing across adapters in future if this causes confusion
     """
 
     def __init__(self, token: str, url: str = "https://api.github.com"):
