@@ -39,14 +39,16 @@ def temp_config_file(tmp_path):
 class TestInitCommand:
     """Tests for drep init command."""
 
-    def test_init_creates_config_file(self, runner, tmp_path):
-        """Test that init command creates config.yaml."""
+    def test_init_creates_config_file_minimal(self, runner, tmp_path):
+        """Test that init command creates config.yaml with minimal setup."""
         # Run in temp directory
         with runner.isolated_filesystem(temp_dir=tmp_path):
-            result = runner.invoke(cli, ["init"])
+            # Provide inputs: platform=gitea, url=default, repos=default, llm=no, docs=yes, no markdown, no dict, db=default
+            inputs = "gitea\n\n\nn\ny\nn\nn\nn\n"
+            result = runner.invoke(cli, ["init"], input=inputs)
 
             assert result.exit_code == 0
-            assert "✓ Created config.yaml" in result.output
+            assert "✓ Configuration created successfully!" in result.output
             assert Path("config.yaml").exists()
 
             # Check content
@@ -54,6 +56,63 @@ class TestInitCommand:
             assert "gitea:" in config_content
             assert "${GITEA_TOKEN}" in config_content
             assert "documentation:" in config_content
+            # LLM section should not be present when disabled
+            assert "llm:" not in config_content
+
+    def test_init_creates_github_config(self, runner, tmp_path):
+        """Test that init command creates GitHub config."""
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            # Inputs: platform=github, not enterprise, repos=default, llm=no, docs=yes, no markdown, no dict, db=default
+            inputs = "github\nn\n\nn\ny\nn\nn\nn\n"
+            result = runner.invoke(cli, ["init"], input=inputs)
+
+            assert result.exit_code == 0
+            config_content = Path("config.yaml").read_text()
+            assert "github:" in config_content
+            assert "${GITHUB_TOKEN}" in config_content
+
+    def test_init_with_llm_openai_compatible(self, runner, tmp_path):
+        """Test init with OpenAI-compatible LLM provider."""
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            # Inputs: gitea, url, repos, llm=yes, provider=openai-compatible, endpoint, model, no api key, no advanced, no cache, docs=yes, no markdown, no dict, db
+            inputs = "gitea\n\n\ny\nopenai-compatible\n\n\nn\nn\nn\ny\nn\nn\nn\n"
+            result = runner.invoke(cli, ["init"], input=inputs)
+
+            assert result.exit_code == 0
+            config_content = Path("config.yaml").read_text()
+            assert "llm:" in config_content
+            assert "enabled: true" in config_content
+            assert "provider: openai-compatible" in config_content
+            assert "endpoint: http://localhost:1234/v1" in config_content
+            assert "model: qwen3-30b-a3b" in config_content
+
+    def test_init_with_llm_bedrock(self, runner, tmp_path):
+        """Test init with AWS Bedrock provider."""
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            # Inputs: github, not enterprise, repos, llm=yes, provider=bedrock, region, model, no advanced, no cache, docs, no markdown, no dict, db
+            inputs = "github\nn\n\ny\nbedrock\n\n\nn\nn\ny\nn\nn\nn\n"
+            result = runner.invoke(cli, ["init"], input=inputs)
+
+            assert result.exit_code == 0
+            config_content = Path("config.yaml").read_text()
+            assert "llm:" in config_content
+            assert "provider: bedrock" in config_content
+            assert "bedrock:" in config_content
+            assert "region: us-east-1" in config_content
+            assert "anthropic.claude-sonnet-4-5-20250929-v1:0" in config_content
+
+    def test_init_with_llm_anthropic(self, runner, tmp_path):
+        """Test init with Anthropic provider."""
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            # Inputs: gitea, url, repos, llm=yes, provider=anthropic, model, no advanced, no cache, docs, no markdown, no dict, db
+            inputs = "gitea\n\n\ny\nanthropic\n\nn\nn\ny\nn\nn\nn\n"
+            result = runner.invoke(cli, ["init"], input=inputs)
+
+            assert result.exit_code == 0
+            config_content = Path("config.yaml").read_text()
+            assert "provider: anthropic" in config_content
+            assert "api_key: ${ANTHROPIC_API_KEY}" in config_content
+            assert "model: claude-sonnet-4-5-20250929" in config_content
 
     def test_init_prompts_on_existing_file(self, runner, tmp_path):
         """Test that init prompts before overwriting existing file."""
@@ -76,11 +135,12 @@ class TestInitCommand:
             # Create existing config
             Path("config.yaml").write_text("existing: config")
 
-            # Run init and confirm
-            result = runner.invoke(cli, ["init"], input="y\n")
+            # Run init and confirm, then provide minimal inputs
+            inputs = "y\ngitea\n\n\nn\ny\nn\nn\nn\n"
+            result = runner.invoke(cli, ["init"], input=inputs)
 
             assert result.exit_code == 0
-            assert "✓ Created config.yaml" in result.output
+            assert "✓ Configuration created successfully!" in result.output
 
             # Verify new content
             config_content = Path("config.yaml").read_text()
@@ -90,7 +150,9 @@ class TestInitCommand:
     def test_init_template_structure(self, runner, tmp_path):
         """Test that init creates valid YAML template."""
         with runner.isolated_filesystem(temp_dir=tmp_path):
-            result = runner.invoke(cli, ["init"])
+            # Minimal inputs
+            inputs = "gitea\n\n\nn\ny\nn\nn\nn\n"
+            result = runner.invoke(cli, ["init"], input=inputs)
 
             assert result.exit_code == 0
 
@@ -105,6 +167,46 @@ class TestInitCommand:
             assert "enabled" in config["documentation"]
             assert "custom_dictionary" in config["documentation"]
             assert "database_url" in config
+            # LLM should not be in config when disabled
+            assert "llm" not in config
+
+    def test_init_with_custom_repositories(self, runner, tmp_path):
+        """Test init with custom repository configuration."""
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            # Inputs: gitea, url, custom repos, llm=no, docs, no markdown, no dict, db
+            inputs = "gitea\n\nowner/repo1, owner/repo2\nn\ny\nn\nn\nn\n"
+            result = runner.invoke(cli, ["init"], input=inputs)
+
+            assert result.exit_code == 0
+            config = yaml.safe_load(Path("config.yaml").read_text())
+            assert "owner/repo1" in config["gitea"]["repositories"]
+            assert "owner/repo2" in config["gitea"]["repositories"]
+
+    def test_init_with_documentation_options(self, runner, tmp_path):
+        """Test init with documentation configuration."""
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            # Inputs: gitea, url, repos, llm=no, docs=yes, markdown=yes, dict=yes, words, db
+            inputs = "gitea\n\n\nn\ny\ny\ny\nfoo,bar,baz\nn\n"
+            result = runner.invoke(cli, ["init"], input=inputs)
+
+            assert result.exit_code == 0
+            config = yaml.safe_load(Path("config.yaml").read_text())
+            assert config["documentation"]["enabled"] is True
+            assert config["documentation"]["markdown_checks"] is True
+            assert "foo" in config["documentation"]["custom_dictionary"]
+            assert "bar" in config["documentation"]["custom_dictionary"]
+            assert "baz" in config["documentation"]["custom_dictionary"]
+
+    def test_init_validates_config(self, runner, tmp_path):
+        """Test that init validates the created config."""
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            # Minimal valid inputs
+            inputs = "gitea\n\n\nn\ny\nn\nn\nn\n"
+            result = runner.invoke(cli, ["init"], input=inputs)
+
+            assert result.exit_code == 0
+            assert "Validating configuration..." in result.output
+            assert "✓ Configuration structure is valid!" in result.output
 
 
 class TestScanCommand:
