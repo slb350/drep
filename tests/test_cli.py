@@ -43,7 +43,8 @@ class TestInitCommand:
         """Test that init command creates config.yaml."""
         # Run in temp directory
         with runner.isolated_filesystem(temp_dir=tmp_path):
-            result = runner.invoke(cli, ["init"])
+            # Provide "gitea" as platform choice
+            result = runner.invoke(cli, ["init"], input="gitea\n")
 
             assert result.exit_code == 0
             assert "✓ Created config.yaml" in result.output
@@ -76,8 +77,8 @@ class TestInitCommand:
             # Create existing config
             Path("config.yaml").write_text("existing: config")
 
-            # Run init and confirm
-            result = runner.invoke(cli, ["init"], input="y\n")
+            # Run init and confirm (y for overwrite, gitea for platform)
+            result = runner.invoke(cli, ["init"], input="y\ngitea\n")
 
             assert result.exit_code == 0
             assert "✓ Created config.yaml" in result.output
@@ -90,7 +91,8 @@ class TestInitCommand:
     def test_init_template_structure(self, runner, tmp_path):
         """Test that init creates valid YAML template."""
         with runner.isolated_filesystem(temp_dir=tmp_path):
-            result = runner.invoke(cli, ["init"])
+            # Provide "gitea" as platform choice
+            result = runner.invoke(cli, ["init"], input="gitea\n")
 
             assert result.exit_code == 0
 
