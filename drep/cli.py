@@ -6,7 +6,9 @@ import tempfile
 from pathlib import Path
 
 import click
+import yaml
 from git import Repo
+from pydantic import ValidationError
 
 from drep.adapters.gitea import GiteaAdapter
 from drep.config import load_config
@@ -622,9 +624,17 @@ async def _run_check(path: str, staged: bool, config_path: str, output_format: s
     if config_path:
         try:
             config = load_config(config_path, require_platform=False)
-        except Exception as e:
-            click.echo(f"Error loading config: {e}", err=True)
+        except FileNotFoundError:
+            click.echo(f"Error: Config file not found: {config_path}", err=True)
             raise SystemExit(1)
+        except yaml.YAMLError as e:
+            click.echo(f"Error: Invalid YAML in {config_path}\n{e}", err=True)
+            raise SystemExit(1)
+        except ValidationError as e:
+            click.echo(f"Error: Configuration validation failed\n{e}", err=True)
+            raise SystemExit(1)
+        # DO NOT CATCH: KeyboardInterrupt, SystemExit, ImportError
+        # These should propagate to allow proper termination and debugging
     else:
         # Create minimal config for local-only mode
         from drep.models.config import Config

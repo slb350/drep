@@ -803,3 +803,42 @@ class TestCheckCommand:
                 assert result.exit_code == 0
                 # If --staged was passed, Repo.index.diff should have been called
                 assert mock_repo.return_value.index.diff.called or result.exit_code == 0
+
+    def test_check_handles_missing_config_file(self, runner, tmp_path):
+        """Test that check handles missing config file gracefully."""
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            result = runner.invoke(cli, ["check", ".", "--config", "nonexistent.yaml"])
+
+            assert result.exit_code == 1
+            assert "Config file not found" in result.output or "not found" in result.output.lower()
+
+    def test_check_handles_malformed_yaml(self, runner, tmp_path):
+        """Test that check handles malformed YAML gracefully."""
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            # Create malformed YAML
+            config_path = Path("bad.yaml")
+            config_path.write_text("invalid: yaml: content: [\n  - unclosed")
+
+            result = runner.invoke(cli, ["check", ".", "--config", "bad.yaml"])
+
+            assert result.exit_code == 1
+            assert "YAML" in result.output or "yaml" in result.output.lower()
+
+    def test_check_handles_invalid_config_validation(self, runner, tmp_path):
+        """Test that check handles Pydantic validation errors gracefully."""
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            # Create config with invalid LLM endpoint format
+            config_path = Path("invalid.yaml")
+            config_data = {
+                "llm": {
+                    "enabled": True,
+                    "endpoint": "not-a-url",  # Invalid URL format
+                    "model": "test",
+                }
+            }
+            config_path.write_text(yaml.dump(config_data))
+
+            result = runner.invoke(cli, ["check", ".", "--config", "invalid.yaml"])
+
+            assert result.exit_code == 1
+            assert "validation" in result.output.lower() or "invalid" in result.output.lower()
