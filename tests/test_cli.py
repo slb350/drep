@@ -165,6 +165,28 @@ class TestScanCommand:
             assert "Config file not found" in result.output
             assert "drep init" in result.output
 
+    def test_scan_rejects_github_only_config(self, runner):
+        """Test that scan rejects GitHub-only configuration (Gitea required)."""
+        from drep.models.config import Config, GitHubConfig
+        from pydantic import SecretStr
+
+        # Create GitHub-only config (no Gitea)
+        github_config = Config(
+            github=GitHubConfig(
+                token=SecretStr("ghp_test"),
+                repositories=["owner/*"]
+            )
+        )
+
+        with patch("drep.cli.load_config") as mock_load:
+            mock_load.return_value = github_config
+
+            result = runner.invoke(cli, ["scan", "owner/repo"])
+
+            assert result.exit_code == 1  # click.Abort()
+            assert "requires Gitea configuration" in result.output
+            assert "GitHub support for repository scanning is not yet implemented" in result.output
+
 
 class TestScanWorkflow:
     """Tests for scan workflow integration."""
@@ -192,7 +214,8 @@ class TestScanWorkflow:
         # Setup mocks
         config = MagicMock()
         config.gitea.url = "http://test"
-        config.gitea.token = "test-token"
+        from pydantic import SecretStr
+        config.gitea.token = SecretStr("test-token")
         config.documentation = MagicMock()
         config.database_url = "sqlite:///./test.db"
         mock_load_config.return_value = config

@@ -1,7 +1,5 @@
 """Tests ensuring LLMClient prefers open-agent-sdk when available."""
 
-from unittest.mock import AsyncMock, MagicMock
-
 import pytest
 
 from drep.llm.client import LLMClient

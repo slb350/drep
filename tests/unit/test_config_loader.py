@@ -53,7 +53,7 @@ def test_load_config_basic(config_file):
     config = load_config(str(config_file))
 
     assert config.gitea.url == "http://192.168.1.14:3000"
-    assert config.gitea.token == "test_token_123"
+    assert config.gitea.token.get_secret_value() == "test_token_123"
     assert config.gitea.repositories == ["steve/*", "steve/drep"]
     assert config.documentation.enabled is True
     assert config.documentation.custom_dictionary == ["asyncio", "gitea"]
@@ -72,7 +72,7 @@ def test_load_config_with_env_vars(config_with_env_vars):
         config = load_config(str(config_with_env_vars))
 
         assert config.gitea.url == "http://test.com:3000"
-        assert config.gitea.token == "secret_token_456"
+        assert config.gitea.token.get_secret_value() == "secret_token_456"
     finally:
         # Clean up
         del os.environ["GITEA_URL"]
@@ -91,7 +91,7 @@ def test_load_config_env_var_not_set(config_with_env_vars):
 
     # Should remain as ${VAR_NAME} if not set
     assert config.gitea.url == "${GITEA_URL}"
-    assert config.gitea.token == "${GITEA_TOKEN}"
+    assert config.gitea.token.get_secret_value() == "${GITEA_TOKEN}"
 
 
 def test_load_config_file_not_found():
@@ -167,9 +167,12 @@ def test_load_config_documentation_defaults(tmp_path):
 """
     config_path.write_text(config_content)
 
-    # Should raise ValidationError because documentation is required
-    with pytest.raises(ValidationError):
-        load_config(str(config_path))
+    # Documentation is optional with defaults, so this should succeed
+    config = load_config(str(config_path))
+
+    # Verify documentation defaults are used
+    assert config.documentation.enabled is True
+    assert config.documentation.custom_dictionary == []
 
 
 def test_load_config_complex_env_vars(tmp_path):
@@ -203,7 +206,7 @@ database_url: ${DATABASE_URL}
         config = load_config(str(config_path))
 
         assert config.gitea.url == "http://test.com"
-        assert config.gitea.token == "token123"
+        assert config.gitea.token.get_secret_value() == "token123"
         assert config.gitea.repositories == ["steve/*"]
         assert config.documentation.custom_dictionary == ["pytest"]
         assert config.database_url == "sqlite:///test.db"
@@ -320,7 +323,7 @@ documentation:
 
         # Should succeed and substitute correctly
         assert config.gitea.url == "http://test.com:3000"
-        assert config.gitea.token == "test_token"
+        assert config.gitea.token.get_secret_value() == "test_token"
     finally:
         del os.environ["GITEA_URL"]
         del os.environ["GITEA_TOKEN"]
@@ -339,7 +342,7 @@ def test_load_config_non_strict_mode_allows_missing_env_vars(config_with_env_var
 
     # Placeholders remain
     assert config.gitea.url == "${GITEA_URL}"
-    assert config.gitea.token == "${GITEA_TOKEN}"
+    assert config.gitea.token.get_secret_value() == "${GITEA_TOKEN}"
 
 
 def test_load_config_strict_mode_partial_substitution(tmp_path):

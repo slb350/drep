@@ -87,6 +87,9 @@ def scan(repository, config, show_metrics, show_progress):
         # Run async scan
         asyncio.run(_run_scan(owner, repo_name, config, show_metrics, show_progress))
         click.echo("✓ Scan complete")
+    except click.Abort:
+        # Re-raise to let Click handle the abort (already displayed error message)
+        raise
     except FileNotFoundError:
         click.echo(f"Config file not found: {config}", err=True)
         click.echo("Run 'drep init' to create a config file.", err=True)
@@ -113,8 +116,19 @@ async def _run_scan(
     # Load config
     config = load_config(config_path)
 
+    # Validate Gitea configuration (required for repository scanning)
+    if config.gitea is None:
+        click.echo(
+            "Error: Repository scanning requires Gitea configuration.\n"
+            "Please add a [gitea] section to your config.yaml.\n\n"
+            "GitHub support for repository scanning is not yet implemented.\n"
+            "Currently, GitHub adapter only supports issue creation and PR reviews.",
+            err=True,
+        )
+        raise click.Abort()
+
     # Initialize components
-    adapter = GiteaAdapter(config.gitea.url, config.gitea.token)
+    adapter = GiteaAdapter(config.gitea.url, config.gitea.token.get_secret_value())
     session = init_database(config.database_url)
     scanner = RepositoryScanner(session, config)  # Pass config for LLM support
     analyzer = DocumentationAnalyzer(config.documentation)
@@ -147,7 +161,7 @@ fi
             **os.environ,
             "GIT_ASKPASS": str(askpass_script),
             "GIT_TERMINAL_PROMPT": "0",
-            "DREP_GIT_TOKEN": config.gitea.token,
+            "DREP_GIT_TOKEN": config.gitea.token.get_secret_value(),
         }
 
         # Repository path
@@ -331,8 +345,19 @@ async def _run_review(
         click.echo("Error: LLM must be enabled in config for PR reviews", err=True)
         return
 
+    # Validate Gitea configuration (required for PR review)
+    if config.gitea is None:
+        click.echo(
+            "Error: PR review requires Gitea configuration.\n"
+            "Please add a [gitea] section to your config.yaml.\n\n"
+            "GitHub PR review support is not yet implemented.\n"
+            "Currently, GitHub adapter only supports issue creation.",
+            err=True,
+        )
+        raise click.Abort()
+
     # Initialize components
-    adapter = GiteaAdapter(config.gitea.url, config.gitea.token)
+    adapter = GiteaAdapter(config.gitea.url, config.gitea.token.get_secret_value())
     scanner = RepositoryScanner(init_database(config.database_url), config, gitea_adapter=adapter)
 
     try:
