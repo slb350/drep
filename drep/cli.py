@@ -199,10 +199,28 @@ async def _run_scan(
             hostname = api_url.replace("https://", "").replace("http://", "").split("/")[0]
             git_url = f"https://{hostname}/{owner}/{repo}.git"
         git_token = config.github.token.get_secret_value()
+    elif config.gitlab is not None:
+        # Use GitLab adapter
+        platform = "gitlab"
+        from drep.adapters.gitlab import GitLabAdapter
+
+        adapter = GitLabAdapter(
+            token=config.gitlab.token.get_secret_value(),
+            url=config.gitlab.url,  # None for GitLab.com, or custom URL
+        )
+        # GitLab git URL format: https://gitlab.com/owner/repo.git
+        # Handle default GitLab.com case (config.gitlab.url is None)
+        if config.gitlab.url is None:
+            git_url = f"https://gitlab.com/{owner}/{repo}.git"
+        else:
+            # Self-hosted GitLab
+            git_url = f"{config.gitlab.url.rstrip('/')}/{owner}/{repo}.git"
+        git_token = config.gitlab.token.get_secret_value()
     else:
         # No platform configured (shouldn't happen - Config validator requires at least one)
         click.echo(
-            "Error: No platform configured. Please add [gitea] or [github] to your config.yaml.",
+            "Error: No platform configured. "
+            "Please add [gitea], [github], or [gitlab] to your config.yaml.",
             err=True,
         )
         raise click.Abort()
@@ -479,10 +497,20 @@ async def _run_review(
             token=config.github.token.get_secret_value(),
             url=str(config.github.url) if config.github.url else "https://api.github.com",
         )
+    elif config.gitlab is not None:
+        # Use GitLab adapter
+        platform = "gitlab"
+        from drep.adapters.gitlab import GitLabAdapter
+
+        adapter = GitLabAdapter(
+            token=config.gitlab.token.get_secret_value(),
+            url=config.gitlab.url,  # None for GitLab.com, or custom URL
+        )
     else:
         # No platform configured (shouldn't happen - Config validator requires at least one)
         click.echo(
-            "Error: No platform configured. Please add [gitea] or [github] to your config.yaml.",
+            "Error: No platform configured. "
+            "Please add [gitea], [github], or [gitlab] to your config.yaml.",
             err=True,
         )
         raise click.Abort()

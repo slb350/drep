@@ -72,7 +72,7 @@
   - **3.2:** GitHub CLI Integration ✅ COMPLETE
   - **3.3:** AWS Bedrock LLM Provider ✅ COMPLETE
   - **3.4:** Anthropic Direct LLM Provider (planned, 3-4 hours)
-  - **3.5:** GitLab Adapter (planned)
+  - **3.5:** GitLab Adapter ✅ **COMPLETE**
 - **Phase 4:** Feature Expansion (Multi-language support, Web UI)
 - **Phase 5:** Advanced Features (Vector database, custom rules, performance)
 
@@ -1361,10 +1361,18 @@ llm:
 - **Deliverables:** `drep/llm/providers/anthropic_client.py`, 8+ tests
 - **See:** [docs/roadmap.md](roadmap.md#34-anthropic-direct-llm-provider) for complete specification
 
-**Phase 3.5: GitLab Adapter** (Planned)
-- GitLab adapter implementation
-- Cross-platform testing and validation
-- Webhook support for all platforms
+**Phase 3.5: GitLab Adapter** ✅ **COMPLETE**
+- ✅ GitLab adapter implementation (1027 lines, full BaseAdapter compliance)
+- ✅ Self-hosted GitLab support + GitLab.com
+- ✅ 35 comprehensive unit tests
+- ✅ CLI integration (scan & review commands)
+- ✅ Webhook support for GitLab merge requests
+- **Key Features:**
+  - URL-encoded project paths (owner%2Frepo)
+  - PRIVATE-TOKEN authentication
+  - Discussions with position objects for inline comments
+  - Base64-encoded file content support
+  - Diff reconstruction from JSON array
 
 ### Phase 4: Feature Expansion (Sprint 9-12)
 - Multi-language support (JavaScript, TypeScript, Go, Rust)
