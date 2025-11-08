@@ -279,7 +279,7 @@ class RepositoryScanner:
             On initial commit (no HEAD exists yet), automatically falls back
             to checking staged files against empty tree.
         """
-        from git.exc import InvalidGitRepositoryError, GitCommandError
+        from git.exc import GitCommandError, InvalidGitRepositoryError
 
         # Validate it's a git repository
         try:
@@ -301,7 +301,7 @@ class RepositoryScanner:
             diff_items = git_repo.index.diff("HEAD")
         except GitCommandError as e:
             if "HEAD" in str(e):
-                logger.warning(f"Repository has no commits yet, checking staged files")
+                logger.warning("Repository has no commits yet, checking staged files")
                 # Fallback for initial commit - compare against empty tree
                 diff_items = git_repo.index.diff(None)
             else:

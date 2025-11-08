@@ -309,13 +309,13 @@ fi
                     result = await analyzer.analyze_file(file_path, content)
                     findings.extend(result.to_findings())
                 except UnicodeDecodeError:
-                    logger.warning(f"Skipping {file_path}: Not valid UTF-8")
+                    click.echo(f"Warning: Skipping {file_path}: Not valid UTF-8", err=True)
                     continue
                 except PermissionError:
-                    logger.error(f"Permission denied: {file_path}")
+                    click.echo(f"Error: Permission denied: {file_path}", err=True)
                     continue
                 except OSError as e:
-                    logger.error(f"Failed to read {file_path}: {e}")
+                    click.echo(f"Error: Failed to read {file_path}: {e}", err=True)
                     continue
 
         # 2. Code quality analysis (LLM-powered)
