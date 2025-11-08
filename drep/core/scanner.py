@@ -254,6 +254,35 @@ class RepositoryScanner:
         # Deduplicate
         return list(set(changed_files))
 
+    def get_staged_files(self, repo_path: str) -> List[str]:
+        """Get staged files from git index (pre-commit workflow).
+
+        Returns only Python (.py) and Markdown (.md) files that are currently
+        staged in the git index. Excludes deleted files.
+
+        Args:
+            repo_path: Path to git repository root
+
+        Returns:
+            List of relative file paths for staged .py and .md files
+
+        Note:
+            This method is designed for pre-commit hooks where you only want
+            to analyze files that are about to be committed.
+        """
+        git_repo = Repo(repo_path)
+        staged_files = []
+
+        # Get diff between HEAD and index (staged changes)
+        for diff_item in git_repo.index.diff("HEAD"):
+            # Use b_path (current file name) not a_path (old name for renames)
+            # b_path is None for deleted files, so we skip those
+            path = diff_item.b_path
+            if path and (path.endswith(".py") or path.endswith(".md")):
+                staged_files.append(path)
+
+        return staged_files
+
     async def analyze_code_quality(
         self,
         repo_path: str,
