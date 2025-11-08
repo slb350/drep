@@ -265,16 +265,50 @@ class RepositoryScanner:
 
         Returns:
             List of relative file paths for staged .py and .md files
+            (relative to repository root). Returns empty list if no
+            matching files staged.
+
+        Raises:
+            ValueError: If repo_path is not a valid git repository
+            RuntimeError: If git operations fail (corrupted index, etc.)
 
         Note:
             This method is designed for pre-commit hooks where you only want
             to analyze files that are about to be committed.
+
+            On initial commit (no HEAD exists yet), automatically falls back
+            to checking staged files against empty tree.
         """
-        git_repo = Repo(repo_path)
+        from git.exc import InvalidGitRepositoryError, GitCommandError
+
+        # Validate it's a git repository
+        try:
+            git_repo = Repo(repo_path)
+        except InvalidGitRepositoryError:
+            logger.error(f"Not a git repository: {repo_path}")
+            raise ValueError(
+                f"Not a git repository: {repo_path}\n"
+                f"drep check --staged requires a git repository.\n"
+                f"Try running 'git init' first or use 'drep check' without --staged."
+            )
+
         staged_files = []
 
         # Get diff between HEAD and index (staged changes)
-        for diff_item in git_repo.index.diff("HEAD"):
+        # Note: This will fail on initial commit (no HEAD exists yet).
+        # We handle this by falling back to diff against None (empty tree).
+        try:
+            diff_items = git_repo.index.diff("HEAD")
+        except GitCommandError as e:
+            if "HEAD" in str(e):
+                logger.warning(f"Repository has no commits yet, checking staged files")
+                # Fallback for initial commit - compare against empty tree
+                diff_items = git_repo.index.diff(None)
+            else:
+                logger.error(f"Git operation failed: {e}")
+                raise RuntimeError(f"Git operation failed: {e}")
+
+        for diff_item in diff_items:
             # Use b_path (current file name) not a_path (old name for renames)
             # b_path is None for deleted files, so we skip those
             path = diff_item.b_path

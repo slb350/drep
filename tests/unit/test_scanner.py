@@ -692,3 +692,72 @@ class TestGetStagedFiles:
             files = scanner.get_staged_files("/fake/path")
 
             assert files == []
+
+    def test_get_staged_files_raises_on_non_git_repository(self):
+        """Test that get_staged_files raises ValueError for non-git directory."""
+        from git.exc import InvalidGitRepositoryError
+
+        db_session = Mock()
+        scanner = RepositoryScanner(db_session)
+
+        with patch("drep.core.scanner.Repo") as mock_repo_class:
+            mock_repo_class.side_effect = InvalidGitRepositoryError("/not/git")
+
+            with pytest.raises(ValueError) as exc_info:
+                scanner.get_staged_files("/not/git")
+
+            assert "Not a git repository" in str(exc_info.value)
+            assert "/not/git" in str(exc_info.value)
+            assert "git init" in str(exc_info.value)
+
+    def test_get_staged_files_handles_initial_commit(self):
+        """Test that get_staged_files handles initial commit (no HEAD)."""
+        from git.exc import GitCommandError
+
+        db_session = Mock()
+        scanner = RepositoryScanner(db_session)
+
+        with patch("drep.core.scanner.Repo") as mock_repo_class:
+            mock_repo = Mock()
+
+            # First call to diff("HEAD") raises GitCommandError for HEAD
+            # Second call to diff(None) returns staged files
+            def diff_side_effect(ref):
+                if ref == "HEAD":
+                    raise GitCommandError("git diff", 128, stderr="unknown revision 'HEAD'")
+                else:
+                    # Return some staged files on fallback
+                    mock_diff_item = Mock()
+                    mock_diff_item.b_path = "new_file.py"
+                    return [mock_diff_item]
+
+            mock_repo.index.diff.side_effect = diff_side_effect
+            mock_repo_class.return_value = mock_repo
+
+            files = scanner.get_staged_files("/fake/path")
+
+            # Should fall back to diff(None) for initial commit
+            assert files == ["new_file.py"]
+            assert mock_repo.index.diff.call_count == 2
+            mock_repo.index.diff.assert_any_call("HEAD")
+            mock_repo.index.diff.assert_any_call(None)
+
+    def test_get_staged_files_raises_on_git_command_error(self):
+        """Test that get_staged_files raises RuntimeError for other git errors."""
+        from git.exc import GitCommandError
+
+        db_session = Mock()
+        scanner = RepositoryScanner(db_session)
+
+        with patch("drep.core.scanner.Repo") as mock_repo_class:
+            mock_repo = Mock()
+            # Git error that's NOT about HEAD
+            mock_repo.index.diff.side_effect = GitCommandError(
+                "git diff", 128, stderr="corrupted index"
+            )
+            mock_repo_class.return_value = mock_repo
+
+            with pytest.raises(RuntimeError) as exc_info:
+                scanner.get_staged_files("/fake/path")
+
+            assert "Git operation failed" in str(exc_info.value)
