@@ -585,7 +585,7 @@ async def test_post_review_comment_missing_diff_refs():
     adapter = GitLabAdapter("glpat_token")
 
     try:
-        with pytest.raises(ValueError, match="missing required 'diff_refs' field"):
+        with pytest.raises(ValueError, match="missing 'diff_refs' field"):
             await adapter.post_review_comment("owner", "repo", 42, "src/main.py", 15, "Comment")
     finally:
         await adapter.close()
@@ -1039,7 +1039,7 @@ async def test_get_pr_diff_invalid_json():
 
     # Return HTML error page instead of JSON
     respx.get(
-        "https://gitlab.com/api/v4/projects/owner%2Frepo/merge_requests/42/changes"
+        "https://gitlab.com/api/v4/projects/owner%2Frepo/merge_requests/42/diffs"
     ).mock(
         return_value=httpx.Response(200, text="<html><body>Error</body></html>")
     )
@@ -1055,21 +1055,21 @@ async def test_get_pr_diff_invalid_json():
 
 @pytest.mark.asyncio
 @respx.mock
-async def test_get_pr_diff_missing_changes():
-    """Test get_pr_diff() validates required fields in response."""
+async def test_get_pr_diff_not_an_array():
+    """Test get_pr_diff() validates response is an array."""
     from drep.adapters.gitlab import GitLabAdapter
 
-    # Response missing 'changes' field
+    # Response is an object instead of array (invalid format)
     respx.get(
-        "https://gitlab.com/api/v4/projects/owner%2Frepo/merge_requests/42/changes"
+        "https://gitlab.com/api/v4/projects/owner%2Frepo/merge_requests/42/diffs"
     ).mock(
-        return_value=httpx.Response(200, json={"iid": 42, "title": "Test MR"})
+        return_value=httpx.Response(200, json={"error": "Invalid response"})
     )
 
     adapter = GitLabAdapter("glpat_token")
 
     try:
-        with pytest.raises(ValueError, match="missing 'changes' field"):
+        with pytest.raises(ValueError, match="expected array"):
             await adapter.get_pr_diff("owner", "repo", 42)
     finally:
         await adapter.close()

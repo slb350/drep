@@ -464,6 +464,36 @@ class GitLabAdapter(BaseAdapter):
                     f"{response.text[:200]}"
                 )
 
+            # Validate required 'diff_refs' field exists
+            if "diff_refs" not in data or data["diff_refs"] is None:
+                logger.error(
+                    f"GitLab response missing 'diff_refs' field for MR !{pr_number} in {owner}/{repo}",
+                    extra={"response": data},
+                )
+                raise ValueError(
+                    f"GitLab API response missing 'diff_refs' field for MR !{pr_number} in {owner}/{repo}"
+                )
+
+            # Validate required fields within diff_refs
+            diff_refs = data["diff_refs"]
+            if "base_sha" not in diff_refs:
+                logger.error(
+                    f"GitLab response missing 'base_sha' in diff_refs for MR !{pr_number} in {owner}/{repo}",
+                    extra={"diff_refs": diff_refs},
+                )
+                raise ValueError(
+                    f"GitLab API response missing 'base_sha' in diff_refs for MR !{pr_number} in {owner}/{repo}"
+                )
+
+            if "head_sha" not in diff_refs:
+                logger.error(
+                    f"GitLab response missing 'head_sha' in diff_refs for MR !{pr_number} in {owner}/{repo}",
+                    extra={"diff_refs": diff_refs},
+                )
+                raise ValueError(
+                    f"GitLab API response missing 'head_sha' in diff_refs for MR !{pr_number} in {owner}/{repo}"
+                )
+
             logger.debug(
                 f"Retrieved MR !{pr_number} from {owner}/{repo}",
                 extra={"repo_id": f"{owner}/{repo}", "mr_iid": pr_number},
@@ -553,6 +583,17 @@ class GitLabAdapter(BaseAdapter):
                 raise ValueError(
                     f"GitLab API returned invalid JSON for {owner}/{repo} MR !{pr_number} diff: "
                     f"{response.text[:200]}"
+                )
+
+            # Validate response is an array (GitLab /diffs endpoint returns array)
+            if not isinstance(diffs, list):
+                logger.error(
+                    f"GitLab API returned non-array response for MR !{pr_number} diff",
+                    extra={"response_type": type(diffs).__name__},
+                )
+                raise ValueError(
+                    f"GitLab API response for {owner}/{repo} MR !{pr_number} diff expected array, "
+                    f"got {type(diffs).__name__}"
                 )
 
             # Reconstruct unified diff from GitLab's JSON array
@@ -666,6 +707,19 @@ class GitLabAdapter(BaseAdapter):
         try:
             response = await self.client.post(url, json=payload)
             response.raise_for_status()
+
+            # Validate JSON response (defensive - ensure GitLab returned valid data)
+            try:
+                response.json()
+            except json.JSONDecodeError:
+                logger.error(
+                    f"GitLab API returned non-JSON response for comment on MR !{pr_number}",
+                    extra={"response_text": response.text[:200]},
+                )
+                raise ValueError(
+                    f"GitLab API returned invalid JSON after posting comment on "
+                    f"MR !{pr_number} in {owner}/{repo}: {response.text[:200]}"
+                )
 
             logger.debug(
                 f"Posted comment on MR !{pr_number} in {owner}/{repo}",
@@ -792,6 +846,19 @@ class GitLabAdapter(BaseAdapter):
         try:
             response = await self.client.post(url, json=payload)
             response.raise_for_status()
+
+            # Validate JSON response (defensive - ensure GitLab returned valid data)
+            try:
+                response.json()
+            except json.JSONDecodeError:
+                logger.error(
+                    f"GitLab API returned non-JSON response for review comment on MR !{pr_number}",
+                    extra={"response_text": response.text[:200]},
+                )
+                raise ValueError(
+                    f"GitLab API returned invalid JSON after posting review comment on "
+                    f"MR !{pr_number} in {owner}/{repo}: {response.text[:200]}"
+                )
 
             logger.debug(
                 f"Posted inline comment on MR !{pr_number} in {owner}/{repo} at {file_path}:{line}",
