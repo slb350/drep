@@ -474,31 +474,37 @@ class GitLabAdapter(BaseAdapter):
             # Validate required 'diff_refs' field exists
             if "diff_refs" not in data or data["diff_refs"] is None:
                 logger.error(
-                    f"GitLab response missing 'diff_refs' field for MR !{pr_number} in {owner}/{repo}",
+                    f"GitLab response missing 'diff_refs' field for MR !{pr_number} "
+                    f"in {owner}/{repo}",
                     extra={"response": data},
                 )
                 raise ValueError(
-                    f"GitLab API response missing 'diff_refs' field for MR !{pr_number} in {owner}/{repo}"
+                    f"GitLab API response missing 'diff_refs' field for MR !{pr_number} "
+                    f"in {owner}/{repo}"
                 )
 
             # Validate required fields within diff_refs
             diff_refs = data["diff_refs"]
             if "base_sha" not in diff_refs:
                 logger.error(
-                    f"GitLab response missing 'base_sha' in diff_refs for MR !{pr_number} in {owner}/{repo}",
+                    f"GitLab response missing 'base_sha' in diff_refs for "
+                    f"MR !{pr_number} in {owner}/{repo}",
                     extra={"diff_refs": diff_refs},
                 )
                 raise ValueError(
-                    f"GitLab API response missing 'base_sha' in diff_refs for MR !{pr_number} in {owner}/{repo}"
+                    f"GitLab API response missing 'base_sha' in diff_refs for "
+                    f"MR !{pr_number} in {owner}/{repo}"
                 )
 
             if "head_sha" not in diff_refs:
                 logger.error(
-                    f"GitLab response missing 'head_sha' in diff_refs for MR !{pr_number} in {owner}/{repo}",
+                    f"GitLab response missing 'head_sha' in diff_refs for "
+                    f"MR !{pr_number} in {owner}/{repo}",
                     extra={"diff_refs": diff_refs},
                 )
                 raise ValueError(
-                    f"GitLab API response missing 'head_sha' in diff_refs for MR !{pr_number} in {owner}/{repo}"
+                    f"GitLab API response missing 'head_sha' in diff_refs for "
+                    f"MR !{pr_number} in {owner}/{repo}"
                 )
 
             logger.debug(

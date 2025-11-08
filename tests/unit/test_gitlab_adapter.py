@@ -840,14 +840,17 @@ async def test_rate_limit_always_raises_on_429_even_with_invalid_headers():
         await adapter.close()
 
 
-@pytest.mark.parametrize("remaining_header,reset_header,expected_in_message", [
-    (" 0 ", "1640000000", "Remaining:  0 "),  # Whitespace preserved in message
-    ("0.0", "1640000000", "Remaining: 0.0"),  # Float value preserved
-    ("invalid", "1640000000", "Remaining: invalid"),  # Non-numeric preserved
-    (None, "1640000000", "Remaining: unknown"),  # Missing header shows "unknown"
-    ("0", None, "Resets at unknown"),  # Missing reset header
-    (None, None, "unknown"),  # Both headers missing
-])
+@pytest.mark.parametrize(
+    "remaining_header,reset_header,expected_in_message",
+    [
+        (" 0 ", "1640000000", "Remaining:  0 "),  # Whitespace preserved in message
+        ("0.0", "1640000000", "Remaining: 0.0"),  # Float value preserved
+        ("invalid", "1640000000", "Remaining: invalid"),  # Non-numeric preserved
+        (None, "1640000000", "Remaining: unknown"),  # Missing header shows "unknown"
+        ("0", None, "Resets at unknown"),  # Missing reset header
+        (None, None, "unknown"),  # Both headers missing
+    ],
+)
 @pytest.mark.asyncio
 @respx.mock
 async def test_rate_limit_header_edge_cases(remaining_header, reset_header, expected_in_message):
@@ -970,10 +973,8 @@ async def test_get_file_content_invalid_json():
     # Return HTML error page instead of JSON
     respx.get(
         "https://gitlab.com/api/v4/projects/owner%2Frepo/repository/files/test.py",
-        params={"ref": "main"}
-    ).mock(
-        return_value=httpx.Response(200, text="<html><body>Error</body></html>")
-    )
+        params={"ref": "main"},
+    ).mock(return_value=httpx.Response(200, text="<html><body>Error</body></html>"))
 
     adapter = GitLabAdapter("glpat_token")
 
@@ -993,10 +994,8 @@ async def test_get_file_content_missing_content_field():
     # Response missing 'content' field
     respx.get(
         "https://gitlab.com/api/v4/projects/owner%2Frepo/repository/files/test.py",
-        params={"ref": "main"}
-    ).mock(
-        return_value=httpx.Response(200, json={"file_path": "test.py", "size": 100})
-    )
+        params={"ref": "main"},
+    ).mock(return_value=httpx.Response(200, json={"file_path": "test.py", "size": 100}))
 
     adapter = GitLabAdapter("glpat_token")
 
@@ -1055,11 +1054,9 @@ async def test_get_pr_missing_base_sha():
 
     # Response missing 'diff_refs.base_sha' field
     respx.get("https://gitlab.com/api/v4/projects/owner%2Frepo/merge_requests/42").mock(
-        return_value=httpx.Response(200, json={
-            "iid": 42,
-            "title": "Test MR",
-            "diff_refs": {"head_sha": "def456"}
-        })
+        return_value=httpx.Response(
+            200, json={"iid": 42, "title": "Test MR", "diff_refs": {"head_sha": "def456"}}
+        )
     )
 
     adapter = GitLabAdapter("glpat_token")
@@ -1079,11 +1076,9 @@ async def test_get_pr_missing_head_sha():
 
     # Response missing 'diff_refs.head_sha' field
     respx.get("https://gitlab.com/api/v4/projects/owner%2Frepo/merge_requests/42").mock(
-        return_value=httpx.Response(200, json={
-            "iid": 42,
-            "title": "Test MR",
-            "diff_refs": {"base_sha": "abc123"}
-        })
+        return_value=httpx.Response(
+            200, json={"iid": 42, "title": "Test MR", "diff_refs": {"base_sha": "abc123"}}
+        )
     )
 
     adapter = GitLabAdapter("glpat_token")
@@ -1102,9 +1097,7 @@ async def test_get_pr_diff_invalid_json():
     from drep.adapters.gitlab import GitLabAdapter
 
     # Return HTML error page instead of JSON
-    respx.get(
-        "https://gitlab.com/api/v4/projects/owner%2Frepo/merge_requests/42/diffs"
-    ).mock(
+    respx.get("https://gitlab.com/api/v4/projects/owner%2Frepo/merge_requests/42/diffs").mock(
         return_value=httpx.Response(200, text="<html><body>Error</body></html>")
     )
 
@@ -1124,9 +1117,7 @@ async def test_get_pr_diff_not_an_array():
     from drep.adapters.gitlab import GitLabAdapter
 
     # Response is an object instead of array (invalid format)
-    respx.get(
-        "https://gitlab.com/api/v4/projects/owner%2Frepo/merge_requests/42/diffs"
-    ).mock(
+    respx.get("https://gitlab.com/api/v4/projects/owner%2Frepo/merge_requests/42/diffs").mock(
         return_value=httpx.Response(200, json={"error": "Invalid response"})
     )
 
@@ -1147,31 +1138,26 @@ async def test_post_review_comment_invalid_json():
 
     # Mock get_pr to return valid MR data
     respx.get("https://gitlab.com/api/v4/projects/owner%2Frepo/merge_requests/42").mock(
-        return_value=httpx.Response(200, json={
-            "iid": 42,
-            "title": "Test MR",
-            "diff_refs": {
-                "base_sha": "abc123",
-                "head_sha": "def456",
-                "start_sha": "abc123"
-            }
-        })
+        return_value=httpx.Response(
+            200,
+            json={
+                "iid": 42,
+                "title": "Test MR",
+                "diff_refs": {"base_sha": "abc123", "head_sha": "def456", "start_sha": "abc123"},
+            },
+        )
     )
 
     # Mock post to return HTML instead of JSON
     respx.post(
         "https://gitlab.com/api/v4/projects/owner%2Frepo/merge_requests/42/discussions"
-    ).mock(
-        return_value=httpx.Response(201, text="<html><body>Created</body></html>")
-    )
+    ).mock(return_value=httpx.Response(201, text="<html><body>Created</body></html>"))
 
     adapter = GitLabAdapter("glpat_token")
 
     try:
         with pytest.raises(ValueError, match="GitLab API returned invalid JSON"):
-            await adapter.post_review_comment(
-                "owner", "repo", 42, "test.py", 10, "Test comment"
-            )
+            await adapter.post_review_comment("owner", "repo", 42, "test.py", 10, "Test comment")
     finally:
         await adapter.close()
 
@@ -1183,9 +1169,7 @@ async def test_create_pr_comment_invalid_json():
     from drep.adapters.gitlab import GitLabAdapter
 
     # Return HTML error page instead of JSON
-    respx.post(
-        "https://gitlab.com/api/v4/projects/owner%2Frepo/merge_requests/42/notes"
-    ).mock(
+    respx.post("https://gitlab.com/api/v4/projects/owner%2Frepo/merge_requests/42/notes").mock(
         return_value=httpx.Response(201, text="<html><body>Created</body></html>")
     )
 
@@ -1216,9 +1200,7 @@ async def test_post_review_comment_get_pr_fails_validation():
 
     try:
         with pytest.raises(ValueError, match="missing 'diff_refs' field"):
-            await adapter.post_review_comment(
-                "owner", "repo", 42, "test.py", 10, "Test comment"
-            )
+            await adapter.post_review_comment("owner", "repo", 42, "test.py", 10, "Test comment")
     finally:
         await adapter.close()
 
@@ -1457,23 +1439,22 @@ async def test_post_review_comment_timeout():
 
     # Mock get_pr to succeed
     respx.get("https://gitlab.com/api/v4/projects/owner%2Frepo/merge_requests/42").mock(
-        return_value=httpx.Response(200, json={
-            "iid": 42,
-            "diff_refs": {
-                "base_sha": "abc123",
-                "head_sha": "def456",
-                "start_sha": "abc123"
-            }
-        })
+        return_value=httpx.Response(
+            200,
+            json={
+                "iid": 42,
+                "diff_refs": {"base_sha": "abc123", "head_sha": "def456", "start_sha": "abc123"},
+            },
+        )
     )
 
     # Mock post to timeout
     async def timeout_handler(request):
         raise httpx.TimeoutException("Request timed out")
 
-    respx.post("https://gitlab.com/api/v4/projects/owner%2Frepo/merge_requests/42/discussions").mock(
-        side_effect=timeout_handler
-    )
+    respx.post(
+        "https://gitlab.com/api/v4/projects/owner%2Frepo/merge_requests/42/discussions"
+    ).mock(side_effect=timeout_handler)
 
     adapter = GitLabAdapter("glpat_token")
 
@@ -1492,23 +1473,22 @@ async def test_post_review_comment_connection_error():
 
     # Mock get_pr to succeed
     respx.get("https://gitlab.com/api/v4/projects/owner%2Frepo/merge_requests/42").mock(
-        return_value=httpx.Response(200, json={
-            "iid": 42,
-            "diff_refs": {
-                "base_sha": "abc123",
-                "head_sha": "def456",
-                "start_sha": "abc123"
-            }
-        })
+        return_value=httpx.Response(
+            200,
+            json={
+                "iid": 42,
+                "diff_refs": {"base_sha": "abc123", "head_sha": "def456", "start_sha": "abc123"},
+            },
+        )
     )
 
     # Mock post to fail connection
     async def connection_error_handler(request):
         raise httpx.ConnectError("Cannot connect")
 
-    respx.post("https://gitlab.com/api/v4/projects/owner%2Frepo/merge_requests/42/discussions").mock(
-        side_effect=connection_error_handler
-    )
+    respx.post(
+        "https://gitlab.com/api/v4/projects/owner%2Frepo/merge_requests/42/discussions"
+    ).mock(side_effect=connection_error_handler)
 
     adapter = GitLabAdapter("glpat_token")
 
@@ -1530,7 +1510,7 @@ async def test_get_file_content_timeout():
 
     respx.get(
         "https://gitlab.com/api/v4/projects/owner%2Frepo/repository/files/test.py",
-        params={"ref": "main"}
+        params={"ref": "main"},
     ).mock(side_effect=timeout_handler)
 
     adapter = GitLabAdapter("glpat_token")
@@ -1553,7 +1533,7 @@ async def test_get_file_content_connection_error():
 
     respx.get(
         "https://gitlab.com/api/v4/projects/owner%2Frepo/repository/files/test.py",
-        params={"ref": "main"}
+        params={"ref": "main"},
     ).mock(side_effect=connection_error_handler)
 
     adapter = GitLabAdapter("glpat_token")
@@ -1568,12 +1548,15 @@ async def test_get_file_content_connection_error():
 # ===== HTTP Error Code Tests =====
 
 
-@pytest.mark.parametrize("status_code,error_type", [
-    (401, "Unauthorized"),
-    (403, "Forbidden"),
-    (500, "Internal Server Error"),
-    (503, "Service Unavailable"),
-])
+@pytest.mark.parametrize(
+    "status_code,error_type",
+    [
+        (401, "Unauthorized"),
+        (403, "Forbidden"),
+        (500, "Internal Server Error"),
+        (503, "Service Unavailable"),
+    ],
+)
 @pytest.mark.asyncio
 @respx.mock
 async def test_get_default_branch_http_errors(status_code, error_type):
@@ -1642,7 +1625,7 @@ async def test_get_file_content_http_errors(status_code):
 
     respx.get(
         "https://gitlab.com/api/v4/projects/owner%2Frepo/repository/files/test.py",
-        params={"ref": "main"}
+        params={"ref": "main"},
     ).mock(return_value=httpx.Response(status_code, text="Error"))
 
     adapter = GitLabAdapter("glpat_token")

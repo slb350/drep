@@ -37,8 +37,7 @@ class GitLabConfig(BaseModel):
     url: Optional[str] = Field(
         default=None,
         description=(
-            "GitLab base URL (None = gitlab.com, "
-            "or https://gitlab.example.com for self-hosted)"
+            "GitLab base URL (None = gitlab.com, " "or https://gitlab.example.com for self-hosted)"
         ),
     )
     token: SecretStr = Field(..., description="GitLab personal access token (requires api scope)")
