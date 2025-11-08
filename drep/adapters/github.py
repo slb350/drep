@@ -178,6 +178,110 @@ class GitHubAdapter(BaseAdapter):
                 "Wait or use a different token."
             )
 
+    # ===== Repository Methods =====
+
+    async def get_default_branch(self, owner: str, repo: str) -> str:
+        """Get repository default branch name.
+
+        Args:
+            owner: Repository owner
+            repo: Repository name
+
+        Returns:
+            Default branch name (e.g., "main", "master", "develop")
+
+        Raises:
+            ValueError: If repository not found (404) or network/API error occurs
+
+        Example:
+            branch = await adapter.get_default_branch("owner", "repo")
+            # Returns: "main"
+        """
+        url = f"{self.url}/repos/{owner}/{repo}"
+
+        try:
+            response = await self.client.get(url)
+            response.raise_for_status()
+
+            # Validate JSON parsing to handle non-JSON error responses
+            try:
+                data = response.json()
+            except json.JSONDecodeError:
+                logger.error(
+                    f"GitHub API returned non-JSON response for {owner}/{repo}",
+                    extra={"response_text": response.text[:200]},
+                )
+                raise ValueError(
+                    f"GitHub API returned invalid JSON for {owner}/{repo}: "
+                    f"{response.text[:200]}"
+                )
+
+            # Validate required 'default_branch' field exists in API response
+            if "default_branch" not in data:
+                logger.error(
+                    f"GitHub response missing 'default_branch' field for {owner}/{repo}",
+                    extra={"response": data},
+                )
+                raise ValueError(
+                    f"GitHub API response missing 'default_branch' field for {owner}/{repo}"
+                )
+
+            default_branch = data["default_branch"]
+
+            logger.debug(
+                f"Retrieved default branch '{default_branch}' for {owner}/{repo}",
+                extra={"repo_id": f"{owner}/{repo}", "default_branch": default_branch},
+            )
+
+            return default_branch
+
+        # Handle network timeout errors
+        except httpx.TimeoutException:
+            logger.error(
+                f"Timeout fetching default branch for {owner}/{repo}",
+                extra={"repo_id": f"{owner}/{repo}"},
+            )
+            raise ValueError(
+                f"GitHub API request timed out after {self.client.timeout.read}s "
+                f"fetching default branch for {owner}/{repo}. "
+                "Repository may be very large, or GitHub API is slow."
+            )
+        except (httpx.ConnectError, httpx.ConnectTimeout):
+            logger.error(
+                f"Failed to connect to GitHub API for {owner}/{repo}",
+                extra={"repo_id": f"{owner}/{repo}"},
+            )
+            raise ValueError(
+                f"Cannot connect to GitHub API at {self.url} for {owner}/{repo}. "
+                "Check your internet connection, firewall, or GitHub API status."
+            )
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 404:
+                logger.warning(
+                    f"Repository {owner}/{repo} not found",
+                    extra={"repo_id": f"{owner}/{repo}"},
+                )
+                raise ValueError(f"Repository {owner}/{repo} not found")
+            else:
+                # Check for rate limit exceeded
+                self._check_rate_limit(e.response, owner, repo)
+
+                logger.error(
+                    f"HTTP error fetching default branch for {owner}/{repo}: "
+                    f"{e.response.status_code}",
+                    extra={
+                        "repo_id": f"{owner}/{repo}",
+                        "http_status": e.response.status_code,
+                        "response_text": e.response.text,
+                    },
+                )
+                raise ValueError(
+                    f"GitHub API error fetching default branch for {owner}/{repo}: "
+                    f"{e.response.text}"
+                )
+
+    # ===== Issue Methods =====
+
     async def create_issue(
         self, owner: str, repo: str, title: str, body: str, labels: Optional[List[str]] = None
     ) -> int:
