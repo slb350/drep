@@ -2,8 +2,10 @@
 
 **D**ocumentation & **R**eview **E**nhancement **P**latform
 
+[![PyPI version](https://badge.fury.io/py/drep-ai.svg)](https://badge.fury.io/py/drep-ai)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
+[![Downloads](https://pepy.tech/badge/drep-ai)](https://pepy.tech/project/drep-ai)
 
 Automated code review and documentation improvement tool for **Gitea and GitHub**. Powered by your choice of LLM backend: local models (LM Studio, Ollama, llama.cpp), AWS Bedrock (Claude 4.5), or Anthropic's Claude API.
 
