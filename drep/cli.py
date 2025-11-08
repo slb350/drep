@@ -370,19 +370,32 @@ async def _run_review(
         click.echo("Error: LLM must be enabled in config for PR reviews", err=True)
         return
 
-    # Validate Gitea configuration (required for PR review)
-    if config.gitea is None:
+    # Determine which adapter to use (prefer Gitea for backward compatibility)
+    platform = None
+    adapter = None
+
+    if config.gitea is not None:
+        # Use Gitea adapter
+        platform = "gitea"
+        adapter = GiteaAdapter(config.gitea.url, config.gitea.token.get_secret_value())
+    elif config.github is not None:
+        # Use GitHub adapter
+        platform = "github"
+        from drep.adapters.github import GitHubAdapter
+
+        adapter = GitHubAdapter(
+            token=config.github.token.get_secret_value(),
+            url=str(config.github.url) if config.github.url else "https://api.github.com",
+        )
+    else:
+        # No platform configured (shouldn't happen - Config validator requires at least one)
         click.echo(
-            "Error: PR review requires Gitea configuration.\n"
-            "Please add a [gitea] section to your config.yaml.\n\n"
-            "GitHub PR review support is not yet implemented.\n"
-            "Currently, GitHub adapter only supports issue creation.",
+            "Error: No platform configured. Please add [gitea] or [github] to your config.yaml.",
             err=True,
         )
         raise click.Abort()
 
     # Initialize components
-    adapter = GiteaAdapter(config.gitea.url, config.gitea.token.get_secret_value())
     scanner = RepositoryScanner(init_database(config.database_url), config, gitea_adapter=adapter)
 
     try:
@@ -392,7 +405,7 @@ async def _run_review(
             return
 
         # Review PR
-        click.echo(f"Fetching PR #{pr_number}...")
+        click.echo(f"Fetching {platform} PR #{pr_number}...")
         result = await scanner.pr_analyzer.review_pr(owner, repo, pr_number)
 
         # Display results
