@@ -123,7 +123,7 @@ async def _run_scan(
             "Please add a [gitea] section to your config.yaml.\n\n"
             "GitHub support for repository scanning is not yet implemented.\n"
             "Currently, GitHub adapter only supports issue creation and PR reviews.",
-            err=True
+            err=True,
         )
         raise click.Abort()
 
@@ -352,7 +352,7 @@ async def _run_review(
             "Please add a [gitea] section to your config.yaml.\n\n"
             "GitHub PR review support is not yet implemented.\n"
             "Currently, GitHub adapter only supports issue creation.",
-            err=True
+            err=True,
         )
         raise click.Abort()
 

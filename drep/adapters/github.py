@@ -171,7 +171,7 @@ class GitHubAdapter(BaseAdapter):
             repo_id = f"{owner}/{repo}" if owner and repo else None
             logger.warning(
                 f"GitHub API rate limit exceeded{context}",
-                extra={"repo_id": repo_id, "reset_time": reset_time}
+                extra={"repo_id": repo_id, "reset_time": reset_time},
             )
             raise ValueError(
                 f"GitHub API rate limit exceeded. Resets at {reset_time}. "
@@ -692,8 +692,8 @@ class GitHubAdapter(BaseAdapter):
                         "repo_id": f"{owner}/{repo}",
                         "file_path": file_path,
                         "ref": ref,
-                        "response": data
-                    }
+                        "response": data,
+                    },
                 )
                 raise ValueError(
                     f"GitHub API response missing 'content' field for {file_path} "
