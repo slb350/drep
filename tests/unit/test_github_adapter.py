@@ -972,3 +972,119 @@ async def test_close_suppresses_non_critical_errors():
 
     # Should not raise - error should be suppressed and logged
     await adapter.close()  # Should complete without exception
+
+
+@pytest.mark.asyncio
+async def test_check_rate_limit_with_zero():
+    """Test _check_rate_limit() detects rate limit with '0' string."""
+    from drep.adapters.github import GitHubAdapter
+
+    adapter = GitHubAdapter("ghp_token")
+    response = httpx.Response(
+        403,
+        headers={"X-RateLimit-Remaining": "0", "X-RateLimit-Reset": "1640000000"}
+    )
+
+    with pytest.raises(ValueError, match="rate limit exceeded.*Resets at"):
+        adapter._check_rate_limit(response, "owner", "repo")
+
+    await adapter.close()
+
+
+@pytest.mark.asyncio
+async def test_check_rate_limit_with_whitespace():
+    """Test _check_rate_limit() handles whitespace in header value."""
+    from drep.adapters.github import GitHubAdapter
+
+    adapter = GitHubAdapter("ghp_token")
+    response = httpx.Response(
+        403,
+        headers={"X-RateLimit-Remaining": " 0 ", "X-RateLimit-Reset": "1640000000"}
+    )
+
+    with pytest.raises(ValueError, match="rate limit exceeded"):
+        adapter._check_rate_limit(response, "owner", "repo")
+
+    await adapter.close()
+
+
+@pytest.mark.asyncio
+async def test_check_rate_limit_with_float():
+    """Test _check_rate_limit() handles float string like '0.0'."""
+    from drep.adapters.github import GitHubAdapter
+
+    adapter = GitHubAdapter("ghp_token")
+    response = httpx.Response(
+        403,
+        headers={"X-RateLimit-Remaining": "0.0", "X-RateLimit-Reset": "1640000000"}
+    )
+
+    with pytest.raises(ValueError, match="rate limit exceeded"):
+        adapter._check_rate_limit(response, "owner", "repo")
+
+    await adapter.close()
+
+
+@pytest.mark.asyncio
+async def test_check_rate_limit_non_zero_remaining():
+    """Test _check_rate_limit() doesn't raise when requests remain."""
+    from drep.adapters.github import GitHubAdapter
+
+    adapter = GitHubAdapter("ghp_token")
+    response = httpx.Response(
+        403,
+        headers={"X-RateLimit-Remaining": "100", "X-RateLimit-Reset": "1640000000"}
+    )
+
+    # Should not raise - still have requests remaining
+    adapter._check_rate_limit(response, "owner", "repo")
+
+    await adapter.close()
+
+
+@pytest.mark.asyncio
+async def test_check_rate_limit_non_403_status():
+    """Test _check_rate_limit() ignores non-403 status codes."""
+    from drep.adapters.github import GitHubAdapter
+
+    adapter = GitHubAdapter("ghp_token")
+    response = httpx.Response(
+        404,
+        headers={"X-RateLimit-Remaining": "0", "X-RateLimit-Reset": "1640000000"}
+    )
+
+    # Should not raise - not a 403
+    adapter._check_rate_limit(response, "owner", "repo")
+
+    await adapter.close()
+
+
+@pytest.mark.asyncio
+async def test_check_rate_limit_missing_header():
+    """Test _check_rate_limit() handles missing rate limit header."""
+    from drep.adapters.github import GitHubAdapter
+
+    adapter = GitHubAdapter("ghp_token")
+    response = httpx.Response(403, headers={})
+
+    # Should not raise - no rate limit header
+    adapter._check_rate_limit(response, "owner", "repo")
+
+    await adapter.close()
+
+
+@pytest.mark.asyncio
+async def test_check_rate_limit_invalid_header_value():
+    """Test _check_rate_limit() handles invalid (non-numeric) header value."""
+    from drep.adapters.github import GitHubAdapter
+
+    adapter = GitHubAdapter("ghp_token")
+    response = httpx.Response(
+        403,
+        headers={"X-RateLimit-Remaining": "invalid", "X-RateLimit-Reset": "1640000000"}
+    )
+
+    # Should not raise - can't parse, so not a valid rate limit response
+    adapter._check_rate_limit(response, "owner", "repo")
+
+    await adapter.close()

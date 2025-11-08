@@ -111,6 +111,49 @@ class GitHubAdapter(BaseAdapter):
             # (httpx.CloseError, RuntimeError, etc.)
             logger.warning(f"Non-critical error closing GitHub client: {e}")
 
+    def _check_rate_limit(self, response: httpx.Response, owner: str = "", repo: str = "") -> None:
+        """Check for rate limit and raise informative error.
+
+        Args:
+            response: HTTP response from GitHub API
+            owner: Repository owner (for error context)
+            repo: Repository name (for error context)
+
+        Raises:
+            ValueError: If rate limit is exceeded
+
+        Note:
+            GitHub returns rate limit info in these headers:
+            - X-RateLimit-Limit: Maximum requests per hour
+            - X-RateLimit-Remaining: Requests remaining (string or int)
+            - X-RateLimit-Reset: Unix timestamp when limit resets
+        """
+        if response.status_code != 403:
+            return  # Not a rate limit error
+
+        remaining_str = response.headers.get("X-RateLimit-Remaining")
+        if remaining_str is None:
+            return  # Not a rate limit response
+
+        # Parse remaining count robustly (handle "0", " 0 ", "0.0", etc.)
+        try:
+            remaining = int(float(remaining_str.strip()))
+        except (ValueError, TypeError):
+            # Can't parse - not a valid rate limit header
+            return
+
+        if remaining == 0:
+            reset_time = response.headers.get("X-RateLimit-Reset", "unknown")
+            context = f" for {owner}/{repo}" if owner and repo else ""
+            logger.warning(
+                f"GitHub API rate limit exceeded{context}",
+                extra={"repo_id": f"{owner}/{repo}" if owner and repo else None, "reset_time": reset_time}
+            )
+            raise ValueError(
+                f"GitHub API rate limit exceeded. Resets at {reset_time}. "
+                "Wait or use a different token."
+            )
+
     async def create_issue(
         self, owner: str, repo: str, title: str, body: str, labels: Optional[List[str]] = None
     ) -> int:
@@ -191,18 +234,8 @@ class GitHubAdapter(BaseAdapter):
                 "Check your internet connection, firewall, or GitHub API status."
             )
         except httpx.HTTPStatusError as e:
-            # Detect GitHub API rate limit from response headers
-            if e.response.status_code == 403:
-                if e.response.headers.get("X-RateLimit-Remaining") == "0":
-                    reset_time = e.response.headers.get("X-RateLimit-Reset")
-                    logger.warning(
-                        f"GitHub API rate limit exceeded for {owner}/{repo}",
-                        extra={"repo_id": f"{owner}/{repo}", "reset_time": reset_time},
-                    )
-                    raise ValueError(
-                        f"GitHub API rate limit exceeded. Resets at {reset_time}. "
-                        "Wait or use a different token."
-                    )
+            # Check for rate limit exceeded
+            self._check_rate_limit(e.response, owner, repo)
 
             # Include repository context in error message for debugging
             logger.error(
@@ -285,17 +318,8 @@ class GitHubAdapter(BaseAdapter):
                 )
                 raise ValueError(f"Pull request #{pr_number} not found in {owner}/{repo}")
             else:
-                # Detect GitHub API rate limit from response headers
-                if e.response.status_code == 403:
-                    if e.response.headers.get("X-RateLimit-Remaining") == "0":
-                        reset_time = e.response.headers.get("X-RateLimit-Reset")
-                        logger.warning(
-                            "GitHub API rate limit exceeded", extra={"reset_time": reset_time}
-                        )
-                        raise ValueError(
-                            f"GitHub API rate limit exceeded. Resets at {reset_time}. "
-                            "Wait or use a different token."
-                        )
+                # Check for rate limit exceeded
+                self._check_rate_limit(e.response, owner, repo)
 
                 logger.error(
                     f"HTTP error fetching PR #{pr_number} from {owner}/{repo}: "
@@ -370,17 +394,8 @@ class GitHubAdapter(BaseAdapter):
                 "Check your internet connection, firewall, or GitHub API status."
             )
         except httpx.HTTPStatusError as e:
-            # Detect GitHub API rate limit from response headers
-            if e.response.status_code == 403:
-                if e.response.headers.get("X-RateLimit-Remaining") == "0":
-                    reset_time = e.response.headers.get("X-RateLimit-Reset")
-                    logger.warning(
-                        "GitHub API rate limit exceeded", extra={"reset_time": reset_time}
-                    )
-                    raise ValueError(
-                        f"GitHub API rate limit exceeded. Resets at {reset_time}. "
-                        "Wait or use a different token."
-                    )
+            # Check for rate limit exceeded
+            self._check_rate_limit(e.response, owner, repo)
 
             logger.error(
                 f"HTTP error fetching PR diff for #{pr_number} from {owner}/{repo}: "
@@ -442,17 +457,8 @@ class GitHubAdapter(BaseAdapter):
                 "Check your internet connection, firewall, or GitHub API status."
             )
         except httpx.HTTPStatusError as e:
-            # Detect GitHub API rate limit from response headers
-            if e.response.status_code == 403:
-                if e.response.headers.get("X-RateLimit-Remaining") == "0":
-                    reset_time = e.response.headers.get("X-RateLimit-Reset")
-                    logger.warning(
-                        "GitHub API rate limit exceeded", extra={"reset_time": reset_time}
-                    )
-                    raise ValueError(
-                        f"GitHub API rate limit exceeded. Resets at {reset_time}. "
-                        "Wait or use a different token."
-                    )
+            # Check for rate limit exceeded
+            self._check_rate_limit(e.response, owner, repo)
 
             logger.error(
                 f"HTTP error posting comment on PR #{pr_number} in {owner}/{repo}: "
@@ -572,17 +578,8 @@ class GitHubAdapter(BaseAdapter):
                 "Check your internet connection, firewall, or GitHub API status."
             )
         except httpx.HTTPStatusError as e:
-            # Detect GitHub API rate limit from response headers
-            if e.response.status_code == 403:
-                if e.response.headers.get("X-RateLimit-Remaining") == "0":
-                    reset_time = e.response.headers.get("X-RateLimit-Reset")
-                    logger.warning(
-                        "GitHub API rate limit exceeded", extra={"reset_time": reset_time}
-                    )
-                    raise ValueError(
-                        f"GitHub API rate limit exceeded. Resets at {reset_time}. "
-                        "Wait or use a different token."
-                    )
+            # Check for rate limit exceeded
+            self._check_rate_limit(e.response, owner, repo)
 
             # Handle 422 (Validation Failed) - likely invalid line number
             if e.response.status_code == 422:
@@ -733,17 +730,8 @@ class GitHubAdapter(BaseAdapter):
                 )
                 raise ValueError(f"File {file_path} not found at ref {ref} in {owner}/{repo}")
             else:
-                # Detect GitHub API rate limit from response headers
-                if e.response.status_code == 403:
-                    if e.response.headers.get("X-RateLimit-Remaining") == "0":
-                        reset_time = e.response.headers.get("X-RateLimit-Reset")
-                        logger.warning(
-                            "GitHub API rate limit exceeded", extra={"reset_time": reset_time}
-                        )
-                        raise ValueError(
-                            f"GitHub API rate limit exceeded. Resets at {reset_time}. "
-                            "Wait or use a different token."
-                        )
+                # Check for rate limit exceeded
+                self._check_rate_limit(e.response, owner, repo)
 
                 logger.error(
                     f"HTTP error fetching {file_path} from {owner}/{repo}@{ref}: "
