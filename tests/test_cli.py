@@ -842,3 +842,11 @@ class TestCheckCommand:
 
             assert result.exit_code == 1
             assert "validation" in result.output.lower() or "invalid" in result.output.lower()
+
+    def test_check_handles_nonexistent_path(self, runner, tmp_path):
+        """Test that check handles nonexistent path gracefully."""
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            result = runner.invoke(cli, ["check", "/nonexistent/path"])
+
+            assert result.exit_code == 1
+            assert "not found" in result.output.lower() or "does not exist" in result.output.lower()

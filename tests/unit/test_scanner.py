@@ -761,3 +761,31 @@ class TestGetStagedFiles:
                 scanner.get_staged_files("/fake/path")
 
             assert "Git operation failed" in str(exc_info.value)
+
+    def test_get_staged_files_handles_uppercase_extensions(self):
+        """Test that get_staged_files handles uppercase file extensions (.PY, .MD)."""
+        db_session = Mock()
+        scanner = RepositoryScanner(db_session)
+
+        with patch("drep.core.scanner.Repo") as mock_repo_class:
+            mock_repo = Mock()
+
+            # Create mock diff items with uppercase extensions
+            mock_diff_items = []
+            for filename in ["TEST.PY", "README.MD", "script.Py", "doc.Md", "other.TXT"]:
+                mock_diff_item = Mock()
+                mock_diff_item.b_path = filename
+                mock_diff_items.append(mock_diff_item)
+
+            mock_repo.index.diff.return_value = mock_diff_items
+            mock_repo_class.return_value = mock_repo
+
+            files = scanner.get_staged_files("/fake/path")
+
+            # Should match case-insensitively
+            assert "TEST.PY" in files
+            assert "README.MD" in files
+            assert "script.Py" in files
+            assert "doc.Md" in files
+            assert "other.TXT" not in files  # Wrong extension
+            assert len(files) == 4

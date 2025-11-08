@@ -312,7 +312,7 @@ class RepositoryScanner:
             # Use b_path (current file name) not a_path (old name for renames)
             # b_path is None for deleted files, so we skip those
             path = diff_item.b_path
-            if path and (path.endswith(".py") or path.endswith(".md")):
+            if path and (path.lower().endswith(".py") or path.lower().endswith(".md")):
                 staged_files.append(path)
 
         return staged_files

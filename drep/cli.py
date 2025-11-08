@@ -658,8 +658,17 @@ async def _run_check(path: str, staged: bool, config_path: str, output_format: s
     scanner = RepositoryScanner(db, config=config)
 
     try:
-        # Get files to check
-        path_obj = PathLib(path).resolve()
+        # Validate and resolve path
+        try:
+            path_obj = PathLib(path).resolve(strict=True)
+        except FileNotFoundError:
+            click.echo(f"Error: Path not found: {path}", err=True)
+            raise SystemExit(1)
+
+        # Additional validation
+        if not path_obj.exists():
+            click.echo(f"Error: Path does not exist: {path}", err=True)
+            raise SystemExit(1)
 
         if staged:
             # Get staged files from git index
