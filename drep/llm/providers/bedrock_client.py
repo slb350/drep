@@ -11,6 +11,7 @@ Authentication:
     For more details: https://boto3.amazonaws.com/v1/documentation/api/latest/guide/credentials.html
 """
 
+import asyncio
 import json
 import logging
 from typing import Any, Dict, List, Optional, Tuple
@@ -243,8 +244,11 @@ class BedrockClient:
             body["system"] = system_prompt
 
         try:
-            # Call Bedrock invoke_model
-            response = self.bedrock_client.invoke_model(
+            # Call Bedrock invoke_model in thread pool to avoid blocking event loop
+            # boto3 is synchronous, so we must use asyncio.to_thread to prevent
+            # blocking other async tasks (rate limiting, progress tracking, etc.)
+            response = await asyncio.to_thread(
+                self.bedrock_client.invoke_model,
                 modelId=self.model,
                 body=json.dumps(body),
             )

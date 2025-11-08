@@ -344,3 +344,53 @@ def test_llm_config_backward_compatibility():
 
     # Should default to openai-compatible
     assert config.provider == "openai-compatible"
+
+
+# ===== Issue #1: Bedrock should not require endpoint/model =====
+
+
+def test_llm_config_bedrock_without_endpoint_model():
+    """Test Bedrock config works without endpoint/model (Issue #1 from PR review)."""
+    from drep.models.config import BedrockConfig, LLMConfig
+
+    # This should work - Bedrock doesn't need OpenAI endpoint/model
+    config = LLMConfig(
+        enabled=True,
+        provider="bedrock",
+        bedrock=BedrockConfig(
+            region="us-east-1",
+            model="anthropic.claude-sonnet-4-5-20250929-v1:0",
+        ),
+        temperature=0.2,
+        max_tokens=4000,
+    )
+
+    assert config.provider == "bedrock"
+    assert config.bedrock.region == "us-east-1"
+    assert config.bedrock.model == "anthropic.claude-sonnet-4-5-20250929-v1:0"
+    # endpoint and model should be None or have default values
+    assert config.endpoint is None or config.endpoint
+    assert config.model is None or config.model
+
+
+def test_llm_config_openai_requires_endpoint_model():
+    """Test OpenAI config fails without endpoint/model (Issue #1 validation)."""
+    from pydantic import ValidationError
+
+    from drep.models.config import LLMConfig
+
+    # OpenAI-compatible provider MUST have endpoint and model
+    with pytest.raises(ValidationError, match="endpoint"):
+        LLMConfig(
+            enabled=True,
+            provider="openai-compatible",
+            temperature=0.2,
+        )
+
+    with pytest.raises(ValidationError, match="model"):
+        LLMConfig(
+            enabled=True,
+            provider="openai-compatible",
+            endpoint="http://localhost:11434/v1",
+            temperature=0.2,
+        )

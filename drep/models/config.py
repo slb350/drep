@@ -101,8 +101,13 @@ class LLMConfig(BaseModel):
         default="openai-compatible",
         description="LLM provider: openai-compatible, bedrock, anthropic",
     )
-    endpoint: HttpUrl = Field(..., description="OpenAI-compatible API endpoint")
-    model: str = Field(..., description="Model name to use")
+    endpoint: Optional[HttpUrl] = Field(
+        default=None,
+        description="OpenAI-compatible API endpoint (required for openai-compatible provider)",
+    )
+    model: Optional[str] = Field(
+        default=None, description="Model name to use (required for openai-compatible provider)"
+    )
     bedrock: Optional[BedrockConfig] = Field(
         default=None, description="AWS Bedrock configuration (required if provider=bedrock)"
     )
@@ -147,6 +152,26 @@ class LLMConfig(BaseModel):
                 "Bedrock provider requires 'bedrock' configuration with region and model. "
                 "Please add 'bedrock:' section to your config."
             )
+        return self
+
+    @model_validator(mode="after")
+    def validate_openai_config(self) -> "LLMConfig":
+        """Ensure endpoint and model are provided for openai-compatible provider.
+
+        Raises:
+            ValueError: If provider is openai-compatible but endpoint or model is missing
+        """
+        if self.provider == "openai-compatible":
+            if self.endpoint is None:
+                raise ValueError(
+                    "OpenAI-compatible provider requires 'endpoint' field. "
+                    "Please specify the API endpoint URL."
+                )
+            if self.model is None:
+                raise ValueError(
+                    "OpenAI-compatible provider requires 'model' field. "
+                    "Please specify the model name to use."
+                )
         return self
 
 
