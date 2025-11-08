@@ -293,6 +293,7 @@ fi
 
             # Save metrics to ~/.drep/metrics.json
             try:
+                import logging
                 from pathlib import Path as _Path
 
                 from drep.llm.metrics import MetricsCollector
@@ -302,6 +303,10 @@ fi
                 collector.current_session = metrics
                 await collector.save()
             except Exception as e:
+                import logging
+
+                logger = logging.getLogger(__name__)
+                logger.warning(f"Failed to persist LLM metrics: {e}")
                 click.echo(f"Warning: failed to persist metrics: {e}")
 
             if show_metrics:
@@ -310,15 +315,44 @@ fi
                 click.echo("=" * 60)
 
     finally:
-        # Cleanup
+        # Cleanup sensitive files
         if temp_dir and Path(temp_dir).exists():
+            import logging
             import shutil
 
-            shutil.rmtree(temp_dir, ignore_errors=True)
+            logger = logging.getLogger(__name__)
 
-        # Close resources
-        await scanner.close()
-        await adapter.close()
+            try:
+                shutil.rmtree(temp_dir)
+                logger.debug(f"Cleaned up temporary directory: {temp_dir}")
+            except Exception as e:
+                logger.error(
+                    f"SECURITY: Failed to delete temporary directory "
+                    f"containing API token: {temp_dir}",
+                    extra={"error": str(e), "temp_dir": temp_dir},
+                )
+                click.echo(
+                    f"WARNING: Failed to clean up temporary credentials at {temp_dir}. "
+                    f"Please manually delete this directory: {e}",
+                    err=True,
+                )
+
+        # Close resources (ensure both are attempted even if one fails)
+        try:
+            await scanner.close()
+        except Exception as e:
+            import logging
+
+            logger = logging.getLogger(__name__)
+            logger.error(f"Error closing scanner: {e}")
+
+        try:
+            await adapter.close()
+        except Exception as e:
+            import logging
+
+            logger = logging.getLogger(__name__)
+            logger.error(f"Error closing adapter: {e}")
 
 
 @cli.command()
@@ -449,6 +483,7 @@ async def _run_review(
         # Persist metrics if available
         if scanner.llm_client:
             try:
+                import logging
                 from pathlib import Path as _Path
 
                 from drep.llm.metrics import MetricsCollector
@@ -457,10 +492,29 @@ async def _run_review(
                 collector = MetricsCollector(metrics_file)
                 collector.current_session = scanner.llm_client.get_llm_metrics()
                 await collector.save()
-            except Exception:
-                pass
-        await scanner.close()
-        await adapter.close()
+            except Exception as e:
+                import logging
+
+                logger = logging.getLogger(__name__)
+                logger.warning(f"Failed to persist LLM metrics: {e}")
+                # Metrics are best-effort in cleanup, don't crash
+
+        # Close resources (ensure both are attempted even if one fails)
+        try:
+            await scanner.close()
+        except Exception as e:
+            import logging
+
+            logger = logging.getLogger(__name__)
+            logger.error(f"Error closing scanner: {e}")
+
+        try:
+            await adapter.close()
+        except Exception as e:
+            import logging
+
+            logger = logging.getLogger(__name__)
+            logger.error(f"Error closing adapter: {e}")
 
 
 @cli.command()

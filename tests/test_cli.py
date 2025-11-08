@@ -351,3 +351,341 @@ class TestScanWorkflow:
             scanner.record_scan.assert_called_once_with("owner", "repo", "abc123")
             scanner.close.assert_called_once()
             adapter.close.assert_called_once()
+
+    @patch("drep.cli.IssueManager")
+    @patch("drep.cli.DocumentationAnalyzer")
+    @patch("drep.cli.RepositoryScanner")
+    @patch("drep.cli.init_database")
+    @patch("drep.cli.GiteaAdapter")
+    @patch("drep.cli.load_config")
+    @patch("drep.cli.Repo")
+    def test_token_file_has_secure_permissions(
+        self,
+        mock_repo_class,
+        mock_load_config,
+        mock_adapter_class,
+        mock_init_db,
+        mock_scanner_class,
+        mock_analyzer_class,
+        mock_issue_manager_class,
+        runner,
+        tmp_path,
+    ):
+        """Test that token file is created with owner-only permissions (0o600)."""
+        # Setup minimal mocks
+        config = MagicMock()
+        config.gitea.url = "http://test"
+        from pydantic import SecretStr
+
+        config.gitea.token = SecretStr("test-token")
+        config.documentation = MagicMock()
+        config.database_url = "sqlite:///./test.db"
+        config.llm = None  # Disable LLM to simplify test
+        mock_load_config.return_value = config
+
+        adapter = AsyncMock()
+        adapter.get_default_branch = AsyncMock(return_value="main")
+        adapter.close = AsyncMock()
+        mock_adapter_class.return_value = adapter
+
+        session = MagicMock()
+        mock_init_db.return_value = session
+
+        scanner = MagicMock()
+        scanner.scan_repository = AsyncMock(return_value=(["test.py"], "abc123"))
+        scanner.record_scan = MagicMock()
+        scanner.close = AsyncMock()
+        scanner.llm_client = None  # No LLM
+        mock_scanner_class.return_value = scanner
+
+        analyzer = MagicMock()
+        analyzer.analyze_file = AsyncMock(return_value=MagicMock(to_findings=lambda: []))
+        mock_analyzer_class.return_value = analyzer
+
+        issue_manager = MagicMock()
+        issue_manager.create_issues_for_findings = AsyncMock()
+        mock_issue_manager_class.return_value = issue_manager
+
+        # Track token file permissions
+        token_file_permissions = None
+
+        def mock_clone_from(url, path, branch, env):
+            # Capture askpass script location from environment
+            askpass_script = Path(env["GIT_ASKPASS"])
+            token_file = askpass_script.parent / ".git-token"
+
+            # Verify token file exists and capture permissions
+            nonlocal token_file_permissions
+            if token_file.exists():
+                token_file_permissions = oct(token_file.stat().st_mode)[-3:]
+
+            # Create repo directory
+            Path(path).mkdir(parents=True, exist_ok=True)
+            (Path(path) / "test.py").write_text("# Test")
+            return MagicMock()
+
+        mock_repo_class.clone_from.side_effect = mock_clone_from
+
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            result = runner.invoke(cli, ["scan", "owner/repo", "--config", "test.yaml"])
+
+            # Verify scan succeeded
+            assert result.exit_code == 0
+
+            # Verify token file had correct permissions (0o600)
+            assert (
+                token_file_permissions == "600"
+            ), f"Token file permissions were {token_file_permissions}, expected 600"
+
+    @patch("drep.cli.IssueManager")
+    @patch("drep.cli.DocumentationAnalyzer")
+    @patch("drep.cli.RepositoryScanner")
+    @patch("drep.cli.init_database")
+    @patch("drep.cli.GiteaAdapter")
+    @patch("drep.cli.load_config")
+    @patch("drep.cli.Repo")
+    def test_askpass_script_has_secure_permissions(
+        self,
+        mock_repo_class,
+        mock_load_config,
+        mock_adapter_class,
+        mock_init_db,
+        mock_scanner_class,
+        mock_analyzer_class,
+        mock_issue_manager_class,
+        runner,
+        tmp_path,
+    ):
+        """Test that askpass script is created with owner-only execute permissions (0o700)."""
+        # Setup minimal mocks
+        config = MagicMock()
+        config.gitea.url = "http://test"
+        from pydantic import SecretStr
+
+        config.gitea.token = SecretStr("test-token")
+        config.documentation = MagicMock()
+        config.database_url = "sqlite:///./test.db"
+        config.llm = None
+        mock_load_config.return_value = config
+
+        adapter = AsyncMock()
+        adapter.get_default_branch = AsyncMock(return_value="main")
+        adapter.close = AsyncMock()
+        mock_adapter_class.return_value = adapter
+
+        session = MagicMock()
+        mock_init_db.return_value = session
+
+        scanner = MagicMock()
+        scanner.scan_repository = AsyncMock(return_value=(["test.py"], "abc123"))
+        scanner.record_scan = MagicMock()
+        scanner.close = AsyncMock()
+        scanner.llm_client = None
+        mock_scanner_class.return_value = scanner
+
+        analyzer = MagicMock()
+        analyzer.analyze_file = AsyncMock(return_value=MagicMock(to_findings=lambda: []))
+        mock_analyzer_class.return_value = analyzer
+
+        issue_manager = MagicMock()
+        issue_manager.create_issues_for_findings = AsyncMock()
+        mock_issue_manager_class.return_value = issue_manager
+
+        # Track askpass script permissions
+        askpass_permissions = None
+
+        def mock_clone_from(url, path, branch, env):
+            # Capture askpass script location and permissions
+            askpass_script = Path(env["GIT_ASKPASS"])
+
+            nonlocal askpass_permissions
+            if askpass_script.exists():
+                askpass_permissions = oct(askpass_script.stat().st_mode)[-3:]
+
+            # Create repo directory
+            Path(path).mkdir(parents=True, exist_ok=True)
+            (Path(path) / "test.py").write_text("# Test")
+            return MagicMock()
+
+        mock_repo_class.clone_from.side_effect = mock_clone_from
+
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            result = runner.invoke(cli, ["scan", "owner/repo", "--config", "test.yaml"])
+
+            # Verify scan succeeded
+            assert result.exit_code == 0
+
+            # Verify askpass script had correct permissions (0o700)
+            assert (
+                askpass_permissions == "700"
+            ), f"Askpass script permissions were {askpass_permissions}, expected 700"
+
+    @patch("drep.cli.IssueManager")
+    @patch("drep.cli.DocumentationAnalyzer")
+    @patch("drep.cli.RepositoryScanner")
+    @patch("drep.cli.init_database")
+    @patch("drep.cli.GiteaAdapter")
+    @patch("drep.cli.load_config")
+    @patch("drep.cli.Repo")
+    def test_token_not_in_environment_variables(
+        self,
+        mock_repo_class,
+        mock_load_config,
+        mock_adapter_class,
+        mock_init_db,
+        mock_scanner_class,
+        mock_analyzer_class,
+        mock_issue_manager_class,
+        runner,
+        tmp_path,
+    ):
+        """Test that token is NOT exposed in environment variables (security fix)."""
+        # Setup minimal mocks
+        config = MagicMock()
+        config.gitea.url = "http://test"
+        from pydantic import SecretStr
+
+        config.gitea.token = SecretStr("test-token-secret")
+        config.documentation = MagicMock()
+        config.database_url = "sqlite:///./test.db"
+        config.llm = None
+        mock_load_config.return_value = config
+
+        adapter = AsyncMock()
+        adapter.get_default_branch = AsyncMock(return_value="main")
+        adapter.close = AsyncMock()
+        mock_adapter_class.return_value = adapter
+
+        session = MagicMock()
+        mock_init_db.return_value = session
+
+        scanner = MagicMock()
+        scanner.scan_repository = AsyncMock(return_value=(["test.py"], "abc123"))
+        scanner.record_scan = MagicMock()
+        scanner.close = AsyncMock()
+        scanner.llm_client = None
+        mock_scanner_class.return_value = scanner
+
+        analyzer = MagicMock()
+        analyzer.analyze_file = AsyncMock(return_value=MagicMock(to_findings=lambda: []))
+        mock_analyzer_class.return_value = analyzer
+
+        issue_manager = MagicMock()
+        issue_manager.create_issues_for_findings = AsyncMock()
+        mock_issue_manager_class.return_value = issue_manager
+
+        # Track environment variables passed to git
+        git_env = None
+
+        def mock_clone_from(url, path, branch, env):
+            nonlocal git_env
+            git_env = env
+
+            # Create repo directory
+            Path(path).mkdir(parents=True, exist_ok=True)
+            (Path(path) / "test.py").write_text("# Test")
+            return MagicMock()
+
+        mock_repo_class.clone_from.side_effect = mock_clone_from
+
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            result = runner.invoke(cli, ["scan", "owner/repo", "--config", "test.yaml"])
+
+            # Verify scan succeeded
+            assert result.exit_code == 0
+
+            # Verify token is NOT in environment variables
+            assert git_env is not None, "Git environment should have been captured"
+            assert (
+                "DREP_GIT_TOKEN" not in git_env
+            ), "Token should NOT be in DREP_GIT_TOKEN environment variable"
+
+            # Verify no environment variable contains the token value
+            token_value = "test-token-secret"
+            for key, value in git_env.items():
+                assert token_value not in str(
+                    value
+                ), f"Token found in environment variable {key}: {value}"
+
+            # Verify GIT_ASKPASS is set (our security mechanism)
+            assert "GIT_ASKPASS" in git_env, "GIT_ASKPASS should be set for secure token handling"
+
+    @patch("drep.cli.IssueManager")
+    @patch("drep.cli.DocumentationAnalyzer")
+    @patch("drep.cli.RepositoryScanner")
+    @patch("drep.cli.init_database")
+    @patch("drep.cli.GiteaAdapter")
+    @patch("drep.cli.load_config")
+    @patch("drep.cli.Repo")
+    @patch("drep.cli.shutil.rmtree")
+    def test_cleanup_failure_is_logged_and_reported(
+        self,
+        mock_rmtree,
+        mock_repo_class,
+        mock_load_config,
+        mock_adapter_class,
+        mock_init_db,
+        mock_scanner_class,
+        mock_analyzer_class,
+        mock_issue_manager_class,
+        runner,
+        tmp_path,
+    ):
+        """Test that cleanup failures are logged with SECURITY warning and reported to user."""
+        # Setup minimal mocks
+        config = MagicMock()
+        config.gitea.url = "http://test"
+        from pydantic import SecretStr
+
+        config.gitea.token = SecretStr("test-token")
+        config.documentation = MagicMock()
+        config.database_url = "sqlite:///./test.db"
+        config.llm = None
+        mock_load_config.return_value = config
+
+        adapter = AsyncMock()
+        adapter.get_default_branch = AsyncMock(return_value="main")
+        adapter.close = AsyncMock()
+        mock_adapter_class.return_value = adapter
+
+        session = MagicMock()
+        mock_init_db.return_value = session
+
+        scanner = MagicMock()
+        scanner.scan_repository = AsyncMock(return_value=(["test.py"], "abc123"))
+        scanner.record_scan = MagicMock()
+        scanner.close = AsyncMock()
+        scanner.llm_client = None
+        mock_scanner_class.return_value = scanner
+
+        analyzer = MagicMock()
+        analyzer.analyze_file = AsyncMock(return_value=MagicMock(to_findings=lambda: []))
+        mock_analyzer_class.return_value = analyzer
+
+        issue_manager = MagicMock()
+        issue_manager.create_issues_for_findings = AsyncMock()
+        mock_issue_manager_class.return_value = issue_manager
+
+        # Mock successful clone
+        def mock_clone_from(url, path, branch, env):
+            Path(path).mkdir(parents=True, exist_ok=True)
+            (Path(path) / "test.py").write_text("# Test")
+            return MagicMock()
+
+        mock_repo_class.clone_from.side_effect = mock_clone_from
+
+        # Mock rmtree to fail
+        mock_rmtree.side_effect = PermissionError("Permission denied")
+
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            result = runner.invoke(cli, ["scan", "owner/repo", "--config", "test.yaml"])
+
+            # Verify scan completed (cleanup failure doesn't crash)
+            assert result.exit_code == 0
+
+            # Verify user was warned about cleanup failure
+            assert "WARNING: Failed to clean up temporary credentials" in result.output
+            assert "Permission denied" in result.output
+
+            # Verify rmtree was called (cleanup attempted)
+            mock_rmtree.assert_called_once()
