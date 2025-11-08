@@ -890,7 +890,8 @@ class LLMClient:
                 (ignored if circuit_breaker provided)
         """
         # Store configuration parameters
-        self.endpoint = endpoint.rstrip("/")  # Remove trailing slash for consistent URL building
+        # Bedrock doesn't need endpoint, so handle None gracefully
+        self.endpoint = endpoint.rstrip("/") if endpoint else None
         self.model = model  # Model name (e.g., "gpt-4", "llama-2-70b", etc.)
         self.temperature = temperature  # Sampling temperature: lower = more deterministic
         self.max_tokens = max_tokens  # Maximum completion tokens per request
@@ -917,6 +918,12 @@ class LLMClient:
                 model=bedrock_model,
             )
             self._using_bedrock = True
+
+            # CRITICAL: Preserve Bedrock model in self.model for cache keys and metadata
+            # Without this, cache lookups use model=None and different Bedrock models
+            # can serve stale cached results from each other
+            self.model = bedrock_model
+
             logger.info(
                 f"LLM backend: AWS Bedrock (region={bedrock_region}, model={bedrock_model})"
             )

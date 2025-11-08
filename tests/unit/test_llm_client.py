@@ -909,3 +909,86 @@ async def test_llm_client_bedrock_with_code_quality_analyzer():
         assert findings_list[0].type == "bug"  # Field is "type" not "category"
         assert findings_list[0].message == "Potential bug found"
         assert mock_bedrock.invoke_model.called
+
+
+@pytest.mark.asyncio
+async def test_llm_client_bedrock_preserves_model_name():
+    """Test LLMClient preserves Bedrock model name in self.model (P1 cache bug)."""
+    import json
+    from pathlib import Path
+    from tempfile import TemporaryDirectory
+    from unittest.mock import MagicMock, patch
+
+    from drep.llm.cache import IntelligentCache
+    from drep.llm.client import LLMClient
+
+    with patch("boto3.client") as mock_boto_client:
+        mock_bedrock = MagicMock()
+        mock_boto_client.return_value = mock_bedrock
+
+        # Mock Bedrock response
+        mock_body = json.dumps(
+            {
+                "content": [{"type": "text", "text": "Test response"}],
+                "usage": {"input_tokens": 10, "output_tokens": 5},
+            }
+        ).encode("utf-8")
+        mock_response = {
+            "body": MagicMock(read=MagicMock(return_value=mock_body), close=MagicMock())
+        }
+
+        async def mock_invoke(*args, **kwargs):
+            return mock_response
+
+        # Mock asyncio.to_thread to return mock response
+        with patch("asyncio.to_thread", side_effect=mock_invoke):
+            # Create client with Bedrock provider
+            # model=None is allowed for Bedrock (Issue #1 fix)
+            client = LLMClient(
+                endpoint="http://dummy",  # Currently required even for Bedrock
+                model=None,  # Optional for Bedrock
+                provider="bedrock",
+                bedrock_region="us-east-1",
+                bedrock_model="anthropic.claude-sonnet-4-5-20250929-v1:0",
+            )
+
+            # CRITICAL: client.model should be set to bedrock_model
+            assert (
+                client.model == "anthropic.claude-sonnet-4-5-20250929-v1:0"
+            ), "client.model should be set to bedrock_model for cache keys and metadata"
+
+            # Verify cache would use correct model name
+            with TemporaryDirectory() as temp_dir:
+                cache = IntelligentCache(cache_dir=Path(temp_dir), ttl_days=30)
+                client.cache = cache
+
+                response = await client.analyze_code(system_prompt="Test", code="def foo(): pass")
+
+                # Verify response has correct model name
+                assert (
+                    response.model == "anthropic.claude-sonnet-4-5-20250929-v1:0"
+                ), "LLMResponse.model should contain actual Bedrock model name"
+
+
+@pytest.mark.asyncio
+async def test_llm_client_bedrock_allows_none_endpoint():
+    """Test LLMClient handles endpoint=None for Bedrock provider (bonus issue)."""
+    from unittest.mock import MagicMock, patch
+
+    from drep.llm.client import LLMClient
+
+    with patch("boto3.client") as mock_boto_client:
+        mock_bedrock = MagicMock()
+        mock_boto_client.return_value = mock_bedrock
+
+        # This should work - Bedrock doesn't need endpoint
+        client = LLMClient(
+            endpoint=None,  # Should be allowed for Bedrock
+            model=None,
+            provider="bedrock",
+            bedrock_region="us-west-2",
+            bedrock_model="anthropic.claude-haiku-4-5-20251001-v1:0",
+        )
+
+        assert client._provider == "bedrock"
+        assert client.bedrock_client.model == "anthropic.claude-haiku-4-5-20251001-v1:0"
