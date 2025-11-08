@@ -32,7 +32,7 @@ Intelligent review workflow for Gitea pull requests:
 ### Flexible LLM Backends
 Choose the right LLM backend for your needs:
 - **Local models:** Complete privacy with Ollama, llama.cpp, LM Studio
-- **AWS Bedrock:** Enterprise compliance with Claude 4.5 on AWS ✅
+- **AWS Bedrock:** Enterprise compliance with Claude 4.5 on AWS ✅ **NEW**
 - **Anthropic Direct:** Latest Claude models with direct API access (planned)
 - **OpenAI-compatible:** Works with any compatible endpoint
 
@@ -398,7 +398,7 @@ llm:
     max_size_gb: 10
 ```
 
-**Option 2: AWS Bedrock (Planned - Phase 3.3)**
+**Option 2: AWS Bedrock (Phase 3.3 - Complete) ✅**
 ```yaml
 llm:
   enabled: true
@@ -550,7 +550,7 @@ See **[docs/roadmap.md](docs/roadmap.md)** for the complete development roadmap 
 **🚀 Phase 3: Platform & LLM Backend Expansion** (Sprint 5-8) - IN PROGRESS
 - ✅ Phase 3.1: GitHub adapter (API complete, 58 unit + 6 integration tests)
 - ✅ Phase 3.2: CLI integration for GitHub (scan & review commands)
-- 🔜 Phase 3.3: AWS Bedrock LLM provider (4-6 hours, enterprise compliance)
+- ✅ Phase 3.3: AWS Bedrock LLM provider (Claude 4.5, enterprise compliance, 17 tests)
 - 🔜 Phase 3.4: Anthropic Direct LLM provider (3-4 hours, latest Claude models)
 - 🔜 Phase 3.5: GitLab adapter support
 
