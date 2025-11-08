@@ -271,17 +271,15 @@ async def test_metrics_tracking_workflow(mock_http_response, temp_cache_dir):
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_backward_compatibility_workflow(mock_http_response):
-    """Test backward compatibility - client works without injected dependencies.
+async def test_default_dependencies_workflow(mock_http_response):
+    """Test client works without injected dependencies.
 
     Tests:
     1. Create client without injecting dependencies
     2. Verify defaults are created
     3. Verify functionality works
-    4. Verify legacy metrics still accessible (with warnings)
+    4. Verify metrics tracked properly
     """
-    import warnings
-
     # Force HTTP backend
     with patch("open_agent.utils.create_client", side_effect=ImportError("Mocked"), create=True):
         with patch("httpx.AsyncClient") as mock_client_class:
@@ -293,7 +291,7 @@ async def test_backward_compatibility_workflow(mock_http_response):
             mock_instance.aclose = AsyncMock()
             mock_client_class.return_value = mock_instance
 
-            # Create client without injected dependencies (backward compat)
+            # Create client without injected dependencies
             client = LLMClient(
                 endpoint="http://test",
                 model="test-model",
@@ -312,11 +310,8 @@ async def test_backward_compatibility_workflow(mock_http_response):
             # Verify it works
             assert isinstance(result, LLMResponse)
 
-            # Test legacy metrics (should work but warn)
-            with warnings.catch_warnings(record=True) as w:
-                warnings.simplefilter("always")
-                _ = client.total_requests
-                assert len(w) == 1
-                assert issubclass(w[0].category, DeprecationWarning)
+            # Verify metrics tracked properly
+            assert client.metrics.total_requests > 0
+            assert client.metrics.total_tokens > 0
 
             await client.close()

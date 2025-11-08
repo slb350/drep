@@ -186,7 +186,7 @@ def calculate_total(items: list) -> float:
         commit_sha="same_sha",
     )
 
-    after_first = llm_client.total_requests
+    after_first = llm_client.metrics.total_requests
 
     # Second analysis with same commit SHA - should use cache
     await generator.analyze_file(
@@ -196,7 +196,7 @@ def calculate_total(items: list) -> float:
         commit_sha="same_sha",  # Same SHA
     )
 
-    after_second = llm_client.total_requests
+    after_second = llm_client.metrics.total_requests
     final_stats = llm_client.cache.get_stats()
 
     # Verify cache hit

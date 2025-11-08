@@ -72,7 +72,6 @@ import logging  # For structured logging throughout the module
 import re  # For regex-based JSON extraction and cleaning
 import subprocess  # For executing git commands to get commit SHA
 import time  # For rate limiting time calculations
-import warnings  # For deprecation warnings on legacy properties
 from dataclasses import dataclass  # For simple data classes (LLMResponse)
 from pathlib import Path  # For cross-platform file path handling
 from typing import Any, Dict, Optional, Type  # Type hints for better IDE support and clarity
@@ -1016,11 +1015,6 @@ class LLMClient:
         # Metrics tracking
         self.metrics = LLMMetrics()
 
-        # Legacy metrics (private attributes, use properties for access)
-        self._total_requests = 0
-        self._total_tokens = 0
-        self._failed_requests = 0
-
         # Circuit breaker (optional, use injected or create default)
         if circuit_breaker is not _UNSET:
             # Explicitly provided (can be an instance or None to disable)
@@ -1035,87 +1029,6 @@ class LLMClient:
         else:
             # Circuit breaker disabled via flag
             self.circuit_breaker = None
-
-    @property
-    def total_requests(self) -> int:
-        """Get total request count (DEPRECATED).
-
-        .. deprecated::
-            Use :attr:`metrics.total_requests` instead.
-
-        Returns:
-            Total number of requests made to the LLM
-        """
-        warnings.warn(
-            "total_requests is deprecated. Use client.metrics.total_requests instead.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        return self._total_requests
-
-    @total_requests.setter
-    def total_requests(self, value: int):
-        """Set total request count (DEPRECATED)."""
-        warnings.warn(
-            "total_requests is deprecated. Use client.metrics directly instead.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        self._total_requests = value
-
-    @property
-    def total_tokens(self) -> int:
-        """Get total token count (DEPRECATED).
-
-        .. deprecated::
-            Use :attr:`metrics.total_tokens` instead.
-
-        Returns:
-            Total number of tokens consumed across all requests
-        """
-        warnings.warn(
-            "total_tokens is deprecated. Use client.metrics.total_tokens instead.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        return self._total_tokens
-
-    @total_tokens.setter
-    def total_tokens(self, value: int):
-        """Set total token count (DEPRECATED)."""
-        warnings.warn(
-            "total_tokens is deprecated. Use client.metrics directly instead.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        self._total_tokens = value
-
-    @property
-    def failed_requests(self) -> int:
-        """Get failed request count (DEPRECATED).
-
-        .. deprecated::
-            Use :attr:`metrics.failed_requests` instead.
-
-        Returns:
-            Number of requests that failed after all retries
-        """
-        warnings.warn(
-            "failed_requests is deprecated. Use client.metrics.failed_requests instead.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        return self._failed_requests
-
-    @failed_requests.setter
-    def failed_requests(self, value: int):
-        """Set failed request count (DEPRECATED)."""
-        warnings.warn(
-            "failed_requests is deprecated. Use client.metrics directly instead.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        self._failed_requests = value
 
     async def analyze_code(
         self,
@@ -1202,10 +1115,6 @@ class LLMClient:
                     # Update actual tokens
                     ctx.set_actual_tokens(tokens_used)
 
-                    # Update legacy metrics (internal use, no warning)
-                    self._total_requests += 1
-                    self._total_tokens += tokens_used
-
                     # Record metrics
                     self.metrics.record_request(
                         analyzer=analyzer,
@@ -1246,7 +1155,6 @@ class LLMClient:
 
             except Exception as e:
                 last_exception = e
-                self._failed_requests += 1
 
                 # Record failed request
                 self.metrics.record_request(
@@ -1476,30 +1384,12 @@ class LLMClient:
         return None
 
     def get_metrics(self) -> Dict[str, Any]:
-        """Get current metrics (legacy dict format for backward compatibility).
+        """Get current metrics as dictionary.
 
         Returns:
-            Dict with metrics including legacy fields
+            Dict with metrics from metrics object
         """
-        success_rate = (
-            (self._total_requests - self._failed_requests) / self._total_requests
-            if self._total_requests > 0
-            else 0.0
-        )
-
-        avg_tokens = self._total_tokens / self._total_requests if self._total_requests > 0 else 0
-
-        # Return merged dict with both legacy and new metrics
-        return {
-            # Legacy fields
-            "total_requests": self._total_requests,
-            "failed_requests": self._failed_requests,
-            "total_tokens": self._total_tokens,
-            "success_rate": success_rate,
-            "avg_tokens_per_request": avg_tokens,
-            # New metrics object for advanced usage
-            "metrics_object": self.metrics,
-        }
+        return self.metrics.to_dict()
 
     def get_llm_metrics(self) -> LLMMetrics:
         """Get LLMMetrics object with detailed statistics.
