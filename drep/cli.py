@@ -138,7 +138,8 @@ async def _run_scan(
             url=str(config.github.url) if config.github.url else "https://api.github.com",
         )
         # GitHub git URL format: https://github.com/owner/repo.git
-        if "github.com" in str(config.github.url):
+        # Handle default GitHub.com case (config.github.url is None)
+        if config.github.url is None or "github.com" in str(config.github.url):
             git_url = f"https://github.com/{owner}/{repo}.git"
         else:
             # GitHub Enterprise - extract hostname from API URL

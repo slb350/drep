@@ -749,6 +749,103 @@ class GitHubAdapter(BaseAdapter):
                 f"{e.response.text}"
             )
 
+    async def create_pr_review_comment(
+        self,
+        owner: str,
+        repo: str,
+        pr_number: int,
+        commit_sha: str,
+        file_path: str,
+        line: int,
+        body: str,
+    ) -> None:
+        """Post an inline review comment on specific line (Gitea-compatible interface).
+
+        This method provides a Gitea-compatible interface that accepts commit_sha
+        explicitly, rather than fetching it from the PR. This is used by PR analyzers
+        that already have the commit SHA available.
+
+        Args:
+            owner: Repository owner
+            repo: Repository name
+            pr_number: Pull request number
+            commit_sha: Commit SHA to comment on (usually PR head)
+            file_path: File path relative to repo root
+            line: Line number in new version (after changes)
+            body: Comment body (markdown supported)
+
+        Raises:
+            ValueError: If review comment creation fails or network/API error occurs
+
+        Note:
+            Implementation currently only supports comments on added/modified lines
+            (side="RIGHT"). Comments on deleted lines are not supported.
+        """
+        # Post review comment using GitHub's review comments API
+        url = f"{self.url}/repos/{owner}/{repo}/pulls/{pr_number}/comments"
+
+        # GitHub requires these fields:
+        # - commit_id: SHA of the commit to comment on
+        # - path: file path
+        # - line: line number
+        # - side: "LEFT" (deleted) or "RIGHT" (added)
+        # Assumption: Only support comments on added lines (side="RIGHT"), not deleted lines
+        payload = {
+            "commit_id": commit_sha,
+            "path": file_path,
+            "line": line,
+            "side": "RIGHT",  # GitHub requires explicit side
+            "body": body,
+        }
+
+        try:
+            response = await self.client.post(url, json=payload)
+            response.raise_for_status()
+
+            logger.debug(
+                f"Posted review comment on PR #{pr_number} in {owner}/{repo} at {file_path}:{line}",
+                extra={
+                    "repo_id": f"{owner}/{repo}",
+                    "pr_number": pr_number,
+                    "file_path": file_path,
+                    "line": line,
+                },
+            )
+
+        # Handle network timeout errors
+        except httpx.TimeoutException:
+            logger.error(
+                f"Timeout posting review comment on PR #{pr_number} in {owner}/{repo}",
+                extra={"repo_id": f"{owner}/{repo}", "pr_number": pr_number},
+            )
+            raise ValueError(
+                f"GitHub API request timed out posting review comment on PR #{pr_number} "
+                f"in {owner}/{repo}"
+            )
+        except (httpx.ConnectError, httpx.ConnectTimeout):
+            logger.error(
+                f"Failed to connect to GitHub API for {owner}/{repo}",
+                extra={"repo_id": f"{owner}/{repo}"},
+            )
+            raise ValueError(f"Cannot connect to GitHub API at {self.url} for {owner}/{repo}")
+        except httpx.HTTPStatusError as e:
+            # Check for rate limit exceeded
+            self._check_rate_limit(e.response, owner, repo)
+
+            logger.error(
+                f"HTTP error posting review comment on PR #{pr_number} in {owner}/{repo}",
+                extra={
+                    "repo_id": f"{owner}/{repo}",
+                    "pr_number": pr_number,
+                    "http_status": e.response.status_code,
+                    "response_text": e.response.text,
+                },
+            )
+            raise ValueError(
+                f"Failed to create review comment on PR #{pr_number} in {owner}/{repo}: "
+                f"{e.response.text}"
+            )
+
     async def get_file_content(self, owner: str, repo: str, file_path: str, ref: str) -> str:
         """Get file content at a specific git reference.
 
