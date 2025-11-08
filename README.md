@@ -5,9 +5,9 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 
-Automated code review and documentation improvement tool for **Gitea and GitHub**. Powered by your local LLM via an OpenAI-compatible API (LM Studio, Ollama, open-agent-sdk).
+Automated code review and documentation improvement tool for **Gitea and GitHub**. Powered by your choice of LLM backend: local models (LM Studio, Ollama, llama.cpp), AWS Bedrock, or Anthropic's Claude API.
 
-> **Current Scope:** Python repositories on Gitea and GitHub. Support for GitLab and additional languages is in active development.
+> **Current Scope:** Python repositories on Gitea and GitHub. Support for GitLab, additional languages, and AWS Bedrock/Anthropic providers is in active development.
 
 ## Features
 
@@ -29,12 +29,12 @@ Intelligent review workflow for Gitea pull requests:
 - Generates inline comments tied to added lines
 - Produces a high-level summary with approval signal
 
-### Local LLM Powered
-Complete privacy and control:
-- Uses your local LLM (Ollama, llama.cpp, LM Studio)
-- No external API calls
-- No cloud dependencies
-- No usage costs
+### Flexible LLM Backends
+Choose the right LLM backend for your needs:
+- **Local models:** Complete privacy with Ollama, llama.cpp, LM Studio
+- **AWS Bedrock:** Enterprise compliance with Claude on AWS (planned)
+- **Anthropic Direct:** Latest Claude models with direct API access (planned)
+- **OpenAI-compatible:** Works with any compatible endpoint
 
 ### Platform Support & Roadmap
 - **Available now:** Gitea, GitHub + Python repositories
@@ -334,6 +334,7 @@ def calculate_total(...):
 
 ### Full config.yaml Example
 
+**Option 1: Local LLM (LM Studio / Ollama)**
 ```yaml
 gitea:
   url: http://localhost:3000
@@ -367,6 +368,42 @@ llm:
     directory: ~/.cache/drep/llm
     ttl_days: 30
     max_size_gb: 10
+```
+
+**Option 2: AWS Bedrock (Planned - Phase 3.3)**
+```yaml
+llm:
+  enabled: true
+  provider: bedrock
+
+  bedrock:
+    region: us-east-1
+    model: anthropic.claude-3-5-sonnet-20241022-v2:0
+    # Optional: Uses AWS credentials chain if not specified
+    # aws_access_key_id: ${AWS_ACCESS_KEY_ID}
+    # aws_secret_access_key: ${AWS_SECRET_ACCESS_KEY}
+
+  temperature: 0.2
+  max_tokens: 4000
+  cache:
+    enabled: true
+```
+
+**Option 3: Anthropic Direct (Planned - Phase 3.4)**
+```yaml
+llm:
+  enabled: true
+  provider: anthropic
+
+  anthropic:
+    api_key: ${ANTHROPIC_API_KEY}
+    model: claude-3-5-sonnet-20241022
+
+  temperature: 0.2
+  max_tokens: 4000
+  requests_per_minute: 50  # Anthropic tier limits
+  cache:
+    enabled: true
 ```
 
 ### Environment Variables
@@ -482,10 +519,12 @@ See **[docs/roadmap.md](docs/roadmap.md)** for the complete development roadmap 
 - E2E integration tests, API documentation, dependency injection
 - 18 new tests added, 411 total tests passing
 
-**🚀 Phase 3: Platform Expansion** (Sprint 5-8) - IN PROGRESS
+**🚀 Phase 3: Platform & LLM Backend Expansion** (Sprint 5-8) - IN PROGRESS
 - ✅ Phase 3.1: GitHub adapter (API complete, 58 unit + 6 integration tests)
 - ✅ Phase 3.2: CLI integration for GitHub (scan & review commands)
-- 🔜 Phase 3.3: GitLab adapter support
+- 🔜 Phase 3.3: AWS Bedrock LLM provider (4-6 hours, enterprise compliance)
+- 🔜 Phase 3.4: Anthropic Direct LLM provider (3-4 hours, latest Claude models)
+- 🔜 Phase 3.5: GitLab adapter support
 
 **🌟 Phase 4: Feature Expansion** (Sprint 9-12)
 - Multi-language support (JavaScript, TypeScript, Go, Rust)

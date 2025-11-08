@@ -1,10 +1,17 @@
 # Technical Design: drep
 
-**Document Version:** 3.3
+**Document Version:** 3.4
 **Last Updated:** 2025-11-08
-**Status:** Phase 1 & 2 Complete, Phase 3.1 & 3.2 Complete
+**Status:** Phase 1 & 2 Complete, Phase 3.1 & 3.2 Complete, Phase 3.3 & 3.4 Planned
 
 ## Recent Updates
+
+**v3.4 (2025-11-08):**
+- Phase 3.3 (AWS Bedrock) and 3.4 (Anthropic) added to roadmap
+- LLM provider architecture expanded to support multiple backends
+- Direct SDK integration approach documented (boto3, anthropic)
+- Configuration examples and API translation patterns defined
+- Combined effort: 7-10 hours for both providers
 
 **v3.3 (2025-11-08):**
 - Phase 3.2 CLI Integration for GitHub completed
@@ -33,19 +40,25 @@
 
 - **Platform:** Gitea and GitHub (self-hosted, cloud, or GitHub.com)
 - **Language:** Python only
+- **LLM Backends:** OpenAI-compatible (Ollama, LM Studio, llama.cpp), with AWS Bedrock and Anthropic planned
 - **Features:**
   - Typo detection in comments, docstrings, and markdown
   - Pattern matching for formatting issues
-  - Issue creation on Gitea with findings
+  - Issue creation on Gitea/GitHub with findings
   - Incremental scanning (only changed files)
-- **Interface:** CLI command `drep scan owner/repo`
+  - LLM-powered code quality and PR reviews
+- **Interface:** CLI commands (`drep scan`, `drep review`)
 
 ### Post-MVP Expansions
 
 - **Phase 1:** Quick Wins (Security, BaseAdapter, Constants, Enhanced Markdown) ✅ COMPLETE
 - **Phase 2:** Quality & Testing (E2E Tests, API Documentation, Dependency Injection) ✅ COMPLETE
-- **Phase 3.1:** GitHub Adapter ✅ COMPLETE
-- **Phase 3.2:** GitLab Adapter (planned)
+- **Phase 3:** Platform & LLM Backend Expansion
+  - **3.1:** GitHub Adapter ✅ COMPLETE
+  - **3.2:** GitHub CLI Integration ✅ COMPLETE
+  - **3.3:** AWS Bedrock LLM Provider (planned, 4-6 hours)
+  - **3.4:** Anthropic Direct LLM Provider (planned, 3-4 hours)
+  - **3.5:** GitLab Adapter (planned)
 - **Phase 4:** Feature Expansion (Multi-language support, Web UI)
 - **Phase 5:** Advanced Features (Vector database, custom rules, performance)
 
@@ -1163,7 +1176,7 @@ MVP is complete when:
 - **Deliverables:** `tests/integration/`, `docs/api/`, dependency injection support
 - **Tests:** 18 new tests added, 411 total tests passing
 
-### Phase 3: Platform Expansion (Sprint 5-8) - IN PROGRESS
+### Phase 3: Platform & LLM Backend Expansion (Sprint 5-8) - IN PROGRESS
 **Phase 3.1: GitHub Adapter** ✅ COMPLETE (2025-11-08)
 - Complete GitHub REST API v3 adapter implementation
 - All 7 BaseAdapter abstract methods implemented:
@@ -1217,7 +1230,47 @@ MVP is complete when:
 - **Deliverables:** Multi-platform CLI commands, get_default_branch() implementation
 - **Tests:** 11 new tests added (7 adapter + 4 CLI), 483 total tests passing
 
-**Phase 3.3: GitLab Adapter** (Next)
+**Phase 3.3: AWS Bedrock LLM Provider** (Planned - 4-6 hours)
+- Add AWS Bedrock as LLM backend for enterprise compliance
+- Direct SDK integration via boto3
+- Support for Claude 3.5, Opus, Haiku, and other Bedrock models
+- OpenAI format → Bedrock Claude Messages API translation
+- AWS credentials handling (IAM, access keys, session tokens)
+- Region selection and model deployment configuration
+- Comprehensive error handling (throttling, quotas, permissions)
+- **Configuration:**
+  ```yaml
+  llm:
+    provider: bedrock
+    bedrock:
+      region: us-east-1
+      model: anthropic.claude-3-5-sonnet-20241022-v2:0
+  ```
+- **Benefits:** Enterprise compliance, AWS integration, separate quotas
+- **Deliverables:** `drep/llm/providers/bedrock_client.py`, 10+ tests
+- **See:** [docs/roadmap.md](roadmap.md#33-aws-bedrock-llm-provider) for complete specification
+
+**Phase 3.4: Anthropic Direct LLM Provider** (Planned - 3-4 hours)
+- Add Anthropic API as direct LLM backend
+- Direct SDK integration via anthropic library (~0.25.0)
+- Support for Claude 3.5 Sonnet, Opus, Sonnet, Haiku models
+- OpenAI format → Anthropic Messages API translation
+- System prompt extraction (separate field in Anthropic API)
+- Tier-based rate limit handling (Build, Scale, Enterprise)
+- Lower latency than Bedrock (direct API access)
+- **Configuration:**
+  ```yaml
+  llm:
+    provider: anthropic
+    anthropic:
+      api_key: ${ANTHROPIC_API_KEY}
+      model: claude-3-5-sonnet-20241022
+  ```
+- **Benefits:** Latest models first, simpler setup, higher rate limits
+- **Deliverables:** `drep/llm/providers/anthropic_client.py`, 8+ tests
+- **See:** [docs/roadmap.md](roadmap.md#34-anthropic-direct-llm-provider) for complete specification
+
+**Phase 3.5: GitLab Adapter** (Planned)
 - GitLab adapter implementation
 - Cross-platform testing and validation
 - Webhook support for all platforms
