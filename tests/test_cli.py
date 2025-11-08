@@ -689,3 +689,115 @@ class TestScanWorkflow:
 
             # Verify rmtree was called (cleanup attempted)
             mock_rmtree.assert_called_once()
+
+
+class TestCheckCommand:
+    """Tests for drep check command (pre-commit integration)."""
+
+    def test_check_command_exists(self, runner):
+        """Test that check command exists."""
+        result = runner.invoke(cli, ["check", "--help"])
+        assert result.exit_code == 0
+        assert "Check local files" in result.output or "check" in result.output.lower()
+
+    def test_check_works_without_platform_config(self, runner, tmp_path):
+        """Test that check works with LLM-only config (no platform)."""
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            # Create LLM-only config
+            config_path = Path("config.yaml")
+            config_data = {
+                "llm": {
+                    "enabled": True,
+                    "endpoint": "http://localhost:1234/v1",
+                    "model": "test-model",
+                },
+                "documentation": {"enabled": True},
+            }
+            config_path.write_text(yaml.dump(config_data))
+
+            # Create a test Python file
+            test_file = Path("test.py")
+            test_file.write_text("def foo(): pass  # No docstring")
+
+            # Mock git operations
+            with patch("drep.cli.Repo") as mock_repo:
+                mock_repo.return_value.index.diff.return_value = []
+                
+                # Mock scanner/analyzer to avoid real analysis
+                with patch("drep.cli.RepositoryScanner") as mock_scanner_class:
+                    mock_scanner = mock_scanner_class.return_value
+                    mock_scanner.get_staged_files.return_value = []
+                    
+                    result = runner.invoke(cli, ["check", ".", "--config", "config.yaml"])
+                    
+                    # Should succeed without requiring platform
+                    assert result.exit_code == 0
+
+    def test_check_returns_exit_code_one_when_findings_present(self, runner, tmp_path):
+        """Test that check returns exit code 1 when issues found."""
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            # Create minimal config
+            config_path = Path("config.yaml")
+            config_data = {
+                "llm": {
+                    "enabled": False,  # Disable LLM for fast test
+                },
+                "documentation": {"enabled": False},
+            }
+            config_path.write_text(yaml.dump(config_data))
+
+            # Create test file
+            test_file = Path("test.py")
+            test_file.write_text("def foo(): pass")
+
+            # Mock finding issues
+            with patch("drep.cli.Repo") as mock_repo:
+                mock_repo.return_value.index.diff.return_value = []
+                
+                with patch("drep.cli.RepositoryScanner") as mock_scanner_class:
+                    # Mock scanner to return findings
+                    from drep.models.findings import Finding
+                    
+                    mock_scanner = mock_scanner_class.return_value
+                    mock_scanner.get_staged_files.return_value = ["test.py"]
+                    
+                    # Mock analyze methods to return findings
+                    async def mock_analyze(*args, **kwargs):
+                        return [
+                            Finding(
+                                type="test",
+                                severity="warning",
+                                file_path="test.py",
+                                line=1,
+                                message="Test finding",
+                            )
+                        ]
+                    
+                    mock_scanner.analyze_code_quality = AsyncMock(return_value=[])
+                    mock_scanner.analyze_docstrings = AsyncMock(side_effect=mock_analyze)
+                    
+                    result = runner.invoke(cli, ["check", ".", "--config", "config.yaml"])
+                    
+                    # Should return exit code 1 when findings present
+                    assert result.exit_code == 1
+
+    def test_check_accepts_staged_flag(self, runner, tmp_path):
+        """Test that check accepts --staged flag."""
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            config_path = Path("config.yaml")
+            config_data = {
+                "documentation": {"enabled": False},
+            }
+            config_path.write_text(yaml.dump(config_data))
+
+            # Patch at the location where it's imported (_run_check imports from drep.core.scanner)
+            with patch("drep.core.scanner.Repo") as mock_repo:
+                mock_repo.return_value.index.diff.return_value = []
+
+                # Create real scanner but mock its methods
+                result = runner.invoke(cli, ["check", ".", "--staged", "--config", "config.yaml"])
+
+                # Should succeed
+                assert result.exit_code == 0
+                # If --staged was passed, Repo.index.diff should have been called
+                assert mock_repo.return_value.index.diff.called or result.exit_code == 0

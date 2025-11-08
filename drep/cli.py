@@ -570,6 +570,155 @@ async def _run_review(
 
 
 @cli.command()
+@click.argument("path", default=".")
+@click.option("--staged", is_flag=True, help="Only check git staged files")
+@click.option("--config", default=None, help="Config file path (optional for local-only mode)")
+@click.option("--exit-zero", is_flag=True, help="Always exit with 0 (don't block commits)")
+@click.option("--format", type=click.Choice(["text", "json"]), default="text", help="Output format")
+def check(path, staged, config, exit_zero, format):
+    """Check local files without platform API (pre-commit friendly).
+
+    Examples:
+        drep check                    # Check current directory
+        drep check --staged           # Check only staged files
+        drep check path/to/file.py    # Check specific file
+        drep check --exit-zero        # Warn without blocking commits
+    """
+    import asyncio
+    from pathlib import Path
+
+    # Run async check
+    findings = asyncio.run(_run_check(path, staged, config, format))
+
+    # Print findings summary
+    if findings:
+        click.echo(f"\n✗ Found {len(findings)} issue(s)", err=True)
+
+        # Exit with appropriate code
+        if not exit_zero:
+            raise SystemExit(1)
+    else:
+        click.echo("✓ No issues found")
+
+
+async def _run_check(path: str, staged: bool, config_path: str, output_format: str):
+    """Run local file check without platform API.
+
+    Args:
+        path: Path to check (file or directory)
+        staged: Only check staged files
+        config_path: Config file path (optional)
+        output_format: Output format (text or json)
+
+    Returns:
+        List of Finding objects
+    """
+    import logging
+    from pathlib import Path as PathLib
+    from drep.core.scanner import RepositoryScanner
+    from drep.config import load_config
+    from drep.db import init_database
+
+    logger = logging.getLogger(__name__)
+
+    # Load config with platform not required (pre-commit mode)
+    if config_path:
+        try:
+            config = load_config(config_path, require_platform=False)
+        except Exception as e:
+            click.echo(f"Error loading config: {e}", err=True)
+            raise SystemExit(1)
+    else:
+        # Create minimal config for local-only mode
+        from drep.models.config import Config
+        config = Config(require_platform_config=False)
+
+    # Initialize database (in-memory for check command)
+    db = init_database("sqlite:///:memory:")
+
+    # Initialize scanner
+    scanner = RepositoryScanner(db, config=config)
+
+    try:
+        # Get files to check
+        path_obj = PathLib(path).resolve()
+
+        if staged:
+            # Get staged files from git index
+            files = scanner.get_staged_files(str(path_obj))
+            click.echo(f"Checking {len(files)} staged file(s)...")
+        else:
+            # Get all Python/Markdown files
+            if path_obj.is_file():
+                # Single file
+                files = [str(path_obj.relative_to(path_obj.parent))]
+            else:
+                # Directory - get all .py and .md files
+                files = scanner._get_all_python_files(str(path_obj))
+            click.echo(f"Checking {len(files)} file(s)...")
+
+        if not files:
+            return []
+
+        # Analyze files
+        all_findings = []
+
+        # Code quality analysis (if LLM enabled)
+        if config.llm and config.llm.enabled:
+            code_findings = await scanner.analyze_code_quality(
+                repo_path=str(path_obj.parent if path_obj.is_file() else path_obj),
+                files=files,
+                repo_id="local",
+                commit_sha="local",
+            )
+            all_findings.extend(code_findings)
+
+        # Docstring analysis (if LLM enabled)
+        if config.llm and config.llm.enabled:
+            docstring_findings = await scanner.analyze_docstrings(
+                repo_path=str(path_obj.parent if path_obj.is_file() else path_obj),
+                files=files,
+                repo_id="local",
+                commit_sha="local",
+            )
+            all_findings.extend(docstring_findings)
+
+        # Output findings
+        if all_findings:
+            _output_findings(all_findings, output_format)
+
+        return all_findings
+
+    finally:
+        # Cleanup
+        await scanner.close()
+
+
+def _output_findings(findings, format_type):
+    """Output findings in specified format.
+
+    Args:
+        findings: List of Finding objects
+        format_type: 'text' or 'json'
+    """
+    if format_type == "json":
+        import json
+        findings_dict = [f.model_dump() for f in findings]
+        click.echo(json.dumps(findings_dict, indent=2))
+    else:
+        # Text format: file:line:column: severity: message
+        click.echo()
+        for finding in findings:
+            col = f":{finding.column}" if finding.column else ""
+            click.echo(
+                f"{finding.file_path}:{finding.line}{col}: "
+                f"{finding.severity}: {finding.message}"
+            )
+            if finding.suggestion:
+                click.echo(f"  → {finding.suggestion}")
+
+
+@cli.command()
 @click.option("--config", default="config.yaml", help="Config file path")
 def validate(config):
     """Validate configuration file and environment variables.
