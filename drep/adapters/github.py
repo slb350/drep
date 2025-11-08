@@ -192,7 +192,13 @@ class GitHubAdapter(BaseAdapter):
             Created issue number
 
         Raises:
-            ValueError: If issue creation fails or network/API error occurs
+            ValueError: If issue creation fails due to:
+                - Network timeout (request exceeds 30s timeout)
+                - Connection failure (cannot reach GitHub API)
+                - GitHub API rate limit exceeded (X-RateLimit-Remaining: 0)
+                - Invalid JSON response from GitHub API
+                - Missing required 'number' field in API response
+                - HTTP errors (401 Unauthorized, 403 Forbidden, 500 Server Error, etc.)
         """
         url = f"{self.url}/repos/{owner}/{repo}/issues"
         payload = {"title": title, "body": body}
