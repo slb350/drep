@@ -77,6 +77,12 @@ Return JSON only:
   "approve": true,
   "concerns": []
 }}
+
+**Severity Levels (MUST use exactly one of these):**
+- "info": Informational note or minor style issue
+- "suggestion": Suggested improvement (not required)
+- "warning": Potential issue that should be addressed
+- "critical": Serious bug, security issue, or blocker that MUST be fixed
 """
 
 
