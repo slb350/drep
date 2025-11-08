@@ -101,6 +101,9 @@ def test_complete_subclass_can_be_instantiated():
         async def get_file_content(self, owner: str, repo: str, file_path: str, ref: str) -> str:
             return ""
 
+        async def get_default_branch(self, owner: str, repo: str) -> str:
+            return "main"
+
         async def close(self) -> None:
             pass
 

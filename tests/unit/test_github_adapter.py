@@ -1292,3 +1292,47 @@ async def test_get_default_branch_invalid_json():
             await adapter.get_default_branch("owner", "repo")
     finally:
         await adapter.close()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_get_default_branch_connect_error():
+    """Test get_default_branch() handles connection failures."""
+    from drep.adapters.github import GitHubAdapter
+
+    # Mock connection error
+    respx.get("https://api.github.com/repos/owner/repo").mock(
+        side_effect=httpx.ConnectError("Failed to connect")
+    )
+
+    adapter = GitHubAdapter("ghp_token")
+
+    try:
+        with pytest.raises(ValueError, match="Cannot connect to GitHub API"):
+            await adapter.get_default_branch("owner", "repo")
+    finally:
+        await adapter.close()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_get_default_branch_rate_limit_exceeded():
+    """Test get_default_branch() detects and reports rate limit errors."""
+    from drep.adapters.github import GitHubAdapter
+
+    # Mock rate limit exceeded response
+    respx.get("https://api.github.com/repos/owner/repo").mock(
+        return_value=httpx.Response(
+            403,
+            headers={"X-RateLimit-Remaining": "0", "X-RateLimit-Reset": "1640000000"},
+            json={"message": "API rate limit exceeded"},
+        )
+    )
+
+    adapter = GitHubAdapter("ghp_token")
+
+    try:
+        with pytest.raises(ValueError, match="rate limit exceeded.*Resets at"):
+            await adapter.get_default_branch("owner", "repo")
+    finally:
+        await adapter.close()
