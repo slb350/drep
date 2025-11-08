@@ -162,7 +162,10 @@ def calculate_total(items):
 """
 
         response = await client.analyze_code(
-            system_prompt="Analyze this Python function. Is there a more Pythonic way to write it? Respond briefly.",
+            system_prompt=(
+                "Analyze this Python function. "
+                "Is there a more Pythonic way to write it? Respond briefly."
+            ),
             code=code,
         )
 

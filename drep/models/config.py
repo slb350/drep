@@ -3,7 +3,7 @@
 from pathlib import Path
 from typing import List, Optional
 
-from pydantic import BaseModel, Field, HttpUrl, SecretStr, model_validator
+from pydantic import BaseModel, Field, HttpUrl, SecretStr, field_validator, model_validator
 
 
 class GiteaConfig(BaseModel):
@@ -56,12 +56,61 @@ class CacheConfig(BaseModel):
     max_size_gb: float = Field(default=10.0, ge=0.1, description="Maximum cache size in gigabytes")
 
 
+class BedrockConfig(BaseModel):
+    """AWS Bedrock configuration."""
+
+    region: str = Field(
+        default="us-east-1",
+        description="AWS region for Bedrock (e.g., us-east-1, us-west-2)",
+    )
+    model: str = Field(
+        default="anthropic.claude-sonnet-4-5-20250929-v1:0",
+        description="Bedrock model ID (e.g., anthropic.claude-sonnet-4-5-20250929-v1:0)",
+    )
+
+    @field_validator("model")
+    @classmethod
+    def validate_model_id(cls, v: str) -> str:
+        """Validate Bedrock model ID format.
+
+        Ensures model ID starts with a valid provider prefix.
+        """
+        valid_prefixes = [
+            "anthropic.",
+            "global.anthropic.",
+            "amazon.",
+            "global.amazon.",
+            "meta.",
+            "global.meta.",
+            "cohere.",
+            "global.cohere.",
+        ]
+        if not any(v.startswith(prefix) for prefix in valid_prefixes):
+            raise ValueError(
+                f"Invalid Bedrock model ID: {v}. "
+                f"Must start with a valid provider prefix: {', '.join(valid_prefixes)}"
+            )
+        return v
+
+
 class LLMConfig(BaseModel):
     """LLM client configuration."""
 
     enabled: bool = Field(default=False, description="Enable LLM-powered analysis")
-    endpoint: HttpUrl = Field(..., description="OpenAI-compatible API endpoint")
-    model: str = Field(..., description="Model name to use")
+    provider: str = Field(
+        default="openai-compatible",
+        description="LLM provider: openai-compatible, bedrock, anthropic",
+    )
+    endpoint: Optional[HttpUrl] = Field(
+        default=None,
+        description="OpenAI-compatible API endpoint (required for openai-compatible provider)",
+    )
+    model: Optional[str] = Field(
+        default=None, description="Model name to use (required for openai-compatible provider)"
+    )
+    bedrock: Optional[BedrockConfig] = Field(
+        default=None, description="AWS Bedrock configuration (required if provider=bedrock)"
+    )
     api_key: Optional[str] = Field(
         default=None, description="API key (optional for local endpoints)"
     )
@@ -90,6 +139,40 @@ class LLMConfig(BaseModel):
         default=100000, ge=1000, description="Rate limit: tokens per minute"
     )
     cache: CacheConfig = Field(default_factory=CacheConfig, description="Cache settings")
+
+    @model_validator(mode="after")
+    def validate_bedrock_config(self) -> "LLMConfig":
+        """Ensure Bedrock config is provided when provider is bedrock.
+
+        Raises:
+            ValueError: If provider is bedrock but bedrock config is missing
+        """
+        if self.provider == "bedrock" and self.bedrock is None:
+            raise ValueError(
+                "Bedrock provider requires 'bedrock' configuration with region and model. "
+                "Please add 'bedrock:' section to your config."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def validate_openai_config(self) -> "LLMConfig":
+        """Ensure endpoint and model are provided for openai-compatible provider.
+
+        Raises:
+            ValueError: If provider is openai-compatible but endpoint or model is missing
+        """
+        if self.provider == "openai-compatible":
+            if self.endpoint is None:
+                raise ValueError(
+                    "OpenAI-compatible provider requires 'endpoint' field. "
+                    "Please specify the API endpoint URL."
+                )
+            if self.model is None:
+                raise ValueError(
+                    "OpenAI-compatible provider requires 'model' field. "
+                    "Please specify the model name to use."
+                )
+        return self
 
 
 class Config(BaseModel):

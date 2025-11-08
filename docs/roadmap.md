@@ -352,47 +352,45 @@ Full GitHub adapter implementation with CLI integration.
 ---
 
 ### 3.3 AWS Bedrock LLM Provider
-**Effort:** Medium | **Impact:** High | **Status:** Not Started
+**Effort:** Medium | **Impact:** High | **Status:** ✅ Complete (2025-11-08)
 
-Add AWS Bedrock as LLM provider for Claude and other models via AWS infrastructure.
+Add AWS Bedrock as LLM provider for Claude 4.5 and other models via AWS infrastructure.
 
 **Rationale:**
 - Enterprise users often require AWS-hosted models for compliance
-- Bedrock provides access to Claude 3.5, Titan, and other models
+- Bedrock provides access to Claude Sonnet 4.5, Haiku 4.5, and other models
 - AWS quotas and billing separate from Anthropic direct
 - Better integration with existing AWS infrastructure
 
-**Implementation Strategy:** Option 1 (Direct SDK Integration)
+**Implementation Strategy:** Option 1 (Direct SDK Integration) ✅
 
 **Tasks:**
-- [ ] Add `boto3` dependency (AWS SDK for Python)
-- [ ] Create `drep/llm/providers/bedrock_client.py`
-- [ ] Implement BedrockProvider class:
-  - `chat_completion()` - Translate to Bedrock InvokeModel API
-  - `_format_messages()` - Convert OpenAI format → Claude Messages API
-  - `_parse_response()` - Extract content from Bedrock response
-  - `_handle_streaming()` - Support streaming responses (optional)
-- [ ] Update `drep/models/config.py` with Bedrock config schema:
+- [x] Add `boto3` dependency (AWS SDK for Python)
+- [x] Create `drep/llm/providers/bedrock_client.py`
+- [x] Implement BedrockClient class:
+  - `chat_completion()` - Translate to Bedrock InvokeModel API ✅
+  - `_format_messages()` - Convert OpenAI format → Claude Messages API ✅
+  - `_parse_response()` - Extract content from Bedrock response ✅
+  - ~~`_handle_streaming()`~~ - Deferred (not required for v1)
+- [x] Update `drep/models/config.py` with Bedrock config schema:
   ```python
   class BedrockConfig(BaseModel):
       region: str = Field(default="us-east-1")
-      model: str = Field(default="anthropic.claude-3-5-sonnet-20241022-v2:0")
-      aws_access_key_id: Optional[SecretStr] = None  # Uses AWS credentials chain
-      aws_secret_access_key: Optional[SecretStr] = None
-      aws_session_token: Optional[SecretStr] = None
+      model: str = Field(default="anthropic.claude-sonnet-4-5-20250929-v1:0")
+      # Uses AWS credentials chain (no explicit keys in config)
   ```
-- [ ] Modify `LLMClient.__init__()` to detect Bedrock provider
-- [ ] Add provider detection logic in `drep/llm/client.py`
-- [ ] Handle Bedrock-specific rate limits and throttling
-- [ ] Add error handling for AWS-specific errors (throttling, permissions)
-- [ ] Write 10+ tests:
-  - Message format translation
-  - Response parsing
-  - Error handling (ThrottlingException, etc.)
-  - AWS credentials handling
-  - Integration test with real Bedrock (optional)
-- [ ] Update `docs/llm-setup.md` with Bedrock configuration
-- [ ] Add example config in README.md
+- [x] Modify `LLMClient.__init__()` to detect Bedrock provider
+- [x] Add provider detection logic in `drep/llm/client.py`
+- [x] Handle Bedrock-specific rate limits and throttling
+- [x] Add error handling for AWS-specific errors (throttling, permissions)
+- [x] Write 15 tests:
+  - Message format translation ✅
+  - Response parsing ✅
+  - Error handling (ThrottlingException, AccessDeniedException, ValidationException) ✅
+  - AWS credentials handling (credentials chain) ✅
+  - ~~Integration test with real Bedrock~~ - Not required (mocked tests sufficient)
+- [x] Update `docs/llm-setup.md` with Bedrock configuration
+- [x] Add example config in README.md
 
 **Configuration Example:**
 ```yaml
@@ -413,7 +411,9 @@ llm:
 ```
 
 **AWS Models Supported:**
-- `anthropic.claude-3-5-sonnet-20241022-v2:0` - Claude 3.5 Sonnet (recommended)
+- `anthropic.claude-sonnet-4-5-20250929-v1:0` - **Claude Sonnet 4.5** (recommended) ✅
+- `anthropic.claude-haiku-4-5-20251001-v1:0` - **Claude Haiku 4.5** (fast & cost-effective) ✅
+- `anthropic.claude-3-5-sonnet-20241022-v2:0` - Claude 3.5 Sonnet
 - `anthropic.claude-3-opus-20240229-v1:0` - Claude 3 Opus
 - `anthropic.claude-3-sonnet-20240229-v1:0` - Claude 3 Sonnet
 - `anthropic.claude-3-haiku-20240307-v1:0` - Claude 3 Haiku
@@ -780,7 +780,7 @@ Track these metrics to measure roadmap progress:
 |-------|----------|----------|--------|--------------|
 | Phase 1: Quick Wins | 2 sprints | Sprint 1-2 | ✅ Complete | Security audit, BaseAdapter, constants |
 | Phase 2: Quality & Testing | 2 sprints | Sprint 3-4 | ✅ Complete | E2E tests, API docs, DI refactor |
-| Phase 3: Platform & LLM Expansion | 4 sprints | Sprint 5-8 | 🔄 In Progress | GitHub ✅, Bedrock, Anthropic, GitLab |
+| Phase 3: Platform & LLM Expansion | 4 sprints | Sprint 5-8 | 🔄 In Progress | GitHub ✅, Bedrock ✅, Anthropic, GitLab |
 | Phase 4: Feature Expansion | 4 sprints | Sprint 9-12 | Not Started | Multi-language, Web UI |
 | Phase 5: Advanced Features | Ongoing | Backlog | Not Started | Performance, optimization |
 
@@ -789,7 +789,7 @@ Track these metrics to measure roadmap progress:
 **Phase 3 Progress:**
 - 3.1 Complete GitHub Adapter: Not Started
 - 3.2 GitHub CLI Integration: ✅ Complete (2025-11-08)
-- 3.3 AWS Bedrock Provider: Not Started (4-6 hours)
+- 3.3 AWS Bedrock Provider: ✅ Complete (2025-11-08)
 - 3.4 Anthropic Direct Provider: Not Started (3-4 hours)
 - 3.5 Complete GitLab Adapter: Not Started
 

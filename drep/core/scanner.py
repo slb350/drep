@@ -53,7 +53,16 @@ class RepositoryScanner:
                     max_size_bytes=int(config.llm.cache.max_size_gb * 1024**3),
                 )
 
-            # Create LLM client
+            # Create LLM client with provider detection
+            provider = getattr(config.llm, "provider", "openai-compatible")
+            bedrock_region = None
+            bedrock_model = None
+
+            # Extract Bedrock config if provider is bedrock
+            if provider == "bedrock" and config.llm.bedrock:
+                bedrock_region = config.llm.bedrock.region
+                bedrock_model = config.llm.bedrock.model
+
             self.llm_client = LLMClient(
                 endpoint=str(config.llm.endpoint),
                 model=config.llm.model,
@@ -69,6 +78,9 @@ class RepositoryScanner:
                 requests_per_minute=config.llm.requests_per_minute,
                 max_tokens_per_minute=config.llm.max_tokens_per_minute,
                 cache=cache,
+                provider=provider,
+                bedrock_region=bedrock_region,
+                bedrock_model=bedrock_model,
             )
 
             # Create code quality analyzer

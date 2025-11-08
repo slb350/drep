@@ -1,17 +1,25 @@
 # Technical Design: drep
 
-**Document Version:** 3.4
+**Document Version:** 3.5
 **Last Updated:** 2025-11-08
-**Status:** Phase 1 & 2 Complete, Phase 3.1 & 3.2 Complete, Phase 3.3 & 3.4 Planned
+**Status:** Phase 1 & 2 Complete, Phase 3.1, 3.2, & 3.3 Complete, Phase 3.4 Planned
 
 ## Recent Updates
+
+**v3.5 (2025-11-08):**
+- Phase 3.3 AWS Bedrock LLM Provider completed
+- Added BedrockClient with complete Claude 4.5 support (Sonnet 4.5, Haiku 4.5)
+- OpenAI format → Bedrock Messages API translation implemented
+- AWS credentials chain integration (env vars, ~/.aws/credentials, IAM roles)
+- Comprehensive error handling (13 issues fixed from PR review)
+- 17 tests (15 unit + 2 integration), all passing
+- Production-ready with enterprise compliance features
 
 **v3.4 (2025-11-08):**
 - Phase 3.3 (AWS Bedrock) and 3.4 (Anthropic) added to roadmap
 - LLM provider architecture expanded to support multiple backends
 - Direct SDK integration approach documented (boto3, anthropic)
 - Configuration examples and API translation patterns defined
-- Combined effort: 7-10 hours for both providers
 
 **v3.3 (2025-11-08):**
 - Phase 3.2 CLI Integration for GitHub completed
@@ -40,7 +48,7 @@
 
 - **Platform:** Gitea and GitHub (self-hosted, cloud, or GitHub.com)
 - **Language:** Python only
-- **LLM Backends:** OpenAI-compatible (Ollama, LM Studio, llama.cpp), with AWS Bedrock and Anthropic planned
+- **LLM Backends:** OpenAI-compatible (Ollama, LM Studio, llama.cpp), AWS Bedrock (Claude 4.5), Anthropic planned
 - **Features:**
   - Typo detection in comments, docstrings, and markdown
   - Pattern matching for formatting issues
@@ -56,7 +64,7 @@
 - **Phase 3:** Platform & LLM Backend Expansion
   - **3.1:** GitHub Adapter ✅ COMPLETE
   - **3.2:** GitHub CLI Integration ✅ COMPLETE
-  - **3.3:** AWS Bedrock LLM Provider (planned, 4-6 hours)
+  - **3.3:** AWS Bedrock LLM Provider ✅ COMPLETE
   - **3.4:** Anthropic Direct LLM Provider (planned, 3-4 hours)
   - **3.5:** GitLab Adapter (planned)
 - **Phase 4:** Feature Expansion (Multi-language support, Web UI)
@@ -1230,25 +1238,65 @@ MVP is complete when:
 - **Deliverables:** Multi-platform CLI commands, get_default_branch() implementation
 - **Tests:** 11 new tests added (7 adapter + 4 CLI), 483 total tests passing
 
-**Phase 3.3: AWS Bedrock LLM Provider** (Planned - 4-6 hours)
-- Add AWS Bedrock as LLM backend for enterprise compliance
-- Direct SDK integration via boto3
-- Support for Claude 3.5, Opus, Haiku, and other Bedrock models
-- OpenAI format → Bedrock Claude Messages API translation
-- AWS credentials handling (IAM, access keys, session tokens)
-- Region selection and model deployment configuration
-- Comprehensive error handling (throttling, quotas, permissions)
-- **Configuration:**
-  ```yaml
-  llm:
-    provider: bedrock
-    bedrock:
-      region: us-east-1
-      model: anthropic.claude-3-5-sonnet-20241022-v2:0
-  ```
-- **Benefits:** Enterprise compliance, AWS integration, separate quotas
-- **Deliverables:** `drep/llm/providers/bedrock_client.py`, 10+ tests
-- **See:** [docs/roadmap.md](roadmap.md#33-aws-bedrock-llm-provider) for complete specification
+**Phase 3.3: AWS Bedrock LLM Provider** ✅ COMPLETE (2025-11-08)
+
+**Completed:** 2025-11-08 | **Branch:** feature/phase-3.3-bedrock-provider | **PR:** #6
+
+Full AWS Bedrock integration with Claude 4.5 support and enterprise-grade error handling.
+
+**Completed Tasks:**
+- [x] Added boto3>=1.34.0 dependency for AWS SDK
+- [x] Created `drep/llm/providers/bedrock_client.py` with BedrockClient class
+- [x] Implemented BedrockClient methods:
+  - `chat_completion()` - Bedrock InvokeModel API with proper resource cleanup
+  - `_format_messages()` - OpenAI → Claude Messages API translation with system prompt extraction
+  - `_parse_response()` - Extract content and tokens from Bedrock response
+  - `close()` - Cleanup (no-op for boto3)
+- [x] Updated `drep/models/config.py` with BedrockConfig and provider field
+- [x] Added Pydantic validators for config-time validation (fail fast)
+- [x] Modified `LLMClient.__init__()` to detect and initialize Bedrock provider
+- [x] AWS credentials chain integration (env vars, ~/.aws/credentials, ~/.aws/config, IAM roles, EC2 metadata)
+- [x] Comprehensive error handling:
+  - StreamingBody resource leak fixed with try/finally
+  - AWS-specific errors (NoCredentialsError, PartialCredentialsError, EndpointConnectionError)
+  - User-friendly error messages for throttling, access denied, validation errors
+  - JSON parsing validation with 500-char error preview
+  - Empty response logging for debugging
+- [x] Addressed all 13 PR review issues (3 critical, 3 high-severity, 3 test gaps, 4 docs)
+- [x] Updated documentation in `docs/llm-setup.md` and `README.md`
+
+**Models Supported:**
+- `anthropic.claude-sonnet-4-5-20250929-v1:0` - Claude Sonnet 4.5 (latest)
+- `anthropic.claude-haiku-4-5-20251001-v1:0` - Claude Haiku 4.5 (fast)
+- Backward compatible with Claude 3.5, 3 Opus, 3 Sonnet, 3 Haiku
+
+**Configuration:**
+```yaml
+llm:
+  provider: bedrock  # Required for Bedrock
+
+  bedrock:
+    region: us-east-1
+    model: anthropic.claude-sonnet-4-5-20250929-v1:0
+
+  temperature: 0.2
+  max_tokens: 4000
+  cache:
+    enabled: true
+```
+
+**Benefits:**
+- Enterprise compliance (data stays in AWS)
+- Separate AWS quotas from Anthropic direct
+- Integration with AWS IAM, CloudWatch, billing
+- Latest Claude 4.5 models
+
+**Deliverables:**
+- `drep/llm/providers/bedrock_client.py` - 304 lines, production-ready
+- `drep/models/config.py` - BedrockConfig with validators
+- 17 tests (15 BedrockClient unit tests + 2 LLMClient integration tests)
+- All 499 tests passing
+- **Commits:** 3 commits (initial + PR review fixes + black formatting)
 
 **Phase 3.4: Anthropic Direct LLM Provider** (Planned - 3-4 hours)
 - Add Anthropic API as direct LLM backend

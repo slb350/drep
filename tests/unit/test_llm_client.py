@@ -631,3 +631,364 @@ async def test_llm_client_close():
     await client.close()
 
     client.client.close.assert_called_once()
+
+
+# Test Bedrock Provider Integration
+
+
+@pytest.mark.asyncio
+async def test_llm_client_bedrock_provider_integration():
+    """Test LLMClient.analyze_code() with Bedrock provider."""
+    import json
+    from unittest.mock import patch
+
+    with patch("boto3.client") as mock_boto_client:
+        # Mock Bedrock response
+        mock_bedrock = MagicMock()
+        mock_boto_client.return_value = mock_bedrock
+
+        mock_body = json.dumps(
+            {
+                "content": [{"type": "text", "text": "Analysis result"}],
+                "usage": {"input_tokens": 100, "output_tokens": 50},
+            }
+        ).encode("utf-8")
+
+        mock_response = {
+            "body": MagicMock(read=MagicMock(return_value=mock_body), close=MagicMock())
+        }
+        mock_bedrock.invoke_model = MagicMock(return_value=mock_response)
+
+        client = LLMClient(
+            endpoint="http://ignored",
+            model="ignored",
+            provider="bedrock",
+            bedrock_region="us-east-1",
+            bedrock_model="anthropic.claude-sonnet-4-5-20250929-v1:0",
+        )
+
+        response = await client.analyze_code(
+            system_prompt="Test prompt",
+            code="def foo(): pass",
+        )
+
+        assert response.content == "Analysis result"
+        assert response.tokens_used == 150
+        assert mock_bedrock.invoke_model.called
+
+
+def test_llm_client_bedrock_provider_missing_config():
+    """Test LLMClient raises ValueError when Bedrock provider lacks config."""
+    with pytest.raises(ValueError, match="Bedrock provider requires bedrock_region"):
+        LLMClient(
+            endpoint="http://localhost:11434/v1",
+            model="test",
+            provider="bedrock",
+            # Missing bedrock_region and bedrock_model
+        )
+
+
+@pytest.mark.asyncio
+async def test_llm_client_bedrock_analyze_code_json():
+    """Test LLMClient.analyze_code_json() with Bedrock provider (Gap #1 from PR review)."""
+    import json
+    from unittest.mock import patch
+
+    with patch("boto3.client") as mock_boto_client:
+        # Mock Bedrock response with JSON
+        mock_bedrock = MagicMock()
+        mock_boto_client.return_value = mock_bedrock
+
+        mock_body = json.dumps(
+            {
+                "content": [{"type": "text", "text": '{"issues": ["bug1", "bug2"], "count": 2}'}],
+                "usage": {"input_tokens": 100, "output_tokens": 50},
+            }
+        ).encode("utf-8")
+
+        mock_response = {
+            "body": MagicMock(read=MagicMock(return_value=mock_body), close=MagicMock())
+        }
+        mock_bedrock.invoke_model = MagicMock(return_value=mock_response)
+
+        client = LLMClient(
+            endpoint="http://ignored",
+            model="ignored",
+            provider="bedrock",
+            bedrock_region="us-east-1",
+            bedrock_model="anthropic.claude-sonnet-4-5-20250929-v1:0",
+        )
+
+        result = await client.analyze_code_json(
+            system_prompt="Find issues",
+            code="def foo(): pass",
+        )
+
+        # Verify JSON parsed correctly
+        assert "issues" in result
+        assert result["count"] == 2
+        assert len(result["issues"]) == 2
+
+
+@pytest.mark.asyncio
+async def test_llm_client_bedrock_retry_on_throttling():
+    """Test LLMClient retries on Bedrock ThrottlingException (Gap #2 from PR review)."""
+    import json
+    from unittest.mock import patch
+
+    from botocore.exceptions import ClientError
+
+    with patch("boto3.client") as mock_boto_client:
+        mock_bedrock = MagicMock()
+        mock_boto_client.return_value = mock_bedrock
+
+        # First call: ThrottlingException
+        # Second call: Success
+        call_count = 0
+
+        def invoke_with_throttle(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+
+            if call_count == 1:
+                # First call fails with throttling
+                error_response = {
+                    "Error": {"Code": "ThrottlingException", "Message": "Rate exceeded"}
+                }
+                raise ClientError(error_response, "invoke_model")
+            else:
+                # Second call succeeds
+                mock_body = json.dumps(
+                    {
+                        "content": [{"type": "text", "text": "Success"}],
+                        "usage": {"input_tokens": 10, "output_tokens": 5},
+                    }
+                ).encode("utf-8")
+                return {
+                    "body": MagicMock(read=MagicMock(return_value=mock_body), close=MagicMock())
+                }
+
+        mock_bedrock.invoke_model = MagicMock(side_effect=invoke_with_throttle)
+
+        client = LLMClient(
+            endpoint="http://ignored",
+            model="ignored",
+            provider="bedrock",
+            bedrock_region="us-east-1",
+            bedrock_model="anthropic.claude-sonnet-4-5-20250929-v1:0",
+            max_retries=3,
+            retry_delay=0.01,  # Fast retry for testing
+        )
+
+        response = await client.analyze_code(system_prompt="Test", code="def foo(): pass")
+
+        # Should succeed after retry
+        assert response.content == "Success"
+        assert call_count == 2  # Verify it retried once
+
+
+@pytest.mark.asyncio
+async def test_llm_client_bedrock_cache_integration():
+    """Test LLMClient cache hit/miss with Bedrock provider (Gap #3 from PR review)."""
+    import json
+    import tempfile
+    from pathlib import Path
+    from unittest.mock import patch
+
+    from drep.llm.cache import IntelligentCache
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        with patch("boto3.client") as mock_boto_client:
+            mock_bedrock = MagicMock()
+            mock_boto_client.return_value = mock_bedrock
+
+            mock_body = json.dumps(
+                {
+                    "content": [{"type": "text", "text": "Cached response"}],
+                    "usage": {"input_tokens": 100, "output_tokens": 50},
+                }
+            ).encode("utf-8")
+
+            mock_response = {
+                "body": MagicMock(read=MagicMock(return_value=mock_body), close=MagicMock())
+            }
+            mock_bedrock.invoke_model = MagicMock(return_value=mock_response)
+
+            # Create cache instance
+            cache = IntelligentCache(cache_dir=Path(temp_dir), ttl_days=30)
+
+            client = LLMClient(
+                endpoint="http://ignored",
+                model="ignored",
+                provider="bedrock",
+                bedrock_region="us-east-1",
+                bedrock_model="anthropic.claude-sonnet-4-5-20250929-v1:0",
+                cache=cache,
+            )
+
+            # First call - cache miss
+            response1 = await client.analyze_code(system_prompt="Test", code="def foo(): pass")
+            assert response1.content == "Cached response"
+            assert mock_bedrock.invoke_model.call_count == 1
+
+            # Second call - cache hit (same prompt + code)
+            response2 = await client.analyze_code(system_prompt="Test", code="def foo(): pass")
+            assert response2.content == "Cached response"
+            # Should NOT call Bedrock again
+            assert mock_bedrock.invoke_model.call_count == 1  # Still 1
+
+
+@pytest.mark.asyncio
+async def test_llm_client_bedrock_with_code_quality_analyzer():
+    """Test Bedrock with CodeQualityAnalyzer end-to-end (Gap #4 from PR review)."""
+    import json
+    from unittest.mock import patch
+
+    from drep.code_quality.analyzer import CodeQualityAnalyzer
+
+    with patch("boto3.client") as mock_boto_client:
+        mock_bedrock = MagicMock()
+        mock_boto_client.return_value = mock_bedrock
+
+        # Mock Bedrock response with code quality findings
+        # Must match CodeAnalysisResult schema (issues, not findings)
+        mock_body = json.dumps(
+            {
+                "content": [
+                    {
+                        "type": "text",
+                        "text": json.dumps(
+                            {
+                                "summary": "Found 1 issue",
+                                "issues": [  # Must be "issues" not "findings"
+                                    {
+                                        "line": 1,  # Required
+                                        "severity": "high",  # Required
+                                        "category": "bug",  # Required
+                                        "message": "Potential bug found",  # Required
+                                        "suggestion": "Fix the bug",  # Required
+                                        "code_snippet": "def foo():",  # Required
+                                    }
+                                ],
+                            }
+                        ),
+                    }
+                ],
+                "usage": {"input_tokens": 200, "output_tokens": 100},
+            }
+        ).encode("utf-8")
+
+        mock_response = {
+            "body": MagicMock(read=MagicMock(return_value=mock_body), close=MagicMock())
+        }
+        mock_bedrock.invoke_model = MagicMock(return_value=mock_response)
+
+        client = LLMClient(
+            endpoint="http://ignored",
+            model="ignored",
+            provider="bedrock",
+            bedrock_region="us-east-1",
+            bedrock_model="anthropic.claude-sonnet-4-5-20250929-v1:0",
+        )
+
+        analyzer = CodeQualityAnalyzer(client)
+
+        # Analyze Python code - returns list of Finding objects
+        findings_list = await analyzer.analyze_file(
+            file_path="test.py",
+            content="def foo():\n    pass",
+            repo_id="test/repo",
+            commit_sha="abc123",
+        )
+
+        # Verify analyzer works with Bedrock
+        assert isinstance(findings_list, list)
+        assert len(findings_list) > 0
+        # Note: CodeAnalysisResult.to_findings() converts "high" → "error"
+        assert findings_list[0].severity == "error"  # "high" is converted to "error"
+        assert findings_list[0].type == "bug"  # Field is "type" not "category"
+        assert findings_list[0].message == "Potential bug found"
+        assert mock_bedrock.invoke_model.called
+
+
+@pytest.mark.asyncio
+async def test_llm_client_bedrock_preserves_model_name():
+    """Test LLMClient preserves Bedrock model name in self.model (P1 cache bug)."""
+    import json
+    from pathlib import Path
+    from tempfile import TemporaryDirectory
+    from unittest.mock import MagicMock, patch
+
+    from drep.llm.cache import IntelligentCache
+    from drep.llm.client import LLMClient
+
+    with patch("boto3.client") as mock_boto_client:
+        mock_bedrock = MagicMock()
+        mock_boto_client.return_value = mock_bedrock
+
+        # Mock Bedrock response
+        mock_body = json.dumps(
+            {
+                "content": [{"type": "text", "text": "Test response"}],
+                "usage": {"input_tokens": 10, "output_tokens": 5},
+            }
+        ).encode("utf-8")
+        mock_response = {
+            "body": MagicMock(read=MagicMock(return_value=mock_body), close=MagicMock())
+        }
+
+        async def mock_invoke(*args, **kwargs):
+            return mock_response
+
+        # Mock asyncio.to_thread to return mock response
+        with patch("asyncio.to_thread", side_effect=mock_invoke):
+            # Create client with Bedrock provider
+            # model=None is allowed for Bedrock (Issue #1 fix)
+            client = LLMClient(
+                endpoint="http://dummy",  # Currently required even for Bedrock
+                model=None,  # Optional for Bedrock
+                provider="bedrock",
+                bedrock_region="us-east-1",
+                bedrock_model="anthropic.claude-sonnet-4-5-20250929-v1:0",
+            )
+
+            # CRITICAL: client.model should be set to bedrock_model
+            assert (
+                client.model == "anthropic.claude-sonnet-4-5-20250929-v1:0"
+            ), "client.model should be set to bedrock_model for cache keys and metadata"
+
+            # Verify cache would use correct model name
+            with TemporaryDirectory() as temp_dir:
+                cache = IntelligentCache(cache_dir=Path(temp_dir), ttl_days=30)
+                client.cache = cache
+
+                response = await client.analyze_code(system_prompt="Test", code="def foo(): pass")
+
+                # Verify response has correct model name
+                assert (
+                    response.model == "anthropic.claude-sonnet-4-5-20250929-v1:0"
+                ), "LLMResponse.model should contain actual Bedrock model name"
+
+
+@pytest.mark.asyncio
+async def test_llm_client_bedrock_allows_none_endpoint():
+    """Test LLMClient handles endpoint=None for Bedrock provider (bonus issue)."""
+    from unittest.mock import MagicMock, patch
+
+    from drep.llm.client import LLMClient
+
+    with patch("boto3.client") as mock_boto_client:
+        mock_bedrock = MagicMock()
+        mock_boto_client.return_value = mock_bedrock
+
+        # This should work - Bedrock doesn't need endpoint
+        client = LLMClient(
+            endpoint=None,  # Should be allowed for Bedrock
+            model=None,
+            provider="bedrock",
+            bedrock_region="us-west-2",
+            bedrock_model="anthropic.claude-haiku-4-5-20251001-v1:0",
+        )
+
+        assert client._provider == "bedrock"
+        assert client.bedrock_client.model == "anthropic.claude-haiku-4-5-20251001-v1:0"
