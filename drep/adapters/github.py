@@ -168,9 +168,10 @@ class GitHubAdapter(BaseAdapter):
         if remaining == 0:
             reset_time = response.headers.get("X-RateLimit-Reset", "unknown")
             context = f" for {owner}/{repo}" if owner and repo else ""
+            repo_id = f"{owner}/{repo}" if owner and repo else None
             logger.warning(
                 f"GitHub API rate limit exceeded{context}",
-                extra={"repo_id": f"{owner}/{repo}" if owner and repo else None, "reset_time": reset_time}
+                extra={"repo_id": repo_id, "reset_time": reset_time}
             )
             raise ValueError(
                 f"GitHub API rate limit exceeded. Resets at {reset_time}. "
@@ -686,12 +687,17 @@ class GitHubAdapter(BaseAdapter):
             # GitHub returns base64-encoded content - validate field exists
             if "content" not in data:
                 logger.error(
-                    f"GitHub API response missing 'content' field for {file_path} in {owner}/{repo}",
-                    extra={"repo_id": f"{owner}/{repo}", "file_path": file_path, "ref": ref, "response": data}
+                    f"GitHub API response missing 'content' field for {file_path}",
+                    extra={
+                        "repo_id": f"{owner}/{repo}",
+                        "file_path": file_path,
+                        "ref": ref,
+                        "response": data
+                    }
                 )
                 raise ValueError(
-                    f"GitHub API response missing 'content' field for {file_path} in {owner}/{repo}@{ref}. "
-                    "API response may be malformed."
+                    f"GitHub API response missing 'content' field for {file_path} "
+                    f"in {owner}/{repo}@{ref}. API response may be malformed."
                 )
 
             content = data["content"]
