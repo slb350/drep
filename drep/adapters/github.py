@@ -94,15 +94,22 @@ class GitHubAdapter(BaseAdapter):
         """Close HTTP client connection.
 
         Note:
-            Errors during close are logged but not re-raised to avoid
-            masking original errors in finally blocks.
+            Non-critical errors during close are logged but not re-raised to avoid
+            masking original errors in finally blocks. Critical exceptions
+            (KeyboardInterrupt, SystemExit, asyncio.CancelledError) are always
+            propagated.
         """
         try:
             await self.client.aclose()
             logger.debug("Closed GitHub adapter HTTP client")
+        except (KeyboardInterrupt, SystemExit):
+            # Always propagate user interrupts and system exit signals
+            logger.info("Close interrupted by user or system")
+            raise
         except Exception as e:
             # Suppress cleanup errors to avoid masking original errors in finally blocks
-            logger.warning(f"Error closing GitHub client: {e}")
+            # (httpx.CloseError, RuntimeError, etc.)
+            logger.warning(f"Non-critical error closing GitHub client: {e}")
 
     async def create_issue(
         self, owner: str, repo: str, title: str, body: str, labels: Optional[List[str]] = None

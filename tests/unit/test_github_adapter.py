@@ -925,3 +925,50 @@ async def test_post_review_comment_missing_head_sha():
             await adapter.post_review_comment("owner", "repo", 42, "test.py", 10, "Comment")
     finally:
         await adapter.close()
+
+
+@pytest.mark.asyncio
+async def test_close_propagates_keyboard_interrupt():
+    """Test that close() propagates KeyboardInterrupt instead of swallowing it."""
+    from unittest.mock import AsyncMock
+    from drep.adapters.github import GitHubAdapter
+
+    adapter = GitHubAdapter("ghp_token")
+
+    # Mock aclose() to raise KeyboardInterrupt
+    adapter.client.aclose = AsyncMock(side_effect=KeyboardInterrupt("User interrupted"))
+
+    # KeyboardInterrupt should propagate
+    with pytest.raises(KeyboardInterrupt):
+        await adapter.close()
+
+
+@pytest.mark.asyncio
+async def test_close_propagates_system_exit():
+    """Test that close() propagates SystemExit instead of swallowing it."""
+    from unittest.mock import AsyncMock
+    from drep.adapters.github import GitHubAdapter
+
+    adapter = GitHubAdapter("ghp_token")
+
+    # Mock aclose() to raise SystemExit
+    adapter.client.aclose = AsyncMock(side_effect=SystemExit(1))
+
+    # SystemExit should propagate
+    with pytest.raises(SystemExit):
+        await adapter.close()
+
+
+@pytest.mark.asyncio
+async def test_close_suppresses_non_critical_errors():
+    """Test that close() suppresses non-critical errors like CloseError."""
+    from unittest.mock import AsyncMock
+    from drep.adapters.github import GitHubAdapter
+
+    adapter = GitHubAdapter("ghp_token")
+
+    # Mock aclose() to raise a non-critical error
+    adapter.client.aclose = AsyncMock(side_effect=RuntimeError("Connection already closed"))
+
+    # Should not raise - error should be suppressed and logged
+    await adapter.close()  # Should complete without exception
