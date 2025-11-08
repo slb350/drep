@@ -49,3 +49,9 @@ jobs:
         run: |
           pytest -q -k "not integration"
 
+      - name: Build Sphinx documentation
+        run: |
+          pip install sphinx sphinx-rtd-theme
+          cd docs/api
+          sphinx-build -b html source build/html -W --keep-going
+

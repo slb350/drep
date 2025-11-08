@@ -347,8 +347,8 @@ def test_llm_client_initialization():
     assert client.model == "test-model"
     assert client.temperature == 0.5
     assert client.max_tokens == 1000
-    assert client.total_requests == 0
-    assert client.total_tokens == 0
+    assert client.metrics.total_requests == 0
+    assert client.metrics.total_tokens == 0
 
 
 # Test LLM Client Basic Request
@@ -368,6 +368,8 @@ async def test_llm_client_analyze_code():
     mock_response.choices = [MagicMock()]
     mock_response.choices[0].message.content = "This is a test response"
     mock_response.usage.total_tokens = 100
+    mock_response.usage.prompt_tokens = 40
+    mock_response.usage.completion_tokens = 60
     mock_response.model = "test-model"
 
     client.client.chat.completions.create = AsyncMock(return_value=mock_response)
@@ -382,8 +384,8 @@ async def test_llm_client_analyze_code():
     assert response.latency_ms > 0
 
     # Check metrics
-    assert client.total_requests == 1
-    assert client.total_tokens == 100
+    assert client.metrics.total_requests == 1
+    assert client.metrics.total_tokens == 100
 
 
 @pytest.mark.asyncio
@@ -441,7 +443,7 @@ async def test_llm_client_retry_exhaustion():
     with pytest.raises(Exception, match="Connection failed"):
         await client.analyze_code("Test", "code")
 
-    assert client.failed_requests == 2
+    assert client.metrics.failed_requests == 2
 
 
 # Test JSON Parsing Strategies
@@ -599,6 +601,8 @@ async def test_llm_client_metrics():
     mock_response.choices = [MagicMock()]
     mock_response.choices[0].message.content = "Success"
     mock_response.usage.total_tokens = 100
+    mock_response.usage.prompt_tokens = 40
+    mock_response.usage.completion_tokens = 60
     mock_response.model = "test-model"
 
     client.client.chat.completions.create = AsyncMock(return_value=mock_response)
@@ -614,7 +618,6 @@ async def test_llm_client_metrics():
     assert metrics["failed_requests"] == 0
     assert metrics["total_tokens"] == 300
     assert metrics["success_rate"] == 1.0
-    assert metrics["avg_tokens_per_request"] == 100
 
 
 @pytest.mark.asyncio

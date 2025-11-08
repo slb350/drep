@@ -47,6 +47,9 @@ The cache is critical for making drep practical to run frequently (e.g., on ever
 
 Usage Example:
 --------------
+
+::
+
     from drep.llm.cache import IntelligentCache
 
     # Initialize cache
@@ -109,12 +112,17 @@ class CacheMetadata:
     Attributes:
         model: Model name used for this response (e.g., "gpt-4", "llama-2-70b").
                Used to validate cache hits - don't return GPT-4 cache for Llama queries.
+
         temperature: Sampling temperature used (0.0-2.0). Lower = more deterministic.
                     Cached responses are only valid for the same temperature (±0.01).
+
         commit_sha: Git commit SHA when this response was cached. Used for automatic
                    invalidation - if commit changes, code changed, cache is stale.
+
         tokens_used: Total tokens consumed (prompt + completion). Used for cost tracking.
+
         latency_ms: Request latency in milliseconds when originally cached. For analytics.
+
         timestamp: Unix timestamp when cached (seconds since epoch). Used for TTL checks.
     """
 

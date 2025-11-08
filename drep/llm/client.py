@@ -42,6 +42,9 @@ resource cleanup even when requests fail. Rate limits are enforced using:
 
 Usage Example:
 --------------
+
+::
+
     client = LLMClient(
         endpoint="http://localhost:1234/v1",
         model="local-model",
@@ -89,6 +92,9 @@ from drep.llm.circuit_breaker import CircuitBreaker  # Prevents cascade failures
 from drep.llm.metrics import LLMMetrics  # Tracks usage statistics for cost monitoring
 
 logger = logging.getLogger(__name__)
+
+# Sentinel value for distinguishing "not provided" from "explicitly None"
+_UNSET = object()
 
 
 def get_current_commit_sha(repo_path: Optional[Path] = None) -> str:
@@ -206,6 +212,9 @@ class RateLimitContext:
 
     Usage Pattern:
     --------------
+
+    ::
+
         async with rate_limiter.request(estimated_tokens=1000, repo_id="my-repo") as ctx:
             response = await make_llm_request()
             ctx.set_actual_tokens(response.tokens_used)
@@ -224,13 +233,15 @@ class RateLimitContext:
         """Initialize rate limit context for a single request.
 
         Args:
-            rate_limiter: Parent RateLimiter instance that manages global state
+            rate_limiter: Parent RateLimiter instance that manages global state.
+
             estimated_tokens: Estimated token usage for this request (prompt + max_tokens).
-                            Used to reserve capacity in the token bucket. Will be adjusted
-                            to actual usage on exit.
+                Used to reserve capacity in the token bucket. Will be adjusted
+                to actual usage on exit.
+
             repo_id: Optional repository identifier for per-repo concurrency limits.
-                    Multiple requests for the same repo_id will be limited to
-                    max_concurrent_per_repo, preventing one repo from monopolizing resources.
+                Multiple requests for the same repo_id will be limited to
+                max_concurrent_per_repo, preventing one repo from monopolizing resources.
         """
         self.rate_limiter = rate_limiter
         self.estimated_tokens = estimated_tokens
@@ -407,6 +418,9 @@ class RateLimiter:
 
     Example Configuration:
     ----------------------
+
+    ::
+
         limiter = RateLimiter(
             max_concurrent=5,              # 5 requests in flight max
             requests_per_minute=60,        # 60 reqs/min = 1 req/sec average
@@ -426,20 +440,20 @@ class RateLimiter:
 
         Args:
             max_concurrent: Maximum concurrent requests globally. This is the total
-                          number of LLM requests that can be in-flight simultaneously
-                          across all repositories. Example: 5 means at most 5 requests
-                          running at once.
+                number of LLM requests that can be in-flight simultaneously
+                across all repositories. Example: 5 means at most 5 requests
+                running at once.
             requests_per_minute: Maximum requests per minute. Uses sliding window
-                                algorithm to enforce. Example: 60 means 60 requests
-                                in any 60-second window.
+                algorithm to enforce. Example: 60 means 60 requests
+                in any 60-second window.
             max_tokens_per_minute: Maximum tokens per minute. Uses token bucket
-                                  algorithm (fixed window). Example: 100000 means
-                                  100K tokens consumed in current minute before
-                                  throttling.
+                algorithm (fixed window). Example: 100000 means
+                100K tokens consumed in current minute before
+                throttling.
             max_concurrent_per_repo: Maximum concurrent requests per repository.
-                                    If None, defaults to max_concurrent (no per-repo
-                                    limit). Example: 3 means each repo can use at most
-                                    3 of the global concurrent slots.
+                If None, defaults to max_concurrent (no per-repo
+                limit). Example: 3 means each repo can use at most
+                3 of the global concurrent slots.
 
         Note:
             All limits are soft limits - they're enforced by sleeping/waiting rather
@@ -714,7 +728,7 @@ class RateLimiter:
 
 
 class LLMClient:
-    """Production-ready LLM client for OpenAI-compatible APIs with advanced features.
+    r"""Production-ready LLM client for OpenAI-compatible APIs with advanced features.
 
     This is the main entry point for all LLM operations in drep. It provides a robust,
     production-ready interface that handles the complexities of LLM integration:
@@ -739,7 +753,7 @@ class LLMClient:
        - Dramatic cost and latency reduction
 
     4. **Robust JSON Parsing** (5-level fallback strategy):
-       - Level 1: Extract from markdown code fences (```json)
+       - Level 1: Extract from markdown code fences (\`\`\`json)
        - Level 2: Direct JSON parse
        - Level 3: Fix common errors (trailing commas, single quotes)
        - Level 4: Recover truncated JSON (add missing brackets)
@@ -758,7 +772,7 @@ class LLMClient:
     that hold semaphores for the entire request duration.
 
     Typical Request Flow:
-    --------------------
+    ---------------------
     1. Check cache (if enabled) → return immediately if hit
     2. Acquire rate limit context (may sleep if limits exceeded)
     3. Make LLM API request (with retries on failure)
@@ -769,40 +783,43 @@ class LLMClient:
 
     Usage Examples:
     ---------------
-    # Initialize with local LLM (LM Studio, Ollama, etc.)
-    client = LLMClient(
-        endpoint="http://localhost:1234/v1",
-        model="local-model",
-        api_key="not-needed",  # Many local LLMs don't need keys
-        max_concurrent_global=5,
-        requests_per_minute=60,
-        max_tokens_per_minute=MAX_TOKENS_PER_MINUTE,
-    )
 
-    # Simple text analysis
-    response = await client.analyze_code(
-        system_prompt="Review this Python code for bugs",
-        code="def divide(a, b): return a / b",
-        repo_id="my-org/my-repo",
-    )
-    print(f"Analysis: {response.content}")
-    print(f"Tokens used: {response.tokens_used}")
+    ::
 
-    # JSON analysis with schema validation
-    from pydantic import BaseModel
-    class BugReport(BaseModel):
-        bugs: list[str]
-        severity: str
+        # Initialize with local LLM (LM Studio, Ollama, etc.)
+        client = LLMClient(
+            endpoint="http://localhost:1234/v1",
+            model="local-model",
+            api_key="not-needed",  # Many local LLMs don't need keys
+            max_concurrent_global=5,
+            requests_per_minute=60,
+            max_tokens_per_minute=MAX_TOKENS_PER_MINUTE,
+        )
 
-    result = await client.analyze_code_json(
-        system_prompt="Return JSON: {bugs: [...], severity: 'high'|'medium'|'low'}",
-        code="def divide(a, b): return a / b",
-        schema=BugReport,  # Validates and provides fallback parsing
-    )
-    print(f"Found {len(result['bugs'])} bugs")
+        # Simple text analysis
+        response = await client.analyze_code(
+            system_prompt="Review this Python code for bugs",
+            code="def divide(a, b): return a / b",
+            repo_id="my-org/my-repo",
+        )
+        print(f"Analysis: {response.content}")
+        print(f"Tokens used: {response.tokens_used}")
 
-    # Don't forget to close when done
-    await client.close()
+        # JSON analysis with schema validation
+        from pydantic import BaseModel
+        class BugReport(BaseModel):
+            bugs: list[str]
+            severity: str
+
+        result = await client.analyze_code_json(
+            system_prompt="Return JSON: {bugs: [...], severity: 'high'|'medium'|'low'}",
+            code="def divide(a, b): return a / b",
+            schema=BugReport,  # Validates and provides fallback parsing
+        )
+        print(f"Found {len(result['bugs'])} bugs")
+
+        # Don't forget to close when done
+        await client.close()
     """
 
     def __init__(
@@ -822,7 +839,9 @@ class LLMClient:
         max_tokens_per_minute: int = MAX_TOKENS_PER_MINUTE,
         cache: Optional["IntelligentCache"] = None,  # noqa: F821
         repo_path: Optional[Path] = None,
+        rate_limiter: Optional[RateLimiter] = None,
         enable_circuit_breaker: bool = True,
+        circuit_breaker: Optional[CircuitBreaker] = _UNSET,  # type: ignore
         circuit_breaker_threshold: int = 5,
         circuit_breaker_timeout: int = 60,
     ):
@@ -838,15 +857,34 @@ class LLMClient:
             max_retries: Maximum retry attempts
             retry_delay: Initial retry delay in seconds
             exponential_backoff: Use exponential backoff for retries
+
             max_concurrent_global: Maximum concurrent requests globally
+                (ignored if rate_limiter provided)
+
             max_concurrent_per_repo: Maximum concurrent requests per repository
+                (ignored if rate_limiter provided)
+
             requests_per_minute: Rate limit for requests
+                (ignored if rate_limiter provided)
+
             max_tokens_per_minute: Rate limit for tokens
+                (ignored if rate_limiter provided)
+
             cache: Optional cache instance for response caching
             repo_path: Optional repository path for commit SHA retrieval
+            rate_limiter: Optional RateLimiter instance (creates default if None)
+
             enable_circuit_breaker: Enable circuit breaker pattern
+                (ignored if circuit_breaker provided)
+
+            circuit_breaker: Optional CircuitBreaker instance
+                (None to disable, creates default if not provided)
+
             circuit_breaker_threshold: Failures before opening circuit
+                (ignored if circuit_breaker provided)
+
             circuit_breaker_timeout: Recovery timeout in seconds
+                (ignored if circuit_breaker provided)
         """
         # Store configuration parameters
         self.endpoint = endpoint.rstrip("/")  # Remove trailing slash for consistent URL building
@@ -984,29 +1022,36 @@ class LLMClient:
         if not self._using_open_agent:
             self.client = _CompatClient(self)
 
-        # Initialize rate limiter
-        self.rate_limiter = RateLimiter(
-            max_concurrent=max_concurrent_global,
-            requests_per_minute=requests_per_minute,
-            max_tokens_per_minute=max_tokens_per_minute,
-            max_concurrent_per_repo=max_concurrent_per_repo,
-        )
+        # Initialize rate limiter (use injected or create default)
+        if rate_limiter is not None:
+            # Use injected RateLimiter (dependency injection)
+            self.rate_limiter = rate_limiter
+        else:
+            # Create default RateLimiter (backward compatibility)
+            self.rate_limiter = RateLimiter(
+                max_concurrent=max_concurrent_global,
+                requests_per_minute=requests_per_minute,
+                max_tokens_per_minute=max_tokens_per_minute,
+                max_concurrent_per_repo=max_concurrent_per_repo,
+            )
 
         # Metrics tracking
         self.metrics = LLMMetrics()
 
-        # Legacy metrics (for backward compatibility)
-        self.total_requests = 0
-        self.total_tokens = 0
-        self.failed_requests = 0
-
-        # Circuit breaker (optional)
-        self.circuit_breaker = None
-        if enable_circuit_breaker:
+        # Circuit breaker (optional, use injected or create default)
+        if circuit_breaker is not _UNSET:
+            # Explicitly provided (can be an instance or None to disable)
+            # This takes precedence over enable_circuit_breaker flag
+            self.circuit_breaker = circuit_breaker  # type: ignore
+        elif enable_circuit_breaker:
+            # Not provided, use enable_circuit_breaker flag (backward compatibility)
             self.circuit_breaker = CircuitBreaker(
                 failure_threshold=circuit_breaker_threshold,
                 recovery_timeout=circuit_breaker_timeout,
             )
+        else:
+            # Circuit breaker disabled via flag
+            self.circuit_breaker = None
 
     async def analyze_code(
         self,
@@ -1093,10 +1138,6 @@ class LLMClient:
                     # Update actual tokens
                     ctx.set_actual_tokens(tokens_used)
 
-                    # Update legacy metrics
-                    self.total_requests += 1
-                    self.total_tokens += tokens_used
-
                     # Record metrics
                     self.metrics.record_request(
                         analyzer=analyzer,
@@ -1137,7 +1178,6 @@ class LLMClient:
 
             except Exception as e:
                 last_exception = e
-                self.failed_requests += 1
 
                 # Record failed request
                 self.metrics.record_request(
@@ -1367,30 +1407,12 @@ class LLMClient:
         return None
 
     def get_metrics(self) -> Dict[str, Any]:
-        """Get current metrics (legacy dict format for backward compatibility).
+        """Get current metrics as dictionary.
 
         Returns:
-            Dict with metrics including legacy fields
+            Dict with metrics from metrics object
         """
-        success_rate = (
-            (self.total_requests - self.failed_requests) / self.total_requests
-            if self.total_requests > 0
-            else 0.0
-        )
-
-        avg_tokens = self.total_tokens / self.total_requests if self.total_requests > 0 else 0
-
-        # Return merged dict with both legacy and new metrics
-        return {
-            # Legacy fields
-            "total_requests": self.total_requests,
-            "failed_requests": self.failed_requests,
-            "total_tokens": self.total_tokens,
-            "success_rate": success_rate,
-            "avg_tokens_per_request": avg_tokens,
-            # New metrics object for advanced usage
-            "metrics_object": self.metrics,
-        }
+        return self.metrics.to_dict()
 
     def get_llm_metrics(self) -> LLMMetrics:
         """Get LLMMetrics object with detailed statistics.
