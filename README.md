@@ -333,6 +333,90 @@ volumes:
 docker compose up -d
 ```
 
+### Pre-Commit Integration
+
+drep can run as a pre-commit hook to analyze code locally before commits, without requiring platform API tokens. Perfect for catching issues early in your workflow.
+
+#### Option 1: Using pre-commit framework
+
+1. Install pre-commit framework:
+```bash
+pip install pre-commit
+```
+
+2. Add drep to your `.pre-commit-config.yaml`:
+```yaml
+repos:
+  - repo: https://github.com/slb350/drep
+    rev: v0.9.0  # Use the latest version
+    hooks:
+      - id: drep-check          # Checks only staged files
+      # - id: drep-check-all    # OR check all Python files
+```
+
+3. Install the hook:
+```bash
+pre-commit install
+```
+
+Now drep will automatically check your staged files before each commit!
+
+#### Option 2: Manual git hook
+
+Add to `.git/hooks/pre-commit`:
+```bash
+#!/bin/bash
+drep check --staged
+```
+
+Make it executable:
+```bash
+chmod +x .git/hooks/pre-commit
+```
+
+#### Pre-Commit Commands
+
+```bash
+# Check only staged files (pre-commit workflow)
+drep check --staged
+
+# Check specific file or directory
+drep check path/to/file.py
+drep check src/
+
+# Warning mode (don't block commits)
+drep check --staged --exit-zero
+
+# JSON output for tools
+drep check --format json
+```
+
+#### Local-Only Config (No Platform Required)
+
+For pre-commit usage, you don't need Gitea/GitHub/GitLab tokens. Create a minimal `config.yaml`:
+
+```yaml
+# Minimal config for local-only analysis
+llm:
+  enabled: true
+  endpoint: http://localhost:1234/v1
+  model: qwen3-30b-a3b
+
+documentation:
+  enabled: true
+```
+
+Or disable LLM features entirely:
+```yaml
+documentation:
+  enabled: true
+
+llm:
+  enabled: false  # Use only rule-based checks
+```
+
+The `drep check` command works without any platform configuration!
+
 ## How It Works
 
 ### Repository Scanning
@@ -531,11 +615,20 @@ drep init [--config config.yaml]
 # Validate configuration
 drep validate [--config config.yaml]
 
+# Check local files (pre-commit friendly, no platform API required)
+drep check [PATH] [--staged] [--exit-zero] [--format text|json] [--config config.yaml]
+
 # Start web server
 drep serve [--host 0.0.0.0] [--port 8000]
 
 # Manual repository scan
 drep scan owner/repo [--platform gitea] [--config config.yaml]
+
+# Review a pull request
+drep review owner/repo PR_NUMBER [--no-post] [--platform gitea] [--config config.yaml]
+
+# View metrics
+drep metrics [--detailed] [--export FILE] [--days N]
 ```
 
 ## Architecture
@@ -600,10 +693,11 @@ pytest tests/unit/test_adapters.py
 
 See **[docs/roadmap.md](docs/roadmap.md)** for the complete development roadmap with priorities, timelines, and contribution opportunities.
 
-### Current Status (v0.1.0+)
+### Current Status (v0.9.0+)
 - ✅ Gitea adapter with full PR review support
 - ✅ GitHub adapter with full CLI integration
 - ✅ LLM-powered code quality analysis (Python)
+- ✅ Pre-commit hook support (local-only analysis)
 - ✅ Intelligent caching (80%+ hit rate)
 - ✅ Circuit breaker & rate limiting
 - ✅ Docstring generator for Python
@@ -625,6 +719,7 @@ See **[docs/roadmap.md](docs/roadmap.md)** for the complete development roadmap 
 - ✅ Phase 3.3: AWS Bedrock LLM provider (Claude 4.5, enterprise compliance, 17 tests)
 - 🔜 Phase 3.4: Anthropic Direct LLM provider (3-4 hours, latest Claude models)
 - 🔜 Phase 3.5: GitLab adapter support
+- ✅ Phase 3.6: Pre-commit hook support (local-only analysis, 14 tests)
 
 **🌟 Phase 4: Feature Expansion** (Sprint 9-12)
 - Multi-language support (JavaScript, TypeScript, Go, Rust)

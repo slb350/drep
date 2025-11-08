@@ -254,6 +254,69 @@ class RepositoryScanner:
         # Deduplicate
         return list(set(changed_files))
 
+    def get_staged_files(self, repo_path: str) -> List[str]:
+        """Get staged files from git index (pre-commit workflow).
+
+        Returns only Python (.py) and Markdown (.md) files that are currently
+        staged in the git index. Excludes deleted files.
+
+        Args:
+            repo_path: Path to git repository root
+
+        Returns:
+            List of relative file paths for staged .py and .md files
+            (relative to repository root). Returns empty list if no
+            matching files staged.
+
+        Raises:
+            ValueError: If repo_path is not a valid git repository
+            RuntimeError: If git operations fail (corrupted index, etc.)
+
+        Note:
+            This method is designed for pre-commit hooks where you only want
+            to analyze files that are about to be committed.
+
+            On initial commit (no HEAD exists yet), automatically falls back
+            to checking staged files against empty tree.
+        """
+        from git.exc import GitCommandError, InvalidGitRepositoryError
+
+        # Validate it's a git repository
+        try:
+            git_repo = Repo(repo_path)
+        except InvalidGitRepositoryError:
+            logger.error(f"Not a git repository: {repo_path}")
+            raise ValueError(
+                f"Not a git repository: {repo_path}\n"
+                f"drep check --staged requires a git repository.\n"
+                f"Try running 'git init' first or use 'drep check' without --staged."
+            )
+
+        staged_files = []
+
+        # Get diff between HEAD and index (staged changes)
+        # Note: This will fail on initial commit (no HEAD exists yet).
+        # We handle this by falling back to diff against None (empty tree).
+        try:
+            diff_items = git_repo.index.diff("HEAD")
+        except GitCommandError as e:
+            if "HEAD" in str(e):
+                logger.warning("Repository has no commits yet, checking staged files")
+                # Fallback for initial commit - compare against empty tree
+                diff_items = git_repo.index.diff(None)
+            else:
+                logger.error(f"Git operation failed: {e}")
+                raise RuntimeError(f"Git operation failed: {e}")
+
+        for diff_item in diff_items:
+            # Use b_path (current file name) not a_path (old name for renames)
+            # b_path is None for deleted files, so we skip those
+            path = diff_item.b_path
+            if path and (path.lower().endswith(".py") or path.lower().endswith(".md")):
+                staged_files.append(path)
+
+        return staged_files
+
     async def analyze_code_quality(
         self,
         repo_path: str,
@@ -312,10 +375,28 @@ class RepositoryScanner:
                     progress_callback(tracker)
                 continue
 
-            # Read file content
+            # Read file content with proper encoding handling
             try:
-                content = full_path.read_text(errors="ignore")
-            except Exception as e:
+                content = full_path.read_text(encoding="utf-8")
+            except UnicodeDecodeError:
+                logger.warning(f"Skipping {file_path}: Not valid UTF-8")
+                tracker.update(skipped=1)
+                if progress_callback:
+                    progress_callback(tracker)
+                continue
+            except PermissionError:
+                logger.error(f"Permission denied: {file_path}")
+                tracker.update(failed=1)
+                if progress_callback:
+                    progress_callback(tracker)
+                continue
+            except FileNotFoundError:
+                logger.warning(f"File disappeared: {file_path}")
+                tracker.update(skipped=1)
+                if progress_callback:
+                    progress_callback(tracker)
+                continue
+            except OSError as e:
                 logger.error(f"Failed to read {file_path}: {e}")
                 tracker.update(failed=1)
                 if progress_callback:
@@ -398,10 +479,28 @@ class RepositoryScanner:
                     progress_callback(tracker)
                 continue
 
-            # Read file content
+            # Read file content with proper encoding handling
             try:
-                content = full_path.read_text(errors="ignore")
-            except Exception as e:
+                content = full_path.read_text(encoding="utf-8")
+            except UnicodeDecodeError:
+                logger.warning(f"Skipping {file_path}: Not valid UTF-8")
+                tracker.update(skipped=1)
+                if progress_callback:
+                    progress_callback(tracker)
+                continue
+            except PermissionError:
+                logger.error(f"Permission denied: {file_path}")
+                tracker.update(failed=1)
+                if progress_callback:
+                    progress_callback(tracker)
+                continue
+            except FileNotFoundError:
+                logger.warning(f"File disappeared: {file_path}")
+                tracker.update(skipped=1)
+                if progress_callback:
+                    progress_callback(tracker)
+                continue
+            except OSError as e:
                 logger.error(f"Failed to read {file_path}: {e}")
                 tracker.update(failed=1)
                 if progress_callback:
