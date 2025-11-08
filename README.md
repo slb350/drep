@@ -465,7 +465,7 @@ See **[docs/roadmap.md](docs/roadmap.md)** for the complete development roadmap 
 
 ### Current Status (v0.1.0+)
 - ✅ Gitea adapter with full PR review support
-- ✅ GitHub adapter with issue creation and PR review (CLI integration in progress)
+- ✅ GitHub adapter with full CLI integration
 - ✅ LLM-powered code quality analysis (Python)
 - ✅ Intelligent caching (80%+ hit rate)
 - ✅ Circuit breaker & rate limiting
@@ -483,8 +483,8 @@ See **[docs/roadmap.md](docs/roadmap.md)** for the complete development roadmap 
 - 18 new tests added, 411 total tests passing
 
 **🚀 Phase 3: Platform Expansion** (Sprint 5-8) - IN PROGRESS
-- ✅ Phase 3.1: GitHub adapter (API complete, 51 unit + 5 integration tests)
-- 🚧 Phase 3.2: CLI integration for GitHub repository scanning
+- ✅ Phase 3.1: GitHub adapter (API complete, 58 unit + 6 integration tests)
+- ✅ Phase 3.2: CLI integration for GitHub (scan & review commands)
 - 🔜 Phase 3.3: GitLab adapter support
 
 **🌟 Phase 4: Feature Expansion** (Sprint 9-12)
@@ -505,13 +505,11 @@ See **[docs/roadmap.md](docs/roadmap.md)** for the complete development roadmap 
 | **Gitea PR reviews** | ✅ | ❌ | ❌ | ❌ |
 | **Local LLM** | ✅ | ❌ | Partial | Partial |
 | **Gitea support** | ✅ Full | ❌ | ❌ | ❌ |
-| **GitHub support** | ⚠️ API only* | ✅ | ✅ | ✅ |
+| **GitHub support** | ✅ Full | ✅ | ✅ | ✅ |
 | **GitLab support** | 🚧 Planned | ✅ | ✅ | ✅ |
 | **Draft PR automation** | 🚧 Planned | ❌ | ❌ | ❌ |
 
-\* GitHub adapter complete with issue creation and PR reviews. CLI integration for repository scanning in progress.
-
-**Key Differentiator**: drep focuses on local, privacy-preserving analysis with docstring intelligence and PR reviews powered by your own LLM. GitHub CLI integration and GitLab support are in active development.
+**Key Differentiator**: drep focuses on local, privacy-preserving analysis with docstring intelligence and PR reviews powered by your own LLM. GitLab support is planned for the next phase.
 
 ## Contributing
 

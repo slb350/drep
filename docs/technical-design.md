@@ -1,10 +1,19 @@
 # Technical Design: drep
 
-**Document Version:** 3.2
+**Document Version:** 3.3
 **Last Updated:** 2025-11-08
-**Status:** Phase 1 & 2 Complete, Phase 3.1 (GitHub Adapter) Complete
+**Status:** Phase 1 & 2 Complete, Phase 3.1 & 3.2 Complete
 
 ## Recent Updates
+
+**v3.3 (2025-11-08):**
+- Phase 3.2 CLI Integration for GitHub completed
+- Multi-platform adapter detection in scan and review commands
+- Added get_default_branch() method to GitHub adapter
+- 7 new unit tests + 1 integration test (all passing)
+- Total: 58 GitHub adapter unit tests + 6 integration tests
+- CLI now fully supports GitHub repositories (scan & review)
+- Platform-agnostic git authentication and cloning
 
 **v3.2 (2025-11-08):**
 - Phase 3.1 GitHub Adapter implementation completed
@@ -1187,13 +1196,28 @@ MVP is complete when:
 - **Deliverables:** `drep/adapters/github.py`, comprehensive test suite, integration tests
 - **Tests:** 56 new tests added, 466 total tests passing
 
-**Phase 3.2: CLI Integration for GitHub** (Next)
-- Implement `get_default_branch()` for GitHub adapter
-- Support GitHub repository cloning in scan workflow
-- Support GitHub PR review in review workflow
-- Update CLI to detect and use appropriate adapter
+**Phase 3.2: CLI Integration for GitHub** ✅ COMPLETE (2025-11-08)
+- Implemented `get_default_branch()` method for GitHub adapter
+  - Fetches default branch name from GitHub REST API
+  - Returns branch name (main, master, or custom)
+  - Comprehensive error handling (404, timeout, invalid JSON)
+  - 7 unit tests + 1 integration test
+- Multi-platform adapter detection in CLI:
+  - Auto-detects Gitea or GitHub adapter based on config
+  - Prefers Gitea when both platforms configured (backward compatibility)
+  - Clear error messages for missing platform config
+- GitHub repository cloning in scan workflow:
+  - Handles GitHub.com and GitHub Enterprise URLs
+  - Platform-agnostic git askpass authentication
+  - Correct git clone URL generation (https://github.com/owner/repo.git)
+- GitHub PR review in review workflow:
+  - GitHubAdapter creation for GitHub-only configs
+  - Full PR review support via GitHub API
+  - Platform-specific messaging in CLI output
+- **Deliverables:** Multi-platform CLI commands, get_default_branch() implementation
+- **Tests:** 11 new tests added (7 adapter + 4 CLI), 483 total tests passing
 
-**Phase 3.3: GitLab Adapter** (Planned)
+**Phase 3.3: GitLab Adapter** (Next)
 - GitLab adapter implementation
 - Cross-platform testing and validation
 - Webhook support for all platforms
