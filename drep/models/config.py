@@ -56,12 +56,32 @@ class CacheConfig(BaseModel):
     max_size_gb: float = Field(default=10.0, ge=0.1, description="Maximum cache size in gigabytes")
 
 
+class BedrockConfig(BaseModel):
+    """AWS Bedrock configuration."""
+
+    region: str = Field(
+        default="us-east-1",
+        description="AWS region for Bedrock (e.g., us-east-1, us-west-2)",
+    )
+    model: str = Field(
+        default="anthropic.claude-sonnet-4-5-20250929-v1:0",
+        description="Bedrock model ID (e.g., anthropic.claude-sonnet-4-5-20250929-v1:0)",
+    )
+
+
 class LLMConfig(BaseModel):
     """LLM client configuration."""
 
     enabled: bool = Field(default=False, description="Enable LLM-powered analysis")
+    provider: str = Field(
+        default="openai-compatible",
+        description="LLM provider: openai-compatible, bedrock, anthropic",
+    )
     endpoint: HttpUrl = Field(..., description="OpenAI-compatible API endpoint")
     model: str = Field(..., description="Model name to use")
+    bedrock: Optional[BedrockConfig] = Field(
+        default=None, description="AWS Bedrock configuration (required if provider=bedrock)"
+    )
     api_key: Optional[str] = Field(
         default=None, description="API key (optional for local endpoints)"
     )

@@ -5,9 +5,9 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 
-Automated code review and documentation improvement tool for **Gitea and GitHub**. Powered by your choice of LLM backend: local models (LM Studio, Ollama, llama.cpp), AWS Bedrock, or Anthropic's Claude API.
+Automated code review and documentation improvement tool for **Gitea and GitHub**. Powered by your choice of LLM backend: local models (LM Studio, Ollama, llama.cpp), AWS Bedrock (Claude 4.5), or Anthropic's Claude API.
 
-> **Current Scope:** Python repositories on Gitea and GitHub. Support for GitLab, additional languages, and AWS Bedrock/Anthropic providers is in active development.
+> **Current Scope:** Python repositories on Gitea and GitHub. Support for GitLab, additional languages, and direct Anthropic API provider is in active development.
 
 ## Features
 
@@ -32,7 +32,7 @@ Intelligent review workflow for Gitea pull requests:
 ### Flexible LLM Backends
 Choose the right LLM backend for your needs:
 - **Local models:** Complete privacy with Ollama, llama.cpp, LM Studio
-- **AWS Bedrock:** Enterprise compliance with Claude on AWS (planned)
+- **AWS Bedrock:** Enterprise compliance with Claude 4.5 on AWS ✅
 - **Anthropic Direct:** Latest Claude models with direct API access (planned)
 - **OpenAI-compatible:** Works with any compatible endpoint
 
@@ -56,6 +56,8 @@ drep includes intelligent code analysis powered by local LLMs via OpenAI-compati
 
 ### Quick Start
 
+#### Option 1: Local Models (LM Studio)
+
 1. Install LM Studio: https://lmstudio.ai/
 2. Download a model (Qwen3-30B-A3B recommended)
 3. Configure drep:
@@ -78,7 +80,33 @@ llm:
     ttl_days: 30
 ```
 
-4. Run analysis:
+#### Option 2: AWS Bedrock (Claude 4.5)
+
+1. Enable Bedrock model access in AWS Console
+2. Configure AWS credentials (`aws configure` or `~/.aws/credentials`)
+3. Configure drep:
+
+```yaml
+llm:
+  enabled: true
+  provider: bedrock  # Required for AWS Bedrock
+
+  bedrock:
+    region: us-east-1
+    model: anthropic.claude-sonnet-4-5-20250929-v1:0  # Or Haiku 4.5
+
+  temperature: 0.2
+  max_tokens: 4000
+
+  # Caching
+  cache:
+    enabled: true
+    ttl_days: 30
+```
+
+See `docs/llm-setup.md` for detailed setup instructions and troubleshooting.
+
+#### Run Analysis
 
 ```bash
 drep scan owner/repo --show-progress --show-metrics

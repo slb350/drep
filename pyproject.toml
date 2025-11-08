@@ -37,6 +37,7 @@ dependencies = [
     "open-agent-sdk>=0.1.0",
     "pyyaml>=6.0",
     "gitpython>=3.1.0",
+    "boto3>=1.34.0",
 ]
 
 [project.scripts]

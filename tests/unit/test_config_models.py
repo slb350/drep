@@ -238,3 +238,109 @@ def test_github_config_url_is_http_url():
     # Invalid URL should raise ValidationError
     with pytest.raises(ValidationError):
         GitHubConfig(token=SecretStr("ghp_test"), repositories=["owner/*"], url="not-a-valid-url")
+
+
+# ===== BedrockConfig Tests =====
+
+
+def test_bedrock_config_defaults():
+    """Test BedrockConfig with default values."""
+    from drep.models.config import BedrockConfig
+
+    config = BedrockConfig()
+
+    assert config.region == "us-east-1"
+    assert config.model == "anthropic.claude-sonnet-4-5-20250929-v1:0"
+
+
+def test_bedrock_config_custom_values():
+    """Test BedrockConfig with custom values."""
+    from drep.models.config import BedrockConfig
+
+    config = BedrockConfig(
+        region="us-west-2",
+        model="anthropic.claude-haiku-4-5-20251001-v1:0",
+    )
+
+    assert config.region == "us-west-2"
+    assert config.model == "anthropic.claude-haiku-4-5-20251001-v1:0"
+
+
+def test_bedrock_config_global_model_id():
+    """Test BedrockConfig with global model ID format."""
+    from drep.models.config import BedrockConfig
+
+    config = BedrockConfig(
+        region="eu-west-1",
+        model="global.anthropic.claude-sonnet-4-5-20250929-v1:0",
+    )
+
+    assert config.region == "eu-west-1"
+    assert config.model == "global.anthropic.claude-sonnet-4-5-20250929-v1:0"
+
+
+# ===== LLMConfig Provider Field Tests =====
+
+
+def test_llm_config_default_provider():
+    """Test LLMConfig defaults to openai-compatible provider."""
+    from drep.models.config import LLMConfig
+
+    config = LLMConfig(
+        enabled=True,
+        endpoint="http://localhost:11434/v1",
+        model="llama2",
+    )
+
+    assert config.provider == "openai-compatible"
+
+
+def test_llm_config_bedrock_provider():
+    """Test LLMConfig with bedrock provider."""
+    from drep.models.config import BedrockConfig, LLMConfig
+
+    config = LLMConfig(
+        enabled=True,
+        provider="bedrock",
+        endpoint="http://localhost:11434/v1",  # Ignored for bedrock
+        model="llama2",  # Ignored for bedrock
+        bedrock=BedrockConfig(
+            region="us-east-1",
+            model="anthropic.claude-sonnet-4-5-20250929-v1:0",
+        ),
+    )
+
+    assert config.provider == "bedrock"
+    assert config.bedrock is not None
+    assert config.bedrock.region == "us-east-1"
+    assert config.bedrock.model == "anthropic.claude-sonnet-4-5-20250929-v1:0"
+
+
+def test_llm_config_bedrock_without_bedrock_config():
+    """Test LLMConfig with bedrock provider but no bedrock config."""
+    from drep.models.config import LLMConfig
+
+    # This should be allowed - validation happens at runtime in LLMClient
+    config = LLMConfig(
+        enabled=True,
+        provider="bedrock",
+        endpoint="http://localhost:11434/v1",
+        model="llama2",
+    )
+
+    assert config.provider == "bedrock"
+    assert config.bedrock is None
+
+
+def test_llm_config_backward_compatibility():
+    """Test LLMConfig works without provider field (backward compatibility)."""
+    from drep.models.config import LLMConfig
+
+    config = LLMConfig(
+        enabled=True,
+        endpoint="http://localhost:11434/v1",
+        model="llama2",
+    )
+
+    # Should default to openai-compatible
+    assert config.provider == "openai-compatible"

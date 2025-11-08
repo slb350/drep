@@ -844,6 +844,9 @@ class LLMClient:
         circuit_breaker: Optional[CircuitBreaker] = _UNSET,  # type: ignore
         circuit_breaker_threshold: int = 5,
         circuit_breaker_timeout: int = 60,
+        provider: str = "openai-compatible",
+        bedrock_region: Optional[str] = None,
+        bedrock_model: Optional[str] = None,
     ):
         """Initialize LLM client.
 
@@ -897,6 +900,53 @@ class LLMClient:
         self.exponential_backoff = exponential_backoff  # Whether to use exponential backoff
         self.cache = cache  # Optional IntelligentCache instance for response caching
         self.repo_path = repo_path  # Optional repo path for commit SHA retrieval
+        self._provider = provider  # LLM provider: openai-compatible, bedrock, anthropic
+
+        # === PROVIDER SELECTION: Bedrock, open-agent-sdk, or HTTP ===
+        # Check if Bedrock provider is requested
+        if provider == "bedrock":
+            from drep.llm.providers.bedrock_client import BedrockClient
+
+            if not bedrock_region or not bedrock_model:
+                raise ValueError(
+                    "Bedrock provider requires bedrock_region and bedrock_model parameters"
+                )
+
+            self.bedrock_client = BedrockClient(
+                region=bedrock_region,
+                model=bedrock_model,
+            )
+            self._using_bedrock = True
+            logger.info(
+                f"LLM backend: AWS Bedrock (region={bedrock_region}, model={bedrock_model})"
+            )
+
+            # Initialize rate limiter (use injected or create default)
+            if rate_limiter is not None:
+                self.rate_limiter = rate_limiter
+            else:
+                self.rate_limiter = RateLimiter(
+                    max_concurrent=max_concurrent_global,
+                    requests_per_minute=requests_per_minute,
+                    max_tokens_per_minute=max_tokens_per_minute,
+                    max_concurrent_per_repo=max_concurrent_per_repo,
+                )
+
+            # Metrics tracking
+            self.metrics = LLMMetrics()
+
+            # Circuit breaker (optional, use injected or create default)
+            if circuit_breaker is not _UNSET:
+                self.circuit_breaker = circuit_breaker  # type: ignore
+            elif enable_circuit_breaker:
+                self.circuit_breaker = CircuitBreaker(
+                    failure_threshold=circuit_breaker_threshold,
+                    recovery_timeout=circuit_breaker_timeout,
+                )
+            else:
+                self.circuit_breaker = None
+
+            return  # Skip open-agent-sdk/HTTP initialization
 
         # === BACKEND SELECTION: open-agent-sdk vs HTTP ===
         # We support two backends with identical interfaces:
@@ -1119,15 +1169,27 @@ class LLMClient:
                     # Make request
                     start_time = time.time()
 
-                    response = await self.client.chat.completions.create(
-                        model=self.model,
-                        messages=[
-                            {"role": "system", "content": system_prompt},
-                            {"role": "user", "content": code},
-                        ],
-                        temperature=self.temperature,
-                        max_tokens=self.max_tokens,
-                    )
+                    # Use Bedrock provider if configured
+                    if self._provider == "bedrock":
+                        response = await self.bedrock_client.chat_completion(
+                            messages=[
+                                {"role": "system", "content": system_prompt},
+                                {"role": "user", "content": code},
+                            ],
+                            temperature=self.temperature,
+                            max_tokens=self.max_tokens,
+                        )
+                    else:
+                        # Use OpenAI-compatible provider (open-agent-sdk or HTTP)
+                        response = await self.client.chat.completions.create(
+                            model=self.model,
+                            messages=[
+                                {"role": "system", "content": system_prompt},
+                                {"role": "user", "content": code},
+                            ],
+                            temperature=self.temperature,
+                            max_tokens=self.max_tokens,
+                        )
 
                     latency_ms = (time.time() - start_time) * 1000
 
@@ -1424,6 +1486,11 @@ class LLMClient:
 
     async def close(self):
         """Close the client and release resources."""
+        # Close Bedrock client if using Bedrock provider
+        if self._provider == "bedrock" and hasattr(self, "bedrock_client"):
+            await self.bedrock_client.close()
+            return
+
         # Prefer closing compat client to satisfy tests that patch client.close
         if hasattr(self, "client") and hasattr(self.client, "close"):
             try:
@@ -1431,4 +1498,5 @@ class LLMClient:
                 return
             except Exception:
                 pass
-        await self.http.aclose()
+        if hasattr(self, "http") and self.http:
+            await self.http.aclose()
