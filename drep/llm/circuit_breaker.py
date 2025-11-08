@@ -97,9 +97,10 @@ class CircuitBreaker:
         Args:
             failure_threshold: Consecutive failures before opening circuit
             recovery_timeout: Seconds to wait before attempting recovery
+
             half_open_max_calls: ⚠️ NOT IMPLEMENTED - Reserved for future use to allow
-                                multiple test calls in HALF_OPEN state. Currently the
-                                circuit closes immediately on the first successful call.
+                multiple test calls in HALF_OPEN state. Currently the
+                circuit closes immediately on the first successful call.
         """
         self.failure_threshold = failure_threshold
         self.recovery_timeout = recovery_timeout

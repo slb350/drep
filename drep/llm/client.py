@@ -42,6 +42,9 @@ resource cleanup even when requests fail. Rate limits are enforced using:
 
 Usage Example:
 --------------
+
+::
+
     client = LLMClient(
         endpoint="http://localhost:1234/v1",
         model="local-model",
@@ -209,6 +212,9 @@ class RateLimitContext:
 
     Usage Pattern:
     --------------
+
+    ::
+
         async with rate_limiter.request(estimated_tokens=1000, repo_id="my-repo") as ctx:
             response = await make_llm_request()
             ctx.set_actual_tokens(response.tokens_used)
@@ -227,13 +233,15 @@ class RateLimitContext:
         """Initialize rate limit context for a single request.
 
         Args:
-            rate_limiter: Parent RateLimiter instance that manages global state
+            rate_limiter: Parent RateLimiter instance that manages global state.
+
             estimated_tokens: Estimated token usage for this request (prompt + max_tokens).
-                            Used to reserve capacity in the token bucket. Will be adjusted
-                            to actual usage on exit.
+                Used to reserve capacity in the token bucket. Will be adjusted
+                to actual usage on exit.
+
             repo_id: Optional repository identifier for per-repo concurrency limits.
-                    Multiple requests for the same repo_id will be limited to
-                    max_concurrent_per_repo, preventing one repo from monopolizing resources.
+                Multiple requests for the same repo_id will be limited to
+                max_concurrent_per_repo, preventing one repo from monopolizing resources.
         """
         self.rate_limiter = rate_limiter
         self.estimated_tokens = estimated_tokens
@@ -410,6 +418,9 @@ class RateLimiter:
 
     Example Configuration:
     ----------------------
+
+    ::
+
         limiter = RateLimiter(
             max_concurrent=5,              # 5 requests in flight max
             requests_per_minute=60,        # 60 reqs/min = 1 req/sec average
@@ -429,20 +440,20 @@ class RateLimiter:
 
         Args:
             max_concurrent: Maximum concurrent requests globally. This is the total
-                          number of LLM requests that can be in-flight simultaneously
-                          across all repositories. Example: 5 means at most 5 requests
-                          running at once.
+                number of LLM requests that can be in-flight simultaneously
+                across all repositories. Example: 5 means at most 5 requests
+                running at once.
             requests_per_minute: Maximum requests per minute. Uses sliding window
-                                algorithm to enforce. Example: 60 means 60 requests
-                                in any 60-second window.
+                algorithm to enforce. Example: 60 means 60 requests
+                in any 60-second window.
             max_tokens_per_minute: Maximum tokens per minute. Uses token bucket
-                                  algorithm (fixed window). Example: 100000 means
-                                  100K tokens consumed in current minute before
-                                  throttling.
+                algorithm (fixed window). Example: 100000 means
+                100K tokens consumed in current minute before
+                throttling.
             max_concurrent_per_repo: Maximum concurrent requests per repository.
-                                    If None, defaults to max_concurrent (no per-repo
-                                    limit). Example: 3 means each repo can use at most
-                                    3 of the global concurrent slots.
+                If None, defaults to max_concurrent (no per-repo
+                limit). Example: 3 means each repo can use at most
+                3 of the global concurrent slots.
 
         Note:
             All limits are soft limits - they're enforced by sleeping/waiting rather
@@ -772,40 +783,43 @@ class LLMClient:
 
     Usage Examples:
     ---------------
-    # Initialize with local LLM (LM Studio, Ollama, etc.)
-    client = LLMClient(
-        endpoint="http://localhost:1234/v1",
-        model="local-model",
-        api_key="not-needed",  # Many local LLMs don't need keys
-        max_concurrent_global=5,
-        requests_per_minute=60,
-        max_tokens_per_minute=MAX_TOKENS_PER_MINUTE,
-    )
 
-    # Simple text analysis
-    response = await client.analyze_code(
-        system_prompt="Review this Python code for bugs",
-        code="def divide(a, b): return a / b",
-        repo_id="my-org/my-repo",
-    )
-    print(f"Analysis: {response.content}")
-    print(f"Tokens used: {response.tokens_used}")
+    ::
 
-    # JSON analysis with schema validation
-    from pydantic import BaseModel
-    class BugReport(BaseModel):
-        bugs: list[str]
-        severity: str
+        # Initialize with local LLM (LM Studio, Ollama, etc.)
+        client = LLMClient(
+            endpoint="http://localhost:1234/v1",
+            model="local-model",
+            api_key="not-needed",  # Many local LLMs don't need keys
+            max_concurrent_global=5,
+            requests_per_minute=60,
+            max_tokens_per_minute=MAX_TOKENS_PER_MINUTE,
+        )
 
-    result = await client.analyze_code_json(
-        system_prompt="Return JSON: {bugs: [...], severity: 'high'|'medium'|'low'}",
-        code="def divide(a, b): return a / b",
-        schema=BugReport,  # Validates and provides fallback parsing
-    )
-    print(f"Found {len(result['bugs'])} bugs")
+        # Simple text analysis
+        response = await client.analyze_code(
+            system_prompt="Review this Python code for bugs",
+            code="def divide(a, b): return a / b",
+            repo_id="my-org/my-repo",
+        )
+        print(f"Analysis: {response.content}")
+        print(f"Tokens used: {response.tokens_used}")
 
-    # Don't forget to close when done
-    await client.close()
+        # JSON analysis with schema validation
+        from pydantic import BaseModel
+        class BugReport(BaseModel):
+            bugs: list[str]
+            severity: str
+
+        result = await client.analyze_code_json(
+            system_prompt="Return JSON: {bugs: [...], severity: 'high'|'medium'|'low'}",
+            code="def divide(a, b): return a / b",
+            schema=BugReport,  # Validates and provides fallback parsing
+        )
+        print(f"Found {len(result['bugs'])} bugs")
+
+        # Don't forget to close when done
+        await client.close()
     """
 
     def __init__(
@@ -843,23 +857,32 @@ class LLMClient:
             max_retries: Maximum retry attempts
             retry_delay: Initial retry delay in seconds
             exponential_backoff: Use exponential backoff for retries
+
             max_concurrent_global: Maximum concurrent requests globally
                 (ignored if rate_limiter provided)
+
             max_concurrent_per_repo: Maximum concurrent requests per repository
                 (ignored if rate_limiter provided)
+
             requests_per_minute: Rate limit for requests
                 (ignored if rate_limiter provided)
+
             max_tokens_per_minute: Rate limit for tokens
                 (ignored if rate_limiter provided)
+
             cache: Optional cache instance for response caching
             repo_path: Optional repository path for commit SHA retrieval
             rate_limiter: Optional RateLimiter instance (creates default if None)
+
             enable_circuit_breaker: Enable circuit breaker pattern
                 (ignored if circuit_breaker provided)
+
             circuit_breaker: Optional CircuitBreaker instance
                 (None to disable, creates default if not provided)
+
             circuit_breaker_threshold: Failures before opening circuit
                 (ignored if circuit_breaker provided)
+
             circuit_breaker_timeout: Recovery timeout in seconds
                 (ignored if circuit_breaker provided)
         """

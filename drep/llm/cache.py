@@ -47,6 +47,9 @@ The cache is critical for making drep practical to run frequently (e.g., on ever
 
 Usage Example:
 --------------
+
+::
+
     from drep.llm.cache import IntelligentCache
 
     # Initialize cache
