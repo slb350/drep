@@ -116,19 +116,45 @@ async def _run_scan(
     # Load config
     config = load_config(config_path)
 
-    # Validate Gitea configuration (required for repository scanning)
-    if config.gitea is None:
+    # Determine which adapter to use (prefer Gitea for backward compatibility)
+    platform = None
+    adapter = None
+    git_url = None
+    git_token = None
+
+    if config.gitea is not None:
+        # Use Gitea adapter
+        platform = "gitea"
+        adapter = GiteaAdapter(config.gitea.url, config.gitea.token.get_secret_value())
+        git_url = f"{config.gitea.url.rstrip('/')}/{owner}/{repo}.git"
+        git_token = config.gitea.token.get_secret_value()
+    elif config.github is not None:
+        # Use GitHub adapter
+        platform = "github"
+        from drep.adapters.github import GitHubAdapter
+
+        adapter = GitHubAdapter(
+            token=config.github.token.get_secret_value(),
+            url=str(config.github.url) if config.github.url else "https://api.github.com",
+        )
+        # GitHub git URL format: https://github.com/owner/repo.git
+        if "github.com" in str(config.github.url):
+            git_url = f"https://github.com/{owner}/{repo}.git"
+        else:
+            # GitHub Enterprise - extract hostname from API URL
+            api_url = str(config.github.url)
+            hostname = api_url.replace("https://", "").replace("http://", "").split("/")[0]
+            git_url = f"https://{hostname}/{owner}/{repo}.git"
+        git_token = config.github.token.get_secret_value()
+    else:
+        # No platform configured (shouldn't happen - Config validator requires at least one)
         click.echo(
-            "Error: Repository scanning requires Gitea configuration.\n"
-            "Please add a [gitea] section to your config.yaml.\n\n"
-            "GitHub support for repository scanning is not yet implemented.\n"
-            "Currently, GitHub adapter only supports issue creation and PR reviews.",
+            "Error: No platform configured. Please add [gitea] or [github] to your config.yaml.",
             err=True,
         )
         raise click.Abort()
 
     # Initialize components
-    adapter = GiteaAdapter(config.gitea.url, config.gitea.token.get_secret_value())
     session = init_database(config.database_url)
     scanner = RepositoryScanner(session, config)  # Pass config for LLM support
     analyzer = DocumentationAnalyzer(config.documentation)
@@ -161,7 +187,7 @@ fi
             **os.environ,
             "GIT_ASKPASS": str(askpass_script),
             "GIT_TERMINAL_PROMPT": "0",
-            "DREP_GIT_TOKEN": config.gitea.token.get_secret_value(),
+            "DREP_GIT_TOKEN": git_token,
         }
 
         # Repository path
@@ -169,15 +195,14 @@ fi
 
         # Clone or pull repository
         if not repo_path.exists():
-            click.echo("Cloning repository...")
+            click.echo(f"Cloning {platform} repository...")
             repo_path.parent.mkdir(parents=True, exist_ok=True)
 
             # Get default branch
             default_branch = await adapter.get_default_branch(owner, repo)
 
             # Clone
-            clean_git_url = f"{config.gitea.url.rstrip('/')}/{owner}/{repo}.git"
-            Repo.clone_from(clean_git_url, repo_path, branch=default_branch, env=git_env)
+            Repo.clone_from(git_url, repo_path, branch=default_branch, env=git_env)
         else:
             click.echo("Pulling latest changes...")
             git_repo = Repo(repo_path)
