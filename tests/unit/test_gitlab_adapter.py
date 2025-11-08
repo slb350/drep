@@ -1565,6 +1565,115 @@ async def test_get_file_content_connection_error():
         await adapter.close()
 
 
+# ===== HTTP Error Code Tests =====
+
+
+@pytest.mark.parametrize("status_code,error_type", [
+    (401, "Unauthorized"),
+    (403, "Forbidden"),
+    (500, "Internal Server Error"),
+    (503, "Service Unavailable"),
+])
+@pytest.mark.asyncio
+@respx.mock
+async def test_get_default_branch_http_errors(status_code, error_type):
+    """Test get_default_branch() handles various HTTP error codes."""
+    from drep.adapters.gitlab import GitLabAdapter
+
+    respx.get("https://gitlab.com/api/v4/projects/owner%2Frepo").mock(
+        return_value=httpx.Response(status_code, text=f"{error_type} error")
+    )
+
+    adapter = GitLabAdapter("glpat_token")
+
+    try:
+        with pytest.raises(ValueError):
+            await adapter.get_default_branch("owner", "repo")
+    finally:
+        await adapter.close()
+
+
+@pytest.mark.parametrize("status_code", [401, 403, 500, 503])
+@pytest.mark.asyncio
+@respx.mock
+async def test_create_issue_http_errors(status_code):
+    """Test create_issue() handles various HTTP error codes."""
+    from drep.adapters.gitlab import GitLabAdapter
+
+    respx.post("https://gitlab.com/api/v4/projects/owner%2Frepo/issues").mock(
+        return_value=httpx.Response(status_code, text="Error")
+    )
+
+    adapter = GitLabAdapter("glpat_token")
+
+    try:
+        with pytest.raises(ValueError):
+            await adapter.create_issue("owner", "repo", "Title", "Body")
+    finally:
+        await adapter.close()
+
+
+@pytest.mark.parametrize("status_code", [401, 403, 500, 503])
+@pytest.mark.asyncio
+@respx.mock
+async def test_get_pr_http_errors(status_code):
+    """Test get_pr() handles various HTTP error codes."""
+    from drep.adapters.gitlab import GitLabAdapter
+
+    respx.get("https://gitlab.com/api/v4/projects/owner%2Frepo/merge_requests/42").mock(
+        return_value=httpx.Response(status_code, text="Error")
+    )
+
+    adapter = GitLabAdapter("glpat_token")
+
+    try:
+        with pytest.raises(ValueError):
+            await adapter.get_pr("owner", "repo", 42)
+    finally:
+        await adapter.close()
+
+
+@pytest.mark.parametrize("status_code", [401, 403, 500, 503])
+@pytest.mark.asyncio
+@respx.mock
+async def test_get_file_content_http_errors(status_code):
+    """Test get_file_content() handles various HTTP error codes."""
+    from drep.adapters.gitlab import GitLabAdapter
+
+    respx.get(
+        "https://gitlab.com/api/v4/projects/owner%2Frepo/repository/files/test.py",
+        params={"ref": "main"}
+    ).mock(return_value=httpx.Response(status_code, text="Error"))
+
+    adapter = GitLabAdapter("glpat_token")
+
+    try:
+        with pytest.raises(ValueError):
+            await adapter.get_file_content("owner", "repo", "test.py", "main")
+    finally:
+        await adapter.close()
+
+
+@pytest.mark.parametrize("status_code", [401, 403, 500, 503])
+@pytest.mark.asyncio
+@respx.mock
+async def test_create_pr_comment_http_errors(status_code):
+    """Test create_pr_comment() handles various HTTP error codes."""
+    from drep.adapters.gitlab import GitLabAdapter
+
+    respx.post("https://gitlab.com/api/v4/projects/owner%2Frepo/merge_requests/42/notes").mock(
+        return_value=httpx.Response(status_code, text="Error")
+    )
+
+    adapter = GitLabAdapter("glpat_token")
+
+    try:
+        with pytest.raises(ValueError):
+            await adapter.create_pr_comment("owner", "repo", 42, "Comment")
+    finally:
+        await adapter.close()
+
+
 # ===== Self-hosted GitLab Tests =====
 
 
