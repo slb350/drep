@@ -1235,6 +1235,298 @@ async def test_connection_error_handling():
         await adapter.close()
 
 
+@pytest.mark.asyncio
+@respx.mock
+async def test_create_issue_timeout():
+    """Test create_issue() handles timeout errors."""
+    from drep.adapters.gitlab import GitLabAdapter
+
+    async def timeout_handler(request):
+        raise httpx.TimeoutException("Request timed out")
+
+    respx.post("https://gitlab.com/api/v4/projects/owner%2Frepo/issues").mock(
+        side_effect=timeout_handler
+    )
+
+    adapter = GitLabAdapter("glpat_token")
+
+    try:
+        with pytest.raises(ValueError, match="GitLab API request timed out"):
+            await adapter.create_issue("owner", "repo", "Title", "Body")
+    finally:
+        await adapter.close()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_create_issue_connection_error():
+    """Test create_issue() handles connection errors."""
+    from drep.adapters.gitlab import GitLabAdapter
+
+    async def connection_error_handler(request):
+        raise httpx.ConnectError("Cannot connect")
+
+    respx.post("https://gitlab.com/api/v4/projects/owner%2Frepo/issues").mock(
+        side_effect=connection_error_handler
+    )
+
+    adapter = GitLabAdapter("glpat_token")
+
+    try:
+        with pytest.raises(ValueError, match="Cannot connect to GitLab API"):
+            await adapter.create_issue("owner", "repo", "Title", "Body")
+    finally:
+        await adapter.close()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_get_pr_timeout():
+    """Test get_pr() handles timeout errors."""
+    from drep.adapters.gitlab import GitLabAdapter
+
+    async def timeout_handler(request):
+        raise httpx.TimeoutException("Request timed out")
+
+    respx.get("https://gitlab.com/api/v4/projects/owner%2Frepo/merge_requests/42").mock(
+        side_effect=timeout_handler
+    )
+
+    adapter = GitLabAdapter("glpat_token")
+
+    try:
+        with pytest.raises(ValueError, match="GitLab API request timed out"):
+            await adapter.get_pr("owner", "repo", 42)
+    finally:
+        await adapter.close()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_get_pr_connection_error():
+    """Test get_pr() handles connection errors."""
+    from drep.adapters.gitlab import GitLabAdapter
+
+    async def connection_error_handler(request):
+        raise httpx.ConnectError("Cannot connect")
+
+    respx.get("https://gitlab.com/api/v4/projects/owner%2Frepo/merge_requests/42").mock(
+        side_effect=connection_error_handler
+    )
+
+    adapter = GitLabAdapter("glpat_token")
+
+    try:
+        with pytest.raises(ValueError, match="Cannot connect to GitLab API"):
+            await adapter.get_pr("owner", "repo", 42)
+    finally:
+        await adapter.close()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_get_pr_diff_timeout():
+    """Test get_pr_diff() handles timeout errors."""
+    from drep.adapters.gitlab import GitLabAdapter
+
+    async def timeout_handler(request):
+        raise httpx.TimeoutException("Request timed out")
+
+    respx.get("https://gitlab.com/api/v4/projects/owner%2Frepo/merge_requests/42/diffs").mock(
+        side_effect=timeout_handler
+    )
+
+    adapter = GitLabAdapter("glpat_token")
+
+    try:
+        with pytest.raises(ValueError, match="GitLab API request timed out"):
+            await adapter.get_pr_diff("owner", "repo", 42)
+    finally:
+        await adapter.close()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_get_pr_diff_connection_error():
+    """Test get_pr_diff() handles connection errors."""
+    from drep.adapters.gitlab import GitLabAdapter
+
+    async def connection_error_handler(request):
+        raise httpx.ConnectError("Cannot connect")
+
+    respx.get("https://gitlab.com/api/v4/projects/owner%2Frepo/merge_requests/42/diffs").mock(
+        side_effect=connection_error_handler
+    )
+
+    adapter = GitLabAdapter("glpat_token")
+
+    try:
+        with pytest.raises(ValueError, match="Cannot connect to GitLab API"):
+            await adapter.get_pr_diff("owner", "repo", 42)
+    finally:
+        await adapter.close()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_create_pr_comment_timeout():
+    """Test create_pr_comment() handles timeout errors."""
+    from drep.adapters.gitlab import GitLabAdapter
+
+    async def timeout_handler(request):
+        raise httpx.TimeoutException("Request timed out")
+
+    respx.post("https://gitlab.com/api/v4/projects/owner%2Frepo/merge_requests/42/notes").mock(
+        side_effect=timeout_handler
+    )
+
+    adapter = GitLabAdapter("glpat_token")
+
+    try:
+        with pytest.raises(ValueError, match="GitLab API request timed out"):
+            await adapter.create_pr_comment("owner", "repo", 42, "Comment")
+    finally:
+        await adapter.close()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_create_pr_comment_connection_error():
+    """Test create_pr_comment() handles connection errors."""
+    from drep.adapters.gitlab import GitLabAdapter
+
+    async def connection_error_handler(request):
+        raise httpx.ConnectError("Cannot connect")
+
+    respx.post("https://gitlab.com/api/v4/projects/owner%2Frepo/merge_requests/42/notes").mock(
+        side_effect=connection_error_handler
+    )
+
+    adapter = GitLabAdapter("glpat_token")
+
+    try:
+        with pytest.raises(ValueError, match="Cannot connect to GitLab API"):
+            await adapter.create_pr_comment("owner", "repo", 42, "Comment")
+    finally:
+        await adapter.close()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_post_review_comment_timeout():
+    """Test post_review_comment() handles timeout errors."""
+    from drep.adapters.gitlab import GitLabAdapter
+
+    # Mock get_pr to succeed
+    respx.get("https://gitlab.com/api/v4/projects/owner%2Frepo/merge_requests/42").mock(
+        return_value=httpx.Response(200, json={
+            "iid": 42,
+            "diff_refs": {
+                "base_sha": "abc123",
+                "head_sha": "def456",
+                "start_sha": "abc123"
+            }
+        })
+    )
+
+    # Mock post to timeout
+    async def timeout_handler(request):
+        raise httpx.TimeoutException("Request timed out")
+
+    respx.post("https://gitlab.com/api/v4/projects/owner%2Frepo/merge_requests/42/discussions").mock(
+        side_effect=timeout_handler
+    )
+
+    adapter = GitLabAdapter("glpat_token")
+
+    try:
+        with pytest.raises(ValueError, match="GitLab API request timed out"):
+            await adapter.post_review_comment("owner", "repo", 42, "test.py", 10, "Comment")
+    finally:
+        await adapter.close()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_post_review_comment_connection_error():
+    """Test post_review_comment() handles connection errors."""
+    from drep.adapters.gitlab import GitLabAdapter
+
+    # Mock get_pr to succeed
+    respx.get("https://gitlab.com/api/v4/projects/owner%2Frepo/merge_requests/42").mock(
+        return_value=httpx.Response(200, json={
+            "iid": 42,
+            "diff_refs": {
+                "base_sha": "abc123",
+                "head_sha": "def456",
+                "start_sha": "abc123"
+            }
+        })
+    )
+
+    # Mock post to fail connection
+    async def connection_error_handler(request):
+        raise httpx.ConnectError("Cannot connect")
+
+    respx.post("https://gitlab.com/api/v4/projects/owner%2Frepo/merge_requests/42/discussions").mock(
+        side_effect=connection_error_handler
+    )
+
+    adapter = GitLabAdapter("glpat_token")
+
+    try:
+        with pytest.raises(ValueError, match="Cannot connect to GitLab API"):
+            await adapter.post_review_comment("owner", "repo", 42, "test.py", 10, "Comment")
+    finally:
+        await adapter.close()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_get_file_content_timeout():
+    """Test get_file_content() handles timeout errors."""
+    from drep.adapters.gitlab import GitLabAdapter
+
+    async def timeout_handler(request):
+        raise httpx.TimeoutException("Request timed out")
+
+    respx.get(
+        "https://gitlab.com/api/v4/projects/owner%2Frepo/repository/files/test.py",
+        params={"ref": "main"}
+    ).mock(side_effect=timeout_handler)
+
+    adapter = GitLabAdapter("glpat_token")
+
+    try:
+        with pytest.raises(ValueError, match="GitLab API request timed out"):
+            await adapter.get_file_content("owner", "repo", "test.py", "main")
+    finally:
+        await adapter.close()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_get_file_content_connection_error():
+    """Test get_file_content() handles connection errors."""
+    from drep.adapters.gitlab import GitLabAdapter
+
+    async def connection_error_handler(request):
+        raise httpx.ConnectError("Cannot connect")
+
+    respx.get(
+        "https://gitlab.com/api/v4/projects/owner%2Frepo/repository/files/test.py",
+        params={"ref": "main"}
+    ).mock(side_effect=connection_error_handler)
+
+    adapter = GitLabAdapter("glpat_token")
+
+    try:
+        with pytest.raises(ValueError, match="Cannot connect to GitLab API"):
+            await adapter.get_file_content("owner", "repo", "test.py", "main")
+    finally:
+        await adapter.close()
+
+
 # ===== Self-hosted GitLab Tests =====
 
 
