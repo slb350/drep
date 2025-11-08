@@ -585,7 +585,6 @@ def check(path, staged, config, exit_zero, format):
         drep check --exit-zero        # Warn without blocking commits
     """
     import asyncio
-    from pathlib import Path
 
     # Run async check
     findings = asyncio.run(_run_check(path, staged, config, format))
@@ -613,13 +612,11 @@ async def _run_check(path: str, staged: bool, config_path: str, output_format: s
     Returns:
         List of Finding objects
     """
-    import logging
     from pathlib import Path as PathLib
-    from drep.core.scanner import RepositoryScanner
-    from drep.config import load_config
-    from drep.db import init_database
 
-    logger = logging.getLogger(__name__)
+    from drep.config import load_config
+    from drep.core.scanner import RepositoryScanner
+    from drep.db import init_database
 
     # Load config with platform not required (pre-commit mode)
     if config_path:
@@ -631,6 +628,7 @@ async def _run_check(path: str, staged: bool, config_path: str, output_format: s
     else:
         # Create minimal config for local-only mode
         from drep.models.config import Config
+
         config = Config(require_platform_config=False)
 
     # Initialize database (in-memory for check command)
@@ -703,6 +701,7 @@ def _output_findings(findings, format_type):
     """
     if format_type == "json":
         import json
+
         findings_dict = [f.model_dump() for f in findings]
         click.echo(json.dumps(findings_dict, indent=2))
     else:

@@ -722,14 +722,14 @@ class TestCheckCommand:
             # Mock git operations
             with patch("drep.cli.Repo") as mock_repo:
                 mock_repo.return_value.index.diff.return_value = []
-                
+
                 # Mock scanner/analyzer to avoid real analysis
                 with patch("drep.cli.RepositoryScanner") as mock_scanner_class:
                     mock_scanner = mock_scanner_class.return_value
                     mock_scanner.get_staged_files.return_value = []
-                    
+
                     result = runner.invoke(cli, ["check", ".", "--config", "config.yaml"])
-                    
+
                     # Should succeed without requiring platform
                     assert result.exit_code == 0
 
@@ -753,14 +753,14 @@ class TestCheckCommand:
             # Mock finding issues
             with patch("drep.cli.Repo") as mock_repo:
                 mock_repo.return_value.index.diff.return_value = []
-                
+
                 with patch("drep.cli.RepositoryScanner") as mock_scanner_class:
                     # Mock scanner to return findings
                     from drep.models.findings import Finding
-                    
+
                     mock_scanner = mock_scanner_class.return_value
                     mock_scanner.get_staged_files.return_value = ["test.py"]
-                    
+
                     # Mock analyze methods to return findings
                     async def mock_analyze(*args, **kwargs):
                         return [
@@ -772,12 +772,12 @@ class TestCheckCommand:
                                 message="Test finding",
                             )
                         ]
-                    
+
                     mock_scanner.analyze_code_quality = AsyncMock(return_value=[])
                     mock_scanner.analyze_docstrings = AsyncMock(side_effect=mock_analyze)
-                    
+
                     result = runner.invoke(cli, ["check", ".", "--config", "config.yaml"])
-                    
+
                     # Should return exit code 1 when findings present
                     assert result.exit_code == 1
 
