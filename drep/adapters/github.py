@@ -27,22 +27,48 @@ class GitHubAdapter(BaseAdapter):
         """Initialize GitHubAdapter with token.
 
         Args:
-            token: GitHub Personal Access Token (PAT) or GitHub App token
-            url: GitHub API base URL (default: https://api.github.com)
-                 Can be overridden for GitHub Enterprise Server
+            token: GitHub Personal Access Token (PAT) or GitHub App token as plain string.
+                   IMPORTANT: If loading from GitHubConfig (Pydantic model), you must
+                   unwrap SecretStr by calling: config.github.token.get_secret_value()
+            url: GitHub API base URL (default: https://api.github.com) as plain string.
+                 IMPORTANT: If loading from GitHubConfig (Pydantic model), you must
+                 convert HttpUrl to str by calling: str(config.github.url)
 
         Raises:
             ValueError: If token is empty or URL is invalid
 
         Example:
-            # GitHub.com
+            # Direct usage with plain strings
             adapter = GitHubAdapter(token="ghp_...")
+            try:
+                issue_num = await adapter.create_issue("owner", "repo", "Title", "Body")
+            finally:
+                await adapter.close()
 
             # GitHub Enterprise
             adapter = GitHubAdapter(
                 token="ghp_...",
                 url="https://github.company.com/api/v3"
             )
+
+            # Loading from GitHubConfig (CRITICAL: unwrap SecretStr and convert HttpUrl)
+            from drep.config import load_config
+
+            config = load_config("config.yaml")
+            if config.github:
+                adapter = GitHubAdapter(
+                    token=config.github.token.get_secret_value(),  # Unwrap SecretStr!
+                    url=str(config.github.url)  # Convert HttpUrl to str!
+                )
+                try:
+                    # Use adapter...
+                    pass
+                finally:
+                    await adapter.close()
+
+        Note:
+            Always call close() when done to release HTTP client resources.
+            Use try/finally or async context manager pattern to ensure cleanup.
         """
         # Validate token is not empty or whitespace
         if not token or not token.strip():
