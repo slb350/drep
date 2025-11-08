@@ -3,6 +3,7 @@
 import asyncio
 import os
 import tempfile
+from enum import Enum
 from pathlib import Path
 
 import click
@@ -16,6 +17,13 @@ from drep.core.issue_manager import IssueManager
 from drep.core.scanner import RepositoryScanner
 from drep.db import init_database
 from drep.documentation.analyzer import DocumentationAnalyzer
+
+
+class OutputFormat(str, Enum):
+    """Output format options for check command."""
+
+    TEXT = "text"
+    JSON = "json"
 
 
 @click.group()
@@ -586,7 +594,12 @@ async def _run_review(
 @click.option("--staged", is_flag=True, help="Only check git staged files")
 @click.option("--config", default=None, help="Config file path (optional for local-only mode)")
 @click.option("--exit-zero", is_flag=True, help="Always exit with 0 (don't block commits)")
-@click.option("--format", type=click.Choice(["text", "json"]), default="text", help="Output format")
+@click.option(
+    "--format",
+    type=click.Choice([OutputFormat.TEXT.value, OutputFormat.JSON.value]),
+    default=OutputFormat.TEXT.value,
+    help="Output format",
+)
 def check(path, staged, config, exit_zero, format):
     """Check local files without platform API (pre-commit friendly).
 
@@ -731,9 +744,9 @@ def _output_findings(findings, format_type):
 
     Args:
         findings: List of Finding objects
-        format_type: 'text' or 'json'
+        format_type: OutputFormat value ('text' or 'json')
     """
-    if format_type == "json":
+    if format_type == OutputFormat.JSON.value:
         import json
 
         findings_dict = [f.model_dump() for f in findings]
