@@ -631,3 +631,58 @@ async def test_llm_client_close():
     await client.close()
 
     client.client.close.assert_called_once()
+
+
+# Test Bedrock Provider Integration
+
+
+@pytest.mark.asyncio
+async def test_llm_client_bedrock_provider_integration():
+    """Test LLMClient.analyze_code() with Bedrock provider."""
+    import json
+    from unittest.mock import patch
+
+    with patch("boto3.client") as mock_boto_client:
+        # Mock Bedrock response
+        mock_bedrock = MagicMock()
+        mock_boto_client.return_value = mock_bedrock
+
+        mock_body = json.dumps(
+            {
+                "content": [{"type": "text", "text": "Analysis result"}],
+                "usage": {"input_tokens": 100, "output_tokens": 50},
+            }
+        ).encode("utf-8")
+
+        mock_response = {
+            "body": MagicMock(read=MagicMock(return_value=mock_body), close=MagicMock())
+        }
+        mock_bedrock.invoke_model = MagicMock(return_value=mock_response)
+
+        client = LLMClient(
+            endpoint="http://ignored",
+            model="ignored",
+            provider="bedrock",
+            bedrock_region="us-east-1",
+            bedrock_model="anthropic.claude-sonnet-4-5-20250929-v1:0",
+        )
+
+        response = await client.analyze_code(
+            system_prompt="Test prompt",
+            code="def foo(): pass",
+        )
+
+        assert response.content == "Analysis result"
+        assert response.tokens_used == 150
+        assert mock_bedrock.invoke_model.called
+
+
+def test_llm_client_bedrock_provider_missing_config():
+    """Test LLMClient raises ValueError when Bedrock provider lacks config."""
+    with pytest.raises(ValueError, match="Bedrock provider requires bedrock_region"):
+        LLMClient(
+            endpoint="http://localhost:11434/v1",
+            model="test",
+            provider="bedrock",
+            # Missing bedrock_region and bedrock_model
+        )

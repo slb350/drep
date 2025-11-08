@@ -317,19 +317,19 @@ def test_llm_config_bedrock_provider():
 
 
 def test_llm_config_bedrock_without_bedrock_config():
-    """Test LLMConfig with bedrock provider but no bedrock config."""
+    """Test LLMConfig with bedrock provider but no bedrock config raises ValidationError."""
+    from pydantic import ValidationError
+
     from drep.models.config import LLMConfig
 
-    # This should be allowed - validation happens at runtime in LLMClient
-    config = LLMConfig(
-        enabled=True,
-        provider="bedrock",
-        endpoint="http://localhost:11434/v1",
-        model="llama2",
-    )
-
-    assert config.provider == "bedrock"
-    assert config.bedrock is None
+    # Should raise ValidationError at config time (fail fast)
+    with pytest.raises(ValidationError, match="Bedrock provider requires 'bedrock' configuration"):
+        LLMConfig(
+            enabled=True,
+            provider="bedrock",
+            endpoint="http://localhost:11434/v1",
+            model="llama2",
+        )
 
 
 def test_llm_config_backward_compatibility():

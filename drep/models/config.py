@@ -3,7 +3,7 @@
 from pathlib import Path
 from typing import List, Optional
 
-from pydantic import BaseModel, Field, HttpUrl, SecretStr, model_validator
+from pydantic import BaseModel, Field, HttpUrl, SecretStr, field_validator, model_validator
 
 
 class GiteaConfig(BaseModel):
@@ -68,6 +68,30 @@ class BedrockConfig(BaseModel):
         description="Bedrock model ID (e.g., anthropic.claude-sonnet-4-5-20250929-v1:0)",
     )
 
+    @field_validator("model")
+    @classmethod
+    def validate_model_id(cls, v: str) -> str:
+        """Validate Bedrock model ID format.
+
+        Ensures model ID starts with a valid provider prefix.
+        """
+        valid_prefixes = [
+            "anthropic.",
+            "global.anthropic.",
+            "amazon.",
+            "global.amazon.",
+            "meta.",
+            "global.meta.",
+            "cohere.",
+            "global.cohere.",
+        ]
+        if not any(v.startswith(prefix) for prefix in valid_prefixes):
+            raise ValueError(
+                f"Invalid Bedrock model ID: {v}. "
+                f"Must start with a valid provider prefix: {', '.join(valid_prefixes)}"
+            )
+        return v
+
 
 class LLMConfig(BaseModel):
     """LLM client configuration."""
@@ -110,6 +134,20 @@ class LLMConfig(BaseModel):
         default=100000, ge=1000, description="Rate limit: tokens per minute"
     )
     cache: CacheConfig = Field(default_factory=CacheConfig, description="Cache settings")
+
+    @model_validator(mode="after")
+    def validate_bedrock_config(self) -> "LLMConfig":
+        """Ensure Bedrock config is provided when provider is bedrock.
+
+        Raises:
+            ValueError: If provider is bedrock but bedrock config is missing
+        """
+        if self.provider == "bedrock" and self.bedrock is None:
+            raise ValueError(
+                "Bedrock provider requires 'bedrock' configuration with region and model. "
+                "Please add 'bedrock:' section to your config."
+            )
+        return self
 
 
 class Config(BaseModel):

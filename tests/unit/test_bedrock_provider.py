@@ -181,8 +181,8 @@ async def test_bedrock_client_throttling_error(mock_boto_client):
     with pytest.raises(Exception) as exc_info:
         await client.chat_completion(messages)
 
-    # Should preserve error details
-    assert "ThrottlingException" in str(exc_info.value) or "Rate exceeded" in str(exc_info.value)
+    # Should show user-friendly error message
+    assert "rate limit exceeded" in str(exc_info.value).lower()
 
 
 @pytest.mark.asyncio
@@ -210,7 +210,8 @@ async def test_bedrock_client_access_denied_error(mock_boto_client):
     with pytest.raises(Exception) as exc_info:
         await client.chat_completion(messages)
 
-    assert "AccessDeniedException" in str(exc_info.value) or "Not authorized" in str(exc_info.value)
+    # Should show user-friendly error message
+    assert "access denied" in str(exc_info.value).lower()
 
 
 @pytest.mark.asyncio
@@ -238,9 +239,8 @@ async def test_bedrock_client_validation_error(mock_boto_client):
     with pytest.raises(Exception) as exc_info:
         await client.chat_completion(messages)
 
-    assert "ValidationException" in str(exc_info.value) or "Invalid parameters" in str(
-        exc_info.value
-    )
+    # Should show user-friendly error message
+    assert "invalid request parameters" in str(exc_info.value).lower()
 
 
 @pytest.mark.asyncio
@@ -313,8 +313,11 @@ async def test_bedrock_client_system_prompt_extraction():
 
     bedrock_messages, system_prompt = client._format_messages(messages)
 
-    # Multiple system prompts should be combined
-    assert "Be concise" in system_prompt
+    # Multiple system prompts should be combined with newlines
+    expected_system = "Be concise.\n\nThis should also be extracted"
+    assert (
+        system_prompt == expected_system
+    ), f"Expected: {expected_system!r}, Got: {system_prompt!r}"
     assert len([m for m in bedrock_messages if m["role"] == "user"]) == 1
 
 

@@ -1,13 +1,51 @@
-"""AWS Bedrock provider for LLM client."""
+"""AWS Bedrock provider for LLM client.
+
+Authentication:
+    Uses boto3's standard credential chain in order:
+    1. Environment variables (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_SESSION_TOKEN)
+    2. Shared credentials file (~/.aws/credentials)
+    3. AWS config file (~/.aws/config)
+    4. Container credentials (ECS tasks)
+    5. Instance metadata service (EC2 IAM roles)
+
+    For more details: https://boto3.amazonaws.com/v1/documentation/api/latest/guide/credentials.html
+"""
 
 import json
 import logging
 from typing import Any, Dict, List, Optional, Tuple
 
 import boto3
-from botocore.exceptions import ClientError
+from botocore.exceptions import (
+    ClientError,
+    EndpointConnectionError,
+    NoCredentialsError,
+    PartialCredentialsError,
+)
 
 logger = logging.getLogger(__name__)
+
+# User-friendly error messages for common AWS Bedrock errors
+ERROR_MESSAGES = {
+    "ThrottlingException": (
+        "AWS Bedrock rate limit exceeded. "
+        "Reduce requests_per_minute or wait before retrying."
+    ),
+    "AccessDeniedException": (
+        "AWS Bedrock access denied. "
+        "Check IAM permissions and enable model access in AWS Console."
+    ),
+    "ValidationException": (
+        "Invalid request parameters. "
+        "Verify model ID format and region availability."
+    ),
+    "ResourceNotFoundException": (
+        "Model not found in this region. " "Check model ID and regional availability."
+    ),
+    "ServiceQuotaExceededException": (
+        "AWS service quota exceeded. Request quota increase or reduce usage."
+    ),
+}
 
 
 class BedrockClient:
@@ -27,17 +65,46 @@ class BedrockClient:
         Args:
             region: AWS region (default: us-east-1)
             model: Bedrock model ID (default: Claude Sonnet 4.5)
+
+        Raises:
+            ValueError: If AWS credentials are missing, incomplete, or endpoint unreachable
         """
         self.region = region
         self.model = model
 
         # Initialize boto3 bedrock-runtime client using AWS credentials chain
-        self.bedrock_client = boto3.client(
-            service_name="bedrock-runtime",
-            region_name=region,
-        )
+        try:
+            self.bedrock_client = boto3.client(
+                service_name="bedrock-runtime",
+                region_name=region,
+            )
+            logger.info(f"Successfully initialized Bedrock client: region={region}, model={model}")
 
-        logger.info(f"Initialized Bedrock client: region={region}, model={model}")
+        except NoCredentialsError as e:
+            logger.error(
+                "AWS credentials not found. Please configure credentials via:\n"
+                "  1. Environment variables: AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY\n"
+                "  2. AWS credentials file: ~/.aws/credentials\n"
+                "  3. IAM role (if running on EC2/ECS/Lambda)"
+            )
+            raise ValueError(
+                "AWS Bedrock requires credentials. "
+                "See https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-files.html"
+            ) from e
+
+        except PartialCredentialsError as e:
+            logger.error("AWS credentials are incomplete")
+            raise ValueError(
+                "Incomplete AWS credentials. "
+                "Both AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY are required."
+            ) from e
+
+        except EndpointConnectionError as e:
+            logger.error(f"Cannot connect to AWS Bedrock in region {region}")
+            raise ValueError(
+                f"Cannot connect to AWS Bedrock in region {region}. "
+                f"Check your network connection and verify Bedrock is available in this region."
+            ) from e
 
     def _format_messages(
         self, messages: List[Dict[str, str]]
@@ -92,13 +159,27 @@ class BedrockClient:
         """
         # Extract content
         content_blocks = bedrock_response.get("content", [])
-        if content_blocks:
-            # Combine all text blocks
-            text_content = " ".join(
-                block.get("text", "") for block in content_blocks if block.get("type") == "text"
+
+        if not content_blocks:
+            logger.warning(
+                f"Bedrock returned empty content array. "
+                f"This may indicate model refusal, quota exhaustion, or configuration issues. "
+                f"Response keys: {list(bedrock_response.keys())}"
             )
-        else:
             text_content = ""
+        else:
+            # Filter text blocks
+            text_blocks = [
+                block.get("text", "") for block in content_blocks if block.get("type") == "text"
+            ]
+
+            if not text_blocks:
+                logger.warning(
+                    f"Bedrock returned content blocks but none were text type. "
+                    f"Content block types: {[block.get('type') for block in content_blocks]}"
+                )
+
+            text_content = " ".join(text_blocks)
 
         # Extract token usage
         usage = bedrock_response.get("usage", {})
@@ -148,6 +229,10 @@ class BedrockClient:
         bedrock_messages, system_prompt = self._format_messages(messages)
 
         # Build Bedrock request body
+        # NOTE: anthropic_version "bedrock-2023-05-31" is REQUIRED by AWS Bedrock API
+        # for all Claude models. This is AWS's schema version, distinct from model version.
+        # Do NOT change without consulting AWS documentation:
+        # https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-anthropic-claude-messages.html
         body = {
             "anthropic_version": "bedrock-2023-05-31",
             "max_tokens": max_tokens,
@@ -166,8 +251,33 @@ class BedrockClient:
                 body=json.dumps(body),
             )
 
-            # Parse response
-            response_body = json.loads(response["body"].read())
+            # Read and parse response body with proper resource management
+            try:
+                body_stream = response["body"]
+                raw_body = body_stream.read()
+                logger.debug(f"Bedrock raw response size: {len(raw_body)} bytes")
+            except KeyError:
+                logger.error("Bedrock response missing 'body' field")
+                raise ValueError("Invalid Bedrock response: missing 'body' field")
+            finally:
+                if "body_stream" in locals():
+                    body_stream.close()  # Always close the StreamingBody
+
+            # Parse JSON with validation
+            try:
+                response_body = json.loads(raw_body)
+                logger.debug("Successfully parsed Bedrock JSON response")
+            except json.JSONDecodeError as e:
+                preview = (
+                    raw_body[:500].decode("utf-8", errors="replace")
+                    if isinstance(raw_body, bytes)
+                    else str(raw_body)[:500]
+                )
+                logger.error(f"Bedrock returned invalid JSON: {e}\nResponse preview: {preview}")
+                raise ValueError(
+                    f"Bedrock returned invalid JSON response. "
+                    f"AWS service issue suspected. Error: {e}"
+                ) from e
 
             # Convert to OpenAI format
             return self._parse_response(response_body)
@@ -179,12 +289,25 @@ class BedrockClient:
             # Log error with details
             logger.error(f"Bedrock API error: code={error_code}, message={error_message}")
 
-            # Wrap and re-raise with context
-            raise Exception(f"Bedrock API error ({error_code}): {error_message}") from e
+            # Provide user-friendly error message
+            user_message = ERROR_MESSAGES.get(error_code, error_message)
+            raise Exception(f"Bedrock request failed: {user_message}") from e
+
+        except json.JSONDecodeError as e:
+            # Already handled above, but catch explicitly for clarity
+            logger.error(f"Failed to parse Bedrock response as JSON: {e}")
+            raise ValueError(f"Bedrock returned invalid JSON: {e}") from e
+
+        except (KeyError, AttributeError) as e:
+            # Response structure errors
+            logger.error(f"Bedrock response structure error: {type(e).__name__}: {e}")
+            raise ValueError(f"Unexpected Bedrock response structure: {e}") from e
 
         except Exception as e:
-            # Log and re-raise generic errors
-            logger.error(f"Bedrock request failed: {e}")
+            # Unexpected errors - log with full traceback
+            logger.error(
+                f"Unexpected error in Bedrock request: {type(e).__name__}: {e}", exc_info=True
+            )
             raise
 
     async def close(self):

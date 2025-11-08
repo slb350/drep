@@ -1193,9 +1193,19 @@ class LLMClient:
 
                     latency_ms = (time.time() - start_time) * 1000
 
-                    # Extract response
-                    content = response.choices[0].message.content
-                    tokens_used = response.usage.total_tokens
+                    # Extract response (handle both dict and object formats)
+                    if self._provider == "bedrock":
+                        # Bedrock returns dict
+                        content = response["choices"][0]["message"]["content"]
+                        tokens_used = response["usage"]["total_tokens"]
+                        prompt_tokens = response["usage"]["prompt_tokens"]
+                        completion_tokens = response["usage"]["completion_tokens"]
+                    else:
+                        # OpenAI-compatible returns object
+                        content = response.choices[0].message.content
+                        tokens_used = response.usage.total_tokens
+                        prompt_tokens = response.usage.prompt_tokens
+                        completion_tokens = response.usage.completion_tokens
 
                     # Update actual tokens
                     ctx.set_actual_tokens(tokens_used)
@@ -1205,8 +1215,8 @@ class LLMClient:
                         analyzer=analyzer,
                         success=True,
                         cached=False,
-                        tokens_prompt=response.usage.prompt_tokens,
-                        tokens_completion=response.usage.completion_tokens,
+                        tokens_prompt=prompt_tokens,
+                        tokens_completion=completion_tokens,
                         latency_ms=latency_ms,
                     )
 
@@ -1215,7 +1225,7 @@ class LLMClient:
                         content=content,
                         tokens_used=tokens_used,
                         latency_ms=latency_ms,
-                        model=response.model,
+                        model=self.model if self._provider == "bedrock" else response.model,
                     )
 
                     # Cache response if available
@@ -1230,7 +1240,9 @@ class LLMClient:
                                 "content": content,
                                 "tokens_used": tokens_used,
                                 "latency_ms": latency_ms,
-                                "model": response.model,
+                                "model": (
+                                    self.model if self._provider == "bedrock" else response.model
+                                ),
                             },
                             tokens_used=tokens_used,
                             latency_ms=latency_ms,

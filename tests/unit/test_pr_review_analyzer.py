@@ -462,8 +462,10 @@ async def test_is_valid_comment_line():
     analyzer = PRReviewAnalyzer(llm, gitea)
 
     # Set up hunks with specific added lines
-    # test.py: line 1 context, line 2 added, line 3 context, line 4 added, line 5 removed, line 5 context, line 6 added
-    # After the removed line, the new line number continues: 1(ctx), 2(add), 3(ctx), 4(add), -(removed), 5(ctx), 6(add)
+    # test.py: line 1 context, line 2 added, line 3 context, line 4 added,
+    # line 5 removed, line 5 context, line 6 added
+    # After the removed line, the new line number continues:
+    # 1(ctx), 2(add), 3(ctx), 4(add), -(removed), 5(ctx), 6(add)
     analyzer._current_hunks = [
         DiffHunk(
             file_path="test.py",
