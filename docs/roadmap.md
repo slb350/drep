@@ -277,32 +277,36 @@ class LLMClient:
 Large projects to add GitHub, GitLab support and additional LLM providers.
 
 ### 3.1 Complete GitHub Adapter
-**Effort:** Large | **Impact:** High | **Status:** Not Started
+**Effort:** Large | **Impact:** High | **Status:** ✅ Complete (2025-11-08)
 
-Full GitHub API integration.
+**Completed:** 2025-11-08 | **Branch:** feature/github-adapter | **PR:** #4
 
-**Tasks:**
-- [ ] Implement GitHubAdapter in `drep/adapters/github.py`
-- [ ] Use PyGithub or GitHub REST API v3
-- [ ] Implement all BaseAdapter methods:
-  - `create_issue()` - Use GitHub Issues API
-  - `get_pull_request()` - Use Pull Requests API
-  - `post_review_comment()` - Use Review Comments API
-  - `get_file_content()` - Use Contents API
-- [ ] Add GitHub authentication (personal access token)
-- [ ] Handle GitHub API rate limiting
-- [ ] Add configuration in `config.yaml`
-- [ ] Write integration tests
-- [ ] Update documentation
+Full GitHub API integration with comprehensive testing and security hardening.
 
-**API endpoints:**
-```python
-# GitHub REST API v3
-POST /repos/{owner}/{repo}/issues
-GET /repos/{owner}/{repo}/pulls/{number}
-POST /repos/{owner}/{repo}/pulls/{number}/comments
-GET /repos/{owner}/{repo}/contents/{path}
-```
+**Completed Tasks:**
+- [x] Implemented GitHubAdapter in `drep/adapters/github.py`
+- [x] GitHub REST API v3 integration
+- [x] All BaseAdapter methods implemented:
+  - `create_issue()` - GitHub Issues API
+  - `get_pr()` - Pull Requests API
+  - `get_pr_diff()` - Diff retrieval
+  - `create_pr_comment()` - General PR comments
+  - `create_pr_review_comment()` - Inline review comments
+  - `post_review_comment()` - Review comments
+  - `get_file_content()` - Contents API (base64 decoding)
+  - `get_default_branch()` - Repository metadata
+- [x] GitHub authentication (PAT via HTTPS + askpass)
+- [x] Rate limit detection and handling
+- [x] Configuration in `config.yaml` (github section)
+- [x] 64 comprehensive unit tests (58 for adapter + 6 integration)
+- [x] Security improvements (token in temp file, not environment)
+- [x] Documentation updated
+
+**Deliverables:**
+- `drep/adapters/github.py` - Full GitHub adapter
+- 64 new tests, all passing
+- Security hardened token handling
+- **Commits:** Multiple in PR #4
 
 ---
 
@@ -465,9 +469,9 @@ Add Anthropic API as direct LLM provider for Claude models.
 **Implementation Strategy:** Option 1 (Direct SDK Integration)
 
 **Tasks:**
-- [ ] Add `anthropic` SDK dependency (~0.25.0)
+- [ ] Add `anthropic` SDK dependency (latest version)
 - [ ] Create `drep/llm/providers/anthropic_client.py`
-- [ ] Implement AnthropicProvider class:
+- [ ] Implement AnthropicClient class:
   - `chat_completion()` - Translate to Anthropic Messages API
   - `_format_messages()` - Convert OpenAI format → Anthropic format
   - `_parse_response()` - Extract content from Anthropic response
@@ -476,7 +480,7 @@ Add Anthropic API as direct LLM provider for Claude models.
   ```python
   class AnthropicConfig(BaseModel):
       api_key: SecretStr
-      model: str = Field(default="claude-3-5-sonnet-20241022")
+      model: str = Field(default="claude-sonnet-4-5-20250929")
       base_url: Optional[str] = None  # For Claude via proxy
   ```
 - [ ] Modify `LLMClient.__init__()` to detect Anthropic provider
@@ -510,11 +514,24 @@ llm:
   max_tokens_per_minute: 40000
 ```
 
-**Anthropic Models Supported:**
-- `claude-3-5-sonnet-20241022` - Claude 3.5 Sonnet (latest, recommended)
-- `claude-3-opus-20240229` - Claude 3 Opus (most capable)
-- `claude-3-sonnet-20240229` - Claude 3 Sonnet (balanced)
-- `claude-3-haiku-20240307` - Claude 3 Haiku (fastest)
+**Anthropic Models Supported (Latest - 2025):**
+- `claude-sonnet-4-5-20250929` - **Claude Sonnet 4.5** (smartest, recommended) 🆕
+  - Pricing: $3/MTok input, $15/MTok output
+  - 200K context (1M beta), 64K max output
+  - Extended thinking support
+- `claude-haiku-4-5-20251001` - **Claude Haiku 4.5** (fastest) 🆕
+  - Pricing: $1/MTok input, $5/MTok output
+  - 200K context, 64K max output
+  - Near-frontier intelligence
+- `claude-opus-4-1-20250805` - **Claude Opus 4.1** (specialized reasoning) 🆕
+  - Pricing: $15/MTok input, $75/MTok output
+  - 200K context, 32K max output
+  - Exceptional for complex tasks
+
+**Model Aliases (auto-update to latest snapshot):**
+- `claude-sonnet-4-5` → claude-sonnet-4-5-20250929
+- `claude-haiku-4-5` → claude-haiku-4-5-20251001
+- `claude-opus-4-1` → claude-opus-4-1-20250805
 
 **API Translation:**
 ```python
