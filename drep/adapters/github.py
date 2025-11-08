@@ -44,11 +44,11 @@ class GitHubAdapter(BaseAdapter):
                 url="https://github.company.com/api/v3"
             )
         """
-        # Validate token (Issue #7)
+        # Validate token is not empty or whitespace
         if not token or not token.strip():
             raise ValueError("GitHub token cannot be empty")
 
-        # Validate URL (Issue #7)
+        # Validate URL starts with http:// or https://
         if not url.startswith(("http://", "https://")):
             raise ValueError(f"GitHub URL must start with http:// or https://, got: {url}")
 
@@ -75,7 +75,7 @@ class GitHubAdapter(BaseAdapter):
             await self.client.aclose()
             logger.debug("Closed GitHub adapter HTTP client")
         except Exception as e:
-            # Issue #12: Don't re-raise cleanup errors
+            # Suppress cleanup errors to avoid masking original errors in finally blocks
             logger.warning(f"Error closing GitHub client: {e}")
 
     async def create_issue(
@@ -107,7 +107,7 @@ class GitHubAdapter(BaseAdapter):
             response = await self.client.post(url, json=payload)
             response.raise_for_status()
 
-            # Issue #5: Validate JSON parsing
+            # Validate JSON parsing to handle non-JSON error responses
             try:
                 data = response.json()
             except json.JSONDecodeError:
@@ -120,7 +120,7 @@ class GitHubAdapter(BaseAdapter):
                     f"{response.text[:200]}"
                 )
 
-            # Issue #5: Validate required fields
+            # Validate required 'number' field exists in API response
             if "number" not in data:
                 logger.error(
                     f"GitHub response missing 'number' field for {owner}/{repo}",
@@ -130,7 +130,7 @@ class GitHubAdapter(BaseAdapter):
 
             issue_number = data["number"]
 
-            # Issue #1: Add logging
+            # Log successful issue creation with context
             logger.debug(
                 f"Created issue #{issue_number} in {owner}/{repo}",
                 extra={"repo_id": f"{owner}/{repo}", "issue_number": issue_number},
@@ -138,7 +138,7 @@ class GitHubAdapter(BaseAdapter):
 
             return issue_number
 
-        # Issue #4: Network error handling
+        # Handle network timeout errors
         except httpx.TimeoutException:
             logger.error(
                 f"Timeout creating issue in {owner}/{repo}",
@@ -158,7 +158,7 @@ class GitHubAdapter(BaseAdapter):
                 "Check your internet connection, firewall, or GitHub API status."
             )
         except httpx.HTTPStatusError as e:
-            # Issue #8: Rate limit detection
+            # Detect GitHub API rate limit from response headers
             if e.response.status_code == 403:
                 if e.response.headers.get("X-RateLimit-Remaining") == "0":
                     reset_time = e.response.headers.get("X-RateLimit-Reset")
@@ -171,7 +171,7 @@ class GitHubAdapter(BaseAdapter):
                         "Wait or use a different token."
                     )
 
-            # Issue #11: Add repo context to error
+            # Include repository context in error message for debugging
             logger.error(
                 f"HTTP error creating issue in {owner}/{repo}: {e.response.status_code}",
                 extra={
@@ -204,7 +204,7 @@ class GitHubAdapter(BaseAdapter):
             response = await self.client.get(url)
             response.raise_for_status()
 
-            # Issue #5: Validate JSON parsing
+            # Validate JSON parsing to handle non-JSON error responses
             try:
                 data = response.json()
             except json.JSONDecodeError:
@@ -224,7 +224,7 @@ class GitHubAdapter(BaseAdapter):
 
             return data
 
-        # Issue #4: Network error handling
+        # Handle network timeout errors
         except httpx.TimeoutException:
             logger.error(
                 f"Timeout fetching PR #{pr_number} from {owner}/{repo}",
@@ -252,7 +252,7 @@ class GitHubAdapter(BaseAdapter):
                 )
                 raise ValueError(f"Pull request #{pr_number} not found in {owner}/{repo}")
             else:
-                # Issue #8: Rate limit detection
+                # Detect GitHub API rate limit from response headers
                 if e.response.status_code == 403:
                     if e.response.headers.get("X-RateLimit-Remaining") == "0":
                         reset_time = e.response.headers.get("X-RateLimit-Reset")
@@ -317,7 +317,7 @@ class GitHubAdapter(BaseAdapter):
 
             return response.text
 
-        # Issue #4: Network error handling
+        # Handle network timeout errors
         except httpx.TimeoutException:
             logger.error(
                 f"Timeout fetching PR diff for #{pr_number} from {owner}/{repo}",
@@ -337,7 +337,7 @@ class GitHubAdapter(BaseAdapter):
                 "Check your internet connection, firewall, or GitHub API status."
             )
         except httpx.HTTPStatusError as e:
-            # Issue #8: Rate limit detection
+            # Detect GitHub API rate limit from response headers
             if e.response.status_code == 403:
                 if e.response.headers.get("X-RateLimit-Remaining") == "0":
                     reset_time = e.response.headers.get("X-RateLimit-Reset")
@@ -389,7 +389,7 @@ class GitHubAdapter(BaseAdapter):
                 extra={"repo_id": f"{owner}/{repo}", "pr_number": pr_number},
             )
 
-        # Issue #4: Network error handling
+        # Handle network timeout errors
         except httpx.TimeoutException:
             logger.error(
                 f"Timeout posting comment on PR #{pr_number} in {owner}/{repo}",
@@ -409,7 +409,7 @@ class GitHubAdapter(BaseAdapter):
                 "Check your internet connection, firewall, or GitHub API status."
             )
         except httpx.HTTPStatusError as e:
-            # Issue #8: Rate limit detection
+            # Detect GitHub API rate limit from response headers
             if e.response.status_code == 403:
                 if e.response.headers.get("X-RateLimit-Remaining") == "0":
                     reset_time = e.response.headers.get("X-RateLimit-Reset")
@@ -470,7 +470,7 @@ class GitHubAdapter(BaseAdapter):
         # Get PR details to extract commit SHA
         pr = await self.get_pr(owner, repo, pr_number)
 
-        # Issue #5: Validate nested structure exists
+        # Validate required head.sha field exists in PR response
         if "head" not in pr or "sha" not in pr["head"]:
             logger.error(
                 f"PR #{pr_number} response missing head.sha in {owner}/{repo}",
@@ -491,7 +491,7 @@ class GitHubAdapter(BaseAdapter):
         # - path: file path
         # - line: line number
         # - side: "LEFT" (deleted) or "RIGHT" (added)
-        # Issue #9: Document assumption - we only support RIGHT (added lines)
+        # Assumption: Only support comments on added lines (side="RIGHT"), not deleted lines
         payload = {
             "commit_id": commit_sha,
             "path": file_path,
@@ -514,7 +514,7 @@ class GitHubAdapter(BaseAdapter):
                 },
             )
 
-        # Issue #4: Network error handling
+        # Handle network timeout errors
         except httpx.TimeoutException:
             logger.error(
                 f"Timeout posting review comment on PR #{pr_number} in {owner}/{repo}",
@@ -539,7 +539,7 @@ class GitHubAdapter(BaseAdapter):
                 "Check your internet connection, firewall, or GitHub API status."
             )
         except httpx.HTTPStatusError as e:
-            # Issue #8: Rate limit detection
+            # Detect GitHub API rate limit from response headers
             if e.response.status_code == 403:
                 if e.response.headers.get("X-RateLimit-Remaining") == "0":
                     reset_time = e.response.headers.get("X-RateLimit-Reset")
@@ -611,7 +611,7 @@ class GitHubAdapter(BaseAdapter):
             response = await self.client.get(url, params=params)
             response.raise_for_status()
 
-            # Issue #5: Validate JSON parsing
+            # Validate JSON parsing to handle non-JSON error responses
             try:
                 data = response.json()
             except json.JSONDecodeError:
@@ -635,7 +635,7 @@ class GitHubAdapter(BaseAdapter):
                 )
                 return ""
 
-            # Issue #6: Base64 decode error handling
+            # Handle base64 decode and UTF-8 decode errors
             try:
                 # GitHub may include newlines in the base64, so remove them first
                 content = content.replace("\n", "")
@@ -673,7 +673,7 @@ class GitHubAdapter(BaseAdapter):
                     f"in {owner}/{repo}@{ref}. File may be corrupted."
                 )
 
-        # Issue #4: Network error handling
+        # Handle network timeout errors
         except httpx.TimeoutException:
             logger.error(
                 f"Timeout fetching {file_path} from {owner}/{repo}@{ref}",
@@ -700,7 +700,7 @@ class GitHubAdapter(BaseAdapter):
                 )
                 raise ValueError(f"File {file_path} not found at ref {ref} in {owner}/{repo}")
             else:
-                # Issue #8: Rate limit detection
+                # Detect GitHub API rate limit from response headers
                 if e.response.status_code == 403:
                     if e.response.headers.get("X-RateLimit-Remaining") == "0":
                         reset_time = e.response.headers.get("X-RateLimit-Reset")
