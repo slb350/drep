@@ -36,7 +36,7 @@ Cache
    :show-inheritance:
 
 Code Quality Analyzer
---------------------
+---------------------
 
 .. automodule:: drep.code_quality.analyzer
    :members:
@@ -44,7 +44,7 @@ Code Quality Analyzer
    :show-inheritance:
 
 Repository Scanner
------------------
+------------------
 
 .. automodule:: drep.core.scanner
    :members:

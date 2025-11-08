@@ -728,7 +728,7 @@ class RateLimiter:
 
 
 class LLMClient:
-    """Production-ready LLM client for OpenAI-compatible APIs with advanced features.
+    r"""Production-ready LLM client for OpenAI-compatible APIs with advanced features.
 
     This is the main entry point for all LLM operations in drep. It provides a robust,
     production-ready interface that handles the complexities of LLM integration:
@@ -753,7 +753,7 @@ class LLMClient:
        - Dramatic cost and latency reduction
 
     4. **Robust JSON Parsing** (5-level fallback strategy):
-       - Level 1: Extract from markdown code fences (```json)
+       - Level 1: Extract from markdown code fences (\`\`\`json)
        - Level 2: Direct JSON parse
        - Level 3: Fix common errors (trailing commas, single quotes)
        - Level 4: Recover truncated JSON (add missing brackets)
@@ -772,7 +772,7 @@ class LLMClient:
     that hold semaphores for the entire request duration.
 
     Typical Request Flow:
-    --------------------
+    ---------------------
     1. Check cache (if enabled) → return immediately if hit
     2. Acquire rate limit context (may sleep if limits exceeded)
     3. Make LLM API request (with retries on failure)

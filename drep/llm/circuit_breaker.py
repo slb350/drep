@@ -114,12 +114,12 @@ class CircuitBreaker:
         self.half_open_calls = 0
 
     async def call(self, func: Callable, *args, **kwargs) -> Any:
-        """Execute function with circuit breaker protection.
+        r"""Execute function with circuit breaker protection.
 
         Args:
             func: Async function to execute
-            *args: Positional arguments for func
-            **kwargs: Keyword arguments for func
+            \*args: Positional arguments for func
+            \*\*kwargs: Keyword arguments for func
 
         Returns:
             Result from func
