@@ -28,16 +28,14 @@ logger = logging.getLogger(__name__)
 # User-friendly error messages for common AWS Bedrock errors
 ERROR_MESSAGES = {
     "ThrottlingException": (
-        "AWS Bedrock rate limit exceeded. "
-        "Reduce requests_per_minute or wait before retrying."
+        "AWS Bedrock rate limit exceeded. " "Reduce requests_per_minute or wait before retrying."
     ),
     "AccessDeniedException": (
         "AWS Bedrock access denied. "
         "Check IAM permissions and enable model access in AWS Console."
     ),
     "ValidationException": (
-        "Invalid request parameters. "
-        "Verify model ID format and region availability."
+        "Invalid request parameters. " "Verify model ID format and region availability."
     ),
     "ResourceNotFoundException": (
         "Model not found in this region. " "Check model ID and regional availability."
