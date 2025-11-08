@@ -192,7 +192,8 @@ class TestScanWorkflow:
         # Setup mocks
         config = MagicMock()
         config.gitea.url = "http://test"
-        config.gitea.token = "test-token"
+        from pydantic import SecretStr
+        config.gitea.token = SecretStr("test-token")
         config.documentation = MagicMock()
         config.database_url = "sqlite:///./test.db"
         mock_load_config.return_value = config

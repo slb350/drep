@@ -114,7 +114,7 @@ async def _run_scan(
     config = load_config(config_path)
 
     # Initialize components
-    adapter = GiteaAdapter(config.gitea.url, config.gitea.token)
+    adapter = GiteaAdapter(config.gitea.url, config.gitea.token.get_secret_value())
     session = init_database(config.database_url)
     scanner = RepositoryScanner(session, config)  # Pass config for LLM support
     analyzer = DocumentationAnalyzer(config.documentation)
@@ -147,7 +147,7 @@ fi
             **os.environ,
             "GIT_ASKPASS": str(askpass_script),
             "GIT_TERMINAL_PROMPT": "0",
-            "DREP_GIT_TOKEN": config.gitea.token,
+            "DREP_GIT_TOKEN": config.gitea.token.get_secret_value(),
         }
 
         # Repository path
@@ -332,7 +332,7 @@ async def _run_review(
         return
 
     # Initialize components
-    adapter = GiteaAdapter(config.gitea.url, config.gitea.token)
+    adapter = GiteaAdapter(config.gitea.url, config.gitea.token.get_secret_value())
     scanner = RepositoryScanner(init_database(config.database_url), config, gitea_adapter=adapter)
 
     try:
