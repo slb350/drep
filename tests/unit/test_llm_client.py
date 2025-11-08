@@ -836,3 +836,76 @@ async def test_llm_client_bedrock_cache_integration():
             assert response2.content == "Cached response"
             # Should NOT call Bedrock again
             assert mock_bedrock.invoke_model.call_count == 1  # Still 1
+
+
+@pytest.mark.asyncio
+async def test_llm_client_bedrock_with_code_quality_analyzer():
+    """Test Bedrock with CodeQualityAnalyzer end-to-end (Gap #4 from PR review)."""
+    import json
+    from unittest.mock import patch
+
+    from drep.code_quality.analyzer import CodeQualityAnalyzer
+
+    with patch("boto3.client") as mock_boto_client:
+        mock_bedrock = MagicMock()
+        mock_boto_client.return_value = mock_bedrock
+
+        # Mock Bedrock response with code quality findings
+        # Must match CodeAnalysisResult schema (issues, not findings)
+        mock_body = json.dumps(
+            {
+                "content": [
+                    {
+                        "type": "text",
+                        "text": json.dumps(
+                            {
+                                "summary": "Found 1 issue",
+                                "issues": [  # Must be "issues" not "findings"
+                                    {
+                                        "line": 1,  # Required
+                                        "severity": "high",  # Required
+                                        "category": "bug",  # Required
+                                        "message": "Potential bug found",  # Required
+                                        "suggestion": "Fix the bug",  # Required
+                                        "code_snippet": "def foo():",  # Required
+                                    }
+                                ],
+                            }
+                        ),
+                    }
+                ],
+                "usage": {"input_tokens": 200, "output_tokens": 100},
+            }
+        ).encode("utf-8")
+
+        mock_response = {
+            "body": MagicMock(read=MagicMock(return_value=mock_body), close=MagicMock())
+        }
+        mock_bedrock.invoke_model = MagicMock(return_value=mock_response)
+
+        client = LLMClient(
+            endpoint="http://ignored",
+            model="ignored",
+            provider="bedrock",
+            bedrock_region="us-east-1",
+            bedrock_model="anthropic.claude-sonnet-4-5-20250929-v1:0",
+        )
+
+        analyzer = CodeQualityAnalyzer(client)
+
+        # Analyze Python code - returns list of Finding objects
+        findings_list = await analyzer.analyze_file(
+            file_path="test.py",
+            content="def foo():\n    pass",
+            repo_id="test/repo",
+            commit_sha="abc123",
+        )
+
+        # Verify analyzer works with Bedrock
+        assert isinstance(findings_list, list)
+        assert len(findings_list) > 0
+        # Note: CodeAnalysisResult.to_findings() converts "high" → "error"
+        assert findings_list[0].severity == "error"  # "high" is converted to "error"
+        assert findings_list[0].type == "bug"  # Field is "type" not "category"
+        assert findings_list[0].message == "Potential bug found"
+        assert mock_bedrock.invoke_model.called
