@@ -1,5 +1,6 @@
 """GitHub platform adapter implementation."""
 
+import asyncio
 import base64
 import json
 import logging
@@ -124,8 +125,8 @@ class GitHubAdapter(BaseAdapter):
         try:
             await self.client.aclose()
             logger.debug("Closed GitHub adapter HTTP client")
-        except (KeyboardInterrupt, SystemExit):
-            # Always propagate user interrupts and system exit signals
+        except (KeyboardInterrupt, SystemExit, asyncio.CancelledError):
+            # Always propagate user interrupts, system exit signals, and async cancellations
             logger.info("Close interrupted by user or system")
             raise
         except Exception as e:

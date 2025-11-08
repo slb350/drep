@@ -975,6 +975,23 @@ async def test_close_suppresses_non_critical_errors():
 
 
 @pytest.mark.asyncio
+async def test_close_propagates_asyncio_cancelled_error():
+    """Test that close() propagates asyncio.CancelledError instead of swallowing it."""
+    from unittest.mock import AsyncMock
+    import asyncio
+    from drep.adapters.github import GitHubAdapter
+
+    adapter = GitHubAdapter("ghp_token")
+
+    # Mock aclose() to raise CancelledError
+    adapter.client.aclose = AsyncMock(side_effect=asyncio.CancelledError())
+
+    # CancelledError should propagate
+    with pytest.raises(asyncio.CancelledError):
+        await adapter.close()
+
+
+@pytest.mark.asyncio
 async def test_check_rate_limit_with_zero():
     """Test _check_rate_limit() detects rate limit with '0' string."""
     from drep.adapters.github import GitHubAdapter
