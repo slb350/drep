@@ -60,7 +60,8 @@ class GitLabAdapter(BaseAdapter):
                    IMPORTANT: If loading from GitLabConfig (Pydantic model), you must
                    unwrap SecretStr by calling: config.gitlab.token.get_secret_value()
             url: GitLab base URL (None = gitlab.com, else full URL like https://gitlab.example.com).
-                 Do not include /api/v4 in the URL.
+                 The /api/v4 suffix is optional - it will be stripped if present and re-added
+                 automatically to prevent URL duplication.
 
         Raises:
             ValueError: If token is empty
@@ -109,7 +110,13 @@ class GitLabAdapter(BaseAdapter):
             # Validate URL starts with http:// or https://
             if not url.startswith(("http://", "https://")):
                 raise ValueError(f"GitLab URL must start with http:// or https://, got: {url}")
-            self.base_url = url.rstrip("/")
+
+            # Strip trailing slashes and /api/v4 suffix if present
+            # This prevents URL duplication like https://gitlab.com/api/v4/api/v4/...
+            clean_url = url.rstrip("/")
+            if clean_url.endswith("/api/v4"):
+                clean_url = clean_url[:-7]  # Remove "/api/v4"
+            self.base_url = clean_url
 
         self.api_url = f"{self.base_url}/api/v4"
         self.token = token.strip()

@@ -133,6 +133,32 @@ async def test_gitlab_adapter_invalid_url_raises_error():
         GitLabAdapter("glpat_token", "ftp://invalid.com")
 
 
+@pytest.mark.asyncio
+async def test_url_with_api_v4_suffix_handled_correctly():
+    """Test that URLs with /api/v4 suffix don't cause duplication.
+
+    If user provides https://gitlab.com/api/v4, the adapter should strip
+    the /api/v4 suffix to avoid creating https://gitlab.com/api/v4/api/v4/...
+    """
+    from drep.adapters.gitlab import GitLabAdapter
+
+    # Test with /api/v4 suffix
+    adapter = GitLabAdapter("glpat_token", "https://gitlab.com/api/v4")
+    try:
+        assert adapter.api_url == "https://gitlab.com/api/v4"
+        assert adapter.base_url == "https://gitlab.com"
+    finally:
+        await adapter.close()
+
+    # Test with /api/v4/ (trailing slash)
+    adapter2 = GitLabAdapter("glpat_token", "https://gitlab.com/api/v4/")
+    try:
+        assert adapter2.api_url == "https://gitlab.com/api/v4"
+        assert adapter2.base_url == "https://gitlab.com"
+    finally:
+        await adapter2.close()
+
+
 # ===== _encode_project_path() Tests =====
 
 
