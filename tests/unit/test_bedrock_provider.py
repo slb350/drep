@@ -495,3 +495,69 @@ async def test_bedrock_client_uses_asyncio_to_thread(mock_to_thread, mock_boto_c
     # Verify first arg to to_thread is the invoke_model method
     call_args = mock_to_thread.call_args
     assert call_args[0][0] == mock_bedrock.invoke_model
+
+
+@pytest.mark.asyncio
+@patch("boto3.client")
+@patch("asyncio.to_thread")
+async def test_bedrock_client_invoke_model_parameters(mock_to_thread, mock_boto_client):
+    """Test invoke_model called with correct parameters (P1: contentType, accept, bytes body)."""
+    from drep.llm.providers.bedrock_client import BedrockClient
+
+    mock_bedrock = MagicMock()
+    mock_boto_client.return_value = mock_bedrock
+
+    # Mock successful response
+    mock_body = json.dumps(
+        {
+            "content": [{"type": "text", "text": "Response"}],
+            "usage": {"input_tokens": 10, "output_tokens": 5},
+        }
+    ).encode("utf-8")
+
+    mock_response = {"body": MagicMock(read=MagicMock(return_value=mock_body), close=MagicMock())}
+
+    # Mock asyncio.to_thread to return the mock response
+    async def mock_async_invoke(*args, **kwargs):
+        return mock_response
+
+    mock_to_thread.side_effect = mock_async_invoke
+
+    client = BedrockClient(
+        region="us-east-1",
+        model="anthropic.claude-sonnet-4-5-20250929-v1:0",
+    )
+
+    messages = [{"role": "user", "content": "Test"}]
+    await client.chat_completion(messages, max_tokens=1000, temperature=0.5)
+
+    # Verify asyncio.to_thread was called with correct parameters
+    mock_to_thread.assert_called_once()
+
+    # Extract the kwargs passed to invoke_model
+    call_args = mock_to_thread.call_args
+    # call_args[1] contains the kwargs passed to invoke_model
+    invoke_kwargs = call_args[1] if len(call_args) > 1 else {}
+
+    # Verify modelId
+    assert "modelId" in invoke_kwargs
+    assert invoke_kwargs["modelId"] == "anthropic.claude-sonnet-4-5-20250929-v1:0"
+
+    # Verify contentType is set (AWS best practice)
+    assert "contentType" in invoke_kwargs
+    assert invoke_kwargs["contentType"] == "application/json"
+
+    # Verify accept is set (to receive JSON response)
+    assert "accept" in invoke_kwargs
+    assert invoke_kwargs["accept"] == "application/json"
+
+    # Verify body is bytes, not string (AWS API requirement)
+    assert "body" in invoke_kwargs
+    assert isinstance(invoke_kwargs["body"], bytes), "Body must be bytes, not string"
+
+    # Verify body contains valid JSON
+    body_dict = json.loads(invoke_kwargs["body"].decode("utf-8"))
+    assert "anthropic_version" in body_dict
+    assert body_dict["anthropic_version"] == "bedrock-2023-05-31"
+    assert body_dict["max_tokens"] == 1000
+    assert body_dict["temperature"] == 0.5

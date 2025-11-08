@@ -250,7 +250,9 @@ class BedrockClient:
             response = await asyncio.to_thread(
                 self.bedrock_client.invoke_model,
                 modelId=self.model,
-                body=json.dumps(body),
+                contentType="application/json",
+                accept="application/json",
+                body=json.dumps(body).encode("utf-8"),  # AWS requires bytes, not string
             )
 
             # Read and parse response body with proper resource management
