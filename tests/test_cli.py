@@ -617,7 +617,7 @@ class TestScanWorkflow:
     @patch("drep.cli.GiteaAdapter")
     @patch("drep.cli.load_config")
     @patch("drep.cli.Repo")
-    @patch("drep.cli.shutil.rmtree")
+    @patch("shutil.rmtree")
     def test_cleanup_failure_is_logged_and_reported(
         self,
         mock_rmtree,
