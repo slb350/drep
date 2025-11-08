@@ -1,6 +1,5 @@
 """Tests for drep.security module - secret detection and logging safety."""
 
-import pytest
 
 
 def test_security_module_exists():

@@ -14,6 +14,22 @@ class GiteaConfig(BaseModel):
     repositories: List[str] = Field(..., description="Repository patterns (e.g., steve/*)")
 
 
+class GitHubConfig(BaseModel):
+    """GitHub platform configuration."""
+
+    token: str = Field(..., description="GitHub Personal Access Token (PAT) or GitHub App token")
+    repositories: List[str] = Field(
+        ..., description="Repository patterns (e.g., owner/repo or owner/*)"
+    )
+    url: str = Field(
+        default="https://api.github.com",
+        description=(
+            "GitHub API URL (default: https://api.github.com, "
+            "use custom for GitHub Enterprise)"
+        ),
+    )
+
+
 class DocumentationConfig(BaseModel):
     """Documentation analysis settings."""
 
@@ -76,9 +92,17 @@ class LLMConfig(BaseModel):
 
 
 class Config(BaseModel):
-    """Main configuration."""
+    """Main configuration.
 
-    gitea: GiteaConfig
-    documentation: DocumentationConfig
+    At least one platform (gitea or github) must be configured.
+    """
+
+    gitea: Optional[GiteaConfig] = Field(
+        default=None, description="Gitea platform configuration (optional)"
+    )
+    github: Optional[GitHubConfig] = Field(
+        default=None, description="GitHub platform configuration (optional)"
+    )
+    documentation: DocumentationConfig = Field(default_factory=DocumentationConfig)
     database_url: str = "sqlite:///./drep.db"
     llm: Optional[LLMConfig] = Field(default=None, description="LLM configuration")

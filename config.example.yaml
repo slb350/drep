@@ -1,11 +1,23 @@
 # Example drep configuration file
 # Copy this to config.yaml and customize for your setup
 
+# Platform configuration - configure at least one platform (Gitea, GitHub, or both)
+
+# Gitea configuration (optional)
 gitea:
   url: http://localhost:3000
   token: ${GITEA_TOKEN}  # Use environment variable
   repositories:
     - your-org/*  # Monitor all repos for this owner/org
+
+# GitHub configuration (optional)
+# Uncomment to enable GitHub support
+# github:
+#   token: ${GITHUB_TOKEN}  # GitHub Personal Access Token
+#   repositories:
+#     - owner/repo  # Specific repository
+#     - organization/*  # All repos in organization
+#   url: https://api.github.com  # Default GitHub API (or custom for GitHub Enterprise)
 
 documentation:
   enabled: true

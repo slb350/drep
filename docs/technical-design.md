@@ -1,18 +1,18 @@
 # Technical Design: drep
 
-**Document Version:** 3.0
+**Document Version:** 3.1
 **Last Updated:** 2025-11-07
-**Status:** Phase 1 & 2 Complete, Phase 3 in Planning
+**Status:** Phase 1 & 2 Complete, Phase 3.1 (GitHub Adapter) Complete
 
 ---
 
 ## Executive Summary
 
-**drep** (Documentation & Review Enhancement Platform) is an automated code review tool for **Gitea** that detects and fixes documentation issues in **Python** repositories.
+**drep** (Documentation & Review Enhancement Platform) is an automated code review tool for **Gitea and GitHub** that detects and fixes documentation issues in **Python** repositories.
 
 ### MVP Scope
 
-- **Platform:** Gitea only (self-hosted or cloud)
+- **Platform:** Gitea and GitHub (self-hosted, cloud, or GitHub.com)
 - **Language:** Python only
 - **Features:**
   - Typo detection in comments, docstrings, and markdown
@@ -25,7 +25,8 @@
 
 - **Phase 1:** Quick Wins (Security, BaseAdapter, Constants, Enhanced Markdown) ✅ COMPLETE
 - **Phase 2:** Quality & Testing (E2E Tests, API Documentation, Dependency Injection) ✅ COMPLETE
-- **Phase 3:** Platform Expansion (GitHub/GitLab adapters)
+- **Phase 3.1:** GitHub Adapter ✅ COMPLETE
+- **Phase 3.2:** GitLab Adapter (planned)
 - **Phase 4:** Feature Expansion (Multi-language support, Web UI)
 - **Phase 5:** Advanced Features (Vector database, custom rules, performance)
 
@@ -306,7 +307,141 @@ class GiteaAdapter:
 
 ---
 
-### 2. Documentation Analyzer
+### 2. GitHub Adapter
+
+```python
+import httpx
+import base64
+from typing import List, Optional
+
+class GitHubAdapter:
+    """GitHub API adapter.
+
+    Uses GitHub REST API v3 for all operations. Key differences from Gitea:
+    - Authentication: Bearer token instead of token prefix
+    - Labels: Use names directly (not IDs like Gitea)
+    - PR diff: Uses Accept header media type negotiation
+    - Review comments: Different endpoint structure with line + side fields
+    """
+
+    def __init__(self, token: str, url: str = "https://api.github.com"):
+        """Initialize GitHub adapter.
+
+        Args:
+            token: GitHub Personal Access Token (PAT) or GitHub App token
+            url: GitHub API URL (default: https://api.github.com,
+                 can override for GitHub Enterprise Server)
+        """
+        self.url = url.rstrip('/')
+        self.token = token
+        self.client = httpx.AsyncClient(
+            headers={
+                'Authorization': f'Bearer {token}',
+                'Accept': 'application/vnd.github.v3+json'
+            },
+            timeout=30.0
+        )
+
+    async def get_file_content(
+        self,
+        owner: str,
+        repo: str,
+        file_path: str,
+        ref: str
+    ) -> str:
+        """Get file content from repository."""
+        url = f"{self.url}/repos/{owner}/{repo}/contents/{file_path}"
+        response = await self.client.get(url, params={'ref': ref})
+        response.raise_for_status()
+
+        data = response.json()
+        # GitHub returns base64-encoded content (may include newlines)
+        content = data.get('content', '').replace('\n', '')
+        return base64.b64decode(content).decode('utf-8') if content else ''
+
+    async def create_issue(
+        self,
+        owner: str,
+        repo: str,
+        title: str,
+        body: str,
+        labels: List[str] = None
+    ) -> int:
+        """Create an issue and return issue number."""
+        url = f"{self.url}/repos/{owner}/{repo}/issues"
+        payload = {
+            'title': title,
+            'body': body
+        }
+
+        # GitHub uses label names directly (not IDs like Gitea)
+        if labels:
+            payload['labels'] = labels
+
+        response = await self.client.post(url, json=payload)
+        response.raise_for_status()
+
+        return response.json()['number']
+
+    async def get_pr(self, owner: str, repo: str, pr_number: int) -> dict:
+        """Get pull request details."""
+        url = f"{self.url}/repos/{owner}/{repo}/pulls/{pr_number}"
+        response = await self.client.get(url)
+        response.raise_for_status()
+        return response.json()
+
+    async def get_pr_diff(self, owner: str, repo: str, pr_number: int) -> str:
+        """Get PR diff using GitHub media type negotiation."""
+        url = f"{self.url}/repos/{owner}/{repo}/pulls/{pr_number}"
+        response = await self.client.get(
+            url,
+            headers={'Accept': 'application/vnd.github.v3.diff'}
+        )
+        response.raise_for_status()
+        return response.text
+
+    async def post_review_comment(
+        self,
+        owner: str,
+        repo: str,
+        pr_number: int,
+        file_path: str,
+        line: int,
+        body: str
+    ) -> None:
+        """Post line-specific review comment."""
+        # Get PR details to extract commit SHA
+        pr = await self.get_pr(owner, repo, pr_number)
+        commit_sha = pr['head']['sha']
+
+        # GitHub requires: commit_id, path, line, side, body
+        url = f"{self.url}/repos/{owner}/{repo}/pulls/{pr_number}/comments"
+        payload = {
+            'commit_id': commit_sha,
+            'path': file_path,
+            'line': line,
+            'side': 'RIGHT',  # GitHub requires explicit side (RIGHT = added)
+            'body': body
+        }
+
+        response = await self.client.post(url, json=payload)
+        response.raise_for_status()
+
+    async def close(self):
+        """Close HTTP client connection."""
+        await self.client.aclose()
+```
+
+**GitHub-Specific Implementation Notes:**
+- **Authentication**: Uses `Authorization: Bearer {token}` header (not `token {token}` like Gitea)
+- **Labels**: GitHub uses label names as strings directly; Gitea requires translation to integer IDs
+- **PR Diffs**: GitHub provides diffs via Accept header negotiation (`application/vnd.github.v3.diff`)
+- **Review Comments**: GitHub uses `line` + `side` fields; Gitea uses `new_position`/`position`
+- **Base64 Content**: GitHub may include newlines in base64 strings that must be stripped before decoding
+
+---
+
+### 3. Documentation Analyzer
 
 ```python
 from pathlib import Path

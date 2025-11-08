@@ -4,8 +4,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from drep.docstring.generator import DocstringGenerator
 from drep.docstring.ast_utils import FunctionInfo
+from drep.docstring.generator import DocstringGenerator
 
 
 @pytest.mark.asyncio

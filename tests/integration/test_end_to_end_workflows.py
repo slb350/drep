@@ -4,7 +4,6 @@ This test module verifies complete LLM client workflows with dependency injectio
 caching, rate limiting, and error handling - testing Items 2.2 and 2.4.
 """
 
-import asyncio
 import tempfile
 from pathlib import Path
 from unittest.mock import AsyncMock, Mock, patch

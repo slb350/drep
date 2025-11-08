@@ -5,9 +5,9 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 
-Automated code review and documentation improvement tool for **Gitea** (initial release). Powered by your local LLM via an OpenAI-compatible API (LM Studio, Ollama, open-agent-sdk).
+Automated code review and documentation improvement tool for **Gitea and GitHub**. Powered by your local LLM via an OpenAI-compatible API (LM Studio, Ollama, open-agent-sdk).
 
-> **Initial Release Scope:** Python repositories on Gitea. Support for GitHub, GitLab, and additional languages is in active development.
+> **Current Scope:** Python repositories on Gitea and GitHub. Support for GitLab and additional languages is in active development.
 
 ## Features
 
@@ -37,8 +37,8 @@ Complete privacy and control:
 - No usage costs
 
 ### Platform Support & Roadmap
-- **Available now:** Gitea + Python repositories
-- **Planned:** GitHub, GitLab, additional languages, advanced draft PR workflows
+- **Available now:** Gitea, GitHub + Python repositories
+- **Planned:** GitLab, additional languages, advanced draft PR workflows
 
 ## LLM-Powered Analysis
 
