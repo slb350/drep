@@ -30,19 +30,16 @@ def init():
     if config_path.exists():
         click.confirm("config.yaml already exists. Overwrite?", abort=True)
 
-    # Create example config
-    example = """gitea:
-  url: http://localhost:3000
-  token: ${GITEA_TOKEN}
-  repositories:
-    - your-org/*
+    # Ask user which platform they're using
+    click.echo("Which git platform are you using?")
+    platform = click.prompt(
+        "Choose platform",
+        type=click.Choice(["github", "gitea", "gitlab"], case_sensitive=False),
+        default="github",
+    )
 
-documentation:
-  enabled: true
-  custom_dictionary: []
-
-database_url: sqlite:///./drep.db
-
+    # Common LLM config (used by all platforms)
+    llm_config = """
 llm:
   enabled: true
   endpoint: http://localhost:1234/v1  # LM Studio / Ollama (with OpenAI compatible API)
@@ -61,10 +58,65 @@ llm:
     ttl_days: 30
 """
 
+    # Platform-specific configs
+    if platform.lower() == "github":
+        platform_config = """github:
+  token: ${GITHUB_TOKEN}
+  # url: https://api.github.com  # Optional: for GitHub Enterprise, use https://your-domain/api/v3
+  repositories:
+    - your-org/*
+
+documentation:
+  enabled: true
+  custom_dictionary: []
+
+database_url: sqlite:///./drep.db
+"""
+        example = platform_config + llm_config
+        env_var = "GITHUB_TOKEN"
+        platform_name = "GitHub"
+
+    elif platform.lower() == "gitea":
+        platform_config = """gitea:
+  url: http://localhost:3000
+  token: ${GITEA_TOKEN}
+  repositories:
+    - your-org/*
+
+documentation:
+  enabled: true
+  custom_dictionary: []
+
+database_url: sqlite:///./drep.db
+"""
+        example = platform_config + llm_config
+        env_var = "GITEA_TOKEN"
+        platform_name = "Gitea"
+
+    else:  # gitlab
+        platform_config = """gitlab:
+  url: https://gitlab.com
+  token: ${GITLAB_TOKEN}
+  repositories:
+    - your-org/*
+
+documentation:
+  enabled: true
+  custom_dictionary: []
+
+database_url: sqlite:///./drep.db
+"""
+        example = platform_config + llm_config
+        env_var = "GITLAB_TOKEN"
+        platform_name = "GitLab"
+
     config_path.write_text(example)
-    click.echo("✓ Created config.yaml")
-    click.echo("\nEdit config.yaml to add your Gitea token.")
-    click.echo("Set GITEA_TOKEN environment variable before running scans.")
+    click.echo(f"✓ Created config.yaml for {platform_name}")
+    click.echo("\nNext steps:")
+    click.echo(f"1. Edit config.yaml to configure your {platform_name} URL (if needed)")
+    click.echo(f"2. Set {env_var} environment variable with your API token")
+    click.echo("3. Update the repositories list to match your org/repos")
+    click.echo("\nThen run: drep scan owner/repo")
 
 
 @cli.command()
