@@ -16,7 +16,6 @@ import pytest
 
 from drep.adapters.github import GitHubAdapter
 
-
 # Test repository configuration
 TEST_OWNER = "slb350"
 TEST_REPO = "drep-test"
@@ -57,11 +56,7 @@ async def test_github_create_issue_real_api(github_adapter):
 
     # Create issue
     issue_number = await github_adapter.create_issue(
-        owner=TEST_OWNER,
-        repo=TEST_REPO,
-        title=title,
-        body=body,
-        labels=labels
+        owner=TEST_OWNER, repo=TEST_REPO, title=title, body=body, labels=labels
     )
 
     # Verify issue number is valid
@@ -93,10 +88,7 @@ async def test_github_get_file_content_real_api(github_adapter):
     # Try to fetch README.md from the test repo
     try:
         content = await github_adapter.get_file_content(
-            owner=TEST_OWNER,
-            repo=TEST_REPO,
-            file_path="README.md",
-            ref="main"
+            owner=TEST_OWNER, repo=TEST_REPO, file_path="README.md", ref="main"
         )
 
         # Verify we got content
@@ -132,7 +124,6 @@ async def test_github_rate_limit_headers_real_api(github_adapter):
     """
     # Make a simple API call to get rate limit headers
     # We'll use the underlying httpx client to inspect headers
-    import httpx
 
     url = f"{github_adapter.url}/repos/{TEST_OWNER}/{TEST_REPO}"
     response = await github_adapter.client.get(url)
@@ -166,7 +157,6 @@ async def test_github_authentication_real_api(github_adapter):
     - Authenticated user has permissions
     """
     # Fetch repository info - requires valid authentication
-    import httpx
 
     url = f"{github_adapter.url}/repos/{TEST_OWNER}/{TEST_REPO}"
     response = await github_adapter.client.get(url)
@@ -220,7 +210,7 @@ async def test_github_unicode_content_real_api(github_adapter):
         repo=TEST_REPO,
         title=title,
         body=body,
-        labels=["automated-test", "unicode"]
+        labels=["automated-test", "unicode"],
     )
 
     assert isinstance(issue_number, int)
@@ -229,3 +219,29 @@ async def test_github_unicode_content_real_api(github_adapter):
     print(f"Created Unicode issue #{issue_number}")
     print(f"Title: {title}")
     print("Body contains emoji, Chinese, Arabic, Japanese, Russian, and symbols")
+
+
+@pytest.mark.asyncio
+@pytest.mark.integration
+async def test_github_get_default_branch_real_api(github_adapter):
+    """Integration test: Get default branch from real GitHub repo.
+
+    Tests:
+    - get_default_branch() works with real GitHub API
+    - Returns actual default branch name for test repository
+    - Handles both 'main' and 'master' branch names correctly
+    """
+    # Get default branch for test repository
+    branch = await github_adapter.get_default_branch(TEST_OWNER, TEST_REPO)
+
+    # Verify we got a valid branch name
+    assert isinstance(branch, str)
+    assert len(branch) > 0
+    # Most repos use 'main' or 'master', but allow custom names
+    print(f"Default branch for {TEST_OWNER}/{TEST_REPO}: {branch}")
+
+    # Verify it's a reasonable branch name (no special characters that would break git)
+    # Branch names can contain alphanumeric, hyphens, underscores, slashes
+    assert all(
+        c.isalnum() or c in "-_/" for c in branch
+    ), f"Branch name contains unexpected characters: {branch}"

@@ -272,9 +272,9 @@ class LLMClient:
 
 ---
 
-## 🚀 Phase 3: Platform Expansion (Sprint 5-8)
+## 🚀 Phase 3: Platform & LLM Backend Expansion (Sprint 5-8)
 
-Large projects to add GitHub and GitLab support.
+Large projects to add GitHub, GitLab support and additional LLM providers.
 
 ### 3.1 Complete GitHub Adapter
 **Effort:** Large | **Impact:** High | **Status:** Not Started
@@ -306,7 +306,257 @@ GET /repos/{owner}/{repo}/contents/{path}
 
 ---
 
-### 3.2 Complete GitLab Adapter
+### 3.2 GitHub CLI Integration
+**Effort:** Large | **Impact:** High | **Status:** ✅ Complete (2025-11-08)
+
+**Completed:** 2025-11-08 | **Branch:** feature/phase-3.2-github-cli | **PR:** #5
+
+Full GitHub adapter implementation with CLI integration.
+
+**Completed Tasks:**
+- [x] Implemented GitHubAdapter in `drep/adapters/github.py`
+- [x] GitHub REST API v3 integration
+- [x] All BaseAdapter methods implemented:
+  - `create_issue()` - GitHub Issues API
+  - `get_pr()` - Pull Requests API
+  - `get_pr_diff()` - Diff retrieval
+  - `create_pr_comment()` - General PR comments
+  - `create_pr_review_comment()` - Inline review comments
+  - `post_review_comment()` - Review comments
+  - `get_file_content()` - Contents API (base64 decoding)
+  - `get_default_branch()` - Repository metadata
+- [x] GitHub authentication (PAT via HTTPS + askpass)
+- [x] Rate limit detection and handling
+- [x] Configuration in `config.yaml` (github section)
+- [x] 18 comprehensive tests (9 for get_default_branch alone)
+- [x] Security improvements (token in temp file, not environment)
+- [x] End-to-end testing with real GitHub API
+- [x] LLM-powered PR review validation
+- [x] Documentation updated
+
+**Deliverables:**
+- `drep/adapters/github.py` - Full GitHub adapter (847 lines)
+- `drep scan` - Works with GitHub repos
+- `drep review` - Automated PR reviews on GitHub
+- 18 new tests, all passing
+- Complete validation with 120B LLM model
+- **Commits:** Multiple in PR #5
+
+**Validation Results:**
+- Repository scanning: ✅ (10 issues created)
+- PR review: ✅ (11 inline comments posted)
+- GitHub API: ✅ (21 successful interactions)
+- LLM integration: ✅ (100% success rate)
+- Security: ✅ (token handling validated)
+
+---
+
+### 3.3 AWS Bedrock LLM Provider
+**Effort:** Medium | **Impact:** High | **Status:** Not Started
+
+Add AWS Bedrock as LLM provider for Claude and other models via AWS infrastructure.
+
+**Rationale:**
+- Enterprise users often require AWS-hosted models for compliance
+- Bedrock provides access to Claude 3.5, Titan, and other models
+- AWS quotas and billing separate from Anthropic direct
+- Better integration with existing AWS infrastructure
+
+**Implementation Strategy:** Option 1 (Direct SDK Integration)
+
+**Tasks:**
+- [ ] Add `boto3` dependency (AWS SDK for Python)
+- [ ] Create `drep/llm/providers/bedrock_client.py`
+- [ ] Implement BedrockProvider class:
+  - `chat_completion()` - Translate to Bedrock InvokeModel API
+  - `_format_messages()` - Convert OpenAI format → Claude Messages API
+  - `_parse_response()` - Extract content from Bedrock response
+  - `_handle_streaming()` - Support streaming responses (optional)
+- [ ] Update `drep/models/config.py` with Bedrock config schema:
+  ```python
+  class BedrockConfig(BaseModel):
+      region: str = Field(default="us-east-1")
+      model: str = Field(default="anthropic.claude-3-5-sonnet-20241022-v2:0")
+      aws_access_key_id: Optional[SecretStr] = None  # Uses AWS credentials chain
+      aws_secret_access_key: Optional[SecretStr] = None
+      aws_session_token: Optional[SecretStr] = None
+  ```
+- [ ] Modify `LLMClient.__init__()` to detect Bedrock provider
+- [ ] Add provider detection logic in `drep/llm/client.py`
+- [ ] Handle Bedrock-specific rate limits and throttling
+- [ ] Add error handling for AWS-specific errors (throttling, permissions)
+- [ ] Write 10+ tests:
+  - Message format translation
+  - Response parsing
+  - Error handling (ThrottlingException, etc.)
+  - AWS credentials handling
+  - Integration test with real Bedrock (optional)
+- [ ] Update `docs/llm-setup.md` with Bedrock configuration
+- [ ] Add example config in README.md
+
+**Configuration Example:**
+```yaml
+llm:
+  provider: bedrock  # New provider option
+
+  bedrock:
+    region: us-east-1
+    model: anthropic.claude-3-5-sonnet-20241022-v2:0
+    # Optional: Uses AWS credentials chain if not specified
+    # aws_access_key_id: ${AWS_ACCESS_KEY_ID}
+    # aws_secret_access_key: ${AWS_SECRET_ACCESS_KEY}
+
+  # Existing rate limiting config still applies
+  temperature: 0.2
+  max_tokens: 4000
+  max_concurrent_global: 5
+```
+
+**AWS Models Supported:**
+- `anthropic.claude-3-5-sonnet-20241022-v2:0` - Claude 3.5 Sonnet (recommended)
+- `anthropic.claude-3-opus-20240229-v1:0` - Claude 3 Opus
+- `anthropic.claude-3-sonnet-20240229-v1:0` - Claude 3 Sonnet
+- `anthropic.claude-3-haiku-20240307-v1:0` - Claude 3 Haiku
+- Future: Titan, Llama 3, Mistral models
+
+**API Translation:**
+```python
+# OpenAI format (input):
+messages = [
+    {"role": "user", "content": "Hello"}
+]
+
+# Bedrock Claude format (output):
+body = {
+    "anthropic_version": "bedrock-2023-05-31",
+    "messages": [
+        {"role": "user", "content": [{"type": "text", "text": "Hello"}]}
+    ],
+    "max_tokens": 4000,
+    "temperature": 0.2
+}
+```
+
+**Benefits:**
+- Enterprise compliance (data stays in AWS)
+- AWS quotas separate from Anthropic direct
+- Integration with AWS IAM, CloudWatch, etc.
+- Access to multiple model providers through single interface
+
+**Estimated Effort:** 4-6 hours
+- 2 hours: BedrockProvider implementation
+- 1 hour: Config schema and provider detection
+- 1 hour: Testing
+- 1 hour: Documentation
+
+---
+
+### 3.4 Anthropic Direct LLM Provider
+**Effort:** Small | **Impact:** High | **Status:** Not Started
+
+Add Anthropic API as direct LLM provider for Claude models.
+
+**Rationale:**
+- Lower latency than Bedrock (direct API access)
+- Higher rate limits for Anthropic direct customers
+- Simpler setup (no AWS account needed)
+- Latest model access (new releases may arrive before Bedrock)
+
+**Implementation Strategy:** Option 1 (Direct SDK Integration)
+
+**Tasks:**
+- [ ] Add `anthropic` SDK dependency (~0.25.0)
+- [ ] Create `drep/llm/providers/anthropic_client.py`
+- [ ] Implement AnthropicProvider class:
+  - `chat_completion()` - Translate to Anthropic Messages API
+  - `_format_messages()` - Convert OpenAI format → Anthropic format
+  - `_parse_response()` - Extract content from Anthropic response
+  - `_handle_streaming()` - Support streaming (optional)
+- [ ] Update `drep/models/config.py` with Anthropic config schema:
+  ```python
+  class AnthropicConfig(BaseModel):
+      api_key: SecretStr
+      model: str = Field(default="claude-3-5-sonnet-20241022")
+      base_url: Optional[str] = None  # For Claude via proxy
+  ```
+- [ ] Modify `LLMClient.__init__()` to detect Anthropic provider
+- [ ] Add provider detection logic in `drep/llm/client.py`
+- [ ] Handle Anthropic-specific rate limits (RPM, TPM)
+- [ ] Add error handling for Anthropic errors (overloaded, rate limit)
+- [ ] Write 8+ tests:
+  - Message format translation
+  - Response parsing
+  - Error handling (rate limits, overloaded)
+  - API key validation
+  - Integration test with real Anthropic API (optional)
+- [ ] Update `docs/llm-setup.md` with Anthropic configuration
+- [ ] Add example config in README.md
+
+**Configuration Example:**
+```yaml
+llm:
+  provider: anthropic  # New provider option
+
+  anthropic:
+    api_key: ${ANTHROPIC_API_KEY}
+    model: claude-3-5-sonnet-20241022
+    # Optional: base_url for proxies or self-hosted
+
+  # Existing rate limiting config still applies
+  temperature: 0.2
+  max_tokens: 4000
+  max_concurrent_global: 5
+  requests_per_minute: 50  # Anthropic tier limits
+  max_tokens_per_minute: 40000
+```
+
+**Anthropic Models Supported:**
+- `claude-3-5-sonnet-20241022` - Claude 3.5 Sonnet (latest, recommended)
+- `claude-3-opus-20240229` - Claude 3 Opus (most capable)
+- `claude-3-sonnet-20240229` - Claude 3 Sonnet (balanced)
+- `claude-3-haiku-20240307` - Claude 3 Haiku (fastest)
+
+**API Translation:**
+```python
+# OpenAI format (input):
+messages = [
+    {"role": "system", "content": "You are helpful"},
+    {"role": "user", "content": "Hello"}
+]
+
+# Anthropic Messages API format (output):
+{
+    "model": "claude-3-5-sonnet-20241022",
+    "max_tokens": 4000,
+    "temperature": 0.2,
+    "system": "You are helpful",  # system extracted
+    "messages": [
+        {"role": "user", "content": "Hello"}
+    ]
+}
+```
+
+**Key Differences from OpenAI:**
+1. **System prompt:** Separate field, not in messages array
+2. **Content format:** Can be string or array of content blocks
+3. **No JSON mode:** Use prompt engineering (drep's JSON parsing handles this)
+4. **Rate limits:** Different tiers (Build, Scale, Enterprise)
+
+**Benefits:**
+- Latest Claude models (immediate access to new releases)
+- Direct support from Anthropic
+- Simpler than Bedrock (no AWS setup)
+- Better for individual developers and small teams
+
+**Estimated Effort:** 3-4 hours
+- 1.5 hours: AnthropicProvider implementation
+- 0.5 hours: Config schema and provider detection
+- 1 hour: Testing
+- 1 hour: Documentation
+
+---
+
+### 3.5 Complete GitLab Adapter
 **Effort:** Large | **Impact:** High | **Status:** Not Started
 
 Full GitLab API integration.
@@ -526,15 +776,22 @@ Track these metrics to measure roadmap progress:
 
 ## 🗓️ Timeline
 
-| Phase | Duration | Timeline | Deliverables |
-|-------|----------|----------|--------------|
-| Phase 1: Quick Wins | 2 sprints | Sprint 1-2 | Security audit, BaseAdapter, constants |
-| Phase 2: Quality & Testing | 2 sprints | Sprint 3-4 | E2E tests, API docs, DI refactor |
-| Phase 3: Platform Expansion | 4 sprints | Sprint 5-8 | GitHub adapter, GitLab adapter |
-| Phase 4: Feature Expansion | 4 sprints | Sprint 9-12 | Multi-language, Web UI |
-| Phase 5: Advanced Features | Ongoing | Backlog | Performance, optimization |
+| Phase | Duration | Timeline | Status | Deliverables |
+|-------|----------|----------|--------|--------------|
+| Phase 1: Quick Wins | 2 sprints | Sprint 1-2 | ✅ Complete | Security audit, BaseAdapter, constants |
+| Phase 2: Quality & Testing | 2 sprints | Sprint 3-4 | ✅ Complete | E2E tests, API docs, DI refactor |
+| Phase 3: Platform & LLM Expansion | 4 sprints | Sprint 5-8 | 🔄 In Progress | GitHub ✅, Bedrock, Anthropic, GitLab |
+| Phase 4: Feature Expansion | 4 sprints | Sprint 9-12 | Not Started | Multi-language, Web UI |
+| Phase 5: Advanced Features | Ongoing | Backlog | Not Started | Performance, optimization |
 
 **Sprint length:** 2 weeks
+
+**Phase 3 Progress:**
+- 3.1 Complete GitHub Adapter: Not Started
+- 3.2 GitHub CLI Integration: ✅ Complete (2025-11-08)
+- 3.3 AWS Bedrock Provider: Not Started (4-6 hours)
+- 3.4 Anthropic Direct Provider: Not Started (3-4 hours)
+- 3.5 Complete GitLab Adapter: Not Started
 
 ---
 

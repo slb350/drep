@@ -116,19 +116,46 @@ async def _run_scan(
     # Load config
     config = load_config(config_path)
 
-    # Validate Gitea configuration (required for repository scanning)
-    if config.gitea is None:
+    # Determine which adapter to use (prefer Gitea for backward compatibility)
+    platform = None
+    adapter = None
+    git_url = None
+    git_token = None
+
+    if config.gitea is not None:
+        # Use Gitea adapter
+        platform = "gitea"
+        adapter = GiteaAdapter(config.gitea.url, config.gitea.token.get_secret_value())
+        git_url = f"{config.gitea.url.rstrip('/')}/{owner}/{repo}.git"
+        git_token = config.gitea.token.get_secret_value()
+    elif config.github is not None:
+        # Use GitHub adapter
+        platform = "github"
+        from drep.adapters.github import GitHubAdapter
+
+        adapter = GitHubAdapter(
+            token=config.github.token.get_secret_value(),
+            url=str(config.github.url) if config.github.url else "https://api.github.com",
+        )
+        # GitHub git URL format: https://github.com/owner/repo.git
+        # Handle default GitHub.com case (config.github.url is None)
+        if config.github.url is None or "github.com" in str(config.github.url):
+            git_url = f"https://github.com/{owner}/{repo}.git"
+        else:
+            # GitHub Enterprise - extract hostname from API URL
+            api_url = str(config.github.url)
+            hostname = api_url.replace("https://", "").replace("http://", "").split("/")[0]
+            git_url = f"https://{hostname}/{owner}/{repo}.git"
+        git_token = config.github.token.get_secret_value()
+    else:
+        # No platform configured (shouldn't happen - Config validator requires at least one)
         click.echo(
-            "Error: Repository scanning requires Gitea configuration.\n"
-            "Please add a [gitea] section to your config.yaml.\n\n"
-            "GitHub support for repository scanning is not yet implemented.\n"
-            "Currently, GitHub adapter only supports issue creation and PR reviews.",
+            "Error: No platform configured. Please add [gitea] or [github] to your config.yaml.",
             err=True,
         )
         raise click.Abort()
 
     # Initialize components
-    adapter = GiteaAdapter(config.gitea.url, config.gitea.token.get_secret_value())
     session = init_database(config.database_url)
     scanner = RepositoryScanner(session, config)  # Pass config for LLM support
     analyzer = DocumentationAnalyzer(config.documentation)
@@ -141,27 +168,32 @@ async def _run_scan(
         # Setup git authentication
         temp_dir = tempfile.mkdtemp(prefix="drep_git_")
         askpass_script = Path(temp_dir) / "askpass.sh"
+        token_file = Path(temp_dir) / ".git-token"
 
-        # Create askpass script
-        askpass_content = """#!/bin/sh
+        # Write token to temporary file with owner-only read permissions
+        # This prevents token exposure in process environment variables
+        token_file.write_text(git_token)
+        token_file.chmod(0o600)  # Owner read/write only
+
+        # Create askpass script that reads token from file
+        askpass_content = f"""#!/bin/sh
 if echo "$1" | grep -qi "username"; then
     echo "token"
 elif echo "$1" | grep -qi "password"; then
-    echo "$DREP_GIT_TOKEN"
+    cat {token_file}
 else
-    echo "$DREP_GIT_TOKEN"
+    cat {token_file}
 fi
 """
         askpass_script.write_text(askpass_content)
-        # Restrict to owner only; contains sensitive token usage
+        # Restrict to owner only; contains sensitive file path
         askpass_script.chmod(0o700)
 
-        # Build git environment
+        # Build git environment (no token in environment!)
         git_env = {
             **os.environ,
             "GIT_ASKPASS": str(askpass_script),
             "GIT_TERMINAL_PROMPT": "0",
-            "DREP_GIT_TOKEN": config.gitea.token.get_secret_value(),
         }
 
         # Repository path
@@ -169,15 +201,14 @@ fi
 
         # Clone or pull repository
         if not repo_path.exists():
-            click.echo("Cloning repository...")
+            click.echo(f"Cloning {platform} repository...")
             repo_path.parent.mkdir(parents=True, exist_ok=True)
 
             # Get default branch
             default_branch = await adapter.get_default_branch(owner, repo)
 
             # Clone
-            clean_git_url = f"{config.gitea.url.rstrip('/')}/{owner}/{repo}.git"
-            Repo.clone_from(clean_git_url, repo_path, branch=default_branch, env=git_env)
+            Repo.clone_from(git_url, repo_path, branch=default_branch, env=git_env)
         else:
             click.echo("Pulling latest changes...")
             git_repo = Repo(repo_path)
@@ -262,6 +293,7 @@ fi
 
             # Save metrics to ~/.drep/metrics.json
             try:
+                import logging
                 from pathlib import Path as _Path
 
                 from drep.llm.metrics import MetricsCollector
@@ -271,6 +303,10 @@ fi
                 collector.current_session = metrics
                 await collector.save()
             except Exception as e:
+                import logging
+
+                logger = logging.getLogger(__name__)
+                logger.warning(f"Failed to persist LLM metrics: {e}")
                 click.echo(f"Warning: failed to persist metrics: {e}")
 
             if show_metrics:
@@ -279,15 +315,44 @@ fi
                 click.echo("=" * 60)
 
     finally:
-        # Cleanup
+        # Cleanup sensitive files
         if temp_dir and Path(temp_dir).exists():
+            import logging
             import shutil
 
-            shutil.rmtree(temp_dir, ignore_errors=True)
+            logger = logging.getLogger(__name__)
 
-        # Close resources
-        await scanner.close()
-        await adapter.close()
+            try:
+                shutil.rmtree(temp_dir)
+                logger.debug(f"Cleaned up temporary directory: {temp_dir}")
+            except Exception as e:
+                logger.error(
+                    f"SECURITY: Failed to delete temporary directory "
+                    f"containing API token: {temp_dir}",
+                    extra={"error": str(e), "temp_dir": temp_dir},
+                )
+                click.echo(
+                    f"WARNING: Failed to clean up temporary credentials at {temp_dir}. "
+                    f"Please manually delete this directory: {e}",
+                    err=True,
+                )
+
+        # Close resources (ensure both are attempted even if one fails)
+        try:
+            await scanner.close()
+        except Exception as e:
+            import logging
+
+            logger = logging.getLogger(__name__)
+            logger.error(f"Error closing scanner: {e}")
+
+        try:
+            await adapter.close()
+        except Exception as e:
+            import logging
+
+            logger = logging.getLogger(__name__)
+            logger.error(f"Error closing adapter: {e}")
 
 
 @cli.command()
@@ -345,19 +410,32 @@ async def _run_review(
         click.echo("Error: LLM must be enabled in config for PR reviews", err=True)
         return
 
-    # Validate Gitea configuration (required for PR review)
-    if config.gitea is None:
+    # Determine which adapter to use (prefer Gitea for backward compatibility)
+    platform = None
+    adapter = None
+
+    if config.gitea is not None:
+        # Use Gitea adapter
+        platform = "gitea"
+        adapter = GiteaAdapter(config.gitea.url, config.gitea.token.get_secret_value())
+    elif config.github is not None:
+        # Use GitHub adapter
+        platform = "github"
+        from drep.adapters.github import GitHubAdapter
+
+        adapter = GitHubAdapter(
+            token=config.github.token.get_secret_value(),
+            url=str(config.github.url) if config.github.url else "https://api.github.com",
+        )
+    else:
+        # No platform configured (shouldn't happen - Config validator requires at least one)
         click.echo(
-            "Error: PR review requires Gitea configuration.\n"
-            "Please add a [gitea] section to your config.yaml.\n\n"
-            "GitHub PR review support is not yet implemented.\n"
-            "Currently, GitHub adapter only supports issue creation.",
+            "Error: No platform configured. Please add [gitea] or [github] to your config.yaml.",
             err=True,
         )
         raise click.Abort()
 
     # Initialize components
-    adapter = GiteaAdapter(config.gitea.url, config.gitea.token.get_secret_value())
     scanner = RepositoryScanner(init_database(config.database_url), config, gitea_adapter=adapter)
 
     try:
@@ -367,7 +445,7 @@ async def _run_review(
             return
 
         # Review PR
-        click.echo(f"Fetching PR #{pr_number}...")
+        click.echo(f"Fetching {platform} PR #{pr_number}...")
         result = await scanner.pr_analyzer.review_pr(owner, repo, pr_number)
 
         # Display results
@@ -405,6 +483,7 @@ async def _run_review(
         # Persist metrics if available
         if scanner.llm_client:
             try:
+                import logging
                 from pathlib import Path as _Path
 
                 from drep.llm.metrics import MetricsCollector
@@ -413,10 +492,29 @@ async def _run_review(
                 collector = MetricsCollector(metrics_file)
                 collector.current_session = scanner.llm_client.get_llm_metrics()
                 await collector.save()
-            except Exception:
-                pass
-        await scanner.close()
-        await adapter.close()
+            except Exception as e:
+                import logging
+
+                logger = logging.getLogger(__name__)
+                logger.warning(f"Failed to persist LLM metrics: {e}")
+                # Metrics are best-effort in cleanup, don't crash
+
+        # Close resources (ensure both are attempted even if one fails)
+        try:
+            await scanner.close()
+        except Exception as e:
+            import logging
+
+            logger = logging.getLogger(__name__)
+            logger.error(f"Error closing scanner: {e}")
+
+        try:
+            await adapter.close()
+        except Exception as e:
+            import logging
+
+            logger = logging.getLogger(__name__)
+            logger.error(f"Error closing adapter: {e}")
 
 
 @cli.command()

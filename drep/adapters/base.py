@@ -204,6 +204,26 @@ class BaseAdapter(ABC):
         pass
 
     @abstractmethod
+    async def get_default_branch(self, owner: str, repo: str) -> str:
+        """Get repository default branch name.
+
+        Args:
+            owner: Repository owner
+            repo: Repository name
+
+        Returns:
+            Default branch name (e.g., "main", "master", "develop")
+
+        Raises:
+            ValueError: If repository not found or network/API error occurs
+
+        Example:
+            branch = await adapter.get_default_branch(owner="user", repo="project")
+            # Returns: "main"
+        """
+        pass
+
+    @abstractmethod
     async def close(self) -> None:
         """Close the adapter and release resources (HTTP connections, etc.).
 

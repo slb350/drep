@@ -501,6 +501,135 @@ async def test_post_review_comment_error_handling():
         await adapter.close()
 
 
+# ===== create_pr_review_comment() Tests =====
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_create_pr_review_comment_success():
+    """Test create_pr_review_comment() successfully posts inline comment with commit_sha."""
+    from drep.adapters.github import GitHubAdapter
+
+    # Mock review comment creation (no get_pr needed - commit_sha provided)
+    respx.post("https://api.github.com/repos/owner/repo/pulls/42/comments").mock(
+        return_value=httpx.Response(201, json={"id": 456})
+    )
+
+    adapter = GitHubAdapter("ghp_token")
+
+    try:
+        # Should not raise - commit_sha provided directly
+        await adapter.create_pr_review_comment(
+            owner="owner",
+            repo="repo",
+            pr_number=42,
+            commit_sha="abc123def456",
+            file_path="src/module.py",
+            line=15,
+            body="Consider adding error handling here",
+        )
+    finally:
+        await adapter.close()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_create_pr_review_comment_sends_correct_payload():
+    """Test create_pr_review_comment() sends correct JSON payload with provided commit_sha."""
+    from drep.adapters.github import GitHubAdapter
+
+    request_data = {}
+
+    def capture_request(request):
+        import json
+
+        request_data["payload"] = json.loads(request.content)
+        return httpx.Response(201, json={"id": 456})
+
+    respx.post("https://api.github.com/repos/owner/repo/pulls/42/comments").mock(
+        side_effect=capture_request
+    )
+
+    adapter = GitHubAdapter("ghp_token")
+
+    try:
+        await adapter.create_pr_review_comment(
+            owner="owner",
+            repo="repo",
+            pr_number=42,
+            commit_sha="xyz789abc",
+            file_path="src/module.py",
+            line=15,
+            body="Consider adding error handling here",
+        )
+
+        # Verify payload uses provided commit_sha (not fetched from PR)
+        payload = request_data["payload"]
+        assert payload["commit_id"] == "xyz789abc"  # Uses provided SHA
+        assert payload["path"] == "src/module.py"
+        assert payload["line"] == 15
+        assert payload["body"] == "Consider adding error handling here"
+        assert payload["side"] == "RIGHT"  # GitHub requires side field
+    finally:
+        await adapter.close()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_create_pr_review_comment_error_handling():
+    """Test create_pr_review_comment() raises ValueError on error."""
+    from drep.adapters.github import GitHubAdapter
+
+    respx.post("https://api.github.com/repos/owner/repo/pulls/42/comments").mock(
+        return_value=httpx.Response(403, text="Forbidden: Permission denied")
+    )
+
+    adapter = GitHubAdapter("ghp_token")
+
+    try:
+        with pytest.raises(ValueError, match="Failed to create review comment"):
+            await adapter.create_pr_review_comment(
+                owner="owner",
+                repo="repo",
+                pr_number=42,
+                commit_sha="abc123",
+                file_path="test.py",
+                line=10,
+                body="Comment",
+            )
+    finally:
+        await adapter.close()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_create_pr_review_comment_handles_422_validation():
+    """Test create_pr_review_comment() handles 422 validation error for invalid line."""
+    from drep.adapters.github import GitHubAdapter
+
+    respx.post("https://api.github.com/repos/owner/repo/pulls/42/comments").mock(
+        return_value=httpx.Response(
+            422, json={"message": "Validation Failed", "errors": [{"message": "Invalid line"}]}
+        )
+    )
+
+    adapter = GitHubAdapter("ghp_token")
+
+    try:
+        with pytest.raises(ValueError, match="Failed to create review comment"):
+            await adapter.create_pr_review_comment(
+                owner="owner",
+                repo="repo",
+                pr_number=42,
+                commit_sha="abc123",
+                file_path="test.py",
+                line=999,
+                body="Comment",
+            )
+    finally:
+        await adapter.close()
+
+
 # ===== get_file_content() Tests =====
 
 
@@ -931,6 +1060,7 @@ async def test_post_review_comment_missing_head_sha():
 async def test_close_propagates_keyboard_interrupt():
     """Test that close() propagates KeyboardInterrupt instead of swallowing it."""
     from unittest.mock import AsyncMock
+
     from drep.adapters.github import GitHubAdapter
 
     adapter = GitHubAdapter("ghp_token")
@@ -947,6 +1077,7 @@ async def test_close_propagates_keyboard_interrupt():
 async def test_close_propagates_system_exit():
     """Test that close() propagates SystemExit instead of swallowing it."""
     from unittest.mock import AsyncMock
+
     from drep.adapters.github import GitHubAdapter
 
     adapter = GitHubAdapter("ghp_token")
@@ -963,6 +1094,7 @@ async def test_close_propagates_system_exit():
 async def test_close_suppresses_non_critical_errors():
     """Test that close() suppresses non-critical errors like CloseError."""
     from unittest.mock import AsyncMock
+
     from drep.adapters.github import GitHubAdapter
 
     adapter = GitHubAdapter("ghp_token")
@@ -977,8 +1109,9 @@ async def test_close_suppresses_non_critical_errors():
 @pytest.mark.asyncio
 async def test_close_propagates_asyncio_cancelled_error():
     """Test that close() propagates asyncio.CancelledError instead of swallowing it."""
-    from unittest.mock import AsyncMock
     import asyncio
+    from unittest.mock import AsyncMock
+
     from drep.adapters.github import GitHubAdapter
 
     adapter = GitHubAdapter("ghp_token")
@@ -998,8 +1131,7 @@ async def test_check_rate_limit_with_zero():
 
     adapter = GitHubAdapter("ghp_token")
     response = httpx.Response(
-        403,
-        headers={"X-RateLimit-Remaining": "0", "X-RateLimit-Reset": "1640000000"}
+        403, headers={"X-RateLimit-Remaining": "0", "X-RateLimit-Reset": "1640000000"}
     )
 
     with pytest.raises(ValueError, match="rate limit exceeded.*Resets at"):
@@ -1015,8 +1147,7 @@ async def test_check_rate_limit_with_whitespace():
 
     adapter = GitHubAdapter("ghp_token")
     response = httpx.Response(
-        403,
-        headers={"X-RateLimit-Remaining": " 0 ", "X-RateLimit-Reset": "1640000000"}
+        403, headers={"X-RateLimit-Remaining": " 0 ", "X-RateLimit-Reset": "1640000000"}
     )
 
     with pytest.raises(ValueError, match="rate limit exceeded"):
@@ -1032,8 +1163,7 @@ async def test_check_rate_limit_with_float():
 
     adapter = GitHubAdapter("ghp_token")
     response = httpx.Response(
-        403,
-        headers={"X-RateLimit-Remaining": "0.0", "X-RateLimit-Reset": "1640000000"}
+        403, headers={"X-RateLimit-Remaining": "0.0", "X-RateLimit-Reset": "1640000000"}
     )
 
     with pytest.raises(ValueError, match="rate limit exceeded"):
@@ -1049,8 +1179,7 @@ async def test_check_rate_limit_non_zero_remaining():
 
     adapter = GitHubAdapter("ghp_token")
     response = httpx.Response(
-        403,
-        headers={"X-RateLimit-Remaining": "100", "X-RateLimit-Reset": "1640000000"}
+        403, headers={"X-RateLimit-Remaining": "100", "X-RateLimit-Reset": "1640000000"}
     )
 
     # Should not raise - still have requests remaining
@@ -1066,8 +1195,7 @@ async def test_check_rate_limit_non_403_status():
 
     adapter = GitHubAdapter("ghp_token")
     response = httpx.Response(
-        404,
-        headers={"X-RateLimit-Remaining": "0", "X-RateLimit-Reset": "1640000000"}
+        404, headers={"X-RateLimit-Remaining": "0", "X-RateLimit-Reset": "1640000000"}
     )
 
     # Should not raise - not a 403
@@ -1097,8 +1225,7 @@ async def test_check_rate_limit_invalid_header_value():
 
     adapter = GitHubAdapter("ghp_token")
     response = httpx.Response(
-        403,
-        headers={"X-RateLimit-Remaining": "invalid", "X-RateLimit-Reset": "1640000000"}
+        403, headers={"X-RateLimit-Remaining": "invalid", "X-RateLimit-Reset": "1640000000"}
     )
 
     # Should not raise - can't parse, so not a valid rate limit response
@@ -1116,8 +1243,7 @@ async def test_get_file_content_missing_content_field():
     # API response missing 'content' field (malformed response)
     respx.get("https://api.github.com/repos/owner/repo/contents/test.py").mock(
         return_value=httpx.Response(
-            200,
-            json={"name": "test.py", "path": "test.py", "type": "file"}  # Missing 'content'
+            200, json={"name": "test.py", "path": "test.py", "type": "file"}  # Missing 'content'
         )
     )
 
@@ -1126,5 +1252,216 @@ async def test_get_file_content_missing_content_field():
     try:
         with pytest.raises(ValueError, match="missing 'content' field"):
             await adapter.get_file_content("owner", "repo", "test.py", "main")
+    finally:
+        await adapter.close()
+
+
+# ===== Repository Methods Tests =====
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_get_default_branch_success():
+    """Test get_default_branch() returns default branch name."""
+    from drep.adapters.github import GitHubAdapter
+
+    # Mock repository API response with default_branch field
+    respx.get("https://api.github.com/repos/owner/repo").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "name": "repo",
+                "owner": {"login": "owner"},
+                "default_branch": "main",
+                "private": False,
+            },
+        )
+    )
+
+    adapter = GitHubAdapter("ghp_token")
+
+    try:
+        branch = await adapter.get_default_branch("owner", "repo")
+        assert branch == "main"
+    finally:
+        await adapter.close()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_get_default_branch_master():
+    """Test get_default_branch() handles 'master' as default branch."""
+    from drep.adapters.github import GitHubAdapter
+
+    # Some repos use 'master' instead of 'main'
+    respx.get("https://api.github.com/repos/owner/legacy-repo").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "name": "legacy-repo",
+                "owner": {"login": "owner"},
+                "default_branch": "master",
+            },
+        )
+    )
+
+    adapter = GitHubAdapter("ghp_token")
+
+    try:
+        branch = await adapter.get_default_branch("owner", "legacy-repo")
+        assert branch == "master"
+    finally:
+        await adapter.close()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_get_default_branch_custom_name():
+    """Test get_default_branch() handles custom branch names."""
+    from drep.adapters.github import GitHubAdapter
+
+    # Some repos use custom default branch names
+    respx.get("https://api.github.com/repos/owner/custom-repo").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "name": "custom-repo",
+                "owner": {"login": "owner"},
+                "default_branch": "develop",
+            },
+        )
+    )
+
+    adapter = GitHubAdapter("ghp_token")
+
+    try:
+        branch = await adapter.get_default_branch("owner", "custom-repo")
+        assert branch == "develop"
+    finally:
+        await adapter.close()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_get_default_branch_not_found():
+    """Test get_default_branch() raises ValueError when repo not found."""
+    from drep.adapters.github import GitHubAdapter
+
+    # Mock 404 response for non-existent repository
+    respx.get("https://api.github.com/repos/owner/nonexistent").mock(
+        return_value=httpx.Response(404, json={"message": "Not Found"})
+    )
+
+    adapter = GitHubAdapter("ghp_token")
+
+    try:
+        with pytest.raises(ValueError, match="Repository owner/nonexistent not found"):
+            await adapter.get_default_branch("owner", "nonexistent")
+    finally:
+        await adapter.close()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_get_default_branch_missing_field():
+    """Test get_default_branch() validates 'default_branch' field exists."""
+    from drep.adapters.github import GitHubAdapter
+
+    # Mock malformed API response missing 'default_branch' field
+    respx.get("https://api.github.com/repos/owner/repo").mock(
+        return_value=httpx.Response(
+            200, json={"name": "repo", "owner": {"login": "owner"}}  # Missing default_branch
+        )
+    )
+
+    adapter = GitHubAdapter("ghp_token")
+
+    try:
+        with pytest.raises(ValueError, match="missing 'default_branch' field"):
+            await adapter.get_default_branch("owner", "repo")
+    finally:
+        await adapter.close()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_get_default_branch_timeout():
+    """Test get_default_branch() handles timeout errors."""
+    from drep.adapters.github import GitHubAdapter
+
+    # Mock timeout
+    respx.get("https://api.github.com/repos/owner/repo").mock(
+        side_effect=httpx.TimeoutException("Request timed out")
+    )
+
+    adapter = GitHubAdapter("ghp_token")
+
+    try:
+        with pytest.raises(ValueError, match="timed out"):
+            await adapter.get_default_branch("owner", "repo")
+    finally:
+        await adapter.close()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_get_default_branch_invalid_json():
+    """Test get_default_branch() handles invalid JSON response."""
+    from drep.adapters.github import GitHubAdapter
+
+    # Mock response with invalid JSON
+    respx.get("https://api.github.com/repos/owner/repo").mock(
+        return_value=httpx.Response(200, text="not json")
+    )
+
+    adapter = GitHubAdapter("ghp_token")
+
+    try:
+        with pytest.raises(ValueError, match="invalid JSON"):
+            await adapter.get_default_branch("owner", "repo")
+    finally:
+        await adapter.close()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_get_default_branch_connect_error():
+    """Test get_default_branch() handles connection failures."""
+    from drep.adapters.github import GitHubAdapter
+
+    # Mock connection error
+    respx.get("https://api.github.com/repos/owner/repo").mock(
+        side_effect=httpx.ConnectError("Failed to connect")
+    )
+
+    adapter = GitHubAdapter("ghp_token")
+
+    try:
+        with pytest.raises(ValueError, match="Cannot connect to GitHub API"):
+            await adapter.get_default_branch("owner", "repo")
+    finally:
+        await adapter.close()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_get_default_branch_rate_limit_exceeded():
+    """Test get_default_branch() detects and reports rate limit errors."""
+    from drep.adapters.github import GitHubAdapter
+
+    # Mock rate limit exceeded response
+    respx.get("https://api.github.com/repos/owner/repo").mock(
+        return_value=httpx.Response(
+            403,
+            headers={"X-RateLimit-Remaining": "0", "X-RateLimit-Reset": "1640000000"},
+            json={"message": "API rate limit exceeded"},
+        )
+    )
+
+    adapter = GitHubAdapter("ghp_token")
+
+    try:
+        with pytest.raises(ValueError, match="rate limit exceeded.*Resets at"):
+            await adapter.get_default_branch("owner", "repo")
     finally:
         await adapter.close()

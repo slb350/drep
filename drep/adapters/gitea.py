@@ -1,6 +1,7 @@
 """Gitea platform adapter implementation."""
 
 import base64
+import json
 from typing import Dict, List, Optional
 
 import httpx
@@ -40,23 +41,47 @@ class GiteaAdapter(BaseAdapter):
             Default branch name (e.g., 'main', 'master')
 
         Raises:
-            ValueError: If repository not found (404) or unauthorized (401)
-            httpx.HTTPStatusError: For other HTTP errors
+            ValueError: If repository not found (404), unauthorized (401),
+                       or API response is malformed
         """
         url = f"{self.url}/api/v1/repos/{owner}/{repo}"
 
         try:
             response = await self.client.get(url)
             response.raise_for_status()
-            data = response.json()
+
+            # Validate JSON parsing
+            try:
+                data = response.json()
+            except json.JSONDecodeError:
+                raise ValueError(
+                    f"Gitea API returned invalid JSON for {owner}/{repo}: " f"{response.text[:200]}"
+                )
+
+            # Validate required field exists
+            if "default_branch" not in data:
+                raise ValueError(
+                    f"Gitea API response missing 'default_branch' field for {owner}/{repo}"
+                )
+
             return data["default_branch"]
+
+        except httpx.TimeoutException:
+            raise ValueError(
+                f"Gitea API request timed out fetching default branch for {owner}/{repo}"
+            )
+        except (httpx.ConnectError, httpx.ConnectTimeout):
+            raise ValueError(f"Cannot connect to Gitea API at {self.url} for {owner}/{repo}")
         except httpx.HTTPStatusError as e:
             if e.response.status_code == 404:
                 raise ValueError(f"Repository {owner}/{repo} not found")
             elif e.response.status_code == 401:
                 raise ValueError("Unauthorized - check your Gitea token")
             else:
-                raise
+                raise ValueError(
+                    f"Gitea API error fetching default branch for {owner}/{repo}: "
+                    f"{e.response.text}"
+                )
 
     async def _get_label_ids(self, owner: str, repo: str, label_names: List[str]) -> List[int]:
         """Get label IDs from label names (with caching).
