@@ -375,10 +375,28 @@ class RepositoryScanner:
                     progress_callback(tracker)
                 continue
 
-            # Read file content
+            # Read file content with proper encoding handling
             try:
-                content = full_path.read_text(errors="ignore")
-            except Exception as e:
+                content = full_path.read_text(encoding="utf-8")
+            except UnicodeDecodeError:
+                logger.warning(f"Skipping {file_path}: Not valid UTF-8")
+                tracker.update(skipped=1)
+                if progress_callback:
+                    progress_callback(tracker)
+                continue
+            except PermissionError:
+                logger.error(f"Permission denied: {file_path}")
+                tracker.update(failed=1)
+                if progress_callback:
+                    progress_callback(tracker)
+                continue
+            except FileNotFoundError:
+                logger.warning(f"File disappeared: {file_path}")
+                tracker.update(skipped=1)
+                if progress_callback:
+                    progress_callback(tracker)
+                continue
+            except OSError as e:
                 logger.error(f"Failed to read {file_path}: {e}")
                 tracker.update(failed=1)
                 if progress_callback:
@@ -461,10 +479,28 @@ class RepositoryScanner:
                     progress_callback(tracker)
                 continue
 
-            # Read file content
+            # Read file content with proper encoding handling
             try:
-                content = full_path.read_text(errors="ignore")
-            except Exception as e:
+                content = full_path.read_text(encoding="utf-8")
+            except UnicodeDecodeError:
+                logger.warning(f"Skipping {file_path}: Not valid UTF-8")
+                tracker.update(skipped=1)
+                if progress_callback:
+                    progress_callback(tracker)
+                continue
+            except PermissionError:
+                logger.error(f"Permission denied: {file_path}")
+                tracker.update(failed=1)
+                if progress_callback:
+                    progress_callback(tracker)
+                continue
+            except FileNotFoundError:
+                logger.warning(f"File disappeared: {file_path}")
+                tracker.update(skipped=1)
+                if progress_callback:
+                    progress_callback(tracker)
+                continue
+            except OSError as e:
                 logger.error(f"Failed to read {file_path}: {e}")
                 tracker.update(failed=1)
                 if progress_callback:

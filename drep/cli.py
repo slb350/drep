@@ -296,9 +296,19 @@ fi
         for file_path in files:
             full_path = Path(repo_path) / file_path
             if full_path.exists():
-                content = full_path.read_text(errors="ignore")
-                result = await analyzer.analyze_file(file_path, content)
-                findings.extend(result.to_findings())
+                try:
+                    content = full_path.read_text(encoding="utf-8")
+                    result = await analyzer.analyze_file(file_path, content)
+                    findings.extend(result.to_findings())
+                except UnicodeDecodeError:
+                    logger.warning(f"Skipping {file_path}: Not valid UTF-8")
+                    continue
+                except PermissionError:
+                    logger.error(f"Permission denied: {file_path}")
+                    continue
+                except OSError as e:
+                    logger.error(f"Failed to read {file_path}: {e}")
+                    continue
 
         # 2. Code quality analysis (LLM-powered)
         if config.llm and config.llm.enabled:
