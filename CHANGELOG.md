@@ -14,6 +14,84 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Metrics dashboard
 - Notification system (Slack, Discord)
 - Multi-repository analysis features
+- Anthropic Direct API provider (Phase 3.4)
+
+## [0.8.0] - 2025-11-08
+
+### Added - AWS Bedrock Provider Support (Phase 3.3)
+- **AWS Bedrock LLM Provider**: Full support for Claude models via AWS Bedrock
+  - BedrockClient implementation with OpenAI-compatible interface
+  - Support for Claude Sonnet 4.5 and Haiku 4.5 models
+  - Automatic AWS credential chain authentication
+  - Region-specific model deployment
+  - Comprehensive error handling for AWS-specific errors
+- **Configuration Enhancements**:
+  - `BedrockConfig` for AWS region and model selection
+  - Optional `endpoint` and `model` fields for Bedrock provider
+  - Provider-specific validation (`openai-compatible` vs `bedrock`)
+  - Support for `provider="bedrock"` in LLMConfig
+- **Test Coverage**: 511 total tests (19 new Bedrock-specific tests)
+  - Unit tests for BedrockClient (17 tests)
+  - Integration tests for LLMClient with Bedrock (4 tests)
+  - Configuration validation tests (3 tests)
+
+### Fixed - Critical P1 Issues
+- **Cache Corruption Fix** (P1): Preserve Bedrock model name in `LLMClient.model`
+  - Previously: Different Bedrock models shared cache entries (model=None)
+  - Impact: Model A could serve stale responses from Model B
+  - Fix: Explicitly set `self.model = bedrock_model` during initialization
+  - Result: Each model has distinct cache keys, metrics show actual model names
+- **Async Event Loop Blocking** (P1): Wrap boto3 calls in `asyncio.to_thread()`
+  - Previously: Synchronous `boto3.invoke_model()` blocked event loop
+  - Impact: Defeated async concurrency, stalled rate limiting/progress tracking
+  - Fix: Use `asyncio.to_thread()` to run boto3 in thread pool
+  - Result: Event loop remains responsive, concurrent requests work properly
+- **AWS API Compliance** (P1): Add required headers and encode body as bytes
+  - Previously: Missing `contentType` and `accept` headers, body as string
+  - Impact: Violates AWS Bedrock API spec, could cause ValidationError
+  - Fix: Add `contentType="application/json"`, `accept="application/json"`, encode body as bytes
+  - Result: Full AWS API compliance per boto3 documentation
+- **Config Validation** (P1): Make `endpoint` and `model` optional for Bedrock
+  - Previously: Required dummy values for Bedrock configs
+  - Impact: Made feature unusable as documented
+  - Fix: Optional fields with provider-specific validation
+  - Result: Bedrock works without dummy endpoint/model values
+- **Endpoint Handling** (P1): Handle `endpoint=None` gracefully
+  - Previously: `endpoint.rstrip("/")` crashed with AttributeError on None
+  - Impact: Blocked Bedrock initialization
+  - Fix: Check if endpoint exists before calling methods
+  - Result: Bedrock provider initializes with endpoint=None
+
+### Fixed - Non-Blocking Issues
+- **StreamingBody Resource Management**: Added explicit `close()` calls
+  - Ensures proper cleanup of AWS response streams
+  - Prevents resource leaks in long-running processes
+- **Error Message Clarity**: Enhanced user-friendly AWS error messages
+  - ThrottlingException, AccessDeniedException, ValidationException
+  - Actionable guidance for common Bedrock errors
+- **Code Quality**: Addressed all PR review feedback
+  - Removed redundant exception handlers
+  - Added explanatory comments for complex logic
+  - Improved test coverage for edge cases
+
+### Changed
+- **Documentation Updates**:
+  - README: Added AWS Bedrock setup instructions and configuration examples
+  - Technical Design: Updated with Bedrock architecture details
+  - LLM Setup Guide: Comprehensive Bedrock configuration walkthrough
+  - Roadmap: Marked Phase 3.3 complete, added Phase 3.4 (Anthropic Direct)
+- **Dependencies**:
+  - Added `boto3` for AWS Bedrock support
+  - Added `botocore` for AWS SDK functionality
+
+### Development
+- **TDD Methodology**: All fixes implemented with strict Test-Driven Development
+  - RED phase: Write failing tests first
+  - GREEN phase: Implement fixes
+  - REFACTOR phase: Improve code quality
+  - VERIFY phase: Run full test suite
+- **Code Quality**: All ruff/black checks passing
+- **Zero Technical Debt**: All P1 and non-blocking issues resolved
 
 ## [0.1.0] - 2025-10-19
 
@@ -65,5 +143,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Rate limiting considerations
 - Sanitized LLM prompts to prevent injection
 
-[Unreleased]: https://github.com/slb350/drep/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/slb350/drep/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/slb350/drep/compare/v0.1.0...v0.8.0
 [0.1.0]: https://github.com/slb350/drep/releases/tag/v0.1.0

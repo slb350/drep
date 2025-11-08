@@ -7,7 +7,7 @@ packages = ["drep"]
 
 [project]
 name = "drep-ai"
-version = "0.1.0"
+version = "0.8.0"
 description = "AI-powered code review and documentation quality tool for Gitea, GitHub, and GitLab"
 authors = [
     {name = "drep Contributors"},
