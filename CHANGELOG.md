@@ -16,6 +16,57 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Multi-repository analysis features
 - Anthropic Direct API provider (Phase 3.4)
 
+## [0.9.0] - 2025-11-08
+
+### Added - Pre-Commit Hook Support (Phase 3.6)
+- **New `drep check` command**: Local-only analysis without platform API requirements
+  - `--staged` flag: Check only git staged files (pre-commit workflow)
+  - `--exit-zero` flag: Warning mode without blocking commits
+  - `--format` option: Output as `text` (default) or `json`
+  - Works without Gitea/GitHub/GitLab tokens (local-only mode)
+  - Respects LLM config when present for intelligent analysis
+  - Pre-commit friendly output format (`file:line:column: severity: message`)
+
+- **Pre-commit Integration**: `.pre-commit-hooks.yaml` in repository
+  - `drep-check` hook: Checks staged files only
+  - `drep-check-all` hook: Checks all Python files
+  - Direct repo reference: `repo: https://github.com/slb350/drep`
+  - Installation: `brew tap slb350/drep && brew install drep-ai` or `pip install drep-ai`
+
+- **Staged File Detection**: `RepositoryScanner.get_staged_files()` method
+  - Returns only Python (.py) and Markdown (.md) files
+  - Handles new files, deleted files, and renamed files correctly
+  - Designed specifically for pre-commit workflow
+
+### Changed
+- **Config Validation**: Platform config now optional for local-only mode
+  - `load_config()` accepts `require_platform=False` parameter
+  - Enables LLM-only configurations without Gitea/GitHub/GitLab
+  - `Config.require_platform_config` field controls validation
+  - Backward compatible (default behavior unchanged)
+
+- **Exit Codes**: `drep check` returns exit code 1 when issues found
+  - Properly blocks commits in pre-commit hooks
+  - Use `--exit-zero` for warning-only mode
+
+### Testing
+- **12 New Tests**: Comprehensive TDD coverage
+  - 6 tests for `get_staged_files()` method
+  - 4 tests for optional platform config
+  - 4 tests for `drep check` command
+  - All 521+ tests passing
+
+### Documentation
+- `.pre-commit-hooks.yaml`: Pre-commit hook definitions
+- Pre-commit integration ready (detailed docs in README to follow)
+
+### Development Methodology
+- **Strict TDD**: All features developed with Test-Driven Development
+  - RED: Write failing tests first
+  - GREEN: Implement to pass tests
+  - REFACTOR: Improve code quality
+  - COMMIT: Commit each TDD cycle
+
 ## [0.8.2] - 2025-11-08
 
 ### Added

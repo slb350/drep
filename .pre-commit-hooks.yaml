@@ -1,0 +1,15 @@
+- id: drep-check
+  name: drep code quality check
+  description: Run drep analysis on staged Python files (local-only, no platform API)
+  entry: drep check --staged
+  language: system
+  pass_filenames: false
+  types: [python]
+
+- id: drep-check-all
+  name: drep full check
+  description: Run drep analysis on all Python files in repository
+  entry: drep check
+  language: system
+  pass_filenames: false
+  types: [python]

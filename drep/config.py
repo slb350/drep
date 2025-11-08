@@ -9,13 +9,16 @@ import yaml
 from drep.models.config import Config
 
 
-def load_config(config_path: str, strict: bool = False) -> Config:
+def load_config(config_path: str, strict: bool = False, require_platform: bool = True) -> Config:
     """Load and validate configuration from YAML file.
 
     Args:
         config_path: Path to the YAML configuration file
         strict: If True, raise error if any ${VAR} placeholders remain after
                 substitution (missing environment variables)
+        require_platform: If True, require at least one platform (gitea/github/gitlab).
+                         If False, allow LLM-only config (for pre-commit hooks).
+                         Default: True (backward compatible)
 
     Returns:
         Validated Config object
@@ -25,6 +28,10 @@ def load_config(config_path: str, strict: bool = False) -> Config:
         ValueError: If config is empty, malformed, or has missing env vars (strict mode)
         yaml.YAMLError: If YAML is malformed
         pydantic.ValidationError: If config structure is invalid
+
+    Note:
+        Setting require_platform=False is useful for pre-commit hooks where
+        you want local-only analysis without platform API integration.
     """
     config_file = Path(config_path)
 
@@ -57,6 +64,9 @@ def load_config(config_path: str, strict: bool = False) -> Config:
             )
 
     config_dict = yaml.safe_load(config_str)
+
+    # Pass require_platform flag to Config model
+    config_dict["require_platform_config"] = require_platform
 
     # Validate with Pydantic
     return Config(**config_dict)

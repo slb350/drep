@@ -210,13 +210,28 @@ class Config(BaseModel):
     database_url: str = "sqlite:///./drep.db"
     llm: Optional[LLMConfig] = Field(default=None, description="LLM configuration")
 
+    # Internal field to control platform validation (for pre-commit hooks)
+    # Excluded from serialization but accessible in validators
+    require_platform_config: bool = Field(
+        default=True, exclude=True, description="Internal flag for platform validation"
+    )
+
     @model_validator(mode="after")
     def validate_at_least_one_platform(self) -> "Config":
         """Ensure at least one platform is configured.
 
         Raises:
-            ValueError: If no platform is configured
+            ValueError: If no platform is configured (when required)
+
+        Note:
+            Platform validation is skipped when require_platform_config=False
+            (used for pre-commit hooks with local-only analysis)
         """
+        # Skip validation if platform not required (pre-commit mode)
+        if not self.require_platform_config:
+            return self
+
+        # Validate platform presence
         if self.gitea is None and self.github is None and self.gitlab is None:
             raise ValueError(
                 "At least one platform must be configured. "

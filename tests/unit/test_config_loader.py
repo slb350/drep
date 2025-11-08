@@ -375,3 +375,103 @@ documentation:
         assert "gitea_token" in error_msg or "repo_pattern" in error_msg
     finally:
         del os.environ["GITEA_URL"]
+
+
+# ===== Tests for Optional Platform Config (Pre-commit Integration) =====
+
+
+def test_load_config_requires_platform_by_default(tmp_path):
+    """Test that load_config requires platform by default (backward compatibility)."""
+    from drep.config import load_config
+
+    config_path = tmp_path / "llm_only.yaml"
+    # LLM-only config with no platform
+    config_content = """llm:
+  enabled: true
+  endpoint: http://localhost:1234/v1
+  model: test-model
+
+documentation:
+  enabled: true
+"""
+    config_path.write_text(config_content)
+
+    # Should raise ValueError for missing platform
+    with pytest.raises(ValidationError) as exc_info:
+        load_config(str(config_path))
+
+    error_msg = str(exc_info.value).lower()
+    assert "platform" in error_msg or "gitea" in error_msg or "github" in error_msg
+
+
+def test_load_config_allows_llm_only_when_platform_not_required(tmp_path):
+    """Test that load_config allows LLM-only config with require_platform=False."""
+    from drep.config import load_config
+
+    config_path = tmp_path / "llm_only.yaml"
+    # LLM-only config with no platform
+    config_content = """llm:
+  enabled: true
+  endpoint: http://localhost:1234/v1
+  model: test-model
+  temperature: 0.2
+  max_tokens: 4000
+
+documentation:
+  enabled: true
+"""
+    config_path.write_text(config_content)
+
+    # Should succeed with require_platform=False
+    config = load_config(str(config_path), require_platform=False)
+
+    assert config.llm is not None
+    assert config.llm.enabled is True
+    assert str(config.llm.endpoint) == "http://localhost:1234/v1"
+    assert config.llm.model == "test-model"
+    assert config.gitea is None
+    assert config.github is None
+
+
+def test_load_config_validates_llm_when_platform_not_required(tmp_path):
+    """Test that LLM config is still validated even when platform not required."""
+    from drep.config import load_config
+
+    config_path = tmp_path / "invalid_llm.yaml"
+    # Invalid LLM config (missing required fields)
+    config_content = """llm:
+  enabled: true
+  # Missing endpoint and model
+
+documentation:
+  enabled: true
+"""
+    config_path.write_text(config_content)
+
+    # Should still validate LLM config properly
+    with pytest.raises(ValidationError) as exc_info:
+        load_config(str(config_path), require_platform=False)
+
+    error_msg = str(exc_info.value).lower()
+    # Should complain about missing endpoint or model
+    assert "endpoint" in error_msg or "model" in error_msg
+
+
+def test_load_config_still_requires_platform_when_explicitly_requested(tmp_path):
+    """Test that require_platform=True explicitly requires platform."""
+    from drep.config import load_config
+
+    config_path = tmp_path / "llm_only.yaml"
+    config_content = """llm:
+  enabled: true
+  endpoint: http://localhost:1234/v1
+  model: test-model
+"""
+    config_path.write_text(config_content)
+
+    # Should raise with require_platform=True (explicit)
+    with pytest.raises(ValidationError) as exc_info:
+        load_config(str(config_path), require_platform=True)
+
+    error_msg = str(exc_info.value).lower()
+    assert "platform" in error_msg or "gitea" in error_msg or "github" in error_msg
