@@ -814,6 +814,351 @@ async def test_rate_limit_always_raises_on_429_even_with_invalid_headers():
         await adapter.close()
 
 
+# ===== JSON Validation Tests =====
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_get_default_branch_invalid_json():
+    """Test get_default_branch() handles non-JSON responses gracefully."""
+    from drep.adapters.gitlab import GitLabAdapter
+
+    # Return HTML error page instead of JSON
+    respx.get("https://gitlab.com/api/v4/projects/owner%2Frepo").mock(
+        return_value=httpx.Response(200, text="<html><body>Error</body></html>")
+    )
+
+    adapter = GitLabAdapter("glpat_token")
+
+    try:
+        with pytest.raises(ValueError, match="GitLab API returned invalid JSON"):
+            await adapter.get_default_branch("owner", "repo")
+    finally:
+        await adapter.close()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_get_default_branch_missing_field():
+    """Test get_default_branch() validates required fields in response."""
+    from drep.adapters.gitlab import GitLabAdapter
+
+    # Response missing 'default_branch' field
+    respx.get("https://gitlab.com/api/v4/projects/owner%2Frepo").mock(
+        return_value=httpx.Response(200, json={"id": 12345, "name": "repo"})
+    )
+
+    adapter = GitLabAdapter("glpat_token")
+
+    try:
+        with pytest.raises(ValueError, match="missing 'default_branch' field"):
+            await adapter.get_default_branch("owner", "repo")
+    finally:
+        await adapter.close()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_create_issue_invalid_json():
+    """Test create_issue() handles non-JSON responses gracefully."""
+    from drep.adapters.gitlab import GitLabAdapter
+
+    # Return HTML error page instead of JSON
+    respx.post("https://gitlab.com/api/v4/projects/owner%2Frepo/issues").mock(
+        return_value=httpx.Response(201, text="<html><body>Created</body></html>")
+    )
+
+    adapter = GitLabAdapter("glpat_token")
+
+    try:
+        with pytest.raises(ValueError, match="GitLab API returned invalid JSON"):
+            await adapter.create_issue("owner", "repo", "Test", "Test body")
+    finally:
+        await adapter.close()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_create_issue_missing_iid():
+    """Test create_issue() validates required fields in response."""
+    from drep.adapters.gitlab import GitLabAdapter
+
+    # Response missing 'iid' field
+    respx.post("https://gitlab.com/api/v4/projects/owner%2Frepo/issues").mock(
+        return_value=httpx.Response(201, json={"id": 12345, "title": "Test"})
+    )
+
+    adapter = GitLabAdapter("glpat_token")
+
+    try:
+        with pytest.raises(ValueError, match="missing 'iid' field"):
+            await adapter.create_issue("owner", "repo", "Test", "Test body")
+    finally:
+        await adapter.close()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_get_file_content_invalid_json():
+    """Test get_file_content() handles non-JSON responses gracefully."""
+    from drep.adapters.gitlab import GitLabAdapter
+
+    # Return HTML error page instead of JSON
+    respx.get(
+        "https://gitlab.com/api/v4/projects/owner%2Frepo/repository/files/test.py",
+        params={"ref": "main"}
+    ).mock(
+        return_value=httpx.Response(200, text="<html><body>Error</body></html>")
+    )
+
+    adapter = GitLabAdapter("glpat_token")
+
+    try:
+        with pytest.raises(ValueError, match="GitLab API returned invalid JSON"):
+            await adapter.get_file_content("owner", "repo", "test.py", "main")
+    finally:
+        await adapter.close()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_get_file_content_missing_content_field():
+    """Test get_file_content() validates required fields in response."""
+    from drep.adapters.gitlab import GitLabAdapter
+
+    # Response missing 'content' field
+    respx.get(
+        "https://gitlab.com/api/v4/projects/owner%2Frepo/repository/files/test.py",
+        params={"ref": "main"}
+    ).mock(
+        return_value=httpx.Response(200, json={"file_path": "test.py", "size": 100})
+    )
+
+    adapter = GitLabAdapter("glpat_token")
+
+    try:
+        with pytest.raises(ValueError, match="missing 'content' field"):
+            await adapter.get_file_content("owner", "repo", "test.py", "main")
+    finally:
+        await adapter.close()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_get_pr_invalid_json():
+    """Test get_pr() handles non-JSON responses gracefully."""
+    from drep.adapters.gitlab import GitLabAdapter
+
+    # Return HTML error page instead of JSON
+    respx.get("https://gitlab.com/api/v4/projects/owner%2Frepo/merge_requests/42").mock(
+        return_value=httpx.Response(200, text="<html><body>Error</body></html>")
+    )
+
+    adapter = GitLabAdapter("glpat_token")
+
+    try:
+        with pytest.raises(ValueError, match="GitLab API returned invalid JSON"):
+            await adapter.get_pr("owner", "repo", 42)
+    finally:
+        await adapter.close()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_get_pr_missing_diff_refs():
+    """Test get_pr() validates required nested fields in response."""
+    from drep.adapters.gitlab import GitLabAdapter
+
+    # Response missing 'diff_refs' field
+    respx.get("https://gitlab.com/api/v4/projects/owner%2Frepo/merge_requests/42").mock(
+        return_value=httpx.Response(200, json={"iid": 42, "title": "Test MR"})
+    )
+
+    adapter = GitLabAdapter("glpat_token")
+
+    try:
+        with pytest.raises(ValueError, match="missing 'diff_refs' field"):
+            await adapter.get_pr("owner", "repo", 42)
+    finally:
+        await adapter.close()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_get_pr_missing_base_sha():
+    """Test get_pr() validates diff_refs.base_sha field."""
+    from drep.adapters.gitlab import GitLabAdapter
+
+    # Response missing 'diff_refs.base_sha' field
+    respx.get("https://gitlab.com/api/v4/projects/owner%2Frepo/merge_requests/42").mock(
+        return_value=httpx.Response(200, json={
+            "iid": 42,
+            "title": "Test MR",
+            "diff_refs": {"head_sha": "def456"}
+        })
+    )
+
+    adapter = GitLabAdapter("glpat_token")
+
+    try:
+        with pytest.raises(ValueError, match="missing 'base_sha'"):
+            await adapter.get_pr("owner", "repo", 42)
+    finally:
+        await adapter.close()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_get_pr_missing_head_sha():
+    """Test get_pr() validates diff_refs.head_sha field."""
+    from drep.adapters.gitlab import GitLabAdapter
+
+    # Response missing 'diff_refs.head_sha' field
+    respx.get("https://gitlab.com/api/v4/projects/owner%2Frepo/merge_requests/42").mock(
+        return_value=httpx.Response(200, json={
+            "iid": 42,
+            "title": "Test MR",
+            "diff_refs": {"base_sha": "abc123"}
+        })
+    )
+
+    adapter = GitLabAdapter("glpat_token")
+
+    try:
+        with pytest.raises(ValueError, match="missing 'head_sha'"):
+            await adapter.get_pr("owner", "repo", 42)
+    finally:
+        await adapter.close()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_get_pr_diff_invalid_json():
+    """Test get_pr_diff() handles non-JSON responses gracefully."""
+    from drep.adapters.gitlab import GitLabAdapter
+
+    # Return HTML error page instead of JSON
+    respx.get(
+        "https://gitlab.com/api/v4/projects/owner%2Frepo/merge_requests/42/changes"
+    ).mock(
+        return_value=httpx.Response(200, text="<html><body>Error</body></html>")
+    )
+
+    adapter = GitLabAdapter("glpat_token")
+
+    try:
+        with pytest.raises(ValueError, match="GitLab API returned invalid JSON"):
+            await adapter.get_pr_diff("owner", "repo", 42)
+    finally:
+        await adapter.close()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_get_pr_diff_missing_changes():
+    """Test get_pr_diff() validates required fields in response."""
+    from drep.adapters.gitlab import GitLabAdapter
+
+    # Response missing 'changes' field
+    respx.get(
+        "https://gitlab.com/api/v4/projects/owner%2Frepo/merge_requests/42/changes"
+    ).mock(
+        return_value=httpx.Response(200, json={"iid": 42, "title": "Test MR"})
+    )
+
+    adapter = GitLabAdapter("glpat_token")
+
+    try:
+        with pytest.raises(ValueError, match="missing 'changes' field"):
+            await adapter.get_pr_diff("owner", "repo", 42)
+    finally:
+        await adapter.close()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_post_review_comment_invalid_json():
+    """Test post_review_comment() handles non-JSON responses gracefully."""
+    from drep.adapters.gitlab import GitLabAdapter
+
+    # Mock get_pr to return valid MR data
+    respx.get("https://gitlab.com/api/v4/projects/owner%2Frepo/merge_requests/42").mock(
+        return_value=httpx.Response(200, json={
+            "iid": 42,
+            "title": "Test MR",
+            "diff_refs": {
+                "base_sha": "abc123",
+                "head_sha": "def456",
+                "start_sha": "abc123"
+            }
+        })
+    )
+
+    # Mock post to return HTML instead of JSON
+    respx.post(
+        "https://gitlab.com/api/v4/projects/owner%2Frepo/merge_requests/42/discussions"
+    ).mock(
+        return_value=httpx.Response(201, text="<html><body>Created</body></html>")
+    )
+
+    adapter = GitLabAdapter("glpat_token")
+
+    try:
+        with pytest.raises(ValueError, match="GitLab API returned invalid JSON"):
+            await adapter.post_review_comment(
+                "owner", "repo", 42, "test.py", 10, "Test comment"
+            )
+    finally:
+        await adapter.close()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_create_pr_comment_invalid_json():
+    """Test create_pr_comment() handles non-JSON responses gracefully."""
+    from drep.adapters.gitlab import GitLabAdapter
+
+    # Return HTML error page instead of JSON
+    respx.post(
+        "https://gitlab.com/api/v4/projects/owner%2Frepo/merge_requests/42/notes"
+    ).mock(
+        return_value=httpx.Response(201, text="<html><body>Created</body></html>")
+    )
+
+    adapter = GitLabAdapter("glpat_token")
+
+    try:
+        with pytest.raises(ValueError, match="GitLab API returned invalid JSON"):
+            await adapter.create_pr_comment("owner", "repo", 42, "Test comment")
+    finally:
+        await adapter.close()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_post_review_comment_get_pr_fails_validation():
+    """Test post_review_comment() when get_pr() fails validation.
+
+    This tests the dependency chain - post_review_comment calls get_pr first.
+    """
+    from drep.adapters.gitlab import GitLabAdapter
+
+    # Mock get_pr to return invalid data (missing diff_refs)
+    respx.get("https://gitlab.com/api/v4/projects/owner%2Frepo/merge_requests/42").mock(
+        return_value=httpx.Response(200, json={"iid": 42, "title": "Test MR"})
+    )
+
+    adapter = GitLabAdapter("glpat_token")
+
+    try:
+        with pytest.raises(ValueError, match="missing 'diff_refs' field"):
+            await adapter.post_review_comment(
+                "owner", "repo", 42, "test.py", 10, "Test comment"
+            )
+    finally:
+        await adapter.close()
+
+
 # ===== Timeout Tests =====
 
 
