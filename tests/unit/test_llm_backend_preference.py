@@ -1,6 +1,5 @@
 """Tests ensuring LLMClient prefers open-agent-sdk when available."""
 
-
 import pytest
 
 from drep.llm.client import LLMClient

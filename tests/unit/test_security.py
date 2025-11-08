@@ -1,7 +1,6 @@
 """Tests for drep.security module - secret detection and logging safety."""
 
 
-
 def test_security_module_exists():
     """Test that security module exists."""
     from drep import security

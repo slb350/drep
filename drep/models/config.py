@@ -3,29 +3,30 @@
 from pathlib import Path
 from typing import List, Optional
 
-from pydantic import BaseModel, Field, HttpUrl
+from pydantic import BaseModel, Field, HttpUrl, SecretStr, model_validator
 
 
 class GiteaConfig(BaseModel):
     """Gitea platform configuration."""
 
     url: str = Field(..., description="Gitea base URL (e.g., http://192.168.1.14:3000)")
-    token: str = Field(..., description="Gitea API token")
+    token: SecretStr = Field(..., description="Gitea API token")
     repositories: List[str] = Field(..., description="Repository patterns (e.g., steve/*)")
 
 
 class GitHubConfig(BaseModel):
     """GitHub platform configuration."""
 
-    token: str = Field(..., description="GitHub Personal Access Token (PAT) or GitHub App token")
+    token: SecretStr = Field(
+        ..., description="GitHub Personal Access Token (PAT) or GitHub App token"
+    )
     repositories: List[str] = Field(
         ..., description="Repository patterns (e.g., owner/repo or owner/*)"
     )
-    url: str = Field(
+    url: HttpUrl = Field(
         default="https://api.github.com",
         description=(
-            "GitHub API URL (default: https://api.github.com, "
-            "use custom for GitHub Enterprise)"
+            "GitHub API URL (default: https://api.github.com, " "use custom for GitHub Enterprise)"
         ),
     )
 
@@ -106,3 +107,17 @@ class Config(BaseModel):
     documentation: DocumentationConfig = Field(default_factory=DocumentationConfig)
     database_url: str = "sqlite:///./drep.db"
     llm: Optional[LLMConfig] = Field(default=None, description="LLM configuration")
+
+    @model_validator(mode="after")
+    def validate_at_least_one_platform(self) -> "Config":
+        """Ensure at least one platform is configured.
+
+        Raises:
+            ValueError: If neither gitea nor github is configured
+        """
+        if self.gitea is None and self.github is None:
+            raise ValueError(
+                "At least one platform must be configured. "
+                "Please provide 'gitea' or 'github' configuration."
+            )
+        return self
