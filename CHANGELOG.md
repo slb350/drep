@@ -16,6 +16,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Multi-repository analysis features
 - Anthropic Direct API provider (Phase 3.4)
 
+## [0.8.2] - 2025-11-08
+
+### Added
+- **Interactive Platform Selection**: `drep init` now prompts for platform choice
+  - Interactive prompt with GitHub, Gitea, GitLab options
+  - Default to GitHub (most common use case)
+  - Platform-specific config templates generated automatically
+  - Correct environment variable names per platform (GITHUB_TOKEN, GITEA_TOKEN, GITLAB_TOKEN)
+
+### Improved
+- **README Documentation**: Comprehensive setup guide with step-by-step instructions
+  - Clear platform selection guidance
+  - Detailed API token creation instructions for each platform
+  - LLM backend setup options (LM Studio, Ollama, AWS Bedrock)
+  - Reduced user confusion during initial setup
+- **User Guidance**: Better error messages and next steps after `drep init`
+
+### Changed
+- `drep init` command behavior: Now interactive instead of generating Gitea-only config
+- Default platform: GitHub (changed from Gitea)
+
+### Fixed
+- User confusion when trying to scan GitHub repositories with default Gitea config
+- Missing platform-specific setup instructions
+
 ## [0.8.0] - 2025-11-08
 
 ### Added - AWS Bedrock Provider Support (Phase 3.3)
