@@ -603,7 +603,12 @@ def check(path, staged, config, exit_zero, format):
 
     # Print findings summary
     if findings:
-        click.echo(f"\n✗ Found {len(findings)} issue(s)", err=True)
+        if exit_zero:
+            # Warning mode - print to stdout
+            click.echo(f"\n⚠ Found {len(findings)} issue(s) (warning mode)")
+        else:
+            # Error mode - print to stderr
+            click.echo(f"\n✗ Found {len(findings)} issue(s)", err=True)
 
         # Exit with appropriate code
         if not exit_zero:

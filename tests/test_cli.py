@@ -850,3 +850,32 @@ class TestCheckCommand:
 
             assert result.exit_code == 1
             assert "not found" in result.output.lower() or "does not exist" in result.output.lower()
+
+    def test_check_exit_zero_returns_zero_with_findings(self, runner, tmp_path):
+        """Test that --exit-zero returns 0 even when findings present."""
+        # This test verifies that when --exit-zero is used,
+        # the exit code is 0 even if findings are present.
+        # We mock the async _run_check to return findings directly.
+
+        from drep.models.findings import Finding
+
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            # Mock _run_check to return findings
+            async def mock_run_check(*args, **kwargs):
+                return [
+                    Finding(
+                        type="test",
+                        severity="warning",
+                        file_path="test.py",
+                        line=1,
+                        message="Test finding",
+                    )
+                ]
+
+            with patch("drep.cli._run_check", side_effect=mock_run_check):
+                result = runner.invoke(cli, ["check", ".", "--exit-zero"])
+
+                # Should return exit code 0 despite findings
+                assert result.exit_code == 0
+                # Should show it's in warning mode
+                assert "warning mode" in result.output.lower()
