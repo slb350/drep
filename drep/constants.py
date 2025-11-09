@@ -105,7 +105,7 @@ Performance Impact:
 
 # ===== Validation Constants =====
 
-BEDROCK_VALID_PREFIXES = [
+BEDROCK_VALID_PREFIXES = (
     "anthropic.",
     "global.anthropic.",
     "amazon.",
@@ -114,7 +114,7 @@ BEDROCK_VALID_PREFIXES = [
     "global.meta.",
     "cohere.",
     "global.cohere.",
-]
+)
 """AWS Bedrock model ID valid prefixes.
 
 Used to validate Bedrock model IDs in both CLI validators and config validation.
