@@ -170,3 +170,253 @@ class TestDocumentationConfig:
         config = DocumentationConfig(config={"documentation": {"enabled": True}})
         with pytest.raises(AttributeError):
             config.config = {"modified": True}  # type: ignore
+
+
+# ===== Tests for Strongly-Typed Models (Fix #25) =====
+
+
+class TestGitHubPlatformData:
+    """Tests for GitHubPlatformData model."""
+
+    def test_github_platform_data_immutable(self):
+        """Test GitHubPlatformData is frozen (immutable)."""
+        from drep.models.wizard import GitHubPlatformData
+
+        data = GitHubPlatformData(
+            token="${GITHUB_TOKEN}",
+            repositories=("owner/repo1", "owner/repo2"),
+            url="https://github.example.com/api/v3",
+        )
+
+        # Should be frozen (Python 3.13 raises FrozenInstanceError,
+        # earlier versions raise AttributeError)
+        with pytest.raises(
+            (AttributeError, Exception), match="can't set attribute|frozen|cannot assign"
+        ):
+            data.token = "new-token"
+
+    def test_github_platform_data_uses_tuples(self):
+        """Test repositories stored as tuple (immutable)."""
+        from drep.models.wizard import GitHubPlatformData
+
+        data = GitHubPlatformData(
+            token="${GITHUB_TOKEN}",
+            repositories=("owner/repo",),
+        )
+
+        assert isinstance(data.repositories, tuple)
+        # Tuples don't have append
+        assert not hasattr(data.repositories, "append")
+
+    def test_github_platform_data_to_dict(self):
+        """Test to_dict() YAML serialization."""
+        from drep.models.wizard import GitHubPlatformData
+
+        data = GitHubPlatformData(
+            token="${GITHUB_TOKEN}",
+            repositories=("owner/repo1", "owner/repo2"),
+            url="https://github.example.com/api/v3",
+        )
+
+        result = data.to_dict()
+
+        # Should convert tuple to list for YAML
+        assert result == {
+            "token": "${GITHUB_TOKEN}",
+            "repositories": ["owner/repo1", "owner/repo2"],
+            "url": "https://github.example.com/api/v3",
+        }
+
+    def test_github_platform_data_optional_url(self):
+        """Test GitHubPlatformData without url (github.com, not enterprise)."""
+        from drep.models.wizard import GitHubPlatformData
+
+        data = GitHubPlatformData(
+            token="${GITHUB_TOKEN}",
+            repositories=("owner/*",),
+        )
+
+        result = data.to_dict()
+
+        # Should not include url key when None
+        assert "url" not in result
+        assert result == {"token": "${GITHUB_TOKEN}", "repositories": ["owner/*"]}
+
+
+class TestPlatformConfigStronglyTyped:
+    """Tests for PlatformConfig wrapper with strongly-typed data."""
+
+    def test_platform_config_with_github_data(self):
+        """Test PlatformConfig with GitHubPlatformData."""
+        from drep.models.wizard import GitHubPlatformData, PlatformConfig
+
+        github_data = GitHubPlatformData(token="${GITHUB_TOKEN}", repositories=("owner/*",))
+
+        config = PlatformConfig(data=github_data, env_var="GITHUB_TOKEN", platform_name="GitHub")
+
+        assert config.platform_name == "GitHub"
+        assert config.env_var == "GITHUB_TOKEN"
+        assert isinstance(config.data, GitHubPlatformData)
+
+    def test_platform_config_to_dict(self):
+        """Test PlatformConfig.to_dict() creates correct structure."""
+        from drep.models.wizard import GiteaPlatformData, PlatformConfig
+
+        gitea_data = GiteaPlatformData(
+            url="http://192.168.1.14:3000",
+            token="${GITEA_TOKEN}",
+            repositories=("steve/*",),
+        )
+
+        config = PlatformConfig(data=gitea_data, env_var="GITEA_TOKEN", platform_name="Gitea")
+
+        result = config.to_dict()
+
+        # Should nest under "gitea" key
+        assert result == {
+            "gitea": {
+                "url": "http://192.168.1.14:3000",
+                "token": "${GITEA_TOKEN}",
+                "repositories": ["steve/*"],
+            }
+        }
+
+
+class TestLLMConfigModels:
+    """Tests for LLM configuration models."""
+
+    def test_openai_llm_data_immutable(self):
+        """Test OpenAILLMData is frozen."""
+        from drep.models.wizard import OpenAILLMData
+
+        data = OpenAILLMData(
+            enabled=True,
+            provider="openai-compatible",
+            endpoint="http://localhost:1234/v1",
+            model="qwen3-30b-a3b",
+        )
+
+        with pytest.raises(
+            (AttributeError, Exception), match="can't set attribute|frozen|cannot assign"
+        ):
+            data.enabled = False
+
+    def test_llm_config_provider_property(self):
+        """Test LLMConfig.provider is derived from data."""
+        from drep.models.wizard import BedrockLLMData, LLMConfig
+
+        bedrock_data = BedrockLLMData(
+            enabled=True,
+            provider="bedrock",
+            bedrock={
+                "region": "us-east-1",
+                "model": "anthropic.claude-sonnet-4-5-20250929-v1:0",
+            },
+        )
+
+        config = LLMConfig(data=bedrock_data)
+
+        # Provider should be derived from data
+        assert config.provider == "bedrock"
+
+    def test_llm_config_to_dict(self):
+        """Test LLMConfig.to_dict() creates correct structure."""
+        from drep.models.wizard import AnthropicLLMData, LLMConfig
+
+        anthropic_data = AnthropicLLMData(
+            enabled=True,
+            provider="anthropic",
+            api_key="${ANTHROPIC_API_KEY}",
+            model="claude-sonnet-4-5-20250929",
+            temperature=0.7,
+        )
+
+        config = LLMConfig(data=anthropic_data)
+        result = config.to_dict()
+
+        # Should nest under "llm" key
+        assert result == {
+            "llm": {
+                "enabled": True,
+                "provider": "anthropic",
+                "api_key": "${ANTHROPIC_API_KEY}",
+                "model": "claude-sonnet-4-5-20250929",
+                "temperature": 0.7,
+            }
+        }
+
+    def test_openai_llm_data_omits_none_fields(self):
+        """Test OpenAILLMData.to_dict() omits optional fields when None."""
+        from drep.models.wizard import OpenAILLMData
+
+        data = OpenAILLMData(
+            enabled=True,
+            provider="openai-compatible",
+            endpoint="http://localhost:1234/v1",
+            model="qwen3-30b-a3b",
+            # All optional fields left as None
+        )
+
+        result = data.to_dict()
+
+        # Should only include required fields
+        assert result == {
+            "enabled": True,
+            "provider": "openai-compatible",
+            "endpoint": "http://localhost:1234/v1",
+            "model": "qwen3-30b-a3b",
+        }
+        # Optional fields should not be present
+        assert "api_key" not in result
+        assert "temperature" not in result
+        assert "max_tokens" not in result
+
+
+class TestDocumentationConfigStronglyTyped:
+    """Tests for DocumentationConfigData model."""
+
+    def test_documentation_config_data_immutable(self):
+        """Test DocumentationConfigData is frozen."""
+        from drep.models.wizard import DocumentationConfigData
+
+        data = DocumentationConfigData(
+            enabled=True,
+            markdown_checks=True,
+            custom_dictionary=("word1", "word2"),
+        )
+
+        with pytest.raises(
+            (AttributeError, Exception), match="can't set attribute|frozen|cannot assign"
+        ):
+            data.enabled = False
+
+    def test_documentation_config_data_uses_tuples(self):
+        """Test custom_dictionary stored as tuple (immutable)."""
+        from drep.models.wizard import DocumentationConfigData
+
+        data = DocumentationConfigData(enabled=True, custom_dictionary=("word1", "word2"))
+
+        assert isinstance(data.custom_dictionary, tuple)
+        assert not hasattr(data.custom_dictionary, "append")
+
+    def test_documentation_config_to_dict(self):
+        """Test DocumentationConfig.to_dict() creates correct structure."""
+        from drep.models.wizard import DocumentationConfig, DocumentationConfigData
+
+        doc_data = DocumentationConfigData(
+            enabled=True,
+            markdown_checks=True,
+            custom_dictionary=("asyncio", "drep"),
+        )
+
+        config = DocumentationConfig(data=doc_data)
+        result = config.to_dict()
+
+        # Should nest under "documentation" key and convert tuple to list
+        assert result == {
+            "documentation": {
+                "enabled": True,
+                "markdown_checks": True,
+                "custom_dictionary": ["asyncio", "drep"],
+            }
+        }

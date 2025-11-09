@@ -26,7 +26,18 @@ from drep.core.issue_manager import IssueManager
 from drep.core.scanner import RepositoryScanner
 from drep.db import init_database
 from drep.documentation.analyzer import DocumentationAnalyzer
-from drep.models.wizard import DocumentationConfig, LLMConfig, PlatformConfig
+from drep.models.wizard import (
+    AnthropicLLMData,
+    BedrockLLMData,
+    DocumentationConfig,
+    DocumentationConfigData,
+    GiteaPlatformData,
+    GitHubPlatformData,
+    GitLabPlatformData,
+    LLMConfig,
+    OpenAILLMData,
+    PlatformConfig,
+)
 
 
 class OutputFormat(str, Enum):
@@ -61,26 +72,29 @@ def _collect_platform_config() -> PlatformConfig:
         click.echo("GitHub Configuration:")
         use_enterprise = click.confirm("Are you using GitHub Enterprise?", default=False)
 
-        github_config = {"token": "${GITHUB_TOKEN}"}
-
+        # Collect URL if enterprise
+        api_url = None
         if use_enterprise:
             api_url = click.prompt(
                 "GitHub Enterprise API URL",
                 default="https://github.example.com/api/v3",
                 type=URLType(),
             )
-            github_config["url"] = api_url
 
         click.echo("\nRepository Configuration:")
         click.echo("Examples: 'your-org/*' (all repos), 'owner/repo' (single repo)")
         repos = click.prompt(
             "Enter repositories (comma-separated)", default="your-org/*", type=RepositoryListType()
         )
-        github_config["repositories"] = repos
 
-        return PlatformConfig(
-            config={"github": github_config}, env_var="GITHUB_TOKEN", platform_name="GitHub"
+        # Create strongly-typed data
+        github_data = GitHubPlatformData(
+            token="${GITHUB_TOKEN}",
+            repositories=tuple(repos),  # Convert list to tuple
+            url=api_url,  # None for github.com, URL for enterprise
         )
+
+        return PlatformConfig(data=github_data, env_var="GITHUB_TOKEN", platform_name="GitHub")
 
     elif platform.lower() == "gitea":
         click.echo("Gitea Configuration:")
@@ -93,34 +107,40 @@ def _collect_platform_config() -> PlatformConfig:
             "Enter repositories (comma-separated)", default="your-org/*", type=RepositoryListType()
         )
 
-        gitea_config = {"url": gitea_url, "token": "${GITEA_TOKEN}", "repositories": repos}
-
-        return PlatformConfig(
-            config={"gitea": gitea_config}, env_var="GITEA_TOKEN", platform_name="Gitea"
+        # Create strongly-typed data
+        gitea_data = GiteaPlatformData(
+            url=gitea_url,
+            token="${GITEA_TOKEN}",
+            repositories=tuple(repos),  # Convert list to tuple
         )
+
+        return PlatformConfig(data=gitea_data, env_var="GITEA_TOKEN", platform_name="Gitea")
 
     else:
         click.echo("GitLab Configuration:")
         use_selfhosted = click.confirm("Are you using self-hosted GitLab?", default=False)
 
-        gitlab_config = {"token": "${GITLAB_TOKEN}"}
-
+        # Collect URL if self-hosted
+        gitlab_url = None
         if use_selfhosted:
             gitlab_url = click.prompt(
                 "GitLab URL", default="https://gitlab.example.com", type=URLType()
             )
-            gitlab_config["url"] = gitlab_url
 
         click.echo("\nRepository Configuration:")
         click.echo("Examples: 'your-org/*' (all projects), 'owner/project' (single project)")
         repos = click.prompt(
             "Enter projects (comma-separated)", default="your-org/*", type=RepositoryListType()
         )
-        gitlab_config["repositories"] = repos
 
-        return PlatformConfig(
-            config={"gitlab": gitlab_config}, env_var="GITLAB_TOKEN", platform_name="GitLab"
+        # Create strongly-typed data
+        gitlab_data = GitLabPlatformData(
+            token="${GITLAB_TOKEN}",
+            repositories=tuple(repos),  # Convert list to tuple
+            url=gitlab_url,  # None for gitlab.com, URL for self-hosted
         )
+
+        return PlatformConfig(data=gitlab_data, env_var="GITLAB_TOKEN", platform_name="GitLab")
 
 
 def _collect_llm_config() -> Optional[LLMConfig]:
@@ -254,7 +274,16 @@ def _collect_llm_config() -> Optional[LLMConfig]:
     else:
         llm_config["cache"] = {"enabled": True, "ttl_days": 30, "max_size_gb": 10.0}
 
-    return LLMConfig(config={"llm": llm_config}, provider=provider)
+    # Create strongly-typed data model based on provider
+    if provider == "openai-compatible":
+        llm_data = OpenAILLMData(**llm_config)
+        return LLMConfig(data=llm_data)
+    elif provider == "bedrock":
+        llm_data = BedrockLLMData(**llm_config)
+        return LLMConfig(data=llm_data)
+    else:  # anthropic
+        llm_data = AnthropicLLMData(**llm_config)
+        return LLMConfig(data=llm_data)
 
 
 def _collect_documentation_config() -> DocumentationConfig:
@@ -267,25 +296,28 @@ def _collect_documentation_config() -> DocumentationConfig:
     click.echo("-" * 60)
     doc_enabled = click.confirm("Enable documentation analysis?", default=True)
 
-    doc_config = {"enabled": doc_enabled}
+    markdown_checks = False
+    words_tuple = ()
 
     if doc_enabled:
         markdown_checks = click.confirm("Enable markdown lint checks?", default=False)
-        doc_config["markdown_checks"] = markdown_checks
 
         custom_dict = click.confirm("Add custom dictionary words?", default=False)
         if custom_dict:
             words = click.prompt("Enter words (comma-separated)", default="")
-            # Filter out empty/whitespace-only entries
+            # Filter out empty/whitespace-only entries and convert to tuple
             words_list = [w.strip() for w in words.split(",") if w.strip()]
-            doc_config["custom_dictionary"] = words_list
-        else:
-            doc_config["custom_dictionary"] = []
-    else:
-        doc_config["custom_dictionary"] = []
+            words_tuple = tuple(words_list)
+
+    # Create strongly-typed data
+    doc_data = DocumentationConfigData(
+        enabled=doc_enabled,
+        markdown_checks=markdown_checks,
+        custom_dictionary=words_tuple,
+    )
 
     click.echo()
-    return DocumentationConfig(config={"documentation": doc_config})
+    return DocumentationConfig(data=doc_data)
 
 
 def _collect_database_config():
@@ -481,11 +513,11 @@ def init():
     db_url = _collect_database_config()
 
     config_dict = {}
-    config_dict.update(platform_config.config)
-    config_dict.update(doc_config.config)
+    config_dict.update(platform_config.to_dict())  # Use to_dict() for new strongly-typed format
+    config_dict.update(doc_config.to_dict())  # Use to_dict() for new strongly-typed format
     config_dict["database_url"] = db_url
     if llm_config is not None:
-        config_dict.update(llm_config.config)
+        config_dict.update(llm_config.to_dict())  # Use to_dict() for new strongly-typed format
 
     _write_and_validate_config(config_dict, config_path)
 
