@@ -242,6 +242,57 @@ class TestInitCommand:
             assert "gitea:" in config_content
             assert "existing: config" not in config_content
 
+    def test_init_backup_failure_aborts(self, runner, tmp_path):
+        """Test init aborts if backup creation fails with PermissionError."""
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            # Create existing config
+            Path("config.yaml").write_text("existing: config")
+
+            # Mock shutil.copy to raise PermissionError
+            with patch("shutil.copy") as mock_copy:
+                mock_copy.side_effect = PermissionError("Cannot create backup")
+
+                # Wizard inputs:
+                # 0. Config location: 1
+                # 1. Overwrite: y
+                # (Should abort before needing more inputs)
+                inputs = "1\ny\n"
+                result = runner.invoke(cli, ["init"], input=inputs)
+
+                # Should abort with error
+                assert result.exit_code == 1
+                assert "ERROR: Cannot create backup" in result.output
+                assert "Permission denied" in result.output or "Cannot safely overwrite" in result.output
+
+                # Original config should still exist unchanged
+                assert Path("config.yaml").exists()
+                assert Path("config.yaml").read_text() == "existing: config"
+
+    def test_init_backup_disk_full(self, runner, tmp_path):
+        """Test init aborts if backup creation fails due to disk full."""
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            # Create existing config
+            Path("config.yaml").write_text("existing: config")
+
+            # Mock shutil.copy to raise OSError (disk full)
+            with patch("shutil.copy") as mock_copy:
+                mock_copy.side_effect = OSError(28, "No space left on device")
+
+                # Wizard inputs:
+                # 0. Config location: 1
+                # 1. Overwrite: y
+                inputs = "1\ny\n"
+                result = runner.invoke(cli, ["init"], input=inputs)
+
+                # Should abort with error
+                assert result.exit_code == 1
+                assert "ERROR: Cannot create backup" in result.output
+                assert "No space left" in result.output or "Cannot safely overwrite" in result.output
+
+                # Original config should still exist unchanged
+                assert Path("config.yaml").exists()
+                assert Path("config.yaml").read_text() == "existing: config"
+
     def test_init_template_structure(self, runner, tmp_path):
         """Test that init creates valid YAML template."""
         with runner.isolated_filesystem(temp_dir=tmp_path):

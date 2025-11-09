@@ -406,8 +406,23 @@ def init():
         click.echo()
         if click.confirm(f"{config_path} already exists. Overwrite?", default=False):
             backup_path = config_path.with_suffix(".yaml.backup")
-            shutil.copy(config_path, backup_path)
-            click.echo(f"Backup created: {backup_path}")
+            try:
+                shutil.copy(config_path, backup_path)
+                click.echo(f"Backup created: {backup_path}")
+            except PermissionError:
+                click.echo(
+                    f"ERROR: Cannot create backup at {backup_path}\n"
+                    f"Permission denied. Cannot safely overwrite config.",
+                    err=True,
+                )
+                raise click.Abort()
+            except OSError as e:
+                click.echo(
+                    f"ERROR: Cannot create backup: {e}\n"
+                    f"Cannot safely overwrite config without backup.",
+                    err=True,
+                )
+                raise click.Abort()
             click.echo()
         else:
             raise click.Abort()
