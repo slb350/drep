@@ -2,6 +2,10 @@
 
 **D**ocumentation & **R**eview **E**nhancement **P**latform
 
+<div align="center">
+  <img src="https://drep-ai.org/assets/images/drep.png" alt="drep logo" width="200" />
+</div>
+
 [![PyPI version](https://badge.fury.io/py/drep-ai.svg)](https://badge.fury.io/py/drep-ai)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
