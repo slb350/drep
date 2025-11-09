@@ -3,13 +3,23 @@
 from pathlib import Path
 from typing import List, Optional
 
-from pydantic import BaseModel, Field, HttpUrl, SecretStr, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    HttpUrl,
+    SecretStr,
+    field_validator,
+    model_validator,
+)
 
 from drep.constants import BEDROCK_VALID_PREFIXES
 
 
 class GiteaConfig(BaseModel):
     """Gitea platform configuration."""
+
+    model_config = ConfigDict(frozen=True)
 
     url: str = Field(..., description="Gitea base URL (e.g., http://192.168.1.14:3000)")
     token: SecretStr = Field(..., description="Gitea API token")
@@ -18,6 +28,8 @@ class GiteaConfig(BaseModel):
 
 class GitHubConfig(BaseModel):
     """GitHub platform configuration."""
+
+    model_config = ConfigDict(frozen=True)
 
     token: SecretStr = Field(
         ..., description="GitHub Personal Access Token (PAT) or GitHub App token"
@@ -36,6 +48,8 @@ class GitHubConfig(BaseModel):
 class GitLabConfig(BaseModel):
     """GitLab platform configuration."""
 
+    model_config = ConfigDict(frozen=True)
+
     url: Optional[str] = Field(
         default=None,
         description=(
@@ -51,6 +65,8 @@ class GitLabConfig(BaseModel):
 class DocumentationConfig(BaseModel):
     """Documentation analysis settings."""
 
+    model_config = ConfigDict(frozen=True)
+
     enabled: bool = True
     custom_dictionary: List[str] = Field(default_factory=list)
     markdown_checks: bool = Field(
@@ -64,6 +80,8 @@ class DocumentationConfig(BaseModel):
 class CacheConfig(BaseModel):
     """LLM response cache configuration."""
 
+    model_config = ConfigDict(frozen=True)
+
     enabled: bool = Field(default=True, description="Enable response caching")
     directory: Path = Field(
         default=Path.home() / ".cache" / "drep" / "llm",
@@ -75,6 +93,8 @@ class CacheConfig(BaseModel):
 
 class BedrockConfig(BaseModel):
     """AWS Bedrock configuration."""
+
+    model_config = ConfigDict(frozen=True)
 
     region: str = Field(
         default="us-east-1",
@@ -102,6 +122,8 @@ class BedrockConfig(BaseModel):
 
 class LLMConfig(BaseModel):
     """LLM client configuration."""
+
+    model_config = ConfigDict(frozen=True)
 
     enabled: bool = Field(default=False, description="Enable LLM-powered analysis")
     provider: str = Field(
@@ -187,6 +209,8 @@ class Config(BaseModel):
 
     At least one platform (gitea, github, or gitlab) must be configured.
     """
+
+    model_config = ConfigDict(frozen=True)
 
     gitea: Optional[GiteaConfig] = Field(
         default=None, description="Gitea platform configuration (optional)"

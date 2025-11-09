@@ -394,3 +394,55 @@ def test_llm_config_openai_requires_endpoint_model():
             endpoint="http://localhost:11434/v1",
             temperature=0.2,
         )
+
+
+def test_config_models_are_frozen():
+    """Test that all Pydantic config models are immutable (frozen=True)."""
+    from pydantic import ValidationError
+
+    from drep.models.config import Config, DocumentationConfig, GiteaConfig
+
+    # Test GiteaConfig is frozen
+    gitea = GiteaConfig(url="http://localhost:3000", token="test-token", repositories=["owner/*"])
+    with pytest.raises(ValidationError, match="frozen"):
+        gitea.url = "http://example.com"
+
+    # Test DocumentationConfig is frozen
+    docs = DocumentationConfig(enabled=True, custom_dictionary=["word1"])
+    with pytest.raises(ValidationError, match="frozen"):
+        docs.enabled = False
+
+    # Test Config is frozen
+    config = Config(gitea=gitea, documentation=docs, database_url="sqlite:///./test.db")
+    with pytest.raises(ValidationError, match="frozen"):
+        config.database_url = "postgresql://localhost/test"
+
+
+def test_nested_config_models_are_frozen():
+    """Test that nested Pydantic models maintain immutability."""
+    from pydantic import ValidationError
+
+    from drep.models.config import (
+        BedrockConfig,
+        CacheConfig,
+        Config,
+        GiteaConfig,
+        LLMConfig,
+    )
+
+    # Create nested config
+    cache = CacheConfig(enabled=True, ttl_days=30)
+    bedrock = BedrockConfig(region="us-east-1", model="anthropic.claude-sonnet-4-5-20250929-v1:0")
+    llm = LLMConfig(enabled=True, provider="bedrock", bedrock=bedrock, cache=cache)
+    gitea = GiteaConfig(url="http://localhost:3000", token="test-token", repositories=["owner/*"])
+    config = Config(gitea=gitea, llm=llm, database_url="sqlite:///./test.db")
+
+    # Verify all nested models are frozen
+    with pytest.raises(ValidationError, match="frozen"):
+        config.llm.enabled = False
+
+    with pytest.raises(ValidationError, match="frozen"):
+        config.llm.bedrock.region = "us-west-2"
+
+    with pytest.raises(ValidationError, match="frozen"):
+        config.llm.cache.enabled = False
