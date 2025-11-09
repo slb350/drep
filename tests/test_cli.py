@@ -772,101 +772,117 @@ class TestScanCommand:
             assert "Config file not found" in result.output
             assert "drep init" in result.output
 
-    def test_scan_detects_gitea_adapter(self, runner):
+    def test_scan_detects_gitea_adapter(self, runner, tmp_path):
         """Test that scan uses GiteaAdapter when gitea config present."""
         from pydantic import SecretStr
 
         from drep.models.config import Config, GiteaConfig
 
-        # Create Gitea-only config
-        gitea_config = Config(
-            gitea=GiteaConfig(
-                url="http://gitea.example.com",
-                token=SecretStr("gitea_token"),
-                repositories=["owner/*"],
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            # Create config file so find_config_file succeeds
+            Path("config.yaml").write_text("gitea: {url: 'http://test', token: 'test'}")
+
+            # Create Gitea-only config
+            gitea_config = Config(
+                gitea=GiteaConfig(
+                    url="http://gitea.example.com",
+                    token=SecretStr("gitea_token"),
+                    repositories=["owner/*"],
+                )
             )
-        )
 
-        with patch("drep.cli.load_config") as mock_load:
-            with patch("drep.cli._run_scan", new_callable=AsyncMock) as mock_run:
-                mock_load.return_value = gitea_config
+            with patch("drep.cli.load_config") as mock_load:
+                with patch("drep.cli._run_scan", new_callable=AsyncMock) as mock_run:
+                    mock_load.return_value = gitea_config
 
-                result = runner.invoke(cli, ["scan", "owner/repo"])
+                    result = runner.invoke(cli, ["scan", "owner/repo"])
 
-                # Verify _run_scan was called (command accepted)
-                assert result.exit_code == 0
-                mock_run.assert_called_once()
+                    # Verify _run_scan was called (command accepted)
+                    assert result.exit_code == 0
+                    mock_run.assert_called_once()
 
-    def test_scan_detects_github_adapter(self, runner):
+    def test_scan_detects_github_adapter(self, runner, tmp_path):
         """Test that scan uses GitHubAdapter when github config present."""
         from pydantic import SecretStr
 
         from drep.models.config import Config, GitHubConfig
 
-        # Create GitHub-only config
-        github_config = Config(
-            github=GitHubConfig(token=SecretStr("ghp_test"), repositories=["owner/*"])
-        )
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            # Create config file so find_config_file succeeds
+            Path("config.yaml").write_text("github: {token: 'test', repositories: ['owner/*']}")
 
-        with patch("drep.cli.load_config") as mock_load:
-            with patch("drep.cli._run_scan", new_callable=AsyncMock) as mock_run:
-                mock_load.return_value = github_config
+            # Create GitHub-only config
+            github_config = Config(
+                github=GitHubConfig(token=SecretStr("ghp_test"), repositories=["owner/*"])
+            )
 
-                result = runner.invoke(cli, ["scan", "owner/repo"])
+            with patch("drep.cli.load_config") as mock_load:
+                with patch("drep.cli._run_scan", new_callable=AsyncMock) as mock_run:
+                    mock_load.return_value = github_config
 
-                # Verify _run_scan was called (command accepted)
-                assert result.exit_code == 0
-                mock_run.assert_called_once()
+                    result = runner.invoke(cli, ["scan", "owner/repo"])
 
-    def test_scan_prefers_gitea_when_both_configured(self, runner):
+                    # Verify _run_scan was called (command accepted)
+                    assert result.exit_code == 0
+                    mock_run.assert_called_once()
+
+    def test_scan_prefers_gitea_when_both_configured(self, runner, tmp_path):
         """Test that scan prefers GiteaAdapter when both platforms configured."""
         from pydantic import SecretStr
 
         from drep.models.config import Config, GiteaConfig, GitHubConfig
 
-        # Create config with both platforms
-        both_config = Config(
-            gitea=GiteaConfig(
-                url="http://gitea.example.com",
-                token=SecretStr("gitea_token"),
-                repositories=["owner/*"],
-            ),
-            github=GitHubConfig(token=SecretStr("ghp_test"), repositories=["owner/*"]),
-        )
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            # Create config file so find_config_file succeeds
+            Path("config.yaml").write_text("gitea: {url: 'http://test', token: 'test'}")
 
-        with patch("drep.cli.load_config") as mock_load:
-            with patch("drep.cli._run_scan", new_callable=AsyncMock) as mock_run:
-                mock_load.return_value = both_config
+            # Create config with both platforms
+            both_config = Config(
+                gitea=GiteaConfig(
+                    url="http://gitea.example.com",
+                    token=SecretStr("gitea_token"),
+                    repositories=["owner/*"],
+                ),
+                github=GitHubConfig(token=SecretStr("ghp_test"), repositories=["owner/*"]),
+            )
 
-                result = runner.invoke(cli, ["scan", "owner/repo"])
+            with patch("drep.cli.load_config") as mock_load:
+                with patch("drep.cli._run_scan", new_callable=AsyncMock) as mock_run:
+                    mock_load.return_value = both_config
 
-                # Verify _run_scan was called
-                assert result.exit_code == 0
-                mock_run.assert_called_once()
+                    result = runner.invoke(cli, ["scan", "owner/repo"])
 
-    def test_scan_rejects_no_platform_config(self, runner):
+                    # Verify _run_scan was called
+                    assert result.exit_code == 0
+                    mock_run.assert_called_once()
+
+    def test_scan_rejects_no_platform_config(self, runner, tmp_path):
         """Test that scan rejects config with neither Gitea nor GitHub."""
         # This test verifies the error handling if somehow we get a config without platforms
         # (shouldn't happen in practice - Config validator prevents it, but test the CLI guard)
 
-        with patch("drep.cli.load_config") as mock_load:
-            # Return a mock config object with no platforms
-            # (bypasses Pydantic validation since we're mocking load_config)
-            class MockConfig:
-                gitea = None
-                github = None
-                gitlab = None
-                database_url = "sqlite:///./test.db"
-                documentation = None
-                llm = None
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            # Create config file so find_config_file succeeds
+            Path("config.yaml").write_text("database_url: 'sqlite:///./test.db'")
 
-            mock_load.return_value = MockConfig()
+            with patch("drep.cli.load_config") as mock_load:
+                # Return a mock config object with no platforms
+                # (bypasses Pydantic validation since we're mocking load_config)
+                class MockConfig:
+                    gitea = None
+                    github = None
+                    gitlab = None
+                    database_url = "sqlite:///./test.db"
+                    documentation = None
+                    llm = None
 
-            result = runner.invoke(cli, ["scan", "owner/repo"])
+                mock_load.return_value = MockConfig()
 
-            # Should show error and abort
-            assert result.exit_code == 1
-            assert "No platform configured" in result.output
+                result = runner.invoke(cli, ["scan", "owner/repo"])
+
+                # Should show error and abort
+                assert result.exit_code == 1
+                assert "No platform configured" in result.output
 
 
 class TestScanWorkflow:
