@@ -485,6 +485,60 @@ class TestInitCommand:
                 assert "ERROR: Configuration validation failed:" in result.output
                 assert "OpenAI-compatible provider requires 'endpoint' field" in result.output
 
+    def test_init_handles_pydantic_validation_error(self, runner, tmp_path):
+        """Test init formats Pydantic ValidationError correctly."""
+        from pydantic_core import ValidationError
+        from unittest.mock import patch
+
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            # Mock load_config to raise ValidationError with multiple fields
+            with patch("drep.cli.load_config") as mock_load:
+                mock_load.side_effect = ValidationError.from_exception_data(
+                    "Config",
+                    [
+                        {
+                            "type": "missing",
+                            "loc": ("github", "token"),
+                            "msg": "Field required",
+                            "input": {},
+                        },
+                        {
+                            "type": "string_type",
+                            "loc": ("llm", "endpoint"),
+                            "msg": "Input should be a valid string",
+                            "input": 123,
+                        },
+                    ],
+                )
+                inputs = "1\ngithub\nn\n\nn\ny\nn\nn\nn\nn\n"
+                result = runner.invoke(cli, ["init"], input=inputs)
+
+                assert result.exit_code == 1
+                assert "ERROR: Configuration validation failed:" in result.output
+                # Verify field paths are formatted correctly
+                assert "github -> token" in result.output
+                assert "llm -> endpoint" in result.output
+                # Verify helpful guidance
+                assert "Please re-run 'drep init' or fix manually" in result.output
+
+    def test_init_unexpected_validation_error_propagates(self, runner, tmp_path):
+        """Test unexpected validation exceptions propagate with stack trace."""
+        from unittest.mock import patch
+
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            # Mock load_config to raise an unexpected exception
+            with patch("drep.cli.load_config") as mock_load:
+                mock_load.side_effect = RuntimeError("Unexpected error in config parsing")
+                inputs = "1\ngitea\n\n\nn\ny\nn\nn\nn\nn\n"
+                result = runner.invoke(cli, ["init"], input=inputs)
+
+                # Unexpected exceptions should propagate (not exit cleanly)
+                assert result.exit_code == 1
+                # Should have exception information in result
+                assert result.exception is not None
+                assert isinstance(result.exception, RuntimeError)
+                assert "Unexpected error in config parsing" in str(result.exception)
+
 
 class TestScanCommand:
     """Tests for drep scan command."""

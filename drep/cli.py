@@ -349,10 +349,7 @@ def _write_and_validate_config(config_dict, config_path):
         click.echo(f"\nConfig file: {config_path}", err=True)
         click.echo("Please re-run 'drep init' or fix manually.", err=True)
         raise click.Abort()
-    except Exception as e:
-        click.echo(f"ERROR: Unexpected validation error: {e}", err=True)
-        click.echo("Please report this issue.", err=True)
-        raise click.Abort()
+    # DO NOT catch Exception - let unexpected errors propagate with stack trace
 
 
 @cli.command()
