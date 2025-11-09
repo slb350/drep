@@ -1,7 +1,7 @@
 # Drep Development Roadmap
 
-**Last Updated:** 2025-11-07
-**Current Version:** v0.1.0
+**Last Updated:** 2025-11-09
+**Current Version:** v1.1.0
 
 This roadmap outlines planned improvements for drep, organized by priority and effort. Items are sequenced from quick wins (easy, high-impact) to complex long-term projects.
 
@@ -455,7 +455,98 @@ body = {
 
 ---
 
-### 3.4 Anthropic Direct LLM Provider
+### 3.4 Complete GitLab Adapter
+**Effort:** Large | **Impact:** High | **Status:** ✅ **COMPLETE**
+
+Full GitLab API integration for GitLab.com and self-hosted instances.
+
+**Tasks:**
+- [x] Implement GitLabAdapter in `drep/adapters/gitlab.py` (1027 lines)
+- [x] Use GitLab REST API v4 directly (httpx)
+- [x] Implement all BaseAdapter methods (8/8 complete)
+- [x] Add GitLab authentication (PRIVATE-TOKEN header)
+- [x] Handle GitLab API rate limiting (429 detection)
+- [x] Add configuration in `config.yaml` (GitLabConfig model)
+- [x] Write comprehensive tests (35 unit tests, 100% pass)
+- [x] Update documentation (README.md, technical-design.md)
+- [x] CLI integration (scan & review commands)
+
+**Implementation Highlights:**
+- URL-encoded project paths (owner%2Frepo)
+- PRIVATE-TOKEN authentication (not Bearer)
+- Discussions with position objects for inline comments
+- Base64-encoded file content support
+- Diff reconstruction from JSON array
+- Self-hosted GitLab support
+
+---
+
+### 3.5 Interactive Configuration Wizard
+**Effort:** Large | **Impact:** High | **Status:** ✅ **COMPLETE**
+
+**Completed:** 2025-11-09 | **Version:** v1.1.0 | **PR:** #9
+
+Comprehensive `drep init` wizard for guided configuration setup with input validation.
+
+**Completed Tasks:**
+- [x] Created interactive CLI wizard with step-by-step guidance
+- [x] Platform selection (Gitea, GitHub, GitLab)
+- [x] Enterprise server detection and configuration
+- [x] Repository pattern configuration with wildcards (`owner/*`)
+- [x] LLM provider selection (OpenAI-compatible, Bedrock, Anthropic)
+- [x] Documentation analysis settings
+- [x] Custom database URL configuration
+- [x] Advanced LLM settings (temperature, max tokens, rate limits)
+- [x] Environment variable verification and guidance
+
+**Input Validators (5 custom Click types):**
+- `URLType` - HTTP/HTTPS URL validation with scheme checking
+- `RepositoryListType` - Repository pattern validation with deduplication
+- `BedrockModelType` - AWS Bedrock model ID validation
+- `DatabaseURLType` - SQLAlchemy database URL validation
+- `NonEmptyString` - Required field validation
+
+**Strongly-Typed Wizard Models (7 frozen dataclasses):**
+- `GitHubPlatformData` - GitHub configuration with optional enterprise URL
+- `GiteaPlatformData` - Gitea configuration
+- `GitLabPlatformData` - GitLab configuration
+- `OpenAILLMData` - OpenAI-compatible LLM configuration
+- `BedrockLLMData` - AWS Bedrock LLM configuration
+- `BedrockRegionModel` - Nested Bedrock region/model settings
+- `AnthropicLLMData` - Anthropic API configuration
+- `DocumentationConfigData` - Documentation analysis settings
+
+**Config Discovery:**
+- Current directory: `./config.yaml` (project-specific)
+- User config directory: `~/Library/Application Support/drep/config.yaml` (system-wide)
+
+**Testing & Security (13 new tests):**
+- **Finally block tests (3)**: Verify cleanup errors don't mask scan errors
+- **Token leakage tests (5)**: Verify tokens never leak to logs/stdout
+- **Integration tests (5)**: End-to-end workflow validation (wizard → load → scan)
+
+**Deliverables:**
+- `drep/cli.py` - Enhanced with comprehensive wizard (823 lines added)
+- `drep/cli_validators.py` - 5 custom Click validators (256 lines)
+- `drep/models/wizard.py` - 7 strongly-typed models (540 lines)
+- `drep/constants.py` - Bedrock model prefixes
+- 13 new tests, 795 total tests passing
+- **Commits:** Multiple in PR #9
+
+**Benefits:**
+- Zero manual YAML editing required
+- Real-time input validation prevents config errors
+- Security: Environment variable placeholders (no token leakage)
+- Guided setup reduces learning curve
+- Type safety prevents runtime errors
+
+---
+
+## 🌟 Phase 4: Feature Expansion (Sprint 11-14)
+
+Major feature additions for broader applicability. Anthropic Direct provider (moved from Phase 3.4) is first priority.
+
+### 4.1 Anthropic Direct LLM Provider
 **Effort:** Small | **Impact:** High | **Status:** Not Started
 
 Add Anthropic API as direct LLM provider for Claude models.
@@ -573,37 +664,7 @@ messages = [
 
 ---
 
-### 3.5 Complete GitLab Adapter
-**Effort:** Large | **Impact:** High | **Status:** ✅ **COMPLETE**
-
-Full GitLab API integration for GitLab.com and self-hosted instances.
-
-**Tasks:**
-- [x] Implement GitLabAdapter in `drep/adapters/gitlab.py` (1027 lines)
-- [x] Use GitLab REST API v4 directly (httpx)
-- [x] Implement all BaseAdapter methods (8/8 complete)
-- [x] Add GitLab authentication (PRIVATE-TOKEN header)
-- [x] Handle GitLab API rate limiting (429 detection)
-- [x] Add configuration in `config.yaml` (GitLabConfig model)
-- [x] Write comprehensive tests (35 unit tests, 100% pass)
-- [x] Update documentation (README.md, technical-design.md)
-- [x] CLI integration (scan & review commands)
-
-**Implementation Highlights:**
-- URL-encoded project paths (owner%2Frepo)
-- PRIVATE-TOKEN authentication (not Bearer)
-- Discussions with position objects for inline comments
-- Base64-encoded file content support
-- Diff reconstruction from JSON array
-- Self-hosted GitLab support
-
----
-
-## 🌟 Phase 4: Feature Expansion (Sprint 9-12)
-
-Major feature additions for broader applicability.
-
-### 4.1 Multi-Language Support
+### 4.2 Multi-Language Support
 **Effort:** Large | **Impact:** High | **Status:** Not Started
 
 Support JavaScript, TypeScript, Go, Rust beyond Python.
@@ -628,7 +689,7 @@ Support JavaScript, TypeScript, Go, Rust beyond Python.
 
 ---
 
-### 4.2 Web UI Dashboard
+### 4.3 Web UI Dashboard
 **Effort:** Large | **Impact:** Medium | **Status:** Not Started
 
 Web interface for viewing findings and metrics.
@@ -789,7 +850,7 @@ Track these metrics to measure roadmap progress:
 - [ ] LLM cost per scan: <$5 with caching
 
 ### Feature Completeness
-- [ ] 3+ platform adapters (Gitea ✅, GitHub, GitLab)
+- [x] 3+ platform adapters (Gitea ✅, GitHub ✅, GitLab ✅)
 - [ ] 3+ language support (Python ✅, JavaScript, Go)
 - [ ] Web UI dashboard available
 
@@ -806,18 +867,19 @@ Track these metrics to measure roadmap progress:
 |-------|----------|----------|--------|--------------|
 | Phase 1: Quick Wins | 2 sprints | Sprint 1-2 | ✅ Complete | Security audit, BaseAdapter, constants |
 | Phase 2: Quality & Testing | 2 sprints | Sprint 3-4 | ✅ Complete | E2E tests, API docs, DI refactor |
-| Phase 3: Platform & LLM Expansion | 4 sprints | Sprint 5-8 | 🔄 In Progress | GitHub ✅, Bedrock ✅, GitLab ✅, Anthropic |
-| Phase 4: Feature Expansion | 4 sprints | Sprint 9-12 | Not Started | Multi-language, Web UI |
+| Phase 3: Platform & LLM Expansion | 6 sprints | Sprint 5-10 | ✅ Complete | GitHub ✅, Bedrock ✅, GitLab ✅, Wizard ✅ |
+| Phase 4: Feature Expansion | 4 sprints | Sprint 11-14 | Not Started | Multi-language, Web UI, Anthropic Direct |
 | Phase 5: Advanced Features | Ongoing | Backlog | Not Started | Performance, optimization |
 
 **Sprint length:** 2 weeks
 
-**Phase 3 Progress:**
+**Phase 3 Progress (COMPLETE - 2025-11-09):**
 - 3.1 Complete GitHub Adapter: ✅ Complete (58 unit + 6 integration tests)
 - 3.2 GitHub CLI Integration: ✅ Complete (2025-11-08)
 - 3.3 AWS Bedrock Provider: ✅ Complete (2025-11-08)
-- 3.4 Anthropic Direct Provider: Not Started (3-4 hours)
-- 3.5 Complete GitLab Adapter: ✅ Complete (2025-11-08, 35 unit tests)
+- 3.4 Complete GitLab Adapter: ✅ Complete (2025-11-08, 35 unit tests)
+- 3.5 Interactive Configuration Wizard: ✅ Complete (2025-11-09, v1.1.0, 13 tests)
+- **Note:** Anthropic Direct Provider moved to Phase 4.1 (estimated 3-4 hours)
 
 ---
 
@@ -826,14 +888,14 @@ Track these metrics to measure roadmap progress:
 Want to help with the roadmap? See [CONTRIBUTING.md](../CONTRIBUTING.md) for guidelines.
 
 **Good first issues:**
-- Extract configuration constants (Phase 1.3)
+- Extract configuration constants (Phase 1.3) ✅ Complete
 - Add performance benchmarks (Phase 5.2)
-- Write additional E2E tests (Phase 2.1)
+- Write additional E2E tests (Phase 2.1) ✅ Complete
 
 **Looking for:**
-- Frontend developers for Web UI (Phase 4.2)
-- Language experts for multi-language support (Phase 4.1)
-- Platform experts for GitHub/GitLab adapters (Phase 3)
+- Anthropic API integration (Phase 4.1, ~3-4 hours) - First priority!
+- Language experts for multi-language support (Phase 4.2)
+- Frontend developers for Web UI (Phase 4.3)
 
 ---
 
