@@ -44,6 +44,7 @@ class TestInitCommand:
         # Run in temp directory
         with runner.isolated_filesystem(temp_dir=tmp_path):
             # Wizard inputs:
+            # 0. Config location: 1 (current directory)
             # 1. Platform: gitea
             # 2. Gitea URL: (default)
             # 3. Repositories: (default)
@@ -53,7 +54,7 @@ class TestInitCommand:
             # 7. Custom dictionary: n
             # 8. Custom DB: n
             # 9. Check env vars: n
-            inputs = "gitea\n\n\nn\ny\nn\nn\nn\nn\n"
+            inputs = "1\ngitea\n\n\nn\ny\nn\nn\nn\nn\n"
             result = runner.invoke(cli, ["init"], input=inputs)
 
             assert result.exit_code == 0
@@ -81,7 +82,7 @@ class TestInitCommand:
             # 7. Custom dictionary: n
             # 8. Custom DB: n
             # 9. Check env vars: n
-            inputs = "github\nn\n\nn\ny\nn\nn\nn\nn\n"
+            inputs = "1\ngithub\nn\n\nn\ny\nn\nn\nn\nn\n"
             result = runner.invoke(cli, ["init"], input=inputs)
 
             assert result.exit_code == 0
@@ -102,7 +103,7 @@ class TestInitCommand:
             # 7. Custom dictionary: n
             # 8. Custom DB: n
             # 9. Check env vars: n
-            inputs = "gitlab\nn\n\nn\ny\nn\nn\nn\nn\n"
+            inputs = "1\ngitlab\nn\n\nn\ny\nn\nn\nn\nn\n"
             result = runner.invoke(cli, ["init"], input=inputs)
 
             assert result.exit_code == 0
@@ -129,7 +130,7 @@ class TestInitCommand:
             # 13. Custom dictionary: n
             # 14. Custom DB: n
             # 15. Check env vars: n
-            inputs = "gitea\n\n\ny\nopenai-compatible\n\n\nn\nn\nn\ny\nn\nn\nn\nn\n"
+            inputs = "1\ngitea\n\n\ny\nopenai-compatible\n\n\nn\nn\nn\ny\nn\nn\nn\nn\n"
             result = runner.invoke(cli, ["init"], input=inputs)
 
             assert result.exit_code == 0
@@ -158,7 +159,7 @@ class TestInitCommand:
             # 12. Custom dictionary: n
             # 13. Custom DB: n
             # 14. Check env vars: n
-            inputs = "github\nn\n\ny\nbedrock\n\n\nn\nn\ny\nn\nn\nn\nn\n"
+            inputs = "1\ngithub\nn\n\ny\nbedrock\n\n\nn\nn\ny\nn\nn\nn\nn\n"
             result = runner.invoke(cli, ["init"], input=inputs)
 
             assert result.exit_code == 0
@@ -186,7 +187,7 @@ class TestInitCommand:
             # 11. Custom dictionary: n
             # 12. Custom DB: n
             # 13. Check env vars: n
-            inputs = "gitea\n\n\ny\nanthropic\n\nn\nn\ny\nn\nn\nn\nn\n"
+            inputs = "1\ngitea\n\n\ny\nanthropic\n\nn\nn\ny\nn\nn\nn\nn\n"
             result = runner.invoke(cli, ["init"], input=inputs)
 
             assert result.exit_code == 0
@@ -202,7 +203,9 @@ class TestInitCommand:
             Path("config.yaml").write_text("existing: config")
 
             # Run init and abort
-            result = runner.invoke(cli, ["init"], input="n\n")
+            # 0. Config location: 1 (current directory)
+            # 1. Overwrite: n (abort)
+            result = runner.invoke(cli, ["init"], input="1\nn\n")
 
             assert result.exit_code == 1
             assert "already exists" in result.output
@@ -227,7 +230,7 @@ class TestInitCommand:
             # 8. Custom dictionary: n
             # 9. Custom DB: n
             # 10. Check env vars: n
-            inputs = "y\ngitea\n\n\nn\ny\nn\nn\nn\nn\n"
+            inputs = "1\ny\ngitea\n\n\nn\ny\nn\nn\nn\nn\n"
             result = runner.invoke(cli, ["init"], input=inputs)
 
             assert result.exit_code == 0
@@ -244,7 +247,7 @@ class TestInitCommand:
         with runner.isolated_filesystem(temp_dir=tmp_path):
             # Wizard inputs:
             # 1-9: same as minimal test
-            inputs = "gitea\n\n\nn\ny\nn\nn\nn\nn\n"
+            inputs = "1\ngitea\n\n\nn\ny\nn\nn\nn\nn\n"
             result = runner.invoke(cli, ["init"], input=inputs)
 
             assert result.exit_code == 0
@@ -271,7 +274,7 @@ class TestInitCommand:
             # 2. Gitea URL: (default)
             # 3. Repositories: owner/repo1, owner/repo2
             # 4-9: same as minimal test
-            inputs = "gitea\n\nowner/repo1, owner/repo2\nn\ny\nn\nn\nn\nn\n"
+            inputs = "1\ngitea\n\nowner/repo1, owner/repo2\nn\ny\nn\nn\nn\nn\n"
             result = runner.invoke(cli, ["init"], input=inputs)
 
             assert result.exit_code == 0
@@ -293,7 +296,7 @@ class TestInitCommand:
             # 8. Words: foo,bar,baz
             # 9. Custom DB: n
             # 10. Check env vars: n
-            inputs = "gitea\n\n\nn\ny\ny\ny\nfoo,bar,baz\nn\nn\n"
+            inputs = "1\ngitea\n\n\nn\ny\ny\ny\nfoo,bar,baz\nn\nn\n"
             result = runner.invoke(cli, ["init"], input=inputs)
 
             assert result.exit_code == 0
@@ -309,7 +312,7 @@ class TestInitCommand:
         with runner.isolated_filesystem(temp_dir=tmp_path):
             # Wizard inputs:
             # 1-9: same as minimal test
-            inputs = "gitea\n\n\nn\ny\nn\nn\nn\nn\n"
+            inputs = "1\ngitea\n\n\nn\ny\nn\nn\nn\nn\n"
             result = runner.invoke(cli, ["init"], input=inputs)
 
             assert result.exit_code == 0
@@ -325,7 +328,7 @@ class TestInitCommand:
             # 3. API URL: https://github.corp.example.com/api/v3
             # 4. Repositories: (default)
             # 5-10: minimal config
-            inputs = "github\ny\nhttps://github.corp.example.com/api/v3\n\nn\ny\nn\nn\nn\nn\n"
+            inputs = "1\ngithub\ny\nhttps://github.corp.example.com/api/v3\n\nn\ny\nn\nn\nn\nn\n"
             result = runner.invoke(cli, ["init"], input=inputs)
 
             assert result.exit_code == 0
@@ -342,7 +345,7 @@ class TestInitCommand:
             # 3. GitLab URL: https://gitlab.internal.corp.com
             # 4. Repositories: (default)
             # 5-10: minimal config
-            inputs = "gitlab\ny\nhttps://gitlab.internal.corp.com\n\nn\ny\nn\nn\nn\nn\n"
+            inputs = "1\ngitlab\ny\nhttps://gitlab.internal.corp.com\n\nn\ny\nn\nn\nn\nn\n"
             result = runner.invoke(cli, ["init"], input=inputs)
 
             assert result.exit_code == 0
@@ -361,7 +364,7 @@ class TestInitCommand:
             # 8: model (default)
             # 9: api_key=y
             # 10-15: rest minimal
-            inputs = "gitea\n\n\ny\nopenai-compatible\n\n\ny\nn\nn\ny\nn\nn\nn\nn\n"
+            inputs = "1\ngitea\n\n\ny\nopenai-compatible\n\n\ny\nn\nn\ny\nn\nn\nn\nn\n"
             result = runner.invoke(cli, ["init"], input=inputs)
 
             assert result.exit_code == 0
@@ -375,13 +378,14 @@ class TestInitCommand:
         """Test advanced LLM configuration."""
         with runner.isolated_filesystem(temp_dir=tmp_path):
             # Wizard inputs with advanced settings
+            # 0. Config location: 1 (current directory)
             # 1-8: openai setup
             # 9: advanced=y
             # 10-15: custom advanced values
             # 16: cache=n
             # 17-21: rest minimal
             inputs = (
-                "gitea\n\n\ny\nopenai-compatible\n\n\nn\ny\n0.7\n4096\n120\n5\n10\n120\nn\n"
+                "1\ngitea\n\n\ny\nopenai-compatible\n\n\nn\ny\n0.7\n4096\n120\n5\n10\n120\nn\n"
                 "y\nn\nn\nn\nn\n"
             )
             result = runner.invoke(cli, ["init"], input=inputs)
@@ -403,7 +407,7 @@ class TestInitCommand:
             # 10: cache=y
             # 11-13: cache settings
             # 14-18: rest minimal
-            inputs = "gitea\n\n\ny\nopenai-compatible\n\n\nn\nn\ny\ny\n7\n5.0\ny\nn\nn\nn\nn\n"
+            inputs = "1\ngitea\n\n\ny\nopenai-compatible\n\n\nn\nn\ny\ny\n7\n5.0\ny\nn\nn\nn\nn\n"
             result = runner.invoke(cli, ["init"], input=inputs)
 
             assert result.exit_code == 0
@@ -423,7 +427,7 @@ class TestInitCommand:
                 mock_load.side_effect = ValueError(
                     "OpenAI-compatible provider requires 'endpoint' field"
                 )
-                inputs = "gitea\n\n\nn\ny\nn\nn\nn\nn\n"
+                inputs = "1\ngitea\n\n\nn\ny\nn\nn\nn\nn\n"
                 result = runner.invoke(cli, ["init"], input=inputs)
 
                 assert result.exit_code == 1
@@ -651,6 +655,9 @@ class TestScanWorkflow:
 
         # Use isolated filesystem for test
         with runner.isolated_filesystem(temp_dir=tmp_path):
+            # Create test config file for discovery
+            Path("test.yaml").write_text("gitea:\n  url: http://test\n  token: test-token")
+
             # Mock creating a clone - this will happen during clone_from
             # We need to create the file AFTER clone_from is called
             def mock_clone_from(url, path, branch, env):
@@ -752,6 +759,9 @@ class TestScanWorkflow:
         mock_repo_class.clone_from.side_effect = mock_clone_from
 
         with runner.isolated_filesystem(temp_dir=tmp_path):
+            # Create test config file for discovery
+            Path("test.yaml").write_text("gitea:\n  url: http://test\n  token: test-token")
+
             result = runner.invoke(cli, ["scan", "owner/repo", "--config", "test.yaml"])
 
             # Verify scan succeeded
@@ -835,6 +845,9 @@ class TestScanWorkflow:
         mock_repo_class.clone_from.side_effect = mock_clone_from
 
         with runner.isolated_filesystem(temp_dir=tmp_path):
+            # Create test config file for discovery
+            Path("test.yaml").write_text("gitea:\n  url: http://test\n  token: test-token")
+
             result = runner.invoke(cli, ["scan", "owner/repo", "--config", "test.yaml"])
 
             # Verify scan succeeded
@@ -914,6 +927,9 @@ class TestScanWorkflow:
         mock_repo_class.clone_from.side_effect = mock_clone_from
 
         with runner.isolated_filesystem(temp_dir=tmp_path):
+            # Create test config file for discovery
+            Path("test.yaml").write_text("gitea:\n  url: http://test\n  token: test-token")
+
             result = runner.invoke(cli, ["scan", "owner/repo", "--config", "test.yaml"])
 
             # Verify scan succeeded
@@ -1003,6 +1019,9 @@ class TestScanWorkflow:
         mock_rmtree.side_effect = PermissionError("Permission denied")
 
         with runner.isolated_filesystem(temp_dir=tmp_path):
+            # Create test config file for discovery
+            Path("test.yaml").write_text("gitea:\n  url: http://test\n  token: test-token")
+
             result = runner.invoke(cli, ["scan", "owner/repo", "--config", "test.yaml"])
 
             # Verify scan completed (cleanup failure doesn't crash)

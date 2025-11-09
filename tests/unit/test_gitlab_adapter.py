@@ -467,9 +467,9 @@ async def test_get_pr_diff_missing_old_path():
     # Mock diff missing 'old_path'
     diffs = [{"new_path": "file.py", "diff": "@@ -1 +1 @@\n"}]
 
-    respx.get(
-        "https://gitlab.com/api/v4/projects/owner%2Frepo/merge_requests/42/diffs"
-    ).mock(return_value=httpx.Response(200, json=diffs))
+    respx.get("https://gitlab.com/api/v4/projects/owner%2Frepo/merge_requests/42/diffs").mock(
+        return_value=httpx.Response(200, json=diffs)
+    )
 
     adapter = GitLabAdapter("glpat_token")
 
@@ -489,9 +489,9 @@ async def test_get_pr_diff_missing_new_path():
     # Mock diff missing 'new_path'
     diffs = [{"old_path": "file.py", "diff": "@@ -1 +1 @@\n"}]
 
-    respx.get(
-        "https://gitlab.com/api/v4/projects/owner%2Frepo/merge_requests/42/diffs"
-    ).mock(return_value=httpx.Response(200, json=diffs))
+    respx.get("https://gitlab.com/api/v4/projects/owner%2Frepo/merge_requests/42/diffs").mock(
+        return_value=httpx.Response(200, json=diffs)
+    )
 
     adapter = GitLabAdapter("glpat_token")
 
@@ -511,9 +511,9 @@ async def test_get_pr_diff_invalid_object_type():
     # Mock diff with string instead of dict
     diffs = ["invalid string object"]
 
-    respx.get(
-        "https://gitlab.com/api/v4/projects/owner%2Frepo/merge_requests/42/diffs"
-    ).mock(return_value=httpx.Response(200, json=diffs))
+    respx.get("https://gitlab.com/api/v4/projects/owner%2Frepo/merge_requests/42/diffs").mock(
+        return_value=httpx.Response(200, json=diffs)
+    )
 
     adapter = GitLabAdapter("glpat_token")
 

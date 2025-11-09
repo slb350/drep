@@ -20,7 +20,7 @@ from drep.cli_validators import (
     RepositoryListType,
     URLType,
 )
-from drep.config import load_config
+from drep.config import find_config_file, get_user_config_dir, load_config
 from drep.core.issue_manager import IssueManager
 from drep.core.scanner import RepositoryScanner
 from drep.db import init_database
@@ -365,16 +365,46 @@ def init():
     3. Documentation analysis settings
     4. Database configuration
 
-    Creates config.yaml in the current directory. Prompts before overwriting
+    Creates config.yaml in either the current directory (project-specific)
+    or user config directory (system-wide). Prompts before overwriting
     if the file already exists. Validates configuration structure after creation.
 
     Raises:
         click.Abort: If configuration validation fails or file cannot be written
     """
-    config_path = Path("config.yaml")
+    click.echo("=" * 60)
+    click.echo("Welcome to drep configuration setup!")
+    click.echo("=" * 60)
+    click.echo()
 
+    # Prompt for config location
+    click.echo("Where should the configuration be created?")
+    click.echo()
+    click.echo("  1. Current directory (./config.yaml)")
+    click.echo("     Use for project-specific configuration")
+    click.echo()
+    user_config_dir = get_user_config_dir()
+    click.echo(f"  2. User config directory ({user_config_dir}/config.yaml)")
+    click.echo("     Use for system-wide configuration (recommended for pip/brew install)")
+    click.echo()
+
+    location_choice = click.prompt(
+        "Choose location",
+        type=click.Choice(["1", "2"], case_sensitive=False),
+        default="2",
+    )
+
+    if location_choice == "1":
+        config_path = Path("config.yaml")
+    else:
+        config_path = user_config_dir / "config.yaml"
+        # Create directory if it doesn't exist
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # Check if config already exists
     if config_path.exists():
-        if click.confirm("config.yaml already exists. Overwrite?", default=False):
+        click.echo()
+        if click.confirm(f"{config_path} already exists. Overwrite?", default=False):
             backup_path = config_path.with_suffix(".yaml.backup")
             shutil.copy(config_path, backup_path)
             click.echo(f"Backup created: {backup_path}")
@@ -382,9 +412,6 @@ def init():
         else:
             raise click.Abort()
 
-    click.echo("=" * 60)
-    click.echo("Welcome to drep configuration setup!")
-    click.echo("=" * 60)
     click.echo()
 
     platform_dict, env_var, platform_name = _collect_platform_config()
@@ -405,6 +432,7 @@ def init():
     click.echo("=" * 60)
     click.echo("✓ Configuration created successfully!")
     click.echo("=" * 60)
+    click.echo(f"\nConfig location: {config_path}")
     click.echo("\nNext steps:")
     click.echo(f"1. Set the {env_var} environment variable:")
     click.echo(f"   export {env_var}='your-api-token-here'")
@@ -449,7 +477,7 @@ def init():
 
 @cli.command()
 @click.argument("repository")
-@click.option("--config", default="config.yaml", help="Config file path")
+@click.option("--config", default=None, help="Config file path (optional, auto-discovers)")
 @click.option("--show-metrics/--no-metrics", default=False, help="Show LLM metrics after scan")
 @click.option("--show-progress/--no-progress", default=True, help="Show progress during scan")
 def scan(repository, config, show_metrics, show_progress):
@@ -461,17 +489,24 @@ def scan(repository, config, show_metrics, show_progress):
 
     owner, repo_name = repository.split("/", 1)
 
+    # Discover config file
+    config_path = find_config_file(config)
+    if not config_path.exists():
+        click.echo(f"Config file not found: {config_path}", err=True)
+        click.echo("Run 'drep init' to create a config file.", err=True)
+        return
+
     click.echo(f"Scanning {owner}/{repo_name}...")
 
     try:
         # Run async scan
-        asyncio.run(_run_scan(owner, repo_name, config, show_metrics, show_progress))
+        asyncio.run(_run_scan(owner, repo_name, str(config_path), show_metrics, show_progress))
         click.echo("✓ Scan complete")
     except click.Abort:
         # Re-raise to let Click handle the abort (already displayed error message)
         raise
     except FileNotFoundError:
-        click.echo(f"Config file not found: {config}", err=True)
+        click.echo(f"Config file not found: {config_path}", err=True)
         click.echo("Run 'drep init' to create a config file.", err=True)
     except Exception as e:
         click.echo(f"Error during scan: {e}", err=True)
@@ -766,7 +801,7 @@ fi
 @cli.command()
 @click.argument("repository")
 @click.argument("pr_number", type=int)
-@click.option("--config", default="config.yaml", help="Config file path")
+@click.option("--config", default=None, help="Config file path (optional, auto-discovers)")
 @click.option("--post/--no-post", default=True, help="Post comments to PR (default: yes)")
 def review(repository, pr_number, config, post):
     """Review a pull request with LLM analysis.
@@ -781,14 +816,21 @@ def review(repository, pr_number, config, post):
 
     owner, repo_name = repository.split("/", 1)
 
+    # Discover config file
+    config_path = find_config_file(config)
+    if not config_path.exists():
+        click.echo(f"Config file not found: {config_path}", err=True)
+        click.echo("Run 'drep init' to create a config file.", err=True)
+        return
+
     click.echo(f"Reviewing PR #{pr_number} in {owner}/{repo_name}...")
 
     try:
         # Run async review
-        asyncio.run(_run_review(owner, repo_name, pr_number, config, post))
+        asyncio.run(_run_review(owner, repo_name, pr_number, str(config_path), post))
         click.echo("✓ Review complete")
     except FileNotFoundError:
-        click.echo(f"Config file not found: {config}", err=True)
+        click.echo(f"Config file not found: {config_path}", err=True)
         click.echo("Run 'drep init' to create a config file.", err=True)
     except Exception as e:
         click.echo(f"Error during review: {e}", err=True)
@@ -957,8 +999,24 @@ def check(path, staged, config, exit_zero, format):
     """
     import asyncio
 
+    # Discover config file if not explicitly disabled
+    # For check command, config is truly optional (can run without it)
+    config_path = None
+    if config is not None:
+        # User explicitly provided a config path - must exist
+        config_file = find_config_file(config)
+        if not config_file.exists():
+            click.echo(f"Config file not found: {config_file}", err=True)
+            raise SystemExit(1)
+        config_path = str(config_file)
+    else:
+        # Try to discover config, but don't fail if not found
+        config_file = find_config_file(None)
+        if config_file.exists():
+            config_path = str(config_file)
+
     # Run async check
-    findings = asyncio.run(_run_check(path, staged, config, format))
+    findings = asyncio.run(_run_check(path, staged, config_path, format))
 
     # Print findings summary
     if findings:
@@ -1111,15 +1169,22 @@ def _output_findings(findings, format_type):
 
 
 @cli.command()
-@click.option("--config", default="config.yaml", help="Config file path")
+@click.option("--config", default=None, help="Config file path (optional, auto-discovers)")
 def validate(config):
     """Validate configuration file and environment variables.
 
     Loads the config in strict mode (env var placeholders must be set).
     """
+    # Discover config file
+    config_path = find_config_file(config)
+    if not config_path.exists():
+        click.echo(f"Config file not found: {config_path}", err=True)
+        click.echo("Run 'drep init' to create a config file.", err=True)
+        return
+
     try:
-        _ = load_config(config, strict=True)
-        click.echo(f"✓ Config valid: {config}")
+        _ = load_config(str(config_path), strict=True)
+        click.echo(f"✓ Config valid: {config_path}")
     except Exception as e:
         click.echo(f"Invalid config: {e}", err=True)
 
