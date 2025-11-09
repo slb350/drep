@@ -276,11 +276,9 @@ def _collect_documentation_config() -> DocumentationConfig:
         custom_dict = click.confirm("Add custom dictionary words?", default=False)
         if custom_dict:
             words = click.prompt("Enter words (comma-separated)", default="")
-            if words.strip():
-                words_list = [w.strip() for w in words.split(",") if w.strip()]
-                doc_config["custom_dictionary"] = words_list if words_list else []
-            else:
-                doc_config["custom_dictionary"] = []
+            # Filter out empty/whitespace-only entries
+            words_list = [w.strip() for w in words.split(",") if w.strip()]
+            doc_config["custom_dictionary"] = words_list
         else:
             doc_config["custom_dictionary"] = []
     else:

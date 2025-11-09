@@ -738,6 +738,18 @@ class TestInitCommand:
             # Empty custom_dictionary should result in empty list
             assert "custom_dictionary: []" in config_content
 
+    def test_init_custom_dictionary_only_commas(self, runner, tmp_path):
+        """Test custom dictionary handles input with only commas and whitespace."""
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            # Custom dictionary with only commas and spaces
+            inputs = "1\ngithub\nn\nowner/*\nn\ny\ny\ny\n, , , \nn\nn\n"
+            result = runner.invoke(cli, ["init"], input=inputs)
+
+            assert result.exit_code == 0
+            config_content = Path("config.yaml").read_text()
+            # Should result in empty list (all entries filtered out)
+            assert "custom_dictionary: []" in config_content
+
 
 class TestScanCommand:
     """Tests for drep scan command."""
