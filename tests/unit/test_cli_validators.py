@@ -151,13 +151,17 @@ class TestRepositoryListType:
         result = validator.convert("my.org/my.repo, user.name/project.name", None, None)
         assert result == ["my.org/my.repo", "user.name/project.name"]
 
-    def test_repository_pattern_detects_duplicates(self):
-        """Test duplicate repository patterns are preserved (user responsibility)."""
+    def test_repository_pattern_detects_duplicates(self, capsys):
+        """Test duplicate repository patterns are deduplicated with user notification."""
         validator = RepositoryListType()
-        # Note: Current implementation does NOT deduplicate - this test documents behavior
-        result = validator.convert("owner/repo, owner/repo", None, None)
-        assert result == ["owner/repo", "owner/repo"]
-        # This is intentional - let users specify duplicates if they want
+        result = validator.convert("owner/repo1, owner/repo1, owner/repo2", None, None)
+
+        # Should deduplicate while preserving order
+        assert result == ["owner/repo1", "owner/repo2"]
+
+        # Should notify user of deduplication
+        captured = capsys.readouterr()
+        assert "Info: Removed 1 duplicate repository pattern(s)" in captured.out
 
 
 class TestBedrockModelType:

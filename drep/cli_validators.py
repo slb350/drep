@@ -122,6 +122,14 @@ class RepositoryListType(click.ParamType):
                 ctx,
             )
 
+        # Deduplicate repository patterns
+        original_count = len(repos)
+        repos = list(dict.fromkeys(repos))  # Preserve order while deduplicating
+        duplicates_removed = original_count - len(repos)
+
+        if duplicates_removed > 0:
+            click.echo(f"Info: Removed {duplicates_removed} duplicate repository pattern(s)")
+
         logger.debug(f"RepositoryListType validated: {len(repos)} patterns")
         return repos
 
