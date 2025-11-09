@@ -99,7 +99,7 @@ def _collect_platform_config() -> PlatformConfig:
             config={"gitea": gitea_config}, env_var="GITEA_TOKEN", platform_name="Gitea"
         )
 
-    else:  # gitlab
+    else:
         click.echo("GitLab Configuration:")
         use_selfhosted = click.confirm("Are you using self-hosted GitLab?", default=False)
 

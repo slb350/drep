@@ -40,7 +40,6 @@ class URLType(click.ParamType):
             click.BadParameter: If URL is invalid
         """
         if not value:
-            logger.debug("URLType validation failed: empty value")
             self.fail("URL cannot be empty", param, ctx)
 
         parsed = urlparse(value)
@@ -151,7 +150,6 @@ class BedrockModelType(click.ParamType):
             click.BadParameter: If model ID is invalid
         """
         if not value:
-            logger.debug("BedrockModelType validation failed: empty value")
             self.fail("Model ID cannot be empty", param, ctx)
 
         if not any(value.startswith(prefix) for prefix in BEDROCK_VALID_PREFIXES):
@@ -193,7 +191,6 @@ class DatabaseURLType(click.ParamType):
             click.BadParameter: If URL is invalid
         """
         if not value:
-            logger.debug("DatabaseURLType validation failed: empty value")
             self.fail("Database URL cannot be empty", param, ctx)
 
         if "://" not in value:
@@ -246,9 +243,6 @@ class NonEmptyString(click.ParamType):
             click.BadParameter: If string is empty
         """
         if not value or not value.strip():
-            logger.debug("NonEmptyString validation failed: empty or whitespace-only value")
             self.fail("Value cannot be empty", param, ctx)
 
-        result = value.strip()
-        logger.debug(f"NonEmptyString validated: {result!r}")
-        return result
+        return value.strip()
