@@ -130,3 +130,27 @@ def test_llm_client_uses_tokens_per_minute_constant():
     # Should not have hardcoded 100000 (except in comments like "100K")
     # Count occurrences - should only be in comment like "Example: 100000 means"
     assert client_module_source.count("100000") <= 1  # Allow in one comment
+
+
+def test_bedrock_valid_prefixes_is_immutable():
+    """Test that BEDROCK_VALID_PREFIXES is a tuple (immutable)."""
+    import pytest
+
+    from drep.constants import BEDROCK_VALID_PREFIXES
+
+    # Should be a tuple, not a list
+    assert isinstance(BEDROCK_VALID_PREFIXES, tuple)
+
+    # Should contain expected prefixes
+    assert "anthropic." in BEDROCK_VALID_PREFIXES
+    assert "global.anthropic." in BEDROCK_VALID_PREFIXES
+    assert "amazon." in BEDROCK_VALID_PREFIXES
+    assert "cohere." in BEDROCK_VALID_PREFIXES
+
+    # Verify immutability - assignment should raise TypeError
+    with pytest.raises(TypeError, match="does not support item assignment"):
+        BEDROCK_VALID_PREFIXES[0] = "invalid."
+
+    # Verify no mutation methods exist (tuples don't have append, etc.)
+    assert not hasattr(BEDROCK_VALID_PREFIXES, "append")
+    assert not hasattr(BEDROCK_VALID_PREFIXES, "extend")

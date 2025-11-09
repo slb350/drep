@@ -2,21 +2,43 @@
 
 import asyncio
 import os
+import shutil
 import tempfile
 from enum import Enum
 from pathlib import Path
+from typing import Optional
 
 import click
 import yaml
-from git import Repo
-from pydantic import ValidationError
+from git import GitCommandError, InvalidGitRepositoryError, Repo
+from pydantic_core import ValidationError
 
 from drep.adapters.gitea import GiteaAdapter
-from drep.config import load_config
+from drep.cli_validators import (
+    BedrockModelType,
+    DatabaseURLType,
+    NonEmptyString,
+    RepositoryListType,
+    URLType,
+)
+from drep.config import find_config_file, get_user_config_dir, load_config
 from drep.core.issue_manager import IssueManager
 from drep.core.scanner import RepositoryScanner
 from drep.db import init_database
 from drep.documentation.analyzer import DocumentationAnalyzer
+from drep.models.wizard import (
+    AnthropicLLMData,
+    BedrockLLMData,
+    BedrockRegionModel,
+    DocumentationConfig,
+    DocumentationConfigData,
+    GiteaPlatformData,
+    GitHubPlatformData,
+    GitLabPlatformData,
+    LLMConfig,
+    OpenAILLMData,
+    PlatformConfig,
+)
 
 
 class OutputFormat(str, Enum):
@@ -32,106 +54,555 @@ def cli():
     pass
 
 
-@cli.command()
-def init():
-    """Initialize drep configuration."""
-    config_path = Path("config.yaml")
+def _collect_platform_config() -> PlatformConfig:
+    """Collect platform configuration from user.
 
-    if config_path.exists():
-        click.confirm("config.yaml already exists. Overwrite?", abort=True)
-
-    # Ask user which platform they're using
-    click.echo("Which git platform are you using?")
+    Returns:
+        PlatformConfig containing platform dict, env var, and platform name
+    """
+    click.echo("Step 1: Git Platform Configuration")
+    click.echo("-" * 60)
     platform = click.prompt(
-        "Choose platform",
+        "Which git platform are you using?",
         type=click.Choice(["github", "gitea", "gitlab"], case_sensitive=False),
         default="github",
     )
+    click.echo()
 
-    # Common LLM config (used by all platforms)
-    llm_config = """
-llm:
-  enabled: true
-  endpoint: http://localhost:1234/v1  # LM Studio / Ollama (with OpenAI compatible API)
-  model: qwen3-30b-a3b
-  temperature: 0.2
-  max_tokens: 8000
-  timeout: 120
-  max_retries: 3
-  retry_delay: 2
-  max_concurrent_global: 5
-  max_concurrent_per_repo: 3
-  requests_per_minute: 60
-  max_tokens_per_minute: 80000
-  cache:
-    enabled: true
-    ttl_days: 30
-"""
-
-    # Platform-specific configs
     if platform.lower() == "github":
-        platform_config = """github:
-  token: ${GITHUB_TOKEN}
-  # url: https://api.github.com  # Optional: for GitHub Enterprise, use https://your-domain/api/v3
-  repositories:
-    - your-org/*
+        click.echo("GitHub Configuration:")
+        use_enterprise = click.confirm("Are you using GitHub Enterprise?", default=False)
 
-documentation:
-  enabled: true
-  custom_dictionary: []
+        # Collect URL if enterprise
+        api_url = None
+        if use_enterprise:
+            api_url = click.prompt(
+                "GitHub Enterprise API URL",
+                default="https://github.example.com/api/v3",
+                type=URLType(),
+            )
 
-database_url: sqlite:///./drep.db
-"""
-        example = platform_config + llm_config
-        env_var = "GITHUB_TOKEN"
-        platform_name = "GitHub"
+        click.echo("\nRepository Configuration:")
+        click.echo("Examples: 'your-org/*' (all repos), 'owner/repo' (single repo)")
+        repos = click.prompt(
+            "Enter repositories (comma-separated)", default="your-org/*", type=RepositoryListType()
+        )
+
+        # Create strongly-typed data
+        github_data = GitHubPlatformData(
+            token="${GITHUB_TOKEN}",
+            repositories=tuple(repos),  # Convert list to tuple
+            url=api_url,  # None for github.com, URL for enterprise
+        )
+
+        return PlatformConfig(data=github_data, env_var="GITHUB_TOKEN", platform_name="GitHub")
 
     elif platform.lower() == "gitea":
-        platform_config = """gitea:
-  url: http://localhost:3000
-  token: ${GITEA_TOKEN}
-  repositories:
-    - your-org/*
+        click.echo("Gitea Configuration:")
 
-documentation:
-  enabled: true
-  custom_dictionary: []
+        gitea_url = click.prompt("Gitea URL", default="http://localhost:3000", type=URLType())
 
-database_url: sqlite:///./drep.db
-"""
-        example = platform_config + llm_config
-        env_var = "GITEA_TOKEN"
-        platform_name = "Gitea"
+        click.echo("\nRepository Configuration:")
+        click.echo("Examples: 'your-org/*' (all repos), 'owner/repo' (single repo)")
+        repos = click.prompt(
+            "Enter repositories (comma-separated)", default="your-org/*", type=RepositoryListType()
+        )
 
-    else:  # gitlab
-        platform_config = """gitlab:
-  url: https://gitlab.com
-  token: ${GITLAB_TOKEN}
-  repositories:
-    - your-org/*
+        # Create strongly-typed data
+        gitea_data = GiteaPlatformData(
+            url=gitea_url,
+            token="${GITEA_TOKEN}",
+            repositories=tuple(repos),  # Convert list to tuple
+        )
 
-documentation:
-  enabled: true
-  custom_dictionary: []
+        return PlatformConfig(data=gitea_data, env_var="GITEA_TOKEN", platform_name="Gitea")
 
-database_url: sqlite:///./drep.db
-"""
-        example = platform_config + llm_config
-        env_var = "GITLAB_TOKEN"
-        platform_name = "GitLab"
+    else:
+        click.echo("GitLab Configuration:")
+        use_selfhosted = click.confirm("Are you using self-hosted GitLab?", default=False)
 
-    config_path.write_text(example)
-    click.echo(f"✓ Created config.yaml for {platform_name}")
+        # Collect URL if self-hosted
+        gitlab_url = None
+        if use_selfhosted:
+            gitlab_url = click.prompt(
+                "GitLab URL", default="https://gitlab.example.com", type=URLType()
+            )
+
+        click.echo("\nRepository Configuration:")
+        click.echo("Examples: 'your-org/*' (all projects), 'owner/project' (single project)")
+        repos = click.prompt(
+            "Enter projects (comma-separated)", default="your-org/*", type=RepositoryListType()
+        )
+
+        # Create strongly-typed data
+        gitlab_data = GitLabPlatformData(
+            token="${GITLAB_TOKEN}",
+            repositories=tuple(repos),  # Convert list to tuple
+            url=gitlab_url,  # None for gitlab.com, URL for self-hosted
+        )
+
+        return PlatformConfig(data=gitlab_data, env_var="GITLAB_TOKEN", platform_name="GitLab")
+
+
+def _collect_llm_config() -> Optional[LLMConfig]:
+    """Collect LLM configuration from user.
+
+    Returns:
+        LLMConfig if LLM is enabled, None if disabled
+    """
+    click.echo("Step 2: LLM Configuration")
+    click.echo("-" * 60)
+    llm_enabled = click.confirm("Enable LLM-powered code analysis?", default=True)
+    click.echo()
+
+    if not llm_enabled:
+        return None
+
+    click.echo("LLM Provider Options:")
+    click.echo("  1. openai-compatible - Use local LLM (LM Studio, Ollama, etc.)")
+    click.echo("  2. bedrock - AWS Bedrock")
+    click.echo("  3. anthropic - Anthropic API (Claude)")
+
+    provider = click.prompt(
+        "Choose provider",
+        type=click.Choice(["openai-compatible", "bedrock", "anthropic"], case_sensitive=False),
+        default="openai-compatible",
+    )
+
+    llm_config = {"enabled": True, "provider": provider}
+
+    if provider == "openai-compatible":
+        click.echo("\nOpenAI-Compatible Configuration:")
+        endpoint = click.prompt("API Endpoint", default="http://localhost:1234/v1", type=URLType())
+        model = click.prompt("Model name", default="qwen3-30b-a3b", type=NonEmptyString())
+        llm_config["endpoint"] = endpoint
+        llm_config["model"] = model
+
+        use_api_key = click.confirm("Does your endpoint require an API key?", default=False)
+        if use_api_key:
+            llm_config["api_key"] = "${LLM_API_KEY}"
+
+    elif provider == "bedrock":
+        click.echo("\nAWS Bedrock Configuration:")
+        region = click.prompt("AWS Region", default="us-east-1", type=NonEmptyString())
+        model = click.prompt(
+            "Bedrock Model ID",
+            default="anthropic.claude-sonnet-4-5-20250929-v1:0",
+            type=BedrockModelType(),
+        )
+        llm_config["bedrock"] = BedrockRegionModel(region=region, model=model)
+
+    elif provider == "anthropic":
+        click.echo("\nAnthropic Configuration:")
+        llm_config["api_key"] = "${ANTHROPIC_API_KEY}"
+        model = click.prompt(
+            "Model name", default="claude-sonnet-4-5-20250929", type=NonEmptyString()
+        )
+        llm_config["model"] = model
+
+    click.echo()
+
+    configure_advanced = click.confirm("Configure advanced LLM settings?", default=False)
+
+    if configure_advanced:
+        click.echo("\nAdvanced LLM Settings:")
+        temperature = click.prompt(
+            "Temperature (0.0-2.0)", default=0.2, type=click.FloatRange(min=0.0, max=2.0)
+        )
+        max_tokens = click.prompt(
+            "Max tokens per request", default=8000, type=click.IntRange(min=100, max=20000)
+        )
+        timeout = click.prompt(
+            "Request timeout (seconds)", default=60, type=click.IntRange(min=10, max=300)
+        )
+        max_retries = click.prompt(
+            "Max retries on failure", default=3, type=click.IntRange(min=0, max=10)
+        )
+        max_concurrent = click.prompt(
+            "Max concurrent requests (global)", default=5, type=click.IntRange(min=1, max=50)
+        )
+        requests_per_min = click.prompt(
+            "Requests per minute limit", default=60, type=click.IntRange(min=1, max=1000)
+        )
+
+        llm_config.update(
+            {
+                "temperature": temperature,
+                "max_tokens": max_tokens,
+                "timeout": timeout,
+                "max_retries": max_retries,
+                "retry_delay": 2,
+                "exponential_backoff": True,
+                "max_concurrent_global": max_concurrent,
+                "max_concurrent_per_repo": 3,
+                "requests_per_minute": requests_per_min,
+                "max_tokens_per_minute": 100000,
+            }
+        )
+    else:
+        llm_config.update(
+            {
+                "temperature": 0.2,
+                "max_tokens": 8000,
+                "timeout": 60,
+                "max_retries": 3,
+                "retry_delay": 2,
+                "exponential_backoff": True,
+                "max_concurrent_global": 5,
+                "max_concurrent_per_repo": 3,
+                "requests_per_minute": 60,
+                "max_tokens_per_minute": 100000,
+            }
+        )
+
+    click.echo()
+
+    configure_cache = click.confirm("Configure LLM response caching?", default=False)
+
+    if configure_cache:
+        click.echo("\nCache Settings:")
+        cache_enabled = click.confirm("Enable cache?", default=True)
+        ttl_days = click.prompt("Cache TTL (days)", default=30, type=click.IntRange(min=1))
+        max_size_gb = click.prompt(
+            "Max cache size (GB)", default=10.0, type=click.FloatRange(min=0.1)
+        )
+
+        llm_config["cache"] = {
+            "enabled": cache_enabled,
+            "ttl_days": ttl_days,
+            "max_size_gb": max_size_gb,
+        }
+    else:
+        llm_config["cache"] = {"enabled": True, "ttl_days": 30, "max_size_gb": 10.0}
+
+    # Create strongly-typed data model based on provider
+    if provider == "openai-compatible":
+        llm_data = OpenAILLMData(**llm_config)
+        return LLMConfig(data=llm_data)
+    elif provider == "bedrock":
+        llm_data = BedrockLLMData(**llm_config)
+        return LLMConfig(data=llm_data)
+    else:  # anthropic
+        llm_data = AnthropicLLMData(**llm_config)
+        return LLMConfig(data=llm_data)
+
+
+def _collect_documentation_config() -> DocumentationConfig:
+    """Collect documentation configuration from user.
+
+    Returns:
+        DocumentationConfig containing documentation settings
+    """
+    click.echo("Step 3: Documentation Analysis")
+    click.echo("-" * 60)
+    doc_enabled = click.confirm("Enable documentation analysis?", default=True)
+
+    markdown_checks = False
+    words_tuple = ()
+
+    if doc_enabled:
+        markdown_checks = click.confirm("Enable markdown lint checks?", default=False)
+
+        custom_dict = click.confirm("Add custom dictionary words?", default=False)
+        if custom_dict:
+            words = click.prompt("Enter words (comma-separated)", default="")
+            # Filter out empty/whitespace-only entries and convert to tuple
+            words_list = [w.strip() for w in words.split(",") if w.strip()]
+            words_tuple = tuple(words_list)
+
+    # Create strongly-typed data
+    doc_data = DocumentationConfigData(
+        enabled=doc_enabled,
+        markdown_checks=markdown_checks,
+        custom_dictionary=words_tuple,
+    )
+
+    click.echo()
+    return DocumentationConfig(data=doc_data)
+
+
+def _collect_database_config():
+    """Collect database configuration from user.
+
+    Returns:
+        Database URL string
+    """
+    click.echo("Step 4: Database Configuration")
+    click.echo("-" * 60)
+    use_custom_db = click.confirm("Use custom database URL?", default=False)
+
+    if use_custom_db:
+        db_url = click.prompt("Database URL", default="sqlite:///./drep.db", type=DatabaseURLType())
+    else:
+        db_url = "sqlite:///./drep.db"
+
+    click.echo()
+    return db_url
+
+
+def _write_and_validate_config(config_dict, config_path):
+    """Write configuration to file and validate it.
+
+    Args:
+        config_dict: Configuration dictionary
+        config_path: Path to write config file
+
+    Raises:
+        click.Abort: If validation fails or file cannot be written
+    """
+    try:
+        config_yaml = yaml.dump(config_dict, default_flow_style=False, sort_keys=False)
+    except yaml.YAMLError as e:
+        click.echo(f"ERROR: Failed to serialize configuration: {e}", err=True)
+        click.echo("This is a bug. Please report this issue.", err=True)
+        raise click.Abort()
+
+    try:
+        config_path.write_text(config_yaml)
+    except PermissionError:
+        click.echo(f"ERROR: Permission denied writing to {config_path}", err=True)
+        click.echo("Check file permissions.", err=True)
+        raise click.Abort()
+    except OSError as e:
+        click.echo(f"ERROR: Failed to write config: {e}", err=True)
+        click.echo("Check disk space and permissions.", err=True)
+        raise click.Abort()
+
+    click.echo("=" * 60)
+    click.echo("Validating configuration...")
+    click.echo("-" * 60)
+
+    try:
+        load_config(str(config_path), strict=False)
+        click.echo("✓ Configuration structure is valid!")
+    except ValidationError as e:
+        click.echo("ERROR: Configuration validation failed:", err=True)
+        for error in e.errors():
+            field = " -> ".join(str(x) for x in error["loc"])
+            click.echo(f"  - {field}: {error['msg']}", err=True)
+        click.echo(f"\nConfig file: {config_path}", err=True)
+        click.echo("Please re-run 'drep init' or fix manually.", err=True)
+        raise click.Abort()
+    except ValueError as e:
+        click.echo(f"ERROR: Configuration validation failed: {e}", err=True)
+        click.echo(f"\nConfig file: {config_path}", err=True)
+        click.echo("Please re-run 'drep init' or fix manually.", err=True)
+        raise click.Abort()
+
+    # SECURITY: Catch only specific, recoverable exceptions
+    # This code catches ValidationError (Pydantic schema failures) and ValueError
+    # (YAML parsing errors) to provide user-friendly error messages. All other
+    # exceptions propagate naturally:
+    # - KeyboardInterrupt: Allows user to interrupt wizard (Ctrl+C)
+    # - MemoryError: Signals resource exhaustion to calling process
+    # - ImportError: Reports missing dependencies with full traceback
+    # - RuntimeError: Exposes unexpected errors for debugging
+    # This selective exception handling provides helpful feedback for expected
+    # errors while preserving full diagnostic information for unexpected failures.
+
+
+@cli.command()
+def init():
+    """Initialize drep configuration with interactive setup wizard.
+
+    Guides the user through a multi-step wizard to configure:
+    1. Configuration location (current directory or user config directory)
+    2. Platform selection (GitHub/Gitea/GitLab) with platform-specific options
+    3. LLM configuration (optional) - supports OpenAI-compatible, Bedrock, Anthropic
+    4. Documentation analysis settings (markdown checks, custom dictionary)
+    5. Database configuration (SQLite, PostgreSQL, MySQL, etc.)
+    6. Environment variable verification (optional)
+
+    Creates config.yaml in the chosen location. If the file already exists,
+    creates a backup (.yaml.backup) before overwriting. All inputs are validated
+    at entry time using custom Click validators to prevent invalid configurations.
+
+    Error Handling:
+    - Backup failures abort the wizard to prevent data loss
+    - File write errors (PermissionError, OSError) show clear error messages
+    - YAML serialization errors are caught and reported
+    - Config validation failures show detailed field-level errors
+    - Environment variable checks wrapped in try-except for restricted environments
+
+    Security:
+    - Never stores secrets in config (uses ${ENV_VAR} placeholders)
+    - All validators enforce strict format requirements
+    - Optional environment variable verification to catch missing credentials
+    - Backup mechanism prevents accidental config loss
+
+    Exit Codes:
+    - 0: Configuration created and validated successfully
+    - 1: User aborted, validation failed, or unrecoverable error occurred
+
+    Raises:
+        click.Abort: If backup creation fails, file cannot be written, or validation fails
+    """
+    click.echo("=" * 60)
+    click.echo("Welcome to drep configuration setup!")
+    click.echo("=" * 60)
+    click.echo()
+
+    # Prompt for config location
+    click.echo("Where should the configuration be created?")
+    click.echo()
+    click.echo("  1. Current directory (./config.yaml)")
+    click.echo("     Use for project-specific configuration")
+    click.echo()
+    user_config_dir = get_user_config_dir()
+    click.echo(f"  2. User config directory ({user_config_dir}/config.yaml)")
+    click.echo("     Use for system-wide configuration (recommended for pip/brew install)")
+    click.echo()
+
+    location_choice = click.prompt(
+        "Choose location",
+        type=click.Choice(["1", "2"], case_sensitive=False),
+        default="2",
+    )
+
+    if location_choice == "1":
+        config_path = Path("config.yaml")
+    else:
+        config_path = user_config_dir / "config.yaml"
+        # Create directory if it doesn't exist
+        try:
+            config_path.parent.mkdir(parents=True, exist_ok=True)
+        except PermissionError:
+            click.echo(f"ERROR: Cannot create directory {config_path.parent}", err=True)
+            click.echo("  Permission denied. Try using location 1 (current directory).", err=True)
+            raise click.Abort()
+        except OSError as e:
+            click.echo(f"ERROR: Cannot create directory: {e}", err=True)
+            raise click.Abort()
+
+    # Check if config already exists
+    if config_path.exists():
+        click.echo()
+        if click.confirm(f"{config_path} already exists. Overwrite?", default=False):
+            # SECURITY: Create backup before overwriting existing config
+            # This copies the existing config.yaml to config.yaml.backup before proceeding.
+            # If the backup creation fails due to permissions or filesystem errors, the
+            # wizard aborts (raises click.Abort) to preserve the existing configuration.
+            # This ensures users can recover their previous settings if the new config
+            # write fails or produces an invalid configuration.
+            backup_path = config_path.with_suffix(".yaml.backup")
+            try:
+                shutil.copy(config_path, backup_path)
+                click.echo(f"Backup created: {backup_path}")
+            except PermissionError:
+                click.echo(
+                    f"ERROR: Cannot create backup at {backup_path}\n"
+                    f"Permission denied. Cannot safely overwrite config.",
+                    err=True,
+                )
+                raise click.Abort()
+            except OSError as e:
+                click.echo(
+                    f"ERROR: Cannot create backup: {e}\n"
+                    f"Cannot safely overwrite config without backup.",
+                    err=True,
+                )
+                raise click.Abort()
+            click.echo()
+        else:
+            raise click.Abort()
+
+    click.echo()
+
+    platform_config = _collect_platform_config()
+    llm_config = _collect_llm_config()
+    doc_config = _collect_documentation_config()
+    db_url = _collect_database_config()
+
+    config_dict = {}
+    config_dict.update(platform_config.to_dict())  # Use to_dict() for new strongly-typed format
+    config_dict.update(doc_config.to_dict())  # Use to_dict() for new strongly-typed format
+    config_dict["database_url"] = db_url
+    if llm_config is not None:
+        config_dict.update(llm_config.to_dict())  # Use to_dict() for new strongly-typed format
+
+    _write_and_validate_config(config_dict, config_path)
+
+    click.echo()
+    click.echo("=" * 60)
+    click.echo("✓ Configuration created successfully!")
+    click.echo("=" * 60)
+    click.echo(f"\nConfig location: {config_path}")
     click.echo("\nNext steps:")
-    click.echo(f"1. Edit config.yaml to configure your {platform_name} URL (if needed)")
-    click.echo(f"2. Set {env_var} environment variable with your API token")
-    click.echo("3. Update the repositories list to match your org/repos")
-    click.echo("\nThen run: drep scan owner/repo")
+    click.echo(f"1. Set the {platform_config.env_var} environment variable:")
+    click.echo(f"   export {platform_config.env_var}='your-api-token-here'")
+
+    if (
+        llm_config
+        and llm_config.provider == "openai-compatible"
+        and "${LLM_API_KEY}" in yaml.dump(config_dict)
+    ):
+        click.echo("   export LLM_API_KEY='your-llm-api-key'")
+    elif llm_config and llm_config.provider == "anthropic":
+        click.echo("   export ANTHROPIC_API_KEY='your-anthropic-api-key'")
+    elif llm_config and llm_config.provider == "bedrock":
+        click.echo("   Configure AWS credentials (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY)")
+
+    if click.confirm("\nCheck if required environment variables are set?", default=False):
+        # SECURITY: Check environment variables with error handling
+        # This code reads required tokens from os.environ to verify they're set before
+        # the user runs a scan. It catches OSError and PermissionError (restricted
+        # environments like containers/sandboxes may restrict os.environ access) and
+        # displays a warning. KeyboardInterrupt propagates naturally to allow wizard abort.
+        try:
+            missing = []
+            if platform_config.env_var not in os.environ:
+                missing.append(platform_config.env_var)
+            if (
+                llm_config
+                and llm_config.provider == "anthropic"
+                and "ANTHROPIC_API_KEY" not in os.environ
+            ):
+                missing.append("ANTHROPIC_API_KEY")
+            if (
+                llm_config
+                and llm_config.provider == "openai-compatible"
+                and "${LLM_API_KEY}" in yaml.dump(config_dict)
+                and "LLM_API_KEY" not in os.environ
+            ):
+                missing.append("LLM_API_KEY")
+            if llm_config and llm_config.provider == "bedrock":
+                if "AWS_ACCESS_KEY_ID" not in os.environ:
+                    missing.append("AWS_ACCESS_KEY_ID")
+                if "AWS_SECRET_ACCESS_KEY" not in os.environ:
+                    missing.append("AWS_SECRET_ACCESS_KEY")
+
+            if missing:
+                click.echo("WARNING: Missing environment variables:", err=True)
+                for var in missing:
+                    click.echo(f"  - {var}", err=True)
+            else:
+                click.echo("✓ All required environment variables are set!")
+        except (OSError, PermissionError) as e:
+            import logging
+
+            logger = logging.getLogger(__name__)
+            logger.debug(f"Cannot access environment variables: {e}")
+            click.echo(
+                "WARNING: Cannot check environment variables in this environment.",
+                err=True,
+            )
+            click.echo("Please verify manually that required tokens are set.", err=True)
+        # KeyboardInterrupt, MemoryError, and other exceptions propagate naturally
+
+    click.echo("\n2. Validate your configuration:")
+    click.echo("   drep validate")
+
+    click.echo("\n3. Start scanning repositories:")
+    click.echo("   drep scan owner/repo")
+
+    click.echo("\n4. (Optional) Review a pull request:")
+    click.echo("   drep review owner/repo PR_NUMBER")
+    click.echo()
 
 
 @cli.command()
 @click.argument("repository")
-@click.option("--config", default="config.yaml", help="Config file path")
+@click.option("--config", default=None, help="Config file path (optional, auto-discovers)")
 @click.option("--show-metrics/--no-metrics", default=False, help="Show LLM metrics after scan")
 @click.option("--show-progress/--no-progress", default=True, help="Show progress during scan")
 def scan(repository, config, show_metrics, show_progress):
@@ -143,17 +614,24 @@ def scan(repository, config, show_metrics, show_progress):
 
     owner, repo_name = repository.split("/", 1)
 
+    # Discover config file
+    config_path = find_config_file(config)
+    if not config_path.exists():
+        click.echo(f"Config file not found: {config_path}", err=True)
+        click.echo("Run 'drep init' to create a config file.", err=True)
+        return
+
     click.echo(f"Scanning {owner}/{repo_name}...")
 
     try:
         # Run async scan
-        asyncio.run(_run_scan(owner, repo_name, config, show_metrics, show_progress))
+        asyncio.run(_run_scan(owner, repo_name, str(config_path), show_metrics, show_progress))
         click.echo("✓ Scan complete")
     except click.Abort:
         # Re-raise to let Click handle the abort (already displayed error message)
         raise
     except FileNotFoundError:
-        click.echo(f"Config file not found: {config}", err=True)
+        click.echo(f"Config file not found: {config_path}", err=True)
         click.echo("Run 'drep init' to create a config file.", err=True)
     except Exception as e:
         click.echo(f"Error during scan: {e}", err=True)
@@ -250,8 +728,11 @@ async def _run_scan(
         askpass_script = Path(temp_dir) / "askpass.sh"
         token_file = Path(temp_dir) / ".git-token"
 
-        # Write token to temporary file with owner-only read permissions
-        # This prevents token exposure in process environment variables
+        # SECURITY: Write token to file instead of environment variable
+        # Threat model: Process listings (ps, /proc) can expose environment variables
+        # to other users on the system. File-based authentication with chmod 0o600 ensures
+        # only the current user (process owner) can read the token, preventing exposure
+        # in multi-user environments. The askpass script reads from this file securely.
         token_file.write_text(git_token)
         token_file.chmod(0o600)  # Owner read/write only
 
@@ -280,20 +761,77 @@ fi
         repo_path = Path("./repos") / owner / repo
 
         # Clone or pull repository
-        if not repo_path.exists():
-            click.echo(f"Cloning {platform} repository...")
-            repo_path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            if not repo_path.exists():
+                click.echo(f"Cloning {platform} repository...")
+                repo_path.parent.mkdir(parents=True, exist_ok=True)
 
-            # Get default branch
-            default_branch = await adapter.get_default_branch(owner, repo)
+                # Get default branch
+                try:
+                    default_branch = await adapter.get_default_branch(owner, repo)
+                except Exception as e:
+                    import logging
 
-            # Clone
-            Repo.clone_from(git_url, repo_path, branch=default_branch, env=git_env)
-        else:
-            click.echo("Pulling latest changes...")
-            git_repo = Repo(repo_path)
-            with git_repo.git.custom_environment(**git_env):
-                git_repo.remotes.origin.pull()
+                    logger = logging.getLogger(__name__)
+                    logger.error(f"Failed to get default branch for {owner}/{repo}: {e}")
+                    click.echo(f"Error: Cannot access repository {owner}/{repo}", err=True)
+                    click.echo("  Check that repository exists and token has access.", err=True)
+                    raise click.Abort()
+
+                if not default_branch:
+                    click.echo(f"Error: Repository {owner}/{repo} has no branches", err=True)
+                    raise click.Abort()
+
+                # Clone
+                try:
+                    Repo.clone_from(git_url, repo_path, branch=default_branch, env=git_env)
+                except GitCommandError as e:
+                    error_msg = str(e).lower()
+                    if "authentication failed" in error_msg:
+                        # Determine which token env var to suggest
+                        token_env_var = (
+                            "GITHUB_TOKEN"
+                            if platform == "github"
+                            else "GITEA_TOKEN" if platform == "gitea" else "GITLAB_TOKEN"
+                        )
+                        click.echo("Error: Authentication failed", err=True)
+                        click.echo(f"  Check your {token_env_var} token is valid", err=True)
+                    elif "not found" in error_msg:
+                        click.echo(f"Error: Repository {owner}/{repo} not found", err=True)
+                        click.echo("  Verify repository exists and token has access", err=True)
+                    else:
+                        click.echo(f"Error: Git clone failed: {e}", err=True)
+                    raise click.Abort()
+            else:
+                click.echo("Pulling latest changes...")
+                try:
+                    git_repo = Repo(repo_path)
+                    with git_repo.git.custom_environment(**git_env):
+                        git_repo.remotes.origin.pull()
+                except GitCommandError as e:
+                    import logging
+
+                    logger = logging.getLogger(__name__)
+                    logger.error(f"Git pull failed for {owner}/{repo}: {e}")
+                    click.echo(f"Error: Git pull failed: {e}", err=True)
+                    click.echo(f"  Try: rm -rf {repo_path} to force re-clone", err=True)
+                    raise click.Abort()
+                except InvalidGitRepositoryError:
+                    import logging
+
+                    logger = logging.getLogger(__name__)
+                    logger.error(f"Corrupted git repository at {repo_path}")
+                    click.echo(f"Error: Corrupted git repository at {repo_path}", err=True)
+                    click.echo(f"  Fix: rm -rf {repo_path} and re-run scan", err=True)
+                    raise click.Abort()
+        except PermissionError as e:
+            import logging
+
+            logger = logging.getLogger(__name__)
+            logger.error(f"Permission denied accessing {repo_path}: {e}")
+            click.echo(f"Error: Cannot write to {repo_path}", err=True)
+            click.echo("  Check directory permissions", err=True)
+            raise click.Abort()
 
         # Scan repository
         click.echo("Analyzing files...")
@@ -389,15 +927,25 @@ fi
                 from drep.llm.metrics import MetricsCollector
 
                 metrics_file = _Path.home() / ".drep" / "metrics.json"
+                metrics_file.parent.mkdir(parents=True, exist_ok=True)
                 collector = MetricsCollector(metrics_file)
                 collector.current_session = metrics
                 await collector.save()
-            except Exception as e:
+            except PermissionError:
                 import logging
 
                 logger = logging.getLogger(__name__)
-                logger.warning(f"Failed to persist LLM metrics: {e}")
-                click.echo(f"Warning: failed to persist metrics: {e}")
+                logger.error(f"Permission denied writing metrics to {metrics_file}")
+                click.echo(f"Warning: Cannot save metrics to {metrics_file}", err=True)
+                click.echo(f"  Fix: chmod 755 {metrics_file.parent}", err=True)
+            except OSError as e:
+                import logging
+
+                logger = logging.getLogger(__name__)
+                logger.error(f"Error writing metrics: {e}")
+                click.echo(f"Warning: Cannot save metrics: {e}", err=True)
+                click.echo("  Check disk space and filesystem permissions.", err=True)
+            # KeyboardInterrupt, MemoryError, and other exceptions propagate naturally
 
             if show_metrics:
                 click.echo("\n" + "=" * 60)
@@ -416,39 +964,56 @@ fi
                 shutil.rmtree(temp_dir)
                 logger.debug(f"Cleaned up temporary directory: {temp_dir}")
             except Exception as e:
+                # SECURITY-CRITICAL: Keep broad catch for temp dir cleanup
+                # If credentials aren't deleted, warn user but don't crash
                 logger.error(
                     f"SECURITY: Failed to delete temporary directory "
                     f"containing API token: {temp_dir}",
                     extra={"error": str(e), "temp_dir": temp_dir},
                 )
                 click.echo(
-                    f"WARNING: Failed to clean up temporary credentials at {temp_dir}. "
-                    f"Please manually delete this directory: {e}",
+                    f"SECURITY WARNING: Failed to clean up credentials at {temp_dir}",
                     err=True,
                 )
+                click.echo(f"  Manually delete: rm -rf {temp_dir}", err=True)
 
         # Close resources (ensure both are attempted even if one fails)
         try:
             await scanner.close()
+        except OSError as e:
+            import logging
+
+            logger = logging.getLogger(__name__)
+            logger.error(f"Error closing database connection: {e}")
+            click.echo(f"Warning: Database cleanup failed: {e}", err=True)
         except Exception as e:
             import logging
 
             logger = logging.getLogger(__name__)
-            logger.error(f"Error closing scanner: {e}")
+            logger.error(f"Unexpected error closing scanner: {e}", exc_info=True)
+            # Re-raise unexpected errors for debugging
+            raise
 
         try:
             await adapter.close()
+        except OSError as e:
+            import logging
+
+            logger = logging.getLogger(__name__)
+            logger.error(f"Error closing HTTP adapter: {e}")
+            click.echo(f"Warning: HTTP adapter cleanup failed: {e}", err=True)
         except Exception as e:
             import logging
 
             logger = logging.getLogger(__name__)
-            logger.error(f"Error closing adapter: {e}")
+            logger.error(f"Unexpected error closing adapter: {e}", exc_info=True)
+            raise
 
 
 @cli.command()
 @click.argument("repository")
 @click.argument("pr_number", type=int)
-@click.option("--config", default="config.yaml", help="Config file path")
+@click.option("--config", default=None, help="Config file path (optional, auto-discovers)")
 @click.option("--post/--no-post", default=True, help="Post comments to PR (default: yes)")
 def review(repository, pr_number, config, post):
     """Review a pull request with LLM analysis.
@@ -463,14 +1028,21 @@ def review(repository, pr_number, config, post):
 
     owner, repo_name = repository.split("/", 1)
 
+    # Discover config file
+    config_path = find_config_file(config)
+    if not config_path.exists():
+        click.echo(f"Config file not found: {config_path}", err=True)
+        click.echo("Run 'drep init' to create a config file.", err=True)
+        return
+
     click.echo(f"Reviewing PR #{pr_number} in {owner}/{repo_name}...")
 
     try:
         # Run async review
-        asyncio.run(_run_review(owner, repo_name, pr_number, config, post))
+        asyncio.run(_run_review(owner, repo_name, pr_number, str(config_path), post))
         click.echo("✓ Review complete")
     except FileNotFoundError:
-        click.echo(f"Config file not found: {config}", err=True)
+        click.echo(f"Config file not found: {config_path}", err=True)
         click.echo("Run 'drep init' to create a config file.", err=True)
     except Exception as e:
         click.echo(f"Error during review: {e}", err=True)
@@ -639,8 +1211,24 @@ def check(path, staged, config, exit_zero, format):
     """
     import asyncio
 
+    # Discover config file if not explicitly disabled
+    # For check command, config is truly optional (can run without it)
+    config_path = None
+    if config is not None:
+        # User explicitly provided a config path - must exist
+        config_file = find_config_file(config)
+        if not config_file.exists():
+            click.echo(f"Config file not found: {config_file}", err=True)
+            raise SystemExit(1)
+        config_path = str(config_file)
+    else:
+        # Try to discover config, but don't fail if not found
+        config_file = find_config_file(None)
+        if config_file.exists():
+            config_path = str(config_file)
+
     # Run async check
-    findings = asyncio.run(_run_check(path, staged, config, format))
+    findings = asyncio.run(_run_check(path, staged, config_path, format))
 
     # Print findings summary
     if findings:
@@ -793,15 +1381,22 @@ def _output_findings(findings, format_type):
 
 
 @cli.command()
-@click.option("--config", default="config.yaml", help="Config file path")
+@click.option("--config", default=None, help="Config file path (optional, auto-discovers)")
 def validate(config):
     """Validate configuration file and environment variables.
 
     Loads the config in strict mode (env var placeholders must be set).
     """
+    # Discover config file
+    config_path = find_config_file(config)
+    if not config_path.exists():
+        click.echo(f"Config file not found: {config_path}", err=True)
+        click.echo("Run 'drep init' to create a config file.", err=True)
+        return
+
     try:
-        _ = load_config(config, strict=True)
-        click.echo(f"✓ Config valid: {config}")
+        _ = load_config(str(config_path), strict=True)
+        click.echo(f"✓ Config valid: {config_path}")
     except Exception as e:
         click.echo(f"Invalid config: {e}", err=True)
 

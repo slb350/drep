@@ -6,12 +6,12 @@ MVP scope:
 """
 
 import asyncio
-import os
 from typing import Any, Dict, Optional, Tuple
 
 from fastapi import FastAPI, Header, HTTPException, Request
 
 from drep.cli import _run_review, _run_scan
+from drep.config import find_config_file
 
 app = FastAPI(title="drep", version="0.1.0")
 
@@ -58,7 +58,10 @@ async def webhook_gitea(
         raise HTTPException(status_code=400, detail=f"Invalid JSON: {e}")
 
     event = (x_gitea_event or "").lower()
-    config_path = os.environ.get("DREP_CONFIG", "config.yaml")
+
+    # Discover config file (respects DREP_CONFIG env var via find_config_file)
+    config_file = find_config_file(None)
+    config_path = str(config_file)
 
     scheduled = False
     details: Dict[str, Any] = {}
