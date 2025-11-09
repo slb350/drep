@@ -6,6 +6,7 @@ import shutil
 import tempfile
 from enum import Enum
 from pathlib import Path
+from typing import Optional
 
 import click
 import yaml
@@ -21,6 +22,7 @@ from drep.cli_validators import (
     URLType,
 )
 from drep.config import find_config_file, get_user_config_dir, load_config
+from drep.models.wizard import DocumentationConfig, LLMConfig, PlatformConfig
 from drep.core.issue_manager import IssueManager
 from drep.core.scanner import RepositoryScanner
 from drep.db import init_database
@@ -40,14 +42,11 @@ def cli():
     pass
 
 
-def _collect_platform_config():
+def _collect_platform_config() -> PlatformConfig:
     """Collect platform configuration from user.
 
     Returns:
-        Tuple of (platform_dict, env_var, platform_name) where:
-        - platform_dict: Platform configuration as dict
-        - env_var: Required environment variable name
-        - platform_name: Human-readable platform name
+        PlatformConfig containing platform dict, env var, and platform name
     """
     click.echo("Step 1: Git Platform Configuration")
     click.echo("-" * 60)
@@ -79,7 +78,9 @@ def _collect_platform_config():
         )
         github_config["repositories"] = repos
 
-        return {"github": github_config}, "GITHUB_TOKEN", "GitHub"
+        return PlatformConfig(
+            config={"github": github_config}, env_var="GITHUB_TOKEN", platform_name="GitHub"
+        )
 
     elif platform.lower() == "gitea":
         click.echo("Gitea Configuration:")
@@ -94,7 +95,9 @@ def _collect_platform_config():
 
         gitea_config = {"url": gitea_url, "token": "${GITEA_TOKEN}", "repositories": repos}
 
-        return {"gitea": gitea_config}, "GITEA_TOKEN", "Gitea"
+        return PlatformConfig(
+            config={"gitea": gitea_config}, env_var="GITEA_TOKEN", platform_name="Gitea"
+        )
 
     else:  # gitlab
         click.echo("GitLab Configuration:")
@@ -115,16 +118,16 @@ def _collect_platform_config():
         )
         gitlab_config["repositories"] = repos
 
-        return {"gitlab": gitlab_config}, "GITLAB_TOKEN", "GitLab"
+        return PlatformConfig(
+            config={"gitlab": gitlab_config}, env_var="GITLAB_TOKEN", platform_name="GitLab"
+        )
 
 
-def _collect_llm_config():
+def _collect_llm_config() -> Optional[LLMConfig]:
     """Collect LLM configuration from user.
 
     Returns:
-        Tuple of (llm_dict, provider) where:
-        - llm_dict: LLM configuration as dict (or None if disabled)
-        - provider: Provider name (or None if disabled)
+        LLMConfig if LLM is enabled, None if disabled
     """
     click.echo("Step 2: LLM Configuration")
     click.echo("-" * 60)
@@ -132,7 +135,7 @@ def _collect_llm_config():
     click.echo()
 
     if not llm_enabled:
-        return None, None
+        return None
 
     click.echo("LLM Provider Options:")
     click.echo("  1. openai-compatible - Use local LLM (LM Studio, Ollama, etc.)")
@@ -251,14 +254,14 @@ def _collect_llm_config():
     else:
         llm_config["cache"] = {"enabled": True, "ttl_days": 30, "max_size_gb": 10.0}
 
-    return {"llm": llm_config}, provider
+    return LLMConfig(config={"llm": llm_config}, provider=provider)
 
 
-def _collect_documentation_config():
+def _collect_documentation_config() -> DocumentationConfig:
     """Collect documentation configuration from user.
 
     Returns:
-        Dict with documentation configuration
+        DocumentationConfig containing documentation settings
     """
     click.echo("Step 3: Documentation Analysis")
     click.echo("-" * 60)
@@ -284,7 +287,7 @@ def _collect_documentation_config():
         doc_config["custom_dictionary"] = []
 
     click.echo()
-    return {"documentation": doc_config}
+    return DocumentationConfig(config={"documentation": doc_config})
 
 
 def _collect_database_config():
@@ -431,17 +434,17 @@ def init():
 
     click.echo()
 
-    platform_dict, env_var, platform_name = _collect_platform_config()
-    llm_dict, provider = _collect_llm_config()
-    doc_dict = _collect_documentation_config()
+    platform_config = _collect_platform_config()
+    llm_config = _collect_llm_config()
+    doc_config = _collect_documentation_config()
     db_url = _collect_database_config()
 
     config_dict = {}
-    config_dict.update(platform_dict)
-    config_dict.update(doc_dict)
+    config_dict.update(platform_config.config)
+    config_dict.update(doc_config.config)
     config_dict["database_url"] = db_url
-    if llm_dict is not None:
-        config_dict.update(llm_dict)
+    if llm_config is not None:
+        config_dict.update(llm_config.config)
 
     _write_and_validate_config(config_dict, config_path)
 
@@ -451,25 +454,26 @@ def init():
     click.echo("=" * 60)
     click.echo(f"\nConfig location: {config_path}")
     click.echo("\nNext steps:")
-    click.echo(f"1. Set the {env_var} environment variable:")
-    click.echo(f"   export {env_var}='your-api-token-here'")
+    click.echo(f"1. Set the {platform_config.env_var} environment variable:")
+    click.echo(f"   export {platform_config.env_var}='your-api-token-here'")
 
-    if provider == "openai-compatible" and "${LLM_API_KEY}" in yaml.dump(config_dict):
+    if llm_config and llm_config.provider == "openai-compatible" and "${LLM_API_KEY}" in yaml.dump(config_dict):
         click.echo("   export LLM_API_KEY='your-llm-api-key'")
-    elif provider == "anthropic":
+    elif llm_config and llm_config.provider == "anthropic":
         click.echo("   export ANTHROPIC_API_KEY='your-anthropic-api-key'")
-    elif provider == "bedrock":
+    elif llm_config and llm_config.provider == "bedrock":
         click.echo("   Configure AWS credentials (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY)")
 
     if click.confirm("\nCheck if required environment variables are set?", default=False):
         try:
             missing = []
-            if env_var not in os.environ:
-                missing.append(env_var)
-            if provider == "anthropic" and "ANTHROPIC_API_KEY" not in os.environ:
+            if platform_config.env_var not in os.environ:
+                missing.append(platform_config.env_var)
+            if llm_config and llm_config.provider == "anthropic" and "ANTHROPIC_API_KEY" not in os.environ:
                 missing.append("ANTHROPIC_API_KEY")
             if (
-                provider == "openai-compatible"
+                llm_config
+                and llm_config.provider == "openai-compatible"
                 and "${LLM_API_KEY}" in yaml.dump(config_dict)
                 and "LLM_API_KEY" not in os.environ
             ):
