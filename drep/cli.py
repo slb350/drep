@@ -10,7 +10,7 @@ from typing import Optional
 
 import click
 import yaml
-from git import Repo
+from git import GitCommandError, InvalidGitRepositoryError, Repo
 from pydantic_core import ValidationError
 
 from drep.adapters.gitea import GiteaAdapter
@@ -431,7 +431,15 @@ def init():
     else:
         config_path = user_config_dir / "config.yaml"
         # Create directory if it doesn't exist
-        config_path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            config_path.parent.mkdir(parents=True, exist_ok=True)
+        except PermissionError:
+            click.echo(f"ERROR: Cannot create directory {config_path.parent}", err=True)
+            click.echo("  Permission denied. Try using location 1 (current directory).", err=True)
+            raise click.Abort()
+        except OSError as e:
+            click.echo(f"ERROR: Cannot create directory: {e}", err=True)
+            raise click.Abort()
 
     # Check if config already exists
     if config_path.exists():
@@ -500,11 +508,10 @@ def init():
         click.echo("   Configure AWS credentials (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY)")
 
     if click.confirm("\nCheck if required environment variables are set?", default=False):
-        # SECURITY: Wrap env var checking in try-except
+        # SECURITY: Wrap env var checking in try-except for restricted environments
         # Rationale: In restricted environments (containers, sandboxes), os.environ
-        # access may raise exceptions. Rather than crash the wizard, catch all
-        # exceptions and show a warning. Users can verify manually if needed.
-        # This is a convenience feature, not security-critical.
+        # access or YAML serialization may raise OSError/PermissionError. Catch these
+        # specific exceptions and warn. KeyboardInterrupt must propagate to allow abort.
         try:
             missing = []
             if platform_config.env_var not in os.environ:
@@ -529,11 +536,17 @@ def init():
                     click.echo(f"  - {var}", err=True)
             else:
                 click.echo("✓ All required environment variables are set!")
-        except Exception as e:
+        except (OSError, PermissionError) as e:
+            import logging
+
+            logger = logging.getLogger(__name__)
+            logger.debug(f"Cannot access environment variables: {e}")
             click.echo(
-                f"WARNING: Cannot check environment variables: {e}\n" f"Please verify manually.",
+                "WARNING: Cannot check environment variables in this environment.",
                 err=True,
             )
+            click.echo("Please verify manually that required tokens are set.", err=True)
+        # KeyboardInterrupt, MemoryError, and other exceptions propagate naturally
 
     click.echo("\n2. Validate your configuration:")
     click.echo("   drep validate")
@@ -704,20 +717,79 @@ fi
         repo_path = Path("./repos") / owner / repo
 
         # Clone or pull repository
-        if not repo_path.exists():
-            click.echo(f"Cloning {platform} repository...")
-            repo_path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            if not repo_path.exists():
+                click.echo(f"Cloning {platform} repository...")
+                repo_path.parent.mkdir(parents=True, exist_ok=True)
 
-            # Get default branch
-            default_branch = await adapter.get_default_branch(owner, repo)
+                # Get default branch
+                try:
+                    default_branch = await adapter.get_default_branch(owner, repo)
+                except Exception as e:
+                    import logging
 
-            # Clone
-            Repo.clone_from(git_url, repo_path, branch=default_branch, env=git_env)
-        else:
-            click.echo("Pulling latest changes...")
-            git_repo = Repo(repo_path)
-            with git_repo.git.custom_environment(**git_env):
-                git_repo.remotes.origin.pull()
+                    logger = logging.getLogger(__name__)
+                    logger.error(f"Failed to get default branch for {owner}/{repo}: {e}")
+                    click.echo(f"Error: Cannot access repository {owner}/{repo}", err=True)
+                    click.echo("  Check that repository exists and token has access.", err=True)
+                    raise click.Abort()
+
+                if not default_branch:
+                    click.echo(f"Error: Repository {owner}/{repo} has no branches", err=True)
+                    raise click.Abort()
+
+                # Clone
+                try:
+                    Repo.clone_from(git_url, repo_path, branch=default_branch, env=git_env)
+                except GitCommandError as e:
+                    error_msg = str(e).lower()
+                    if "authentication failed" in error_msg:
+                        # Determine which token env var to suggest
+                        token_env_var = (
+                            "GITHUB_TOKEN" if platform == "github"
+                            else "GITEA_TOKEN" if platform == "gitea"
+                            else "GITLAB_TOKEN"
+                        )
+                        click.echo("Error: Authentication failed", err=True)
+                        click.echo(
+                            f"  Check your {token_env_var} token is valid", err=True
+                        )
+                    elif "not found" in error_msg:
+                        click.echo(f"Error: Repository {owner}/{repo} not found", err=True)
+                        click.echo("  Verify repository exists and token has access", err=True)
+                    else:
+                        click.echo(f"Error: Git clone failed: {e}", err=True)
+                    raise click.Abort()
+            else:
+                click.echo("Pulling latest changes...")
+                try:
+                    git_repo = Repo(repo_path)
+                    with git_repo.git.custom_environment(**git_env):
+                        git_repo.remotes.origin.pull()
+                except GitCommandError as e:
+                    import logging
+
+                    logger = logging.getLogger(__name__)
+                    logger.error(f"Git pull failed for {owner}/{repo}: {e}")
+                    click.echo(f"Error: Git pull failed: {e}", err=True)
+                    click.echo(f"  Try: rm -rf {repo_path} to force re-clone", err=True)
+                    raise click.Abort()
+                except InvalidGitRepositoryError:
+                    import logging
+
+                    logger = logging.getLogger(__name__)
+                    logger.error(f"Corrupted git repository at {repo_path}")
+                    click.echo(f"Error: Corrupted git repository at {repo_path}", err=True)
+                    click.echo(f"  Fix: rm -rf {repo_path} and re-run scan", err=True)
+                    raise click.Abort()
+        except PermissionError as e:
+            import logging
+
+            logger = logging.getLogger(__name__)
+            logger.error(f"Permission denied accessing {repo_path}: {e}")
+            click.echo(f"Error: Cannot write to {repo_path}", err=True)
+            click.echo("  Check directory permissions", err=True)
+            raise click.Abort()
 
         # Scan repository
         click.echo("Analyzing files...")
