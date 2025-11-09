@@ -2,6 +2,7 @@
 
 import asyncio
 import os
+import shutil
 import tempfile
 from enum import Enum
 from pathlib import Path
@@ -9,9 +10,16 @@ from pathlib import Path
 import click
 import yaml
 from git import Repo
-from pydantic import ValidationError
+from pydantic_core import ValidationError
 
 from drep.adapters.gitea import GiteaAdapter
+from drep.cli_validators import (
+    BedrockModelType,
+    DatabaseURLType,
+    NonEmptyString,
+    RepositoryListType,
+    URLType,
+)
 from drep.config import load_config
 from drep.core.issue_manager import IssueManager
 from drep.core.scanner import RepositoryScanner
@@ -32,20 +40,15 @@ def cli():
     pass
 
 
-@cli.command()
-def init():
-    """Initialize drep configuration with interactive setup."""
-    config_path = Path("config.yaml")
+def _collect_platform_config():
+    """Collect platform configuration from user.
 
-    if config_path.exists():
-        click.confirm("config.yaml already exists. Overwrite?", abort=True)
-
-    click.echo("=" * 60)
-    click.echo("Welcome to drep configuration setup!")
-    click.echo("=" * 60)
-    click.echo()
-
-    # ========== Platform Selection ==========
+    Returns:
+        Tuple of (platform_dict, env_var, platform_name) where:
+        - platform_dict: Platform configuration as dict
+        - env_var: Required environment variable name
+        - platform_name: Human-readable platform name
+    """
     click.echo("Step 1: Git Platform Configuration")
     click.echo("-" * 60)
     platform = click.prompt(
@@ -55,278 +58,350 @@ def init():
     )
     click.echo()
 
-    # Platform-specific configuration
-    platform_config_lines = []
-
     if platform.lower() == "github":
         click.echo("GitHub Configuration:")
-
-        # GitHub Enterprise or github.com
         use_enterprise = click.confirm("Are you using GitHub Enterprise?", default=False)
 
-        if use_enterprise:
-            api_url = click.prompt("GitHub Enterprise API URL", default="https://github.example.com/api/v3")
-            platform_config_lines.append("github:")
-            platform_config_lines.append("  token: ${GITHUB_TOKEN}")
-            platform_config_lines.append(f"  url: {api_url}")
-        else:
-            platform_config_lines.append("github:")
-            platform_config_lines.append("  token: ${GITHUB_TOKEN}")
-            platform_config_lines.append("  # url: https://api.github.com  # Default GitHub.com")
+        github_config = {"token": "${GITHUB_TOKEN}"}
 
-        # Repositories
+        if use_enterprise:
+            api_url = click.prompt(
+                "GitHub Enterprise API URL",
+                default="https://github.example.com/api/v3",
+                type=URLType(),
+            )
+            github_config["url"] = api_url
+
         click.echo("\nRepository Configuration:")
         click.echo("Examples: 'your-org/*' (all repos), 'owner/repo' (single repo)")
-        repos_input = click.prompt("Enter repositories (comma-separated)", default="your-org/*")
-        repos = [r.strip() for r in repos_input.split(",")]
+        repos = click.prompt(
+            "Enter repositories (comma-separated)", default="your-org/*", type=RepositoryListType()
+        )
+        github_config["repositories"] = repos
 
-        platform_config_lines.append("  repositories:")
-        for repo in repos:
-            platform_config_lines.append(f"    - {repo}")
-
-        env_var = "GITHUB_TOKEN"
-        platform_name = "GitHub"
+        return {"github": github_config}, "GITHUB_TOKEN", "GitHub"
 
     elif platform.lower() == "gitea":
         click.echo("Gitea Configuration:")
 
-        # Gitea URL
-        gitea_url = click.prompt("Gitea URL", default="http://localhost:3000")
-        platform_config_lines.append("gitea:")
-        platform_config_lines.append(f"  url: {gitea_url}")
-        platform_config_lines.append("  token: ${GITEA_TOKEN}")
+        gitea_url = click.prompt("Gitea URL", default="http://localhost:3000", type=URLType())
 
-        # Repositories
         click.echo("\nRepository Configuration:")
         click.echo("Examples: 'your-org/*' (all repos), 'owner/repo' (single repo)")
-        repos_input = click.prompt("Enter repositories (comma-separated)", default="your-org/*")
-        repos = [r.strip() for r in repos_input.split(",")]
+        repos = click.prompt(
+            "Enter repositories (comma-separated)", default="your-org/*", type=RepositoryListType()
+        )
 
-        platform_config_lines.append("  repositories:")
-        for repo in repos:
-            platform_config_lines.append(f"    - {repo}")
+        gitea_config = {"url": gitea_url, "token": "${GITEA_TOKEN}", "repositories": repos}
 
-        env_var = "GITEA_TOKEN"
-        platform_name = "Gitea"
+        return {"gitea": gitea_config}, "GITEA_TOKEN", "Gitea"
 
     else:  # gitlab
         click.echo("GitLab Configuration:")
-
-        # Self-hosted or gitlab.com
         use_selfhosted = click.confirm("Are you using self-hosted GitLab?", default=False)
 
-        platform_config_lines.append("gitlab:")
-        platform_config_lines.append("  token: ${GITLAB_TOKEN}")
+        gitlab_config = {"token": "${GITLAB_TOKEN}"}
 
         if use_selfhosted:
-            gitlab_url = click.prompt("GitLab URL", default="https://gitlab.example.com")
-            platform_config_lines.append(f"  url: {gitlab_url}")
-        else:
-            platform_config_lines.append("  # url: null  # Default gitlab.com")
+            gitlab_url = click.prompt(
+                "GitLab URL", default="https://gitlab.example.com", type=URLType()
+            )
+            gitlab_config["url"] = gitlab_url
 
-        # Repositories
         click.echo("\nRepository Configuration:")
         click.echo("Examples: 'your-org/*' (all projects), 'owner/project' (single project)")
-        repos_input = click.prompt("Enter projects (comma-separated)", default="your-org/*")
-        repos = [r.strip() for r in repos_input.split(",")]
+        repos = click.prompt(
+            "Enter projects (comma-separated)", default="your-org/*", type=RepositoryListType()
+        )
+        gitlab_config["repositories"] = repos
 
-        platform_config_lines.append("  repositories:")
-        for repo in repos:
-            platform_config_lines.append(f"    - {repo}")
+        return {"gitlab": gitlab_config}, "GITLAB_TOKEN", "GitLab"
 
-        env_var = "GITLAB_TOKEN"
-        platform_name = "GitLab"
 
-    click.echo()
+def _collect_llm_config():
+    """Collect LLM configuration from user.
 
-    # ========== LLM Configuration ==========
+    Returns:
+        Tuple of (llm_dict, provider) where:
+        - llm_dict: LLM configuration as dict (or None if disabled)
+        - provider: Provider name (or None if disabled)
+    """
     click.echo("Step 2: LLM Configuration")
     click.echo("-" * 60)
     llm_enabled = click.confirm("Enable LLM-powered code analysis?", default=True)
     click.echo()
 
-    llm_config_lines = []
+    if not llm_enabled:
+        return None, None
 
-    if llm_enabled:
-        # Provider selection
-        click.echo("LLM Provider Options:")
-        click.echo("  1. openai-compatible - Use local LLM (LM Studio, Ollama, etc.)")
-        click.echo("  2. bedrock - AWS Bedrock")
-        click.echo("  3. anthropic - Anthropic API (Claude)")
+    click.echo("LLM Provider Options:")
+    click.echo("  1. openai-compatible - Use local LLM (LM Studio, Ollama, etc.)")
+    click.echo("  2. bedrock - AWS Bedrock")
+    click.echo("  3. anthropic - Anthropic API (Claude)")
 
-        provider = click.prompt(
-            "Choose provider",
-            type=click.Choice(["openai-compatible", "bedrock", "anthropic"], case_sensitive=False),
-            default="openai-compatible",
+    provider = click.prompt(
+        "Choose provider",
+        type=click.Choice(["openai-compatible", "bedrock", "anthropic"], case_sensitive=False),
+        default="openai-compatible",
+    )
+
+    llm_config = {"enabled": True, "provider": provider}
+
+    if provider == "openai-compatible":
+        click.echo("\nOpenAI-Compatible Configuration:")
+        endpoint = click.prompt("API Endpoint", default="http://localhost:1234/v1", type=URLType())
+        model = click.prompt("Model name", default="qwen3-30b-a3b", type=NonEmptyString())
+        llm_config["endpoint"] = endpoint
+        llm_config["model"] = model
+
+        use_api_key = click.confirm("Does your endpoint require an API key?", default=False)
+        if use_api_key:
+            llm_config["api_key"] = "${LLM_API_KEY}"
+
+    elif provider == "bedrock":
+        click.echo("\nAWS Bedrock Configuration:")
+        region = click.prompt("AWS Region", default="us-east-1", type=NonEmptyString())
+        model = click.prompt(
+            "Bedrock Model ID",
+            default="anthropic.claude-sonnet-4-5-20250929-v1:0",
+            type=BedrockModelType(),
         )
+        llm_config["bedrock"] = {"region": region, "model": model}
 
-        llm_config_lines.append("llm:")
-        llm_config_lines.append("  enabled: true")
-        llm_config_lines.append(f"  provider: {provider}")
-
-        if provider == "openai-compatible":
-            click.echo("\nOpenAI-Compatible Configuration:")
-            endpoint = click.prompt("API Endpoint", default="http://localhost:1234/v1")
-            model = click.prompt("Model name", default="qwen3-30b-a3b")
-            llm_config_lines.append(f"  endpoint: {endpoint}")
-            llm_config_lines.append(f"  model: {model}")
-
-            use_api_key = click.confirm("Does your endpoint require an API key?", default=False)
-            if use_api_key:
-                llm_config_lines.append("  api_key: ${LLM_API_KEY}")
-
-        elif provider == "bedrock":
-            click.echo("\nAWS Bedrock Configuration:")
-            region = click.prompt("AWS Region", default="us-east-1")
-            model = click.prompt("Bedrock Model ID", default="anthropic.claude-sonnet-4-5-20250929-v1:0")
-            llm_config_lines.append("  bedrock:")
-            llm_config_lines.append(f"    region: {region}")
-            llm_config_lines.append(f"    model: {model}")
-
-        elif provider == "anthropic":
-            click.echo("\nAnthropic Configuration:")
-            llm_config_lines.append("  api_key: ${ANTHROPIC_API_KEY}")
-            model = click.prompt("Model name", default="claude-sonnet-4-5-20250929")
-            llm_config_lines.append(f"  model: {model}")
-
-        click.echo()
-
-        # Advanced LLM settings
-        configure_advanced = click.confirm("Configure advanced LLM settings?", default=False)
-
-        if configure_advanced:
-            click.echo("\nAdvanced LLM Settings:")
-            temperature = click.prompt("Temperature (0.0-2.0)", default=0.2, type=float)
-            max_tokens = click.prompt("Max tokens per request", default=8000, type=int)
-            timeout = click.prompt("Request timeout (seconds)", default=60, type=int)
-            max_retries = click.prompt("Max retries on failure", default=3, type=int)
-            max_concurrent = click.prompt("Max concurrent requests (global)", default=5, type=int)
-            requests_per_min = click.prompt("Requests per minute limit", default=60, type=int)
-
-            llm_config_lines.append(f"  temperature: {temperature}")
-            llm_config_lines.append(f"  max_tokens: {max_tokens}")
-            llm_config_lines.append(f"  timeout: {timeout}")
-            llm_config_lines.append(f"  max_retries: {max_retries}")
-            llm_config_lines.append("  retry_delay: 2")
-            llm_config_lines.append("  exponential_backoff: true")
-            llm_config_lines.append(f"  max_concurrent_global: {max_concurrent}")
-            llm_config_lines.append("  max_concurrent_per_repo: 3")
-            llm_config_lines.append(f"  requests_per_minute: {requests_per_min}")
-            llm_config_lines.append("  max_tokens_per_minute: 100000")
-        else:
-            # Use defaults
-            llm_config_lines.append("  temperature: 0.2")
-            llm_config_lines.append("  max_tokens: 8000")
-            llm_config_lines.append("  timeout: 60")
-            llm_config_lines.append("  max_retries: 3")
-            llm_config_lines.append("  retry_delay: 2")
-            llm_config_lines.append("  exponential_backoff: true")
-            llm_config_lines.append("  max_concurrent_global: 5")
-            llm_config_lines.append("  max_concurrent_per_repo: 3")
-            llm_config_lines.append("  requests_per_minute: 60")
-            llm_config_lines.append("  max_tokens_per_minute: 100000")
-
-        click.echo()
-
-        # Cache configuration
-        configure_cache = click.confirm("Configure LLM response caching?", default=False)
-
-        if configure_cache:
-            click.echo("\nCache Settings:")
-            cache_enabled = click.confirm("Enable cache?", default=True)
-            ttl_days = click.prompt("Cache TTL (days)", default=30, type=int)
-            max_size_gb = click.prompt("Max cache size (GB)", default=10.0, type=float)
-
-            llm_config_lines.append("  cache:")
-            llm_config_lines.append(f"    enabled: {str(cache_enabled).lower()}")
-            llm_config_lines.append(f"    ttl_days: {ttl_days}")
-            llm_config_lines.append(f"    max_size_gb: {max_size_gb}")
-        else:
-            llm_config_lines.append("  cache:")
-            llm_config_lines.append("    enabled: true")
-            llm_config_lines.append("    ttl_days: 30")
-            llm_config_lines.append("    max_size_gb: 10.0")
-    else:
-        llm_config_lines.append("llm:")
-        llm_config_lines.append("  enabled: false")
+    elif provider == "anthropic":
+        click.echo("\nAnthropic Configuration:")
+        llm_config["api_key"] = "${ANTHROPIC_API_KEY}"
+        model = click.prompt(
+            "Model name", default="claude-sonnet-4-5-20250929", type=NonEmptyString()
+        )
+        llm_config["model"] = model
 
     click.echo()
 
-    # ========== Documentation Configuration ==========
+    configure_advanced = click.confirm("Configure advanced LLM settings?", default=False)
+
+    if configure_advanced:
+        click.echo("\nAdvanced LLM Settings:")
+        temperature = click.prompt(
+            "Temperature (0.0-2.0)", default=0.2, type=click.FloatRange(min=0.0, max=2.0)
+        )
+        max_tokens = click.prompt(
+            "Max tokens per request", default=8000, type=click.IntRange(min=100, max=20000)
+        )
+        timeout = click.prompt(
+            "Request timeout (seconds)", default=60, type=click.IntRange(min=10, max=300)
+        )
+        max_retries = click.prompt(
+            "Max retries on failure", default=3, type=click.IntRange(min=0, max=10)
+        )
+        max_concurrent = click.prompt(
+            "Max concurrent requests (global)", default=5, type=click.IntRange(min=1, max=50)
+        )
+        requests_per_min = click.prompt(
+            "Requests per minute limit", default=60, type=click.IntRange(min=1, max=1000)
+        )
+
+        llm_config.update(
+            {
+                "temperature": temperature,
+                "max_tokens": max_tokens,
+                "timeout": timeout,
+                "max_retries": max_retries,
+                "retry_delay": 2,
+                "exponential_backoff": True,
+                "max_concurrent_global": max_concurrent,
+                "max_concurrent_per_repo": 3,
+                "requests_per_minute": requests_per_min,
+                "max_tokens_per_minute": 100000,
+            }
+        )
+    else:
+        llm_config.update(
+            {
+                "temperature": 0.2,
+                "max_tokens": 8000,
+                "timeout": 60,
+                "max_retries": 3,
+                "retry_delay": 2,
+                "exponential_backoff": True,
+                "max_concurrent_global": 5,
+                "max_concurrent_per_repo": 3,
+                "requests_per_minute": 60,
+                "max_tokens_per_minute": 100000,
+            }
+        )
+
+    click.echo()
+
+    configure_cache = click.confirm("Configure LLM response caching?", default=False)
+
+    if configure_cache:
+        click.echo("\nCache Settings:")
+        cache_enabled = click.confirm("Enable cache?", default=True)
+        ttl_days = click.prompt("Cache TTL (days)", default=30, type=click.IntRange(min=1))
+        max_size_gb = click.prompt(
+            "Max cache size (GB)", default=10.0, type=click.FloatRange(min=0.1)
+        )
+
+        llm_config["cache"] = {
+            "enabled": cache_enabled,
+            "ttl_days": ttl_days,
+            "max_size_gb": max_size_gb,
+        }
+    else:
+        llm_config["cache"] = {"enabled": True, "ttl_days": 30, "max_size_gb": 10.0}
+
+    return {"llm": llm_config}, provider
+
+
+def _collect_documentation_config():
+    """Collect documentation configuration from user.
+
+    Returns:
+        Dict with documentation configuration
+    """
     click.echo("Step 3: Documentation Analysis")
     click.echo("-" * 60)
     doc_enabled = click.confirm("Enable documentation analysis?", default=True)
 
-    doc_config_lines = []
-    doc_config_lines.append("documentation:")
-    doc_config_lines.append(f"  enabled: {str(doc_enabled).lower()}")
+    doc_config = {"enabled": doc_enabled}
 
     if doc_enabled:
         markdown_checks = click.confirm("Enable markdown lint checks?", default=False)
-        doc_config_lines.append(f"  markdown_checks: {str(markdown_checks).lower()}")
+        doc_config["markdown_checks"] = markdown_checks
 
         custom_dict = click.confirm("Add custom dictionary words?", default=False)
         if custom_dict:
             words = click.prompt("Enter words (comma-separated)", default="")
             if words.strip():
-                words_list = [w.strip() for w in words.split(",")]
-                doc_config_lines.append("  custom_dictionary:")
-                for word in words_list:
-                    doc_config_lines.append(f"    - {word}")
+                words_list = [w.strip() for w in words.split(",") if w.strip()]
+                doc_config["custom_dictionary"] = words_list if words_list else []
             else:
-                doc_config_lines.append("  custom_dictionary: []")
+                doc_config["custom_dictionary"] = []
         else:
-            doc_config_lines.append("  custom_dictionary: []")
+            doc_config["custom_dictionary"] = []
     else:
-        doc_config_lines.append("  custom_dictionary: []")
+        doc_config["custom_dictionary"] = []
 
     click.echo()
+    return {"documentation": doc_config}
 
-    # ========== Database Configuration ==========
+
+def _collect_database_config():
+    """Collect database configuration from user.
+
+    Returns:
+        Database URL string
+    """
     click.echo("Step 4: Database Configuration")
     click.echo("-" * 60)
     use_custom_db = click.confirm("Use custom database URL?", default=False)
 
     if use_custom_db:
-        db_url = click.prompt("Database URL", default="sqlite:///./drep.db")
+        db_url = click.prompt("Database URL", default="sqlite:///./drep.db", type=DatabaseURLType())
     else:
         db_url = "sqlite:///./drep.db"
 
     click.echo()
+    return db_url
 
-    # ========== Write Configuration ==========
-    config_content = []
-    config_content.extend(platform_config_lines)
-    config_content.append("")
-    config_content.extend(doc_config_lines)
-    config_content.append("")
-    config_content.append(f"database_url: {db_url}")
 
-    # Only include LLM config if enabled
-    if llm_enabled:
-        config_content.append("")
-        config_content.extend(llm_config_lines)
+def _write_and_validate_config(config_dict, config_path):
+    """Write configuration to file and validate it.
 
-    config_text = "\n".join(config_content)
-    config_path.write_text(config_text)
+    Args:
+        config_dict: Configuration dictionary
+        config_path: Path to write config file
 
-    # ========== Validate Configuration ==========
+    Raises:
+        click.Abort: If validation fails or file cannot be written
+    """
+    config_yaml = yaml.dump(config_dict, default_flow_style=False, sort_keys=False)
+
+    try:
+        config_path.write_text(config_yaml)
+    except PermissionError:
+        click.echo(f"ERROR: Permission denied writing to {config_path}", err=True)
+        click.echo("Check file permissions.", err=True)
+        raise click.Abort()
+    except OSError as e:
+        click.echo(f"ERROR: Failed to write config: {e}", err=True)
+        click.echo("Check disk space and permissions.", err=True)
+        raise click.Abort()
+
     click.echo("=" * 60)
     click.echo("Validating configuration...")
     click.echo("-" * 60)
 
     try:
-        # Try to load config (in non-strict mode since env vars aren't set yet)
-        from drep.config import load_config
         load_config(str(config_path), strict=False)
         click.echo("✓ Configuration structure is valid!")
+    except ValidationError as e:
+        click.echo("ERROR: Configuration validation failed:", err=True)
+        for error in e.errors():
+            field = " -> ".join(str(x) for x in error["loc"])
+            click.echo(f"  - {field}: {error['msg']}", err=True)
+        click.echo(f"\nConfig file: {config_path}", err=True)
+        click.echo("Please re-run 'drep init' or fix manually.", err=True)
+        raise click.Abort()
+    except ValueError as e:
+        click.echo(f"ERROR: Configuration validation failed: {e}", err=True)
+        click.echo(f"\nConfig file: {config_path}", err=True)
+        click.echo("Please re-run 'drep init' or fix manually.", err=True)
+        raise click.Abort()
     except Exception as e:
-        click.echo(f"Warning: Configuration validation failed: {e}", err=True)
-        click.echo("You may need to fix config.yaml manually.", err=True)
+        click.echo(f"ERROR: Unexpected validation error: {e}", err=True)
+        click.echo("Please report this issue.", err=True)
+        raise click.Abort()
 
+
+@cli.command()
+def init():
+    """Initialize drep configuration with interactive setup wizard.
+
+    Guides the user through a multi-step wizard to configure:
+    1. Platform selection (GitHub/Gitea/GitLab) with platform-specific options
+    2. LLM configuration (optional) - supports OpenAI-compatible, Bedrock, Anthropic
+    3. Documentation analysis settings
+    4. Database configuration
+
+    Creates config.yaml in the current directory. Prompts before overwriting
+    if the file already exists. Validates configuration structure after creation.
+
+    Raises:
+        click.Abort: If configuration validation fails or file cannot be written
+    """
+    config_path = Path("config.yaml")
+
+    if config_path.exists():
+        if click.confirm("config.yaml already exists. Overwrite?", default=False):
+            backup_path = config_path.with_suffix(".yaml.backup")
+            shutil.copy(config_path, backup_path)
+            click.echo(f"Backup created: {backup_path}")
+            click.echo()
+        else:
+            raise click.Abort()
+
+    click.echo("=" * 60)
+    click.echo("Welcome to drep configuration setup!")
+    click.echo("=" * 60)
     click.echo()
 
-    # ========== Next Steps ==========
+    platform_dict, env_var, platform_name = _collect_platform_config()
+    llm_dict, provider = _collect_llm_config()
+    doc_dict = _collect_documentation_config()
+    db_url = _collect_database_config()
+
+    config_dict = {}
+    config_dict.update(platform_dict)
+    config_dict.update(doc_dict)
+    config_dict["database_url"] = db_url
+    if llm_dict is not None:
+        config_dict.update(llm_dict)
+
+    _write_and_validate_config(config_dict, config_path)
+
+    click.echo()
     click.echo("=" * 60)
     click.echo("✓ Configuration created successfully!")
     click.echo("=" * 60)
@@ -334,13 +409,32 @@ def init():
     click.echo(f"1. Set the {env_var} environment variable:")
     click.echo(f"   export {env_var}='your-api-token-here'")
 
-    if llm_enabled:
-        if provider == "openai-compatible" and "api_key" in config_text:
-            click.echo("   export LLM_API_KEY='your-llm-api-key'")
-        elif provider == "anthropic":
-            click.echo("   export ANTHROPIC_API_KEY='your-anthropic-api-key'")
-        elif provider == "bedrock":
-            click.echo("   Configure AWS credentials (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY)")
+    if provider == "openai-compatible" and "${LLM_API_KEY}" in yaml.dump(config_dict):
+        click.echo("   export LLM_API_KEY='your-llm-api-key'")
+    elif provider == "anthropic":
+        click.echo("   export ANTHROPIC_API_KEY='your-anthropic-api-key'")
+    elif provider == "bedrock":
+        click.echo("   Configure AWS credentials (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY)")
+
+    if click.confirm("\nCheck if required environment variables are set?", default=False):
+        missing = []
+        if env_var not in os.environ:
+            missing.append(env_var)
+        if provider == "anthropic" and "ANTHROPIC_API_KEY" not in os.environ:
+            missing.append("ANTHROPIC_API_KEY")
+        if (
+            provider == "openai-compatible"
+            and "${LLM_API_KEY}" in yaml.dump(config_dict)
+            and "LLM_API_KEY" not in os.environ
+        ):
+            missing.append("LLM_API_KEY")
+
+        if missing:
+            click.echo("WARNING: Missing environment variables:", err=True)
+            for var in missing:
+                click.echo(f"  - {var}", err=True)
+        else:
+            click.echo("✓ All required environment variables are set!")
 
     click.echo("\n2. Validate your configuration:")
     click.echo("   drep validate")

@@ -43,8 +43,17 @@ class TestInitCommand:
         """Test that init command creates config.yaml with minimal setup."""
         # Run in temp directory
         with runner.isolated_filesystem(temp_dir=tmp_path):
-            # Provide inputs: platform=gitea, url=default, repos=default, llm=no, docs=yes, no markdown, no dict, db=default
-            inputs = "gitea\n\n\nn\ny\nn\nn\nn\n"
+            # Wizard inputs:
+            # 1. Platform: gitea
+            # 2. Gitea URL: (default)
+            # 3. Repositories: (default)
+            # 4. Enable LLM: n
+            # 5. Enable docs: y
+            # 6. Markdown checks: n
+            # 7. Custom dictionary: n
+            # 8. Custom DB: n
+            # 9. Check env vars: n
+            inputs = "gitea\n\n\nn\ny\nn\nn\nn\nn\n"
             result = runner.invoke(cli, ["init"], input=inputs)
 
             assert result.exit_code == 0
@@ -62,8 +71,17 @@ class TestInitCommand:
     def test_init_creates_github_config(self, runner, tmp_path):
         """Test that init command creates GitHub config."""
         with runner.isolated_filesystem(temp_dir=tmp_path):
-            # Inputs: platform=github, not enterprise, repos=default, llm=no, docs=yes, no markdown, no dict, db=default
-            inputs = "github\nn\n\nn\ny\nn\nn\nn\n"
+            # Wizard inputs:
+            # 1. Platform: github
+            # 2. GitHub Enterprise: n
+            # 3. Repositories: (default)
+            # 4. Enable LLM: n
+            # 5. Enable docs: y
+            # 6. Markdown checks: n
+            # 7. Custom dictionary: n
+            # 8. Custom DB: n
+            # 9. Check env vars: n
+            inputs = "github\nn\n\nn\ny\nn\nn\nn\nn\n"
             result = runner.invoke(cli, ["init"], input=inputs)
 
             assert result.exit_code == 0
@@ -74,8 +92,17 @@ class TestInitCommand:
     def test_init_creates_gitlab_config(self, runner, tmp_path):
         """Test that init command creates GitLab config."""
         with runner.isolated_filesystem(temp_dir=tmp_path):
-            # Inputs: platform=gitlab, not self-hosted, repos=default, llm=no, docs=yes, no markdown, no dict, db=default
-            inputs = "gitlab\nn\n\nn\ny\nn\nn\nn\n"
+            # Wizard inputs:
+            # 1. Platform: gitlab
+            # 2. Self-hosted: n
+            # 3. Repositories: (default)
+            # 4. Enable LLM: n
+            # 5. Enable docs: y
+            # 6. Markdown checks: n
+            # 7. Custom dictionary: n
+            # 8. Custom DB: n
+            # 9. Check env vars: n
+            inputs = "gitlab\nn\n\nn\ny\nn\nn\nn\nn\n"
             result = runner.invoke(cli, ["init"], input=inputs)
 
             assert result.exit_code == 0
@@ -86,8 +113,23 @@ class TestInitCommand:
     def test_init_with_llm_openai_compatible(self, runner, tmp_path):
         """Test init with OpenAI-compatible LLM provider."""
         with runner.isolated_filesystem(temp_dir=tmp_path):
-            # Inputs: gitea, url, repos, llm=yes, provider=openai-compatible, endpoint, model, no api key, no advanced, no cache, docs=yes, no markdown, no dict, db
-            inputs = "gitea\n\n\ny\nopenai-compatible\n\n\nn\nn\nn\ny\nn\nn\nn\n"
+            # Wizard inputs:
+            # 1. Platform: gitea
+            # 2. Gitea URL: (default)
+            # 3. Repositories: (default)
+            # 4. Enable LLM: y
+            # 5. Provider: openai-compatible
+            # 6. Endpoint: (default)
+            # 7. Model: (default)
+            # 8. API key required: n
+            # 9. Advanced settings: n
+            # 10. Configure cache: n
+            # 11. Enable docs: y
+            # 12. Markdown checks: n
+            # 13. Custom dictionary: n
+            # 14. Custom DB: n
+            # 15. Check env vars: n
+            inputs = "gitea\n\n\ny\nopenai-compatible\n\n\nn\nn\nn\ny\nn\nn\nn\nn\n"
             result = runner.invoke(cli, ["init"], input=inputs)
 
             assert result.exit_code == 0
@@ -101,8 +143,22 @@ class TestInitCommand:
     def test_init_with_llm_bedrock(self, runner, tmp_path):
         """Test init with AWS Bedrock provider."""
         with runner.isolated_filesystem(temp_dir=tmp_path):
-            # Inputs: github, not enterprise, repos, llm=yes, provider=bedrock, region, model, no advanced, no cache, docs, no markdown, no dict, db
-            inputs = "github\nn\n\ny\nbedrock\n\n\nn\nn\ny\nn\nn\nn\n"
+            # Wizard inputs:
+            # 1. Platform: github
+            # 2. GitHub Enterprise: n
+            # 3. Repositories: (default)
+            # 4. Enable LLM: y
+            # 5. Provider: bedrock
+            # 6. Region: (default)
+            # 7. Model: (default)
+            # 8. Advanced settings: n
+            # 9. Configure cache: n
+            # 10. Enable docs: y
+            # 11. Markdown checks: n
+            # 12. Custom dictionary: n
+            # 13. Custom DB: n
+            # 14. Check env vars: n
+            inputs = "github\nn\n\ny\nbedrock\n\n\nn\nn\ny\nn\nn\nn\nn\n"
             result = runner.invoke(cli, ["init"], input=inputs)
 
             assert result.exit_code == 0
@@ -116,8 +172,21 @@ class TestInitCommand:
     def test_init_with_llm_anthropic(self, runner, tmp_path):
         """Test init with Anthropic provider."""
         with runner.isolated_filesystem(temp_dir=tmp_path):
-            # Inputs: gitea, url, repos, llm=yes, provider=anthropic, model, no advanced, no cache, docs, no markdown, no dict, db
-            inputs = "gitea\n\n\ny\nanthropic\n\nn\nn\ny\nn\nn\nn\n"
+            # Wizard inputs:
+            # 1. Platform: gitea
+            # 2. Gitea URL: (default)
+            # 3. Repositories: (default)
+            # 4. Enable LLM: y
+            # 5. Provider: anthropic
+            # 6. Model: (default)
+            # 7. Advanced settings: n
+            # 8. Configure cache: n
+            # 9. Enable docs: y
+            # 10. Markdown checks: n
+            # 11. Custom dictionary: n
+            # 12. Custom DB: n
+            # 13. Check env vars: n
+            inputs = "gitea\n\n\ny\nanthropic\n\nn\nn\ny\nn\nn\nn\nn\n"
             result = runner.invoke(cli, ["init"], input=inputs)
 
             assert result.exit_code == 0
@@ -147,12 +216,23 @@ class TestInitCommand:
             # Create existing config
             Path("config.yaml").write_text("existing: config")
 
-            # Run init and confirm, then provide minimal inputs
-            inputs = "y\ngitea\n\n\nn\ny\nn\nn\nn\n"
+            # Wizard inputs:
+            # 1. Overwrite: y
+            # 2. Platform: gitea
+            # 3. Gitea URL: (default)
+            # 4. Repositories: (default)
+            # 5. Enable LLM: n
+            # 6. Enable docs: y
+            # 7. Markdown checks: n
+            # 8. Custom dictionary: n
+            # 9. Custom DB: n
+            # 10. Check env vars: n
+            inputs = "y\ngitea\n\n\nn\ny\nn\nn\nn\nn\n"
             result = runner.invoke(cli, ["init"], input=inputs)
 
             assert result.exit_code == 0
             assert "✓ Configuration created successfully!" in result.output
+            assert "Backup created:" in result.output
 
             # Verify new content
             config_content = Path("config.yaml").read_text()
@@ -162,8 +242,9 @@ class TestInitCommand:
     def test_init_template_structure(self, runner, tmp_path):
         """Test that init creates valid YAML template."""
         with runner.isolated_filesystem(temp_dir=tmp_path):
-            # Minimal inputs
-            inputs = "gitea\n\n\nn\ny\nn\nn\nn\n"
+            # Wizard inputs:
+            # 1-9: same as minimal test
+            inputs = "gitea\n\n\nn\ny\nn\nn\nn\nn\n"
             result = runner.invoke(cli, ["init"], input=inputs)
 
             assert result.exit_code == 0
@@ -185,8 +266,12 @@ class TestInitCommand:
     def test_init_with_custom_repositories(self, runner, tmp_path):
         """Test init with custom repository configuration."""
         with runner.isolated_filesystem(temp_dir=tmp_path):
-            # Inputs: gitea, url, custom repos, llm=no, docs, no markdown, no dict, db
-            inputs = "gitea\n\nowner/repo1, owner/repo2\nn\ny\nn\nn\nn\n"
+            # Wizard inputs:
+            # 1. Platform: gitea
+            # 2. Gitea URL: (default)
+            # 3. Repositories: owner/repo1, owner/repo2
+            # 4-9: same as minimal test
+            inputs = "gitea\n\nowner/repo1, owner/repo2\nn\ny\nn\nn\nn\nn\n"
             result = runner.invoke(cli, ["init"], input=inputs)
 
             assert result.exit_code == 0
@@ -197,8 +282,18 @@ class TestInitCommand:
     def test_init_with_documentation_options(self, runner, tmp_path):
         """Test init with documentation configuration."""
         with runner.isolated_filesystem(temp_dir=tmp_path):
-            # Inputs: gitea, url, repos, llm=no, docs=yes, markdown=yes, dict=yes, words, db
-            inputs = "gitea\n\n\nn\ny\ny\ny\nfoo,bar,baz\nn\n"
+            # Wizard inputs:
+            # 1. Platform: gitea
+            # 2. Gitea URL: (default)
+            # 3. Repositories: (default)
+            # 4. Enable LLM: n
+            # 5. Enable docs: y
+            # 6. Markdown checks: y
+            # 7. Custom dictionary: y
+            # 8. Words: foo,bar,baz
+            # 9. Custom DB: n
+            # 10. Check env vars: n
+            inputs = "gitea\n\n\nn\ny\ny\ny\nfoo,bar,baz\nn\nn\n"
             result = runner.invoke(cli, ["init"], input=inputs)
 
             assert result.exit_code == 0
@@ -212,13 +307,128 @@ class TestInitCommand:
     def test_init_validates_config(self, runner, tmp_path):
         """Test that init validates the created config."""
         with runner.isolated_filesystem(temp_dir=tmp_path):
-            # Minimal valid inputs
-            inputs = "gitea\n\n\nn\ny\nn\nn\nn\n"
+            # Wizard inputs:
+            # 1-9: same as minimal test
+            inputs = "gitea\n\n\nn\ny\nn\nn\nn\nn\n"
             result = runner.invoke(cli, ["init"], input=inputs)
 
             assert result.exit_code == 0
             assert "Validating configuration..." in result.output
             assert "✓ Configuration structure is valid!" in result.output
+
+    def test_init_github_enterprise(self, runner, tmp_path):
+        """Test GitHub Enterprise configuration with custom URL."""
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            # Wizard inputs:
+            # 1. Platform: github
+            # 2. Enterprise: y
+            # 3. API URL: https://github.corp.example.com/api/v3
+            # 4. Repositories: (default)
+            # 5-10: minimal config
+            inputs = "github\ny\nhttps://github.corp.example.com/api/v3\n\nn\ny\nn\nn\nn\nn\n"
+            result = runner.invoke(cli, ["init"], input=inputs)
+
+            assert result.exit_code == 0
+            config = yaml.safe_load(Path("config.yaml").read_text())
+            assert "github" in config
+            assert config["github"]["url"] == "https://github.corp.example.com/api/v3"
+
+    def test_init_gitlab_selfhosted(self, runner, tmp_path):
+        """Test self-hosted GitLab configuration with custom URL."""
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            # Wizard inputs:
+            # 1. Platform: gitlab
+            # 2. Self-hosted: y
+            # 3. GitLab URL: https://gitlab.internal.corp.com
+            # 4. Repositories: (default)
+            # 5-10: minimal config
+            inputs = "gitlab\ny\nhttps://gitlab.internal.corp.com\n\nn\ny\nn\nn\nn\nn\n"
+            result = runner.invoke(cli, ["init"], input=inputs)
+
+            assert result.exit_code == 0
+            config = yaml.safe_load(Path("config.yaml").read_text())
+            assert "gitlab" in config
+            assert config["gitlab"]["url"] == "https://gitlab.internal.corp.com"
+
+    def test_init_openai_with_api_key(self, runner, tmp_path):
+        """Test OpenAI-compatible provider with API key."""
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            # Wizard inputs with API key enabled
+            # 1-4: gitea platform
+            # 5: llm=y
+            # 6: provider=openai-compatible
+            # 7: endpoint (default)
+            # 8: model (default)
+            # 9: api_key=y
+            # 10-15: rest minimal
+            inputs = "gitea\n\n\ny\nopenai-compatible\n\n\ny\nn\nn\ny\nn\nn\nn\nn\n"
+            result = runner.invoke(cli, ["init"], input=inputs)
+
+            assert result.exit_code == 0
+            config = yaml.safe_load(Path("config.yaml").read_text())
+            assert "llm" in config
+            assert "api_key" in config["llm"]
+            assert config["llm"]["api_key"] == "${LLM_API_KEY}"
+            assert "LLM_API_KEY" in result.output
+
+    def test_init_advanced_llm_settings(self, runner, tmp_path):
+        """Test advanced LLM configuration."""
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            # Wizard inputs with advanced settings
+            # 1-8: openai setup
+            # 9: advanced=y
+            # 10-15: custom advanced values
+            # 16: cache=n
+            # 17-21: rest minimal
+            inputs = (
+                "gitea\n\n\ny\nopenai-compatible\n\n\nn\ny\n0.7\n4096\n120\n5\n10\n120\nn\n"
+                "y\nn\nn\nn\nn\n"
+            )
+            result = runner.invoke(cli, ["init"], input=inputs)
+
+            assert result.exit_code == 0
+            config = yaml.safe_load(Path("config.yaml").read_text())
+            assert config["llm"]["temperature"] == 0.7
+            assert config["llm"]["max_tokens"] == 4096
+            assert config["llm"]["timeout"] == 120
+            assert config["llm"]["max_retries"] == 5
+            assert config["llm"]["max_concurrent_global"] == 10
+            assert config["llm"]["requests_per_minute"] == 120
+
+    def test_init_cache_configuration(self, runner, tmp_path):
+        """Test LLM cache configuration."""
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            # Wizard inputs with cache config
+            # 1-9: openai setup, no advanced
+            # 10: cache=y
+            # 11-13: cache settings
+            # 14-18: rest minimal
+            inputs = "gitea\n\n\ny\nopenai-compatible\n\n\nn\nn\ny\ny\n7\n5.0\ny\nn\nn\nn\nn\n"
+            result = runner.invoke(cli, ["init"], input=inputs)
+
+            assert result.exit_code == 0
+            config = yaml.safe_load(Path("config.yaml").read_text())
+            assert "cache" in config["llm"]
+            assert config["llm"]["cache"]["enabled"] is True
+            assert config["llm"]["cache"]["ttl_days"] == 7
+            assert config["llm"]["cache"]["max_size_gb"] == 5.0
+
+    def test_init_validation_failure(self, runner, tmp_path):
+        """Test that validation failures abort with error."""
+        from unittest.mock import patch
+
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            # Mock load_config to raise ValueError
+            with patch("drep.cli.load_config") as mock_load:
+                mock_load.side_effect = ValueError(
+                    "OpenAI-compatible provider requires 'endpoint' field"
+                )
+                inputs = "gitea\n\n\nn\ny\nn\nn\nn\nn\n"
+                result = runner.invoke(cli, ["init"], input=inputs)
+
+                assert result.exit_code == 1
+                assert "ERROR: Configuration validation failed:" in result.output
+                assert "OpenAI-compatible provider requires 'endpoint' field" in result.output
 
 
 class TestScanCommand:
