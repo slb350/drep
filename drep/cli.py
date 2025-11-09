@@ -316,7 +316,12 @@ def _write_and_validate_config(config_dict, config_path):
     Raises:
         click.Abort: If validation fails or file cannot be written
     """
-    config_yaml = yaml.dump(config_dict, default_flow_style=False, sort_keys=False)
+    try:
+        config_yaml = yaml.dump(config_dict, default_flow_style=False, sort_keys=False)
+    except yaml.YAMLError as e:
+        click.echo(f"ERROR: Failed to serialize configuration: {e}", err=True)
+        click.echo("This is a bug. Please report this issue.", err=True)
+        raise click.Abort()
 
     try:
         config_path.write_text(config_yaml)

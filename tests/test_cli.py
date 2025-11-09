@@ -330,6 +330,25 @@ class TestInitCommand:
                 assert "No space left on device" in result.output
                 assert "Check disk space and permissions" in result.output
 
+    def test_init_handles_yaml_serialization_error(self, runner, tmp_path):
+        """Test init handles YAML serialization errors gracefully."""
+        from unittest.mock import patch
+        import yaml
+
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            # Mock yaml.dump to raise YAMLError
+            with patch("yaml.dump") as mock_dump:
+                mock_dump.side_effect = yaml.YAMLError("Cannot serialize non-standard type")
+
+                # Wizard inputs (minimal)
+                inputs = "1\ngitea\n\n\nn\ny\nn\nn\nn\nn\n"
+                result = runner.invoke(cli, ["init"], input=inputs)
+
+                # Should abort with clear error message
+                assert result.exit_code == 1
+                assert "ERROR: Failed to serialize configuration" in result.output
+                assert "Cannot serialize non-standard type" in result.output or "This is a bug" in result.output
+
     def test_init_template_structure(self, runner, tmp_path):
         """Test that init creates valid YAML template."""
         with runner.isolated_filesystem(temp_dir=tmp_path):
