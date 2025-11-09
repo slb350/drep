@@ -911,6 +911,69 @@ class TestConfigDiscoveryConsistency:
                 mock_scan.assert_called_once_with("owner", "repo", "config.yaml", False, True)
 
 
+class TestPlatformURLValidation:
+    """Tests for platform URL validation during wizard."""
+
+    def test_init_github_enterprise_rejects_invalid_url(self, runner, tmp_path):
+        """Test GitHub Enterprise URL validation rejects invalid URLs."""
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            # Try GitHub Enterprise with invalid URL, then valid URL
+            # Invalid: "not-a-url" (missing protocol)
+            # Valid: https://github.example.com/api/v3
+            inputs = (
+                "1\ngithub\ny\nnot-a-url\n"
+                "https://github.example.com/api/v3\n"
+                "owner/*\nn\ny\nn\nn\nn\nn\n"
+            )
+            result = runner.invoke(cli, ["init"], input=inputs)
+
+            # Should succeed after retry
+            assert result.exit_code == 0
+            # Verify error message appeared
+            assert "invalid" in result.output.lower() or "error" in result.output.lower()
+            # Verify config created with valid URL
+            config_content = Path("config.yaml").read_text()
+            assert "https://github.example.com/api/v3" in config_content
+
+    def test_init_gitea_rejects_invalid_url(self, runner, tmp_path):
+        """Test Gitea URL validation rejects malformed URLs."""
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            # Try Gitea with invalid URL, then valid URL
+            # Invalid: "gitea-server" (missing protocol)
+            # Valid: http://192.168.1.14:3000
+            inputs = "1\ngitea\ngitea-server\n" "http://192.168.1.14:3000\n" "\nn\ny\nn\nn\nn\nn\n"
+            result = runner.invoke(cli, ["init"], input=inputs)
+
+            # Should succeed after retry
+            assert result.exit_code == 0
+            # Verify error message appeared
+            assert "invalid" in result.output.lower() or "error" in result.output.lower()
+            # Verify config created with valid URL
+            config_content = Path("config.yaml").read_text()
+            assert "http://192.168.1.14:3000" in config_content
+
+    def test_init_gitlab_selfhosted_rejects_invalid_url(self, runner, tmp_path):
+        """Test GitLab self-hosted URL validation rejects invalid URLs."""
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            # Try GitLab self-hosted with invalid URL, then valid URL
+            # Invalid: "my-gitlab" (missing protocol)
+            # Valid: https://gitlab.internal.company.com
+            inputs = (
+                "1\ngitlab\ny\nmy-gitlab\n"
+                "https://gitlab.internal.company.com\n"
+                "\nn\ny\nn\nn\nn\nn\n"
+            )
+            result = runner.invoke(cli, ["init"], input=inputs)
+
+            # Should succeed after retry
+            assert result.exit_code == 0
+            # Verify error message appeared
+            assert "invalid" in result.output.lower() or "error" in result.output.lower()
+            # Verify config created with valid URL
+            config_content = Path("config.yaml").read_text()
+            assert "https://gitlab.internal.company.com" in config_content
+
+
 class TestScanCommand:
     """Tests for drep scan command."""
 
