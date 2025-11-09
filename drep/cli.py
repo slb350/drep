@@ -850,33 +850,50 @@ fi
                 shutil.rmtree(temp_dir)
                 logger.debug(f"Cleaned up temporary directory: {temp_dir}")
             except Exception as e:
+                # SECURITY-CRITICAL: Keep broad catch for temp dir cleanup
+                # If credentials aren't deleted, warn user but don't crash
                 logger.error(
                     f"SECURITY: Failed to delete temporary directory "
                     f"containing API token: {temp_dir}",
                     extra={"error": str(e), "temp_dir": temp_dir},
                 )
                 click.echo(
-                    f"WARNING: Failed to clean up temporary credentials at {temp_dir}. "
-                    f"Please manually delete this directory: {e}",
+                    f"SECURITY WARNING: Failed to clean up credentials at {temp_dir}",
                     err=True,
                 )
+                click.echo(f"  Manually delete: rm -rf {temp_dir}", err=True)
 
         # Close resources (ensure both are attempted even if one fails)
         try:
             await scanner.close()
+        except OSError as e:
+            import logging
+
+            logger = logging.getLogger(__name__)
+            logger.error(f"Error closing database connection: {e}")
+            click.echo(f"Warning: Database cleanup failed: {e}", err=True)
         except Exception as e:
             import logging
 
             logger = logging.getLogger(__name__)
-            logger.error(f"Error closing scanner: {e}")
+            logger.error(f"Unexpected error closing scanner: {e}", exc_info=True)
+            # Re-raise unexpected errors for debugging
+            raise
 
         try:
             await adapter.close()
+        except OSError as e:
+            import logging
+
+            logger = logging.getLogger(__name__)
+            logger.error(f"Error closing HTTP adapter: {e}")
+            click.echo(f"Warning: HTTP adapter cleanup failed: {e}", err=True)
         except Exception as e:
             import logging
 
             logger = logging.getLogger(__name__)
-            logger.error(f"Error closing adapter: {e}")
+            logger.error(f"Unexpected error closing adapter: {e}", exc_info=True)
+            raise
 
 
 @cli.command()

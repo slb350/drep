@@ -1322,9 +1322,9 @@ class TestScanWorkflow:
             # Verify scan completed (cleanup failure doesn't crash)
             assert result.exit_code == 0
 
-            # Verify user was warned about cleanup failure
-            assert "WARNING: Failed to clean up temporary credentials" in result.output
-            assert "Permission denied" in result.output
+            # Verify user was warned about cleanup failure (improved message)
+            assert "SECURITY WARNING: Failed to clean up credentials" in result.output
+            assert "Manually delete: rm -rf" in result.output
 
             # Verify rmtree was called (cleanup attempted)
             mock_rmtree.assert_called_once()
