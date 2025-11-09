@@ -782,6 +782,98 @@ class TestInitCommand:
             # Should result in empty list (all entries filtered out)
             assert "custom_dictionary: []" in config_content
 
+    def test_init_validates_url_type(self, runner, tmp_path):
+        """Test URLType validator catches invalid URLs during wizard."""
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            # Try Gitea with invalid URL, then valid URL
+            # Inputs: location, platform, invalid_url, valid_url, repos, llm, docs
+            inputs = "1\ngitea\nnot-a-url\nhttp://localhost:3000\n\nn\ny\nn\nn\nn\nn\n"
+            result = runner.invoke(cli, ["init"], input=inputs)
+
+            # Should succeed after retry
+            assert result.exit_code == 0
+            # Verify error message appeared for invalid URL
+            assert "invalid" in result.output.lower() or "error" in result.output.lower()
+            # Verify config created with valid URL
+            config_content = Path("config.yaml").read_text()
+            assert "http://localhost:3000" in config_content
+
+    def test_init_validates_repository_list(self, runner, tmp_path):
+        """Test RepositoryListType validator catches invalid patterns during wizard."""
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            # Try GitHub with invalid repository pattern, then valid pattern
+            # Invalid: contains spaces (not allowed)
+            # Valid: owner/repo
+            inputs = "1\ngithub\nn\ninvalid repo pattern\nowner/repo\nn\ny\nn\nn\nn\nn\n"
+            result = runner.invoke(cli, ["init"], input=inputs)
+
+            # Should succeed after retry
+            assert result.exit_code == 0
+            # Verify error message appeared for invalid pattern
+            assert "invalid" in result.output.lower() or "error" in result.output.lower()
+            # Verify config created with valid pattern
+            config_content = Path("config.yaml").read_text()
+            assert "owner/repo" in config_content
+
+    def test_init_validates_bedrock_model(self, runner, tmp_path):
+        """Test BedrockModelType validator catches invalid model IDs during wizard."""
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            # Try Bedrock with invalid model ID, then valid model ID
+            # Invalid: doesn't start with valid prefix (anthropic., ai21., etc.)
+            # Valid: anthropic.claude-3-5-sonnet-20241022-v2:0
+            inputs = (
+                "1\ngithub\nn\nowner/*\ny\nbedrock\n"
+                "us-east-1\ninvalid-model-id\n"
+                "anthropic.claude-3-5-sonnet-20241022-v2:0\n"
+                "n\nn\ny\nn\nn\nn\nn\n"
+            )
+            result = runner.invoke(cli, ["init"], input=inputs)
+
+            # Should succeed after retry
+            assert result.exit_code == 0
+            # Verify error message appeared for invalid model
+            assert "invalid" in result.output.lower() or "error" in result.output.lower()
+            # Verify config created with valid model
+            config_content = Path("config.yaml").read_text()
+            assert "anthropic.claude-3-5-sonnet-20241022-v2:0" in config_content
+
+    def test_init_validates_database_url(self, runner, tmp_path):
+        """Test DatabaseURLType validator catches malformed database URLs during wizard."""
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            # Try custom database with invalid URL, then valid URL
+            # Invalid: missing ://
+            # Valid: sqlite:///./drep.db
+            inputs = "1\ngitea\n\n\nn\ny\nn\nn\ny\ninvalid-db-url\nsqlite:///./drep.db\nn\n"
+            result = runner.invoke(cli, ["init"], input=inputs)
+
+            # Should succeed after retry
+            assert result.exit_code == 0
+            # Verify error message appeared for invalid URL
+            assert "invalid" in result.output.lower() or "error" in result.output.lower()
+            # Verify config created with valid URL
+            config_content = Path("config.yaml").read_text()
+            assert "sqlite:///./drep.db" in config_content
+
+    def test_init_validates_nonempty_string(self, runner, tmp_path):
+        """Test NonEmptyString validator catches empty/whitespace input during wizard."""
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            # Try OpenAI-compatible with empty model name, then valid model name
+            inputs = (
+                "1\ngitea\n\n\ny\nopenai-compatible\n"
+                "http://localhost:1234/v1\n   \n"  # Empty/whitespace model name
+                "qwen3-30b-a3b\n"  # Valid model name
+                "n\nn\nn\ny\nn\nn\nn\nn\n"
+            )
+            result = runner.invoke(cli, ["init"], input=inputs)
+
+            # Should succeed after retry
+            assert result.exit_code == 0
+            # Verify error message appeared for empty input
+            assert "invalid" in result.output.lower() or "error" in result.output.lower()
+            # Verify config created with valid model
+            config_content = Path("config.yaml").read_text()
+            assert "qwen3-30b-a3b" in config_content
+
 
 class TestScanCommand:
     """Tests for drep scan command."""
