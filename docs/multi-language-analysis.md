@@ -1,722 +1,611 @@
 # Multi-Language Support Analysis
 
-**Created:** 2025-11-09
-**Status:** Investigation Phase
-**Goal:** Determine if adding multi-language support requires simple analyzer additions or major refactoring
+**Created:** 2025-11-09  
+**Last Validated:** 2025-11-09 (Codex deep dive)  
+**Status:** Investigation Phase  
+**Goal:** Determine whether multi-language support can be achieved via additive analyzers or requires foundational refactoring
 
 ---
 
-## Executive Summary
+## 1. Purpose & Scope
 
-**Verdict: MAJOR REFACTORING REQUIRED** (not simple analyzer additions)
-
-Adding multi-language support (JavaScript, TypeScript, Go, Rust) requires significant architectural changes due to deep Python-specific assumptions throughout the codebase. This is a **Phase 4.2** feature with **Large effort** classification.
-
-**Estimated Effort:** 40-60 hours (not 3-4 hours)
-- Architecture refactoring: 15-20 hours
-- First language (JavaScript/TypeScript): 15-20 hours
-- Additional languages: 8-10 hours each
-- Testing: 10-15 hours
+This document validates the current Python-first implementation, captures the gaps that block additional languages, and outlines a detailed plan for delivering JavaScript/TypeScript, Go, and Rust coverage without regressing existing Python behavior. The audience is engineering leadership plus the contributors who will own the Phase 4.2 workstream.
 
 ---
 
-## Current Architecture Analysis
+## 2. Validation Snapshot (2025-11-09)
 
-### File Discovery (Scanner)
+| Area | Source of Truth | Observation | Impact |
+| --- | --- | --- | --- |
+| Repository scanning | `drep/core/scanner.py:103-318` | All discovery, diff, and staged-file logic hard-code `.py`/`.md` filters; analyzer routing assumes a single Python analyzer | Non-Python files are never queued; incremental scans will silently skip new languages |
+| Code quality analyzer | `drep/code_quality/analyzer.py:10-118` | One global `PYTHON_ANALYSIS_PROMPT`; `is_supported_file` enforces `.py` only | No extension point for prompts, severity tuning, or analyzer selection per language |
+| Docstring pipeline | `drep/docstring/ast_utils.py:1-200`, `drep/docstring/generator.py:1-160` | Direct dependency on the stdlib `ast` module and Google-style docstrings | Cannot reuse AST extraction for other languages; heuristics like `FunctionInfo` are Python-specific |
+| PR review analyzer | `drep/pr_review/analyzer.py:1-155` | Prompt explicitly says “You are a senior Python engineer”; rubric references PEP8/type hints | PR reviews for other languages would immediately contain incorrect guidance |
+| Config & CLI | `drep/models/config.py`, `drep/cli/check.py` (not shown) | No schema/flags for per-language enablement, lint tooling, or resource limits | Users cannot opt-in/out or provide language-specific settings |
 
-**Location:** `drep/core/scanner.py`
-
-**Current Implementation:**
-```python
-# Lines 185-193: Hardcoded Python + Markdown patterns
-for pattern in ["**/*.py", "**/*.md"]:
-    files.extend([
-        str(f.relative_to(repo_path))
-        for f in repo_path.glob(pattern)
-        if not self._should_ignore(f)
-    ])
-
-# Line 251: Git diff filtering
-if path and (path.endswith(".py") or path.endswith(".md")):
-    changed_files.append(path)
-
-# Line 315: Staged files check
-if path and (path.lower().endswith(".py") or path.lower().endswith(".md")):
-    staged_files.append(path)
-```
-
-**Issue:** File extension checks are scattered and hardcoded
-**Refactoring Required:** YES - Need centralized file type registry
+**Conclusion:** Multi-language enablement is not an additive analyzer; it demands architectural refactoring plus new configuration, prompt strategy, and test coverage.
 
 ---
 
-### Code Quality Analyzer
+## 3. Verified Python-Only Coupling
 
-**Location:** `drep/code_quality/analyzer.py`
+### 3.1 Repository Scanner
+- `_get_all_python_files` only globs `**/*.py` and `**/*.md` (`drep/core/scanner.py:173-194`).
+- `_get_changed_files` and `get_staged_files` repeat `.py`/`.md` suffix checks (`drep/core/scanner.py:230-318`), which duplicates logic and makes new extensions hard to add consistently.
+- `analyze_code_quality` filters to `self.code_analyzer.is_supported_file`, which currently returns True only for `.py` (`drep/core/scanner.py:320-420` + `drep/code_quality/analyzer.py:107-118`).
 
-**Current Implementation:**
-```python
-# Lines 17-66: Python-specific analysis prompt
-PYTHON_ANALYSIS_PROMPT = """You are an expert Python code reviewer.
-Analyze the following code and identify issues in these categories:
-...
-"""
+### 3.2 Code Quality Analyzer
+- Prompt content references PEP8, Python naming, and docstrings (`drep/code_quality/analyzer.py:17-64`).
+- The analyzer always reports issues under the `"code_quality"` analyzer key, making it impossible to differentiate caching/metrics by language (`drep/code_quality/analyzer.py:79-105`).
 
-# Lines 175-187: is_supported_file() method
-def is_supported_file(self, file_path: str) -> bool:
-    """Check if file is supported for analysis.
+### 3.3 Docstring Generator + AST Utilities
+- `extract_functions` and `extract_classes` rely on `ast.parse`, `ast.FunctionDef`, Python-only decorator syntax, and positional-only args (`drep/docstring/ast_utils.py:45-200`).
+- The docstring prompt instructs the LLM to output Google-style Python docstrings (`drep/docstring/generator.py:32-103`), which would be invalid for JS (JSDoc), Go (line comments), or Rust (`///`).
 
-    Currently only Python files (.py) are supported.
-    """
-    path = Path(file_path)
-    return path.suffix == ".py"
-```
+### 3.4 PR Review Analyzer
+- The PR prompt states “You are a senior Python engineer” and lists Python-only quality gates (PEP8, type hints) (`drep/pr_review/analyzer.py:15-93`).
+- Severity vocabulary (`info|suggestion|warning|critical`) is reasonable across languages but the guidance and examples need language context.
 
-**Issues:**
-1. Single hardcoded prompt for Python only
-2. No abstraction for language-specific analysis
-3. Prompt references PEP 8, Python-specific best practices
-4. No concept of language detection or multiple analyzers
-
-**Refactoring Required:** YES - Need language-specific analyzer classes
+### 3.5 Configuration & Telemetry
+- `Config` lacks a `languages` section, so there is no place to express defaults, per-language lint tooling, or enablement toggles.
+- Metrics, cache keys, and progress tracking all log “Python” implicitly via analyzer names; adding languages without unique identifiers would make observability ambiguous.
 
 ---
 
-### Docstring Generator (AST Analysis)
+## 4. Product Requirements for Multi-Language Support
 
-**Location:** `drep/docstring/ast_utils.py` and `drep/docstring/generator.py`
+### 4.1 Functional Scope
 
-**Current Implementation:**
-```python
-# ast_utils.py uses Python's ast module exclusively
-import ast
+| Capability | Python (current) | JavaScript / TypeScript | Go | Rust |
+| --- | --- | --- | --- | --- |
+| File discovery | ✅ `.py`, `.md` | ❌ | ❌ | ❌ |
+| Code quality LLM review | ✅ (prompt + findings) | ⏳ (needs JS/TS prompt + AST extraction) | ⏳ | ⏳ |
+| Docstring / comment quality | ✅ Google-style docstrings | ⏳ JSDoc/JSDoc-lite | ⏳ standard Go doc comments | ⏳ `///` + `//!` doc comments |
+| PR review feedback | ✅ (Python rubric) | ⏳ (JS/TS rubric) | ⏳ | ⏳ |
+| External lint hook | ⚙️ None (pure LLM) | Optional ESLint/TS compiler diagnostics | Optional `golangci-lint` | Optional `clippy` |
+| Configuration | Global, language-agnostic | Needs per-language toggles + tooling paths | Same | Same |
 
-def extract_functions(code: str) -> List[FunctionInfo]:
-    """Extract all function definitions from Python code."""
-    tree = ast.parse(code)  # Python AST only
-    ...
-
-# Line 175-187: Python-specific AST traversal
-for node, parent in _collect_function_nodes(tree):
-    if isinstance(parent, (ast.FunctionDef, ast.AsyncFunctionDef)):
-        continue
-    ...
-```
-
-**Issues:**
-1. Python `ast` module only works for Python code
-2. AST structure is Python-specific (FunctionDef, ClassDef, etc.)
-3. Docstring extraction uses `ast.get_docstring()` (Python-only)
-4. Each language has different AST parsers and structures
-
-**Refactoring Required:** YES - Need language-specific AST parsers or tree-sitter
+### 4.2 Non-Functional Requirements
+1. **Backward compatibility:** Python users must see identical behavior unless they opt into additional languages.
+2. **Extensibility:** Adding a new language must be limited to registering a `LanguageSupport` implementation plus prompts/config entries.
+3. **Performance:** Avoid re-scanning files unnecessarily; language detection must be O(1) by extension.
+4. **Caching:** LLM cache keys need to include the language/analyzer name to prevent cross-language leakage.
+5. **Observability:** Metrics (e.g., analyzer latency, findings per file) must include `language` tags for dashboards.
+6. **Security/Isolation:** Optional subprocess-based linters (Go/Rust) must be sandboxed and respect repo-local execution policies.
 
 ---
 
-### Scanner Integration
+## 5. Target Architecture
 
-**Location:** `drep/core/scanner.py:320-422`
-
-**Current Implementation:**
-```python
-# Line 353: Filter to Python files only
-python_files = [f for f in files if self.code_analyzer.is_supported_file(f)]
-
-# Line 457: Hardcoded .py extension check
-python_files = [f for f in files if f.endswith(".py")]
-```
-
-**Issue:** Assumes single analyzer for all code files
-**Refactoring Required:** YES - Need analyzer routing by language
-
----
-
-## Hardcoded Python Assumptions
-
-### 1. **File Extension Checks** (12 locations)
-- `scanner.py` line 185: `["**/*.py", "**/*.md"]`
-- `scanner.py` line 251: `.endswith(".py")`
-- `scanner.py` line 315: `.lower().endswith(".py")`
-- `scanner.py` line 353: `code_analyzer.is_supported_file()`
-- `scanner.py` line 457: `.endswith(".py")`
-- `code_quality/analyzer.py` line 187: `path.suffix == ".py"`
-
-### 2. **Python-Specific Prompts**
-- `code_quality/analyzer.py` lines 17-66: `PYTHON_ANALYSIS_PROMPT`
-  - References: PEP 8, Python naming conventions, Python best practices
-  - Hardcoded severity levels, categories specific to Python ecosystem
-
-### 3. **AST Parsing**
-- `docstring/ast_utils.py`: Entire file (205 lines) is Python AST-specific
-  - `ast.parse()` - Python-only parser
-  - `ast.FunctionDef`, `ast.AsyncFunctionDef` - Python AST nodes
-  - `ast.get_docstring()` - Python docstring extraction
-  - Python-specific concepts: decorators, positional-only args, **kwargs
-
-### 4. **File Type Classification**
-- `scanner.py` line 139: Comment says "all Python/Markdown files"
-- No concept of multiple programming languages
-- Documentation files (`.md`) treated separately from code files
-
----
-
-## Required Architectural Changes
-
-### 1. Language Abstraction Layer
-
-**New Module:** `drep/languages/`
+### 5.1 Language Support Layer
 
 ```
 drep/languages/
 ├── __init__.py
-├── base.py           # Abstract base for language support
-├── python.py         # Python language implementation
-├── javascript.py     # JavaScript/TypeScript support
-├── go.py            # Go support
-└── rust.py          # Rust support
+├── base.py              # Abstract protocol
+├── registry.py          # Extension discovery
+├── python.py            # Existing behavior
+├── javascript.py        # JS/TS
+├── go.py
+└── rust.py
 ```
 
-**Base Interface:**
-```python
-from abc import ABC, abstractmethod
-from typing import List
-from pathlib import Path
+`base.py` exposes the minimal surface area needed by scanners, analyzers, and docstring generators:
 
+```python
 class LanguageSupport(ABC):
-    """Abstract base for language-specific support."""
+    name: str
+    file_extensions: list[str]
 
-    @property
-    @abstractmethod
-    def name(self) -> str:
-        """Language name (e.g., 'python', 'javascript')."""
-        pass
-
-    @property
-    @abstractmethod
-    def file_extensions(self) -> List[str]:
-        """Supported file extensions (e.g., ['.py', '.pyi'])."""
-        pass
-
-    @abstractmethod
-    def get_analysis_prompt(self) -> str:
-        """Get language-specific LLM analysis prompt."""
-        pass
-
-    @abstractmethod
-    def extract_functions(self, code: str) -> List[FunctionInfo]:
-        """Extract functions from code (AST or regex-based)."""
-        pass
-
-    @abstractmethod
-    def extract_classes(self, code: str) -> List[ClassInfo]:
-        """Extract classes from code."""
-        pass
-
-    @abstractmethod
-    def is_comment(self, line: str) -> bool:
-        """Check if line is a comment."""
-        pass
-
-    @abstractmethod
-    def get_linter_config(self) -> dict:
-        """Get external linter configuration (ESLint, rustfmt, etc.)."""
-        pass
+    def get_analysis_prompt(self) -> str: ...
+    def get_doc_prompt(self) -> str: ...
+    def normalize_finding(self, finding: Finding) -> Finding: ...
+    def extract_symbols(self, code: str) -> SymbolGraph: ...
+    def doc_style(self) -> DocStyle: ...
+    def auxiliary_linters(self) -> list[LinterConfig]: ...
 ```
 
-### 2. Language Registry
+Implementation details:
+- `extract_symbols` can internally use tree-sitter, native AST tooling, or regexes.
+- `DocStyle` encapsulates formatting requirements (e.g., Google docstring vs JSDoc vs `///`).
+- `auxiliary_linters` provides command templates plus severity remapping for optional static analyzers.
 
-**New Module:** `drep/languages/registry.py`
+### 5.2 Language Registry
 
-```python
-from typing import Dict, Optional
-from pathlib import Path
-from drep.languages.base import LanguageSupport
-from drep.languages.python import PythonSupport
-from drep.languages.javascript import JavaScriptSupport
+- Maintains `{extension -> language}` and `{language -> LanguageSupport}` maps.
+- Provides helpers used throughout the codebase:
+  - `detect_language(path: str) -> Optional[LanguageSupport]`
+  - `supported_extensions(include_docs: bool = True) -> list[str]`
+  - `iter_languages(enabled_only=True)`
+- Accepts dependency injection so that tests can register fake languages without touching global singletons.
 
-class LanguageRegistry:
-    """Central registry for language support."""
+### 5.3 Pipeline Integration
 
-    def __init__(self):
-        self._languages: Dict[str, LanguageSupport] = {}
-        self._extension_map: Dict[str, str] = {}
+1. **Scanner (`drep/core/scanner.py`):**
+   - `_get_all_python_files` → `_get_all_supported_files` leveraging registry patterns.
+   - `_get_changed_files` / `get_staged_files` filter using `registry.supported_extensions`.
+   - `scan_repository` records the enabled language list in scan metadata for auditability.
 
-        # Register built-in languages
-        self.register(PythonSupport())
-        self.register(JavaScriptSupport())
+2. **Code Quality Analyzer (`drep/code_quality/analyzer.py`):**
+   - Accept `LanguageRegistry` and look up the `LanguageSupport` per file.
+   - Analyzer name should include the language (e.g., `code_quality_python`) to preserve metrics/cache segmentation.
+   - Prompts move into each `LanguageSupport` implementation; shared scaffolding remains in the analyzer.
 
-    def register(self, language: LanguageSupport):
-        """Register a language."""
-        self._languages[language.name] = language
-        for ext in language.file_extensions:
-            self._extension_map[ext] = language.name
+3. **Docstring / Comment Analyzer:**
+   - Replace direct `extract_functions` call with `language.extract_symbols`.
+   - Route style-specific prompts (Google docstrings, JSDoc, Rust doc comments) via `language.get_doc_prompt`.
+   - Keep `DocstringGenerator` as orchestrator; rename to `DocumentationGenerator` once multiple languages exist.
 
-    def detect_language(self, file_path: str) -> Optional[LanguageSupport]:
-        """Detect language from file extension."""
-        ext = Path(file_path).suffix
-        if lang_name := self._extension_map.get(ext):
-            return self._languages[lang_name]
-        return None
+4. **PR Review Analyzer:**
+   - Parameterize prompts by dominant language(s) in the diff; fallback to per-file language for inline comments.
+   - Validate added-line coordinates the same way, but include `language` in each comment payload for downstream consumers.
 
-    def get_supported_extensions(self) -> List[str]:
-        """Get all supported file extensions."""
-        return list(self._extension_map.keys())
-```
+5. **LLM Cache & Metrics:**
+   - Cache key format: `{analyzer}:{language}:{repo_id}:{commit_sha}:{file_path}`.
+   - Metrics tags: `language`, `analyzer`, `provider`.
 
-### 3. Multi-Language Code Analyzer
+### 5.4 Prompt Strategy
 
-**Refactor:** `drep/code_quality/analyzer.py`
+- **Python:** Existing prompt becomes `language.get_analysis_prompt()`.
+- **JavaScript/TypeScript:** Highlight async/await pitfalls, TypeScript `any`, React hooks, Node vs browser context.
+- **Go:** Emphasize error handling, goroutine leaks, `defer` usage, concurrency race patterns.
+- **Rust:** Focus on ownership/borrowing, unsafe blocks, trait bounds, `Send/Sync` correctness.
+- Prompts must share core JSON schemas to keep parsing logic unchanged.
 
-```python
-class CodeQualityAnalyzer:
-    """Multi-language code quality analyzer."""
+### 5.5 Configuration Schema
 
-    def __init__(self, llm_client: LLMClient, language_registry: LanguageRegistry):
-        self.llm_client = llm_client
-        self.language_registry = language_registry
-
-    async def analyze_file(
-        self, file_path: str, content: str, repo_id: str, commit_sha: str
-    ) -> List[Finding]:
-        """Analyze file with language-specific logic."""
-
-        # Detect language
-        language = self.language_registry.detect_language(file_path)
-        if not language:
-            logger.debug(f"Unsupported language for {file_path}")
-            return []
-
-        # Get language-specific prompt
-        prompt = language.get_analysis_prompt()
-
-        # Call LLM with language-specific prompt
-        result_dict = await self.llm_client.analyze_code_json(
-            system_prompt=prompt,
-            code=content,
-            schema=CodeAnalysisResult,
-            repo_id=repo_id,
-            commit_sha=commit_sha,
-            analyzer=f"code_quality_{language.name}",
-        )
-
-        # Convert to findings
-        result = CodeAnalysisResult(**result_dict)
-        return result.to_findings(file_path)
-
-    def is_supported_file(self, file_path: str) -> bool:
-        """Check if file is supported."""
-        return self.language_registry.detect_language(file_path) is not None
-```
-
-### 4. Scanner Refactoring
-
-**Refactor:** `drep/core/scanner.py`
-
-```python
-class RepositoryScanner:
-    def __init__(self, db_session, config, language_registry: LanguageRegistry):
-        self.db = db_session
-        self.config = config
-        self.language_registry = language_registry
-        # ...
-
-    def _get_all_code_files(self, repo_path: str) -> List[str]:
-        """Get all code files in supported languages."""
-        files = []
-        repo_path = Path(repo_path)
-
-        # Get patterns for all supported languages
-        extensions = self.language_registry.get_supported_extensions()
-        patterns = [f"**/*{ext}" for ext in extensions]
-
-        # Add markdown (documentation)
-        patterns.append("**/*.md")
-
-        for pattern in patterns:
-            files.extend([
-                str(f.relative_to(repo_path))
-                for f in repo_path.glob(pattern)
-                if not self._should_ignore(f)
-            ])
-
-        return files
-
-    def _get_changed_files(self, repo: Repo, old_sha: str, new_sha: str) -> List[str]:
-        """Get changed files in supported languages."""
-        diff = repo.commit(old_sha).diff(new_sha)
-
-        supported_extensions = set(self.language_registry.get_supported_extensions())
-        supported_extensions.add(".md")  # Always include markdown
-
-        changed_files = []
-        for diff_item in diff:
-            path = diff_item.b_path
-            if path and Path(path).suffix in supported_extensions:
-                changed_files.append(path)
-
-        return list(set(changed_files))
-```
-
-### 5. Docstring/AST Abstraction
-
-**Challenge:** Each language has different AST structure
-
-**Options:**
-
-#### Option A: Tree-sitter (Recommended)
-Use tree-sitter for unified AST parsing across languages:
-- **Pros:** Single interface, supports 50+ languages, fast
-- **Cons:** Additional C dependency, learning curve
-- **Libraries:** `tree-sitter`, language-specific grammars
-
-```python
-from tree_sitter import Language, Parser
-
-class PythonSupport(LanguageSupport):
-    def __init__(self):
-        self.parser = Parser()
-        self.parser.set_language(Language('build/languages.so', 'python'))
-
-    def extract_functions(self, code: str) -> List[FunctionInfo]:
-        tree = self.parser.parse(bytes(code, 'utf8'))
-        # Query for function definitions
-        query = self.language.query("""
-            (function_definition
-                name: (identifier) @name
-                parameters: (parameters) @params
-                body: (block) @body)
-        """)
-        matches = query.captures(tree.root_node)
-        # Process matches...
-```
-
-#### Option B: Language-Specific Parsers
-Use native parsers for each language:
-- **Python:** `ast` module (already implemented)
-- **JavaScript/TypeScript:** `esprima` or `@typescript-eslint/parser` (via subprocess)
-- **Go:** `go/ast` package (via subprocess)
-- **Rust:** `syn` crate (via subprocess)
-
-**Pros:** Native tooling, accurate parsing
-**Cons:** Complex integration, multiple dependencies, subprocess overhead
-
-#### Option C: Regex-Based (Fallback)
-Use regex patterns for simple extraction:
-- **Pros:** No dependencies, fast
-- **Cons:** Fragile, misses edge cases, not suitable for complex analysis
-
-**Recommendation:** Option A (tree-sitter) for unified approach
-
----
-
-## Language-Specific Considerations
-
-### JavaScript/TypeScript
-
-**File Extensions:** `.js`, `.jsx`, `.ts`, `.tsx`, `.mjs`, `.cjs`
-
-**Analysis Prompt Additions:**
-- ESLint rules integration
-- TypeScript-specific: type errors, any usage, strict mode
-- React-specific: hooks rules, JSX best practices
-- Node.js vs Browser context
-
-**AST Challenges:**
-- ES6+ syntax (arrow functions, destructuring, async/await)
-- JSX syntax (requires special parser)
-- TypeScript types and generics
-- Module systems: CommonJS, ES modules, AMD
-
-**Docstring Format:**
-- JSDoc comments (`/** ... */`)
-- TypeScript interfaces and type definitions
-
-### Go
-
-**File Extensions:** `.go`
-
-**Analysis Prompt Additions:**
-- `go vet` integration
-- gofmt style compliance
-- Error handling patterns (no exceptions)
-- Goroutine safety, race conditions
-- Interface satisfaction
-
-**AST Challenges:**
-- Go's unique syntax (defer, goroutines, channels)
-- Package vs module system
-- Implicit interfaces
-
-**Docstring Format:**
-- Standard Go comments (no special syntax)
-- Package-level documentation
-
-### Rust
-
-**File Extensions:** `.rs`
-
-**Analysis Prompt Additions:**
-- Clippy lints integration
-- Ownership and borrowing rules
-- Unsafe code blocks
-- Lifetime annotations
-- Cargo.toml integration
-
-**AST Challenges:**
-- Complex type system (traits, lifetimes, generics)
-- Macros (require macro expansion)
-- Procedural macros
-
-**Docstring Format:**
-- Doc comments (`///` for items, `//!` for modules)
-- Markdown support in docs
-
----
-
-## Configuration Changes
-
-### config.yaml Extensions
+Add to `config.yaml` / `Config` model:
 
 ```yaml
-# New section for language support
 languages:
-  enabled:
-    - python
-    - javascript
-    - typescript
-    - go
-    - rust
+  enabled: ["python", "javascript", "typescript", "go", "rust"]
+  defaults:
+    python:
+      docstring_style: google
+      lint: null
+    javascript:
+      docstring_style: jsdoc
+      lint:
+        command: ["npx", "eslint", "--format", "json"]
+        severity_map:
+          error: high
+          warning: medium
+    go:
+      lint:
+        command: ["golangci-lint", "run", "--out-format", "json"]
+    rust:
+      lint:
+        command: ["cargo", "clippy", "--message-format", "json"]
+```
 
-  # Language-specific settings
-  python:
-    linter: pylint  # or ruff, flake8
-    style_guide: pep8
+Validation rules:
+- Unknown languages in `enabled` raise a config error.
+- Linter commands are optional; when omitted we remain LLM-only.
 
-  javascript:
-    linter: eslint
-    parser: babel  # or espree
+### 5.6 Data & Persistence
 
-  typescript:
-    linter: eslint
-    parser: typescript-eslint
+- No schema changes required for the SQLite cache, but we must persist the `language` string on each `Finding` to keep UI/API parity.
+- Repository scan table should remain unchanged; the new metadata can live in structured logs until we need reporting.
 
-  go:
-    linter: golangci-lint
-    formatter: gofmt
+---
 
-  rust:
-    linter: clippy
-    formatter: rustfmt
+## 6. Implementation Plan & Effort
 
-# Existing LLM config remains unchanged
+### Phase 0 – Research & Tooling Spike (4-6 hours)
+- Evaluate `tree-sitter` vs language-specific parsers; prototype symbol extraction for JS & Go.
+- Decide on packaging strategy (pre-built `tree-sitter` binaries vs runtime compile).
+- Output: comparison matrix + go/no-go on tree-sitter investment.
+
+### Phase 1 – Abstraction Foundation (v1.2.0, 15-20 hours)
+1. Introduce `drep/languages` module, registry, and Python implementation.
+2. Refactor scanner, analyzer, docstring generator, and PR review to be language-aware while still only enabling Python.
+3. Update config schema with `languages.enabled` (default `["python"]`).
+4. Add metrics/logging fields for `language`.
+5. Tests:
+   - Registry unit tests (extension detection, overrides).
+   - Scanner tests across fake languages.
+   - Regression tests ensuring Python-only behavior is unchanged when no other language is enabled.
+6. Exit criteria: existing 395 tests still green; new unit tests cover registry and scanner fan-out.
+
+### Phase 2 – JavaScript/TypeScript (v1.3.0, 15-20 hours)
+1. Finalize parser strategy (tree-sitter or `esprima`/`typescript-eslint`).
+2. Implement `JavaScriptSupport` with:
+   - Extension set: `.js`, `.jsx`, `.mjs`, `.cjs`, `.ts`, `.tsx`.
+   - Language-specific analysis prompt & docstring prompt (JSDoc).
+   - Symbol extraction for functions/classes/modules.
+3. Optional ESLint integration gated by config.
+4. Add 20+ tests covering detection, prompt selection, docstring formatting, and ESLint parsing.
+5. Documentation updates (`README`, `docs/technical-design.md`, this file).
+6. Exit criteria: `drep scan` surfaces JS/TS findings in sample repos; CLI flag `--languages js,ts` works.
+
+### Phase 3 – Go (v1.4.0, 8-10 hours)
+1. Implement `GoSupport` (extensions `.go`).
+2. Go analysis prompt focuses on error handling, concurrency, `defer`, `context.Context`.
+3. Optionally read `golangci-lint` JSON output and merge into findings.
+4. Add doc comment heuristics (top-of-function `//` comments).
+5. Add ~15 targeted tests with sample Go files.
+6. Exit criteria: sample Go repo analyzed end-to-end; doc comment suggestions match Go style guide.
+
+### Phase 4 – Rust (v1.5.0, 8-10 hours)
+1. Implement `RustSupport` (extension `.rs`).
+2. Prompt includes ownership, borrow checker pitfalls, and `unsafe` guidelines.
+3. Optional `cargo clippy` ingestion.
+4. Implement doc comment detection for `///` and module-level `//!`.
+5. Add ~15 tests + integration run against a small Rust crate.
+6. Exit criteria: LLM findings show Rust-specific messaging; doc comments respect `rustdoc` formatting.
+
+**Cumulative Effort:** 46-60 hours, matching the earlier high-level estimate but now with explicit deliverables and gate checks.
+
+---
+
+## 7. Testing & Validation Strategy
+
+1. **Unit Tests**
+   - Registry: extension mapping, duplicate registration, case sensitivity.
+   - Language adapters: prompt retrieval, docstyle formatting, auxiliary linter config.
+   - Scanner: ensure only enabled language extensions are returned for mixed repos.
+2. **Integration Tests**
+   - Add sample fixtures per language in `tests/fixtures/<language>/repo`.
+   - Simulate `drep scan` on each fixture and assert findings include correct `language`.
+3. **Golden Tests for Prompts**
+   - Store sanitized prompt snapshots for each language to catch accidental prompt regressions.
+4. **Performance Regression Tests**
+   - Benchmark scanning a repo with 1k mixed-language files; ensure the new registry adds <5% overhead.
+5. **Manual Validation**
+   - Run ESLint/golangci-lint/clippy integration manually on representative repos before enabling in CI.
+6. **Telemetry**
+   - Emit structured logs per analyzer invocation to confirm languages route correctly in staging before GA.
+
+---
+
+## 8. Tooling & Dependency Evaluation
+
+| Option | Pros | Cons | Recommendation |
+| --- | --- | --- | --- |
+| **Tree-sitter** | Unified API, mature grammars for JS/TS/Go/Rust, fast incremental parsing | Requires compiling shared library; adds binary artifact management | ✅ Recommended if Phase 0 spike confirms build pipeline is acceptable |
+| **Language-specific parsers** (esprima, go/ast, syn) | Native accuracy, ecosystem-aligned | Multiple runtimes (Node, Go, Rust), complex subprocess orchestration, slower | 🚫 Avoid for initial rollout |
+| **Regex/heuristic parsing** | Zero dependencies | Fragile, misses edge cases, not future-proof | 🚫 Only for stopgap metrics |
+
+**Binary distribution note:** If we ship tree-sitter, prebuild `build/languages.so` for macOS/Linux and fall back to runtime compilation when unavailable. Cache in `.drep/tree-sitter/` to avoid repeated builds.
+
+---
+
+## 9. Risk Register
+
+| Risk | Likelihood | Impact | Mitigation |
+| --- | --- | --- | --- |
+| Tree-sitter compile failures on user machines | Medium | High (multi-language unusable) | Provide prebuilt binaries + optional pure-Python fallback (regex) with warning |
+| LLM prompt quality varies by language | Medium | Medium | Collect real-world snippets per language; add prompt regression tests and human review loop |
+| Auxiliary linters increase runtime | Medium | Medium | Make linters opt-in per config, parallelize linters + LLM work, expose timing metrics |
+| Cache pollution across languages | Low | Medium | Include `language` in cache key + analyzer name before Phase 2 |
+| PR review prompt drift | Medium | Medium | Parameterize prompt by detected languages and add tests verifying language token injection |
+| Documentation mismatch | Low | Medium | Update README/docs simultaneously with feature flags; ship sample config blocks |
+
+---
+
+## 10. Open Questions & Decisions Needed
+
+1. **Tree-sitter delivery** – Do we commit compiled grammars to the repo or build during install?
+2. **ESLint/golangci-lint/clippy availability** – Should we auto-install (risky) or require users to pre-install and configure paths?
+3. **Docstring generator scope** – Do we extend it to code comments only, or also general documentation (e.g., TS interface comments)?
+4. **PR review default language** – When diffs include multiple languages, do we create per-language review batches or a single combined review with annotations?
+5. **Feature flag rollout** – Should JS/TS ship behind `--experimental-languages` before becoming GA?
+
+---
+
+## 11. Success Metrics & KPIs
+
+### 11.1 Adoption Metrics
+- **Phase 1**: Zero regression in Python analysis (100% backward compatibility)
+- **Phase 2**: 50+ JavaScript/TypeScript repositories analyzed in first month
+- **Phase 3-4**: 20+ Go/Rust repositories each within first month
+
+### 11.2 Quality Metrics
+- **False positive rate**: <5% per language (measured via user feedback)
+- **Language detection accuracy**: 100% (file extension based)
+- **Prompt effectiveness**: 80%+ findings marked as "helpful" by users
+- **Cross-language consistency**: Severity levels map correctly across all languages
+
+### 11.3 Performance Metrics
+- **Scan time overhead**: <10% increase with multi-language enabled
+- **Cache hit rate**: >70% across all languages
+- **Memory usage**: <2x increase with 4 languages enabled
+- **Language detection latency**: <1ms per file
+
+---
+
+## 12. Migration Guide for Existing Users
+
+### 12.1 Version Transition Path
+
+**v1.1.0 → v1.2.0 (No action required)**
+- Python-only behavior preserved by default
+- Existing config.yaml remains valid
+- Cache entries remain valid (language assumed to be Python)
+
+**v1.2.0 → v1.3.0 (Opt-in to JavaScript)**
+```yaml
+# Add to config.yaml to enable JavaScript:
+languages:
+  enabled: ["python", "javascript", "typescript"]
+```
+
+**v1.3.0 → v1.4.0+ (Additional languages)**
+```yaml
+languages:
+  enabled: ["python", "javascript", "typescript", "go", "rust"]
+  # Per-language configuration optional
+  defaults:
+    go:
+      lint:
+        command: ["golangci-lint", "run", "--out-format", "json"]
+```
+
+### 12.2 Breaking Change Mitigation
+- Old cache entries remain valid with implicit `language="python"`
+- Existing API endpoints continue to work
+- Metrics dashboards auto-updated with `language="python"` for historical data
+- Finding format unchanged (only adds `language` field)
+
+---
+
+## 13. Cost Impact Analysis
+
+### 13.1 LLM Token Usage
+| Scenario | Tokens/File | Monthly Cost Impact |
+| --- | --- | --- |
+| Current (Python-only) | ~500 avg | Baseline |
+| With language-specific prompts | ~600 avg | +20% |
+| With auxiliary linter integration | ~550 avg | +10% |
+| Multi-language repo (mixed) | ~580 avg | +16% |
+
+### 13.2 Caching Efficiency
+- Cache invalidation unchanged (commit SHA based)
+- Language segmentation prevents false cache hits
+- Net effect: Neutral to slight improvement in hit rate
+- Storage: +5% due to language key in cache entries
+
+### 13.3 Infrastructure Requirements
+| Component | Impact | Mitigation |
+| --- | --- | --- |
+| Tree-sitter binary | +50MB disk | Pre-built binaries in release |
+| Runtime memory | +100MB for grammars | Lazy loading per language |
+| CI/CD pipeline | +5 minutes for tests | Parallel test execution |
+| Network | Minimal (linter subprocesses) | Local execution only |
+
+---
+
+## 14. External Tooling Dependencies
+
+### 14.1 Tool Requirements Matrix
+
+| Language | Optional Tool | Min Version | Detection Method | Fallback | Priority |
+|----------|--------------|-------------|------------------|----------|----------|
+| Python | ruff/pylint | Any | `which ruff` | LLM-only | Optional |
+| JavaScript | ESLint | ≥8.0 | `npm list eslint` | LLM-only | Recommended |
+| TypeScript | typescript | ≥4.0 | `npm list typescript` | Treat as JS | Recommended |
+| Go | golangci-lint | ≥1.50 | `golangci-lint version` | LLM-only | Optional |
+| Rust | clippy | Stable | `cargo clippy --version` | LLM-only | Optional |
+
+### 14.2 Auto-Detection Logic
+```python
+# Pseudocode for tool detection
+def detect_linters():
+    available = {}
+    for lang, config in language_configs.items():
+        if config.lint_command:
+            try:
+                result = subprocess.run([config.lint_command[0], "--version"],
+                                      capture_output=True, timeout=1)
+                if result.returncode == 0:
+                    available[lang] = config.lint_command
+            except (FileNotFoundError, TimeoutError):
+                logger.info(f"Optional linter for {lang} not found, using LLM-only")
+    return available
+```
+
+---
+
+## 15. Documentation Impact
+
+### 15.1 Required Documentation Updates
+
+| Document | Changes Required | Priority |
+| --- | --- | --- |
+| README.md | Add "Supported Languages" section, multi-language examples | P0 |
+| docs/technical-design.md | New "Language Architecture" section, updated component diagram | P0 |
+| docs/llm-setup.md | Per-language prompt tuning, token usage by language | P1 |
+| docs/roadmap.md | Update Phase 4.2 with implementation details | P1 |
+| **NEW: docs/adding-languages.md** | Guide for contributors to add new languages | P1 |
+| **NEW: docs/language-prompts.md** | Prompt engineering patterns per language | P2 |
+
+### 15.2 API Documentation
+- OpenAPI spec updates for language field in findings
+- New endpoint: `GET /api/languages` (list enabled languages)
+- Update webhook payloads to include language metadata
+
+---
+
+## 16. Example Implementation: JavaScript Support
+
+### 16.1 Language Support Class
+
+```python
+# drep/languages/javascript.py
+from typing import List, Optional
+from drep.languages.base import LanguageSupport, LinterConfig, DocStyle
+
+class JavaScriptSupport(LanguageSupport):
+    """JavaScript and TypeScript language support."""
+
+    name = "javascript"
+    file_extensions = [".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx"]
+
+    def get_analysis_prompt(self) -> str:
+        return """You are an expert JavaScript/TypeScript reviewer.
+
+        Focus on these JavaScript-specific issues:
+        1. **Async/Await**: Unhandled promise rejections, missing await, async context
+        2. **Type Safety** (TypeScript): any usage, type assertions, null/undefined handling
+        3. **Security**: XSS, prototype pollution, eval usage, injection vulnerabilities
+        4. **Performance**: Event loop blocking, memory leaks, inefficient algorithms
+        5. **React** (if applicable): Hook rules, dependency arrays, performance optimizations
+        6. **Node.js** (if applicable): Callback patterns, stream handling, error boundaries
+
+        Output using the same JSON schema as other languages.
+        Severity levels: critical (security/crashes), high (bugs), medium (best practices), low (style).
+        """
+
+    def extract_symbols(self, code: str) -> SymbolGraph:
+        """Extract functions, classes, and modules using tree-sitter."""
+        parser = self._get_parser()  # Lazy-loaded tree-sitter-javascript
+        tree = parser.parse(code.encode())
+
+        symbols = SymbolGraph()
+        # Traverse for: function declarations, arrow functions, classes,
+        # async functions, generators, React components
+        query = self.language.query("""
+            (function_declaration name: (identifier) @func.name)
+            (variable_declarator
+              name: (identifier) @func.name
+              value: (arrow_function))
+            (class_declaration name: (identifier) @class.name)
+        """)
+
+        for match in query.matches(tree.root_node):
+            # Process matches into SymbolGraph
+            pass
+
+        return symbols
+
+    def doc_style(self) -> DocStyle:
+        return DocStyle(
+            format="jsdoc",
+            example="/** @param {string} name - Description */",
+            keywords=["@param", "@returns", "@throws", "@example"]
+        )
+
+    def auxiliary_linters(self) -> List[LinterConfig]:
+        return [
+            LinterConfig(
+                name="eslint",
+                command=["npx", "eslint", "--format", "json", "{file}"],
+                required=False,
+                timeout=30,
+                severity_map={"error": "high", "warning": "medium"}
+            ),
+            LinterConfig(
+                name="tsc",
+                command=["npx", "tsc", "--noEmit", "--incremental", "false", "{file}"],
+                required=False,
+                timeout=30,
+                enabled_for=[".ts", ".tsx"]  # TypeScript only
+            )
+        ]
+```
+
+### 16.2 Integration Example
+
+```python
+# In scanner.py after refactoring
+async def analyze_file(self, file_path: str, content: str) -> List[Finding]:
+    # Detect language
+    language = self.registry.detect_language(file_path)
+    if not language:
+        return []
+
+    # Get language-specific prompt
+    prompt = language.get_analysis_prompt()
+
+    # Run LLM analysis
+    llm_findings = await self.llm_client.analyze_code_json(
+        system_prompt=prompt,
+        code=content,
+        analyzer=f"code_quality_{language.name}"
+    )
+
+    # Optionally run auxiliary linter
+    linter_findings = []
+    if self.config.languages.use_linters:
+        for linter in language.auxiliary_linters():
+            if linter.is_available():
+                linter_findings.extend(
+                    await self.run_linter(linter, file_path)
+                )
+
+    # Merge and deduplicate findings
+    return self.merge_findings(llm_findings, linter_findings)
+```
+
+---
+
+## 17. Integration with Existing Drep Patterns
+
+### 17.1 Architectural Alignment
+
+| Drep Pattern | Language Support Mapping |
+| --- | --- |
+| Platform adapters (Gitea/GitHub/GitLab) | Language adapters follow same abstract base pattern |
+| Finding model | All languages produce same `Finding` structure |
+| Cache keys | Extended with language: `{analyzer}:{language}:{repo}:{sha}:{file}` |
+| Progress tracking | `ProgressTracker` gains `language` field in callbacks |
+| Metrics | `LLMMetrics` extended with `language` tag |
+
+### 17.2 Severity Mapping Preservation
+```python
+# Consistent across all languages
+SEVERITY_MAP = {
+    "critical": "error",    # Security vulnerabilities, crashes
+    "high": "error",        # Bugs, serious issues
+    "medium": "warning",    # Best practices, moderate issues
+    "low": "info",          # Minor improvements
+    "info": "info"          # Suggestions
+}
+```
+
+### 17.3 Configuration Compatibility
+```yaml
+# Existing config remains valid
 llm:
   enabled: true
-  ...
-```
+  model: "llama-3.1-70b"
 
-### Backward Compatibility
-
-**Current behavior:** Only Python files analyzed
-**New behavior:** Analyze all enabled languages (default: Python only)
-
-**Migration Path:**
-1. v1.2.0: Add language registry, default to Python only
-2. v1.3.0: Add JavaScript/TypeScript support (opt-in)
-3. v1.4.0: Add Go/Rust support (opt-in)
-
----
-
-## Testing Strategy
-
-### Unit Tests Per Language (est. 15-20 tests each)
-
-```python
-# tests/unit/languages/test_python_support.py
-def test_python_file_detection():
-    lang = PythonSupport()
-    assert ".py" in lang.file_extensions
-    assert lang.name == "python"
-
-def test_python_function_extraction():
-    code = "def foo(x: int) -> str:\n    return str(x)"
-    lang = PythonSupport()
-    functions = lang.extract_functions(code)
-    assert len(functions) == 1
-    assert functions[0].name == "foo"
-
-# tests/unit/languages/test_javascript_support.py
-def test_javascript_arrow_function_extraction():
-    code = "const foo = (x) => x * 2;"
-    lang = JavaScriptSupport()
-    functions = lang.extract_functions(code)
-    assert len(functions) == 1
-    assert functions[0].name == "foo"
-```
-
-### Integration Tests (est. 10 tests)
-
-```python
-@pytest.mark.integration
-async def test_multi_language_repository_scan():
-    """Test scanning repository with Python, JS, and Go files."""
-    # Create test repo with mixed languages
-    repo = create_mixed_language_repo()
-
-    scanner = RepositoryScanner(db, config, language_registry)
-    files, sha = await scanner.scan_repository(repo.path, "test", "mixed")
-
-    # Verify all languages detected
-    python_files = [f for f in files if f.endswith(".py")]
-    js_files = [f for f in files if f.endswith(".js")]
-    go_files = [f for f in files if f.endswith(".go")]
-
-    assert len(python_files) > 0
-    assert len(js_files) > 0
-    assert len(go_files) > 0
+# New section is additive only
+languages:
+  enabled: ["python"]  # Default preserves current behavior
 ```
 
 ---
 
-## Migration Plan
+## 18. Immediate Next Actions
 
-### Phase 1: Foundation (v1.2.0) - 15-20 hours
-
-**Goal:** Add language abstraction without breaking changes
-
-**Tasks:**
-1. Create `drep/languages/` module structure
-2. Implement `LanguageSupport` base class
-3. Implement `LanguageRegistry`
-4. Migrate Python support to `PythonSupport` class
-5. Refactor `CodeQualityAnalyzer` to use language registry
-6. Refactor `Scanner` to use language registry (backward compatible)
-7. Add 20+ unit tests for language abstraction
-8. Update documentation
-
-**Deliverables:**
-- `drep/languages/base.py`
-- `drep/languages/registry.py`
-- `drep/languages/python.py`
-- Tests passing (795 existing + 20 new = 815)
-- Zero breaking changes (Python-only behavior preserved)
-
-### Phase 2: JavaScript/TypeScript (v1.3.0) - 15-20 hours
-
-**Goal:** Add first additional language
-
-**Tasks:**
-1. Choose AST parser (tree-sitter vs esprima)
-2. Implement `JavaScriptSupport` class
-3. Add `.js`, `.jsx`, `.ts`, `.tsx` support
-4. Create JavaScript-specific analysis prompt
-5. Add ESLint integration (optional)
-6. Implement function/class extraction for JS
-7. Add 20+ tests for JavaScript support
-8. Update configuration schema
-9. Update documentation
-
-**Deliverables:**
-- `drep/languages/javascript.py`
-- JavaScript analysis working end-to-end
-- Tests: 835 total (815 + 20 new)
-
-### Phase 3: Go Support (v1.4.0) - 8-10 hours
-
-**Tasks:**
-1. Implement `GoSupport` class
-2. Add `.go` file support
-3. Create Go-specific analysis prompt
-4. Add golangci-lint integration (optional)
-5. Implement function/struct extraction for Go
-6. Add 15+ tests
-7. Update documentation
-
-**Deliverables:**
-- `drep/languages/go.py`
-- Tests: 850 total (835 + 15 new)
-
-### Phase 4: Rust Support (v1.5.0) - 8-10 hours
-
-**Tasks:**
-1. Implement `RustSupport` class
-2. Add `.rs` file support
-3. Create Rust-specific analysis prompt
-4. Add clippy integration (optional)
-5. Implement function/impl extraction for Rust
-6. Add 15+ tests
-7. Update documentation
-
-**Deliverables:**
-- `drep/languages/rust.py`
-- Tests: 865 total (850 + 15 new)
-
----
-
-## Risks and Challenges
-
-### 1. AST Parsing Complexity
-**Risk:** Each language has vastly different syntax and AST structure
-**Mitigation:** Use tree-sitter for unified interface, fall back to regex for simple cases
-
-### 2. External Linter Integration
-**Risk:** Depending on external tools (ESLint, clippy) adds dependencies
-**Mitigation:** Make external linters optional, provide pure LLM-based analysis as fallback
-
-### 3. LLM Prompt Quality
-**Risk:** LLM may not be equally good at all languages
-**Mitigation:** Test prompts with real code samples, iterate on prompt engineering
-
-### 4. Performance Degradation
-**Risk:** Supporting many languages could slow down scans
-**Mitigation:** Parallel analysis (already implemented), language-specific caching
-
-### 5. Breaking Changes
-**Risk:** Refactoring could break existing users
-**Mitigation:** Strict backward compatibility testing, default to Python-only
+1. **Approve tree-sitter architecture** (or document alternative) — **blocking Phase 1**
+2. **Create implementation tickets:**
+   - `LANG-001` Language registry + base abstractions
+   - `LANG-002` Python adapter (refactor existing)
+   - `LANG-003` Scanner/analyzer refactoring
+   - `LANG-004` JavaScript/TypeScript adapter
+   - `LANG-005` Go adapter
+   - `LANG-006` Rust adapter
+   - `LANG-007` Configuration schema updates
+   - `LANG-008` Documentation updates
+3. **Schedule 2-hour design review** with maintainers
+4. **Prepare sample repositories** for each language (test fixtures)
+5. **Prototype tree-sitter integration** (Phase 0 spike)
 
 ---
 
 ## Conclusion
 
-### Simple Analyzer Addition? **NO**
+Multi-language support requires **architectural refactoring** rather than simple analyzer additions. This comprehensive plan provides:
 
-Adding multi-language support is **NOT** as simple as adding new analyzer classes. It requires:
+- **Clear architecture** with language registry and adapters
+- **Phased delivery** (v1.2.0–v1.5.0) maintaining backward compatibility
+- **Risk mitigation** strategies for technical and operational challenges
+- **Success metrics** to validate implementation quality
+- **Cost analysis** showing acceptable resource impact (+20% tokens, +100MB memory)
+- **Migration path** ensuring zero disruption for existing Python users
 
-1. ✅ **Language abstraction layer** (new architecture)
-2. ✅ **Refactoring file discovery** (scanner changes)
-3. ✅ **Refactoring analyzer dispatch** (routing by language)
-4. ✅ **Language-specific AST parsing** (tree-sitter or per-language parsers)
-5. ✅ **Configuration schema changes** (language-specific settings)
-6. ✅ **Comprehensive testing** (per-language test suites)
+The 46-60 hour estimate remains accurate, with Phase 0 research spike as the critical first step. This plan transforms drep from a Python-only tool into an extensible multi-language platform while preserving all existing functionality.
 
-### Recommendation
-
-**Phase 4.2 Status:** Accurate ("Large effort, High impact")
-
-**Proposed Timeline:**
-- v1.2.0 (Phase 1): Language abstraction foundation (15-20 hours)
-- v1.3.0 (Phase 2): JavaScript/TypeScript support (15-20 hours)
-- v1.4.0 (Phase 3): Go support (8-10 hours)
-- v1.5.0 (Phase 4): Rust support (8-10 hours)
-
-**Total Effort:** 46-60 hours (spread across 4 releases)
-
-**Priority:** After Anthropic Direct provider (Phase 4.1, 3-4 hours)
-
-### Next Steps
-
-1. Review this analysis with stakeholders
-2. Approve architectural approach (tree-sitter vs native parsers)
-3. Create Phase 4.2 implementation plan
-4. Begin Phase 1 (foundation) work
-5. Prototype JavaScript support to validate approach
-
----
-
-## References
-
-- Tree-sitter: https://tree-sitter.github.io/tree-sitter/
-- ESLint Parser: https://github.com/eslint/espree
-- Go AST: https://pkg.go.dev/go/ast
-- Rust syn: https://docs.rs/syn/latest/syn/
-- Current Python implementation: `drep/code_quality/analyzer.py`, `drep/docstring/ast_utils.py`
+**Recommendation:** Proceed with Phase 0 (tree-sitter evaluation) to validate the technical approach before committing to full implementation.
