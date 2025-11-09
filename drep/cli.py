@@ -358,14 +358,16 @@ def _write_and_validate_config(config_dict, config_path):
         click.echo("Please re-run 'drep init' or fix manually.", err=True)
         raise click.Abort()
 
-    # SECURITY: DO NOT catch Exception here
-    # Rationale: Broad exception handlers (except Exception) hide critical bugs:
-    # - KeyboardInterrupt: User should be able to interrupt the wizard
-    # - MemoryError: System resource exhaustion should propagate
-    # - ImportError: Missing dependencies should fail loudly
-    # - RuntimeError: Unexpected errors need full stack traces for debugging
-    # Only catch specific, recoverable exceptions (ValidationError, ValueError).
-    # Unexpected errors should crash with stack traces, not silent failures.
+    # SECURITY: Catch only specific, recoverable exceptions
+    # This code catches ValidationError (Pydantic schema failures) and ValueError
+    # (YAML parsing errors) to provide user-friendly error messages. All other
+    # exceptions propagate naturally:
+    # - KeyboardInterrupt: Allows user to interrupt wizard (Ctrl+C)
+    # - MemoryError: Signals resource exhaustion to calling process
+    # - ImportError: Reports missing dependencies with full traceback
+    # - RuntimeError: Exposes unexpected errors for debugging
+    # This selective exception handling provides helpful feedback for expected
+    # errors while preserving full diagnostic information for unexpected failures.
 
 
 @cli.command()
@@ -445,10 +447,12 @@ def init():
     if config_path.exists():
         click.echo()
         if click.confirm(f"{config_path} already exists. Overwrite?", default=False):
-            # SECURITY: Always create backup before overwriting config
-            # Rationale: Prevents catastrophic data loss if wizard fails mid-write.
-            # If backup creation fails, ABORT rather than risk overwriting without backup.
-            # Users can recover from backup if config write fails or produces invalid config.
+            # SECURITY: Create backup before overwriting existing config
+            # This copies the existing config.yaml to config.yaml.backup before proceeding.
+            # If the backup creation fails due to permissions or filesystem errors, the
+            # wizard aborts (raises click.Abort) to preserve the existing configuration.
+            # This ensures users can recover their previous settings if the new config
+            # write fails or produces an invalid configuration.
             backup_path = config_path.with_suffix(".yaml.backup")
             try:
                 shutil.copy(config_path, backup_path)
@@ -508,10 +512,11 @@ def init():
         click.echo("   Configure AWS credentials (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY)")
 
     if click.confirm("\nCheck if required environment variables are set?", default=False):
-        # SECURITY: Wrap env var checking in try-except for restricted environments
-        # Rationale: In restricted environments (containers, sandboxes), os.environ
-        # access or YAML serialization may raise OSError/PermissionError. Catch these
-        # specific exceptions and warn. KeyboardInterrupt must propagate to allow abort.
+        # SECURITY: Check environment variables with error handling
+        # This code reads required tokens from os.environ to verify they're set before
+        # the user runs a scan. It catches OSError and PermissionError (restricted
+        # environments like containers/sandboxes may restrict os.environ access) and
+        # displays a warning. KeyboardInterrupt propagates naturally to allow wizard abort.
         try:
             missing = []
             if platform_config.env_var not in os.environ:
@@ -746,14 +751,12 @@ fi
                     if "authentication failed" in error_msg:
                         # Determine which token env var to suggest
                         token_env_var = (
-                            "GITHUB_TOKEN" if platform == "github"
-                            else "GITEA_TOKEN" if platform == "gitea"
-                            else "GITLAB_TOKEN"
+                            "GITHUB_TOKEN"
+                            if platform == "github"
+                            else "GITEA_TOKEN" if platform == "gitea" else "GITLAB_TOKEN"
                         )
                         click.echo("Error: Authentication failed", err=True)
-                        click.echo(
-                            f"  Check your {token_env_var} token is valid", err=True
-                        )
+                        click.echo(f"  Check your {token_env_var} token is valid", err=True)
                     elif "not found" in error_msg:
                         click.echo(f"Error: Repository {owner}/{repo} not found", err=True)
                         click.echo("  Verify repository exists and token has access", err=True)
