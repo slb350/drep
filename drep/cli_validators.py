@@ -10,6 +10,8 @@ from urllib.parse import urlparse
 
 import click
 
+from drep.constants import BEDROCK_VALID_PREFIXES
+
 
 class URLType(click.ParamType):
     """Validates HTTP/HTTPS URL format.
@@ -121,17 +123,6 @@ class BedrockModelType(click.ParamType):
 
     name = "bedrock-model"
 
-    VALID_PREFIXES = [
-        "anthropic.",
-        "global.anthropic.",
-        "amazon.",
-        "global.amazon.",
-        "meta.",
-        "global.meta.",
-        "cohere.",
-        "global.cohere.",
-    ]
-
     def convert(self, value, param, ctx):
         """Convert and validate Bedrock model ID.
 
@@ -149,8 +140,8 @@ class BedrockModelType(click.ParamType):
         if not value:
             self.fail("Model ID cannot be empty", param, ctx)
 
-        if not any(value.startswith(prefix) for prefix in self.VALID_PREFIXES):
-            prefixes_str = ", ".join(self.VALID_PREFIXES)
+        if not any(value.startswith(prefix) for prefix in BEDROCK_VALID_PREFIXES):
+            prefixes_str = ", ".join(BEDROCK_VALID_PREFIXES)
             self.fail(
                 f"Invalid Bedrock model ID: {value!r}\n" f"Must start with one of: {prefixes_str}",
                 param,

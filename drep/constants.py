@@ -101,3 +101,30 @@ Performance Impact:
 - Higher values increase cost but allow longer, more detailed responses
 - Lower values reduce cost but may truncate complex analysis
 """
+
+
+# ===== Validation Constants =====
+
+BEDROCK_VALID_PREFIXES = [
+    "anthropic.",
+    "global.anthropic.",
+    "amazon.",
+    "global.amazon.",
+    "meta.",
+    "global.meta.",
+    "cohere.",
+    "global.cohere.",
+]
+"""AWS Bedrock model ID valid prefixes.
+
+Used to validate Bedrock model IDs in both CLI validators and config validation.
+Ensures consistent validation across the codebase.
+
+Used in:
+- drep.cli_validators.BedrockModelType.convert()
+- drep.models.config.BedrockConfig.validate_model_id()
+
+Why these prefixes: AWS Bedrock models follow a naming convention where the
+model ID starts with the provider name (anthropic, amazon, meta, cohere).
+Global models use "global." prefix for cross-region availability.
+"""

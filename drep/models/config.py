@@ -5,6 +5,8 @@ from typing import List, Optional
 
 from pydantic import BaseModel, Field, HttpUrl, SecretStr, field_validator, model_validator
 
+from drep.constants import BEDROCK_VALID_PREFIXES
+
 
 class GiteaConfig(BaseModel):
     """Gitea platform configuration."""
@@ -90,20 +92,10 @@ class BedrockConfig(BaseModel):
 
         Ensures model ID starts with a valid provider prefix.
         """
-        valid_prefixes = [
-            "anthropic.",
-            "global.anthropic.",
-            "amazon.",
-            "global.amazon.",
-            "meta.",
-            "global.meta.",
-            "cohere.",
-            "global.cohere.",
-        ]
-        if not any(v.startswith(prefix) for prefix in valid_prefixes):
+        if not any(v.startswith(prefix) for prefix in BEDROCK_VALID_PREFIXES):
             raise ValueError(
                 f"Invalid Bedrock model ID: {v}. "
-                f"Must start with a valid provider prefix: {', '.join(valid_prefixes)}"
+                f"Must start with a valid provider prefix: {', '.join(BEDROCK_VALID_PREFIXES)}"
             )
         return v
 
