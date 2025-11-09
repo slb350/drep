@@ -671,6 +671,31 @@ class TestInitCommand:
             assert "LLM_API_KEY" in result.output
             assert "GITHUB_TOKEN" in result.output
 
+    def test_init_env_check_detects_aws_credentials_for_bedrock(
+        self, runner, tmp_path, monkeypatch
+    ):
+        """Test env check detects missing AWS credentials for Bedrock provider."""
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            # Clear AWS environment variables
+            monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+            monkeypatch.delenv("AWS_ACCESS_KEY_ID", raising=False)
+            monkeypatch.delenv("AWS_SECRET_ACCESS_KEY", raising=False)
+
+            # Wizard: location + GitHub + Bedrock + docs + db + env check
+            # Bedrock needs: region, model_id
+            inputs = (
+                "1\ngithub\nn\nowner/*\ny\nbedrock\n"
+                "us-east-1\nanthropic.claude-3-5-sonnet-20241022-v2:0\nn\nn\n"
+                "n\nn\ny\n"
+            )
+            result = runner.invoke(cli, ["init"], input=inputs)
+
+            assert result.exit_code == 0
+            assert "WARNING: Missing environment variables:" in result.output
+            assert "AWS_ACCESS_KEY_ID" in result.output
+            assert "AWS_SECRET_ACCESS_KEY" in result.output
+            assert "GITHUB_TOKEN" in result.output
+
     def test_init_backup_contains_original_content(self, runner, tmp_path):
         """Test that backup file preserves original config content."""
         with runner.isolated_filesystem(temp_dir=tmp_path):

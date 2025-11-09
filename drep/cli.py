@@ -534,6 +534,11 @@ def init():
                 and "LLM_API_KEY" not in os.environ
             ):
                 missing.append("LLM_API_KEY")
+            if llm_config and llm_config.provider == "bedrock":
+                if "AWS_ACCESS_KEY_ID" not in os.environ:
+                    missing.append("AWS_ACCESS_KEY_ID")
+                if "AWS_SECRET_ACCESS_KEY" not in os.environ:
+                    missing.append("AWS_SECRET_ACCESS_KEY")
 
             if missing:
                 click.echo("WARNING: Missing environment variables:", err=True)
