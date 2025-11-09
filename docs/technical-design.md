@@ -1,10 +1,20 @@
 # Technical Design: drep
 
-**Document Version:** 4.0
+**Document Version:** 4.1
 **Last Updated:** 2025-11-09
-**Status:** Production (v1.0.0) - Phase 1, 2, & 3 Complete
+**Status:** Production (v1.1.0 Release Candidate) - Phase 1, 2, & 3 Complete
 
 ## Recent Updates
+
+**v4.1 (2025-11-09):**
+- **🎉 Version 1.1.0 Release Candidate - Interactive Configuration Wizard**
+- Added comprehensive `drep init` wizard with Click validators
+- 7 new wizard models with strongly-typed dataclasses (frozen, tuple-based immutability)
+- 13 security and integration tests added (finally blocks, token leakage, end-to-end)
+- 795 total tests passing (787 + 13 new from PR review fixes)
+- Config discovery: current directory + user config directory support
+- Platform-specific validators: URLType, RepositoryListType, BedrockModelType, DatabaseURLType
+- Zero tech debt policy maintained - all critical PR review issues resolved
 
 **v4.0 (2025-11-09):**
 - **🎉 Version 1.0.0 Production Release**
