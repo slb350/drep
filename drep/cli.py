@@ -29,6 +29,7 @@ from drep.documentation.analyzer import DocumentationAnalyzer
 from drep.models.wizard import (
     AnthropicLLMData,
     BedrockLLMData,
+    BedrockRegionModel,
     DocumentationConfig,
     DocumentationConfigData,
     GiteaPlatformData,
@@ -189,7 +190,7 @@ def _collect_llm_config() -> Optional[LLMConfig]:
             default="anthropic.claude-sonnet-4-5-20250929-v1:0",
             type=BedrockModelType(),
         )
-        llm_config["bedrock"] = {"region": region, "model": model}
+        llm_config["bedrock"] = BedrockRegionModel(region=region, model=model)
 
     elif provider == "anthropic":
         click.echo("\nAnthropic Configuration:")

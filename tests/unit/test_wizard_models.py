@@ -282,6 +282,36 @@ class TestPlatformConfigStronglyTyped:
         }
 
 
+class TestBedrockRegionModel:
+    """Tests for BedrockRegionModel."""
+
+    def test_bedrock_region_model_immutable(self):
+        """Test BedrockRegionModel is frozen."""
+        from drep.models.wizard import BedrockRegionModel
+
+        model = BedrockRegionModel(region="us-east-1", model="anthropic.claude-v2")
+
+        with pytest.raises(
+            (AttributeError, Exception), match="can't set attribute|frozen|cannot assign"
+        ):
+            model.region = "us-west-2"
+
+    def test_bedrock_region_model_to_dict(self):
+        """Test BedrockRegionModel.to_dict() serialization."""
+        from drep.models.wizard import BedrockRegionModel
+
+        model = BedrockRegionModel(
+            region="us-east-1", model="anthropic.claude-sonnet-4-5-20250929-v1:0"
+        )
+
+        result = model.to_dict()
+
+        assert result == {
+            "region": "us-east-1",
+            "model": "anthropic.claude-sonnet-4-5-20250929-v1:0",
+        }
+
+
 class TestLLMConfigModels:
     """Tests for LLM configuration models."""
 
@@ -303,15 +333,15 @@ class TestLLMConfigModels:
 
     def test_llm_config_provider_property(self):
         """Test LLMConfig.provider is derived from data."""
-        from drep.models.wizard import BedrockLLMData, LLMConfig
+        from drep.models.wizard import BedrockLLMData, BedrockRegionModel, LLMConfig
 
         bedrock_data = BedrockLLMData(
             enabled=True,
             provider="bedrock",
-            bedrock={
-                "region": "us-east-1",
-                "model": "anthropic.claude-sonnet-4-5-20250929-v1:0",
-            },
+            bedrock=BedrockRegionModel(
+                region="us-east-1",
+                model="anthropic.claude-sonnet-4-5-20250929-v1:0",
+            ),
         )
 
         config = LLMConfig(data=bedrock_data)

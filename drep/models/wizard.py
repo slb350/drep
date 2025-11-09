@@ -99,6 +99,27 @@ class GitLabPlatformData:
 
 
 @dataclass(frozen=True)
+class BedrockRegionModel:
+    """AWS Bedrock region and model configuration.
+
+    Attributes:
+        region: AWS region (e.g., "us-east-1")
+        model: Bedrock model ID (e.g., "anthropic.claude-sonnet-4-5-20250929-v1:0")
+    """
+
+    region: str
+    model: str
+
+    def to_dict(self) -> dict[str, str]:
+        """Convert to dictionary for YAML serialization.
+
+        Returns:
+            Dict with region and model keys
+        """
+        return {"region": self.region, "model": self.model}
+
+
+@dataclass(frozen=True)
 class OpenAILLMData:
     """Strongly-typed OpenAI-compatible LLM configuration data.
 
@@ -185,7 +206,7 @@ class BedrockLLMData:
     Attributes:
         enabled: Whether LLM integration is enabled
         provider: Provider name (always "bedrock")
-        bedrock: Bedrock configuration dict (region and model)
+        bedrock: Bedrock configuration (region and model)
         temperature: Optional temperature setting
         max_tokens: Optional max tokens per request
         timeout: Optional request timeout
@@ -201,7 +222,7 @@ class BedrockLLMData:
 
     enabled: bool
     provider: str
-    bedrock: dict[str, str]  # {"region": "...", "model": "..."}
+    bedrock: BedrockRegionModel
     temperature: Optional[float] = None
     max_tokens: Optional[int] = None
     timeout: Optional[int] = None
@@ -223,7 +244,7 @@ class BedrockLLMData:
         result = {
             "enabled": self.enabled,
             "provider": self.provider,
-            "bedrock": self.bedrock,
+            "bedrock": self.bedrock.to_dict(),
         }
         # Add optional fields only if set
         if self.temperature is not None:
