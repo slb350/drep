@@ -875,6 +875,42 @@ class TestInitCommand:
             assert "qwen3-30b-a3b" in config_content
 
 
+class TestConfigDiscoveryConsistency:
+    """Tests verifying init and scan use consistent config discovery."""
+
+    def test_init_and_scan_config_discovery_consistency(self, runner, tmp_path):
+        """Test that init creates config where scan discovers it.
+
+        This verifies that drep init and drep scan use consistent config
+        discovery logic - configs created by init should be found by scan.
+        """
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            # Run drep init with location choice "1" (current directory)
+            # This should create ./config.yaml
+            inputs = "1\ngitea\n\n\nn\ny\nn\nn\nn\nn\n"
+            result = runner.invoke(cli, ["init"], input=inputs)
+
+            assert result.exit_code == 0
+            assert Path("config.yaml").exists()
+
+            # Verify find_config_file() would discover this config
+            from drep.config import find_config_file
+
+            discovered_path = find_config_file(None)  # No explicit path
+            assert discovered_path == Path("config.yaml")
+            assert discovered_path.exists()
+
+            # Verify scan command would find this config
+            # (Mock the actual scan to avoid needing a real repository)
+            with patch("drep.cli._run_scan", new_callable=AsyncMock) as mock_scan:
+                result = runner.invoke(cli, ["scan", "owner/repo"])
+
+                # Should succeed because config is discovered
+                assert result.exit_code == 0
+                # Verify scan was called with the discovered config path
+                mock_scan.assert_called_once_with("owner", "repo", "config.yaml", False, True)
+
+
 class TestScanCommand:
     """Tests for drep scan command."""
 
