@@ -1,7 +1,7 @@
 # drep
 
 <p align="center">
-  <img src="https://drep-ai.org/assets/images/drep.png" alt="drep logo" width="200" />
+  <img src="docs/images/drep.png" alt="drep logo" width="200" />
 </p>
 
 **D**ocumentation & **R**eview **E**nhancement **P**latform
