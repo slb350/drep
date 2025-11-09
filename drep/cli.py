@@ -3,10 +3,13 @@
 import asyncio
 import os
 import tempfile
+from enum import Enum
 from pathlib import Path
 
 import click
+import yaml
 from git import Repo
+from pydantic import ValidationError
 
 from drep.adapters.gitea import GiteaAdapter
 from drep.config import load_config
@@ -14,6 +17,13 @@ from drep.core.issue_manager import IssueManager
 from drep.core.scanner import RepositoryScanner
 from drep.db import init_database
 from drep.documentation.analyzer import DocumentationAnalyzer
+
+
+class OutputFormat(str, Enum):
+    """Output format options for check command."""
+
+    TEXT = "text"
+    JSON = "json"
 
 
 @click.group()
@@ -40,7 +50,7 @@ def init():
     click.echo("-" * 60)
     platform = click.prompt(
         "Which git platform are you using?",
-        type=click.Choice(["github", "gitea"], case_sensitive=False),
+        type=click.Choice(["github", "gitea", "gitlab"], case_sensitive=False),
         default="github",
     )
     click.echo()
@@ -77,7 +87,7 @@ def init():
         env_var = "GITHUB_TOKEN"
         platform_name = "GitHub"
 
-    else:  # gitea
+    elif platform.lower() == "gitea":
         click.echo("Gitea Configuration:")
 
         # Gitea URL
@@ -98,6 +108,34 @@ def init():
 
         env_var = "GITEA_TOKEN"
         platform_name = "Gitea"
+
+    else:  # gitlab
+        click.echo("GitLab Configuration:")
+
+        # Self-hosted or gitlab.com
+        use_selfhosted = click.confirm("Are you using self-hosted GitLab?", default=False)
+
+        platform_config_lines.append("gitlab:")
+        platform_config_lines.append("  token: ${GITLAB_TOKEN}")
+
+        if use_selfhosted:
+            gitlab_url = click.prompt("GitLab URL", default="https://gitlab.example.com")
+            platform_config_lines.append(f"  url: {gitlab_url}")
+        else:
+            platform_config_lines.append("  # url: null  # Default gitlab.com")
+
+        # Repositories
+        click.echo("\nRepository Configuration:")
+        click.echo("Examples: 'your-org/*' (all projects), 'owner/project' (single project)")
+        repos_input = click.prompt("Enter projects (comma-separated)", default="your-org/*")
+        repos = [r.strip() for r in repos_input.split(",")]
+
+        platform_config_lines.append("  repositories:")
+        for repo in repos:
+            platform_config_lines.append(f"    - {repo}")
+
+        env_var = "GITLAB_TOKEN"
+        platform_name = "GitLab"
 
     click.echo()
 
@@ -395,10 +433,28 @@ async def _run_scan(
             hostname = api_url.replace("https://", "").replace("http://", "").split("/")[0]
             git_url = f"https://{hostname}/{owner}/{repo}.git"
         git_token = config.github.token.get_secret_value()
+    elif config.gitlab is not None:
+        # Use GitLab adapter
+        platform = "gitlab"
+        from drep.adapters.gitlab import GitLabAdapter
+
+        adapter = GitLabAdapter(
+            token=config.gitlab.token.get_secret_value(),
+            url=config.gitlab.url,  # None for GitLab.com, or custom URL
+        )
+        # GitLab git URL format: https://gitlab.com/owner/repo.git
+        # Handle default GitLab.com case (config.gitlab.url is None)
+        if config.gitlab.url is None:
+            git_url = f"https://gitlab.com/{owner}/{repo}.git"
+        else:
+            # Self-hosted GitLab
+            git_url = f"{config.gitlab.url.rstrip('/')}/{owner}/{repo}.git"
+        git_token = config.gitlab.token.get_secret_value()
     else:
         # No platform configured (shouldn't happen - Config validator requires at least one)
         click.echo(
-            "Error: No platform configured. Please add [gitea] or [github] to your config.yaml.",
+            "Error: No platform configured. "
+            "Please add [gitea], [github], or [gitlab] to your config.yaml.",
             err=True,
         )
         raise click.Abort()
@@ -490,9 +546,19 @@ fi
         for file_path in files:
             full_path = Path(repo_path) / file_path
             if full_path.exists():
-                content = full_path.read_text(errors="ignore")
-                result = await analyzer.analyze_file(file_path, content)
-                findings.extend(result.to_findings())
+                try:
+                    content = full_path.read_text(encoding="utf-8")
+                    result = await analyzer.analyze_file(file_path, content)
+                    findings.extend(result.to_findings())
+                except UnicodeDecodeError:
+                    click.echo(f"Warning: Skipping {file_path}: Not valid UTF-8", err=True)
+                    continue
+                except PermissionError:
+                    click.echo(f"Error: Permission denied: {file_path}", err=True)
+                    continue
+                except OSError as e:
+                    click.echo(f"Error: Failed to read {file_path}: {e}", err=True)
+                    continue
 
         # 2. Code quality analysis (LLM-powered)
         if config.llm and config.llm.enabled:
@@ -675,10 +741,20 @@ async def _run_review(
             token=config.github.token.get_secret_value(),
             url=str(config.github.url) if config.github.url else "https://api.github.com",
         )
+    elif config.gitlab is not None:
+        # Use GitLab adapter
+        platform = "gitlab"
+        from drep.adapters.gitlab import GitLabAdapter
+
+        adapter = GitLabAdapter(
+            token=config.gitlab.token.get_secret_value(),
+            url=config.gitlab.url,  # None for GitLab.com, or custom URL
+        )
     else:
         # No platform configured (shouldn't happen - Config validator requires at least one)
         click.echo(
-            "Error: No platform configured. Please add [gitea] or [github] to your config.yaml.",
+            "Error: No platform configured. "
+            "Please add [gitea], [github], or [gitlab] to your config.yaml.",
             err=True,
         )
         raise click.Abort()
@@ -763,6 +839,181 @@ async def _run_review(
 
             logger = logging.getLogger(__name__)
             logger.error(f"Error closing adapter: {e}")
+
+
+@cli.command()
+@click.argument("path", default=".")
+@click.option("--staged", is_flag=True, help="Only check git staged files")
+@click.option("--config", default=None, help="Config file path (optional for local-only mode)")
+@click.option("--exit-zero", is_flag=True, help="Always exit with 0 (don't block commits)")
+@click.option(
+    "--format",
+    type=click.Choice([OutputFormat.TEXT.value, OutputFormat.JSON.value]),
+    default=OutputFormat.TEXT.value,
+    help="Output format",
+)
+def check(path, staged, config, exit_zero, format):
+    """Check local files without platform API (pre-commit friendly).
+
+    Examples:
+        drep check                    # Check current directory
+        drep check --staged           # Check only staged files
+        drep check path/to/file.py    # Check specific file
+        drep check --exit-zero        # Warn without blocking commits
+    """
+    import asyncio
+
+    # Run async check
+    findings = asyncio.run(_run_check(path, staged, config, format))
+
+    # Print findings summary
+    if findings:
+        if exit_zero:
+            # Warning mode - print to stdout
+            click.echo(f"\n⚠ Found {len(findings)} issue(s) (warning mode)")
+        else:
+            # Error mode - print to stderr
+            click.echo(f"\n✗ Found {len(findings)} issue(s)", err=True)
+
+        # Exit with appropriate code
+        if not exit_zero:
+            raise SystemExit(1)
+    else:
+        click.echo("✓ No issues found")
+
+
+async def _run_check(path: str, staged: bool, config_path: str, output_format: str):
+    """Run local file check without platform API.
+
+    Args:
+        path: Path to check (file or directory)
+        staged: Only check staged files
+        config_path: Config file path (optional)
+        output_format: Output format (text or json)
+
+    Returns:
+        List of Finding objects
+    """
+    from pathlib import Path as PathLib
+
+    from drep.config import load_config
+    from drep.core.scanner import RepositoryScanner
+    from drep.db import init_database
+
+    # Load config with platform not required (pre-commit mode)
+    if config_path:
+        try:
+            config = load_config(config_path, require_platform=False)
+        except FileNotFoundError:
+            click.echo(f"Error: Config file not found: {config_path}", err=True)
+            raise SystemExit(1)
+        except yaml.YAMLError as e:
+            click.echo(f"Error: Invalid YAML in {config_path}\n{e}", err=True)
+            raise SystemExit(1)
+        except ValidationError as e:
+            click.echo(f"Error: Configuration validation failed\n{e}", err=True)
+            raise SystemExit(1)
+        # DO NOT CATCH: KeyboardInterrupt, SystemExit, ImportError
+        # These should propagate to allow proper termination and debugging
+    else:
+        # Create minimal config for local-only mode
+        from drep.models.config import Config
+
+        config = Config(require_platform_config=False)
+
+    # Initialize database (in-memory for check command)
+    db = init_database("sqlite:///:memory:")
+
+    # Initialize scanner
+    scanner = RepositoryScanner(db, config=config)
+
+    try:
+        # Validate and resolve path
+        try:
+            path_obj = PathLib(path).resolve(strict=True)
+        except FileNotFoundError:
+            click.echo(f"Error: Path not found: {path}", err=True)
+            raise SystemExit(1)
+
+        # Additional validation
+        if not path_obj.exists():
+            click.echo(f"Error: Path does not exist: {path}", err=True)
+            raise SystemExit(1)
+
+        if staged:
+            # Get staged files from git index
+            files = scanner.get_staged_files(str(path_obj))
+            click.echo(f"Checking {len(files)} staged file(s)...")
+        else:
+            # Get all Python/Markdown files
+            if path_obj.is_file():
+                # Single file
+                files = [str(path_obj.relative_to(path_obj.parent))]
+            else:
+                # Directory - get all .py and .md files
+                files = scanner._get_all_python_files(str(path_obj))
+            click.echo(f"Checking {len(files)} file(s)...")
+
+        if not files:
+            return []
+
+        # Analyze files
+        all_findings = []
+
+        # Code quality analysis (if LLM enabled)
+        if config.llm and config.llm.enabled:
+            code_findings = await scanner.analyze_code_quality(
+                repo_path=str(path_obj.parent if path_obj.is_file() else path_obj),
+                files=files,
+                repo_id="local",
+                commit_sha="local",
+            )
+            all_findings.extend(code_findings)
+
+        # Docstring analysis (if LLM enabled)
+        if config.llm and config.llm.enabled:
+            docstring_findings = await scanner.analyze_docstrings(
+                repo_path=str(path_obj.parent if path_obj.is_file() else path_obj),
+                files=files,
+                repo_id="local",
+                commit_sha="local",
+            )
+            all_findings.extend(docstring_findings)
+
+        # Output findings
+        if all_findings:
+            _output_findings(all_findings, output_format)
+
+        return all_findings
+
+    finally:
+        # Cleanup
+        await scanner.close()
+
+
+def _output_findings(findings, format_type):
+    """Output findings in specified format.
+
+    Args:
+        findings: List of Finding objects
+        format_type: OutputFormat value ('text' or 'json')
+    """
+    if format_type == OutputFormat.JSON.value:
+        import json
+
+        findings_dict = [f.model_dump() for f in findings]
+        click.echo(json.dumps(findings_dict, indent=2))
+    else:
+        # Text format: file:line:column: severity: message
+        click.echo()
+        for finding in findings:
+            col = f":{finding.column}" if finding.column else ""
+            click.echo(
+                f"{finding.file_path}:{finding.line}{col}: "
+                f"{finding.severity}: {finding.message}"
+            )
+            if finding.suggestion:
+                click.echo(f"  → {finding.suggestion}")
 
 
 @cli.command()

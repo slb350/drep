@@ -556,3 +556,236 @@ class TestDocstringAnalysis:
         assert scanner.docstring_generator.analyze_file.call_count == 1
         call_args = scanner.docstring_generator.analyze_file.call_args
         assert call_args.kwargs["file_path"] == "test.py"
+
+
+class TestGetStagedFiles:
+    """Tests for get_staged_files method (pre-commit integration)."""
+
+    def test_get_staged_files_method_exists(self):
+        """Test that get_staged_files method exists."""
+        db_session = Mock()
+        scanner = RepositoryScanner(db_session)
+
+        assert hasattr(scanner, "get_staged_files")
+        assert callable(scanner.get_staged_files)
+
+    def test_get_staged_files_returns_only_python_and_markdown(self):
+        """Test that get_staged_files returns only .py and .md files."""
+        db_session = Mock()
+        scanner = RepositoryScanner(db_session)
+
+        with patch("drep.core.scanner.Repo") as mock_repo_class:
+            mock_repo = Mock()
+
+            # Mock staged files: Python, Markdown, and other
+            mock_diff_item1 = Mock()
+            mock_diff_item1.a_path = "test.py"
+            mock_diff_item1.b_path = "test.py"
+
+            mock_diff_item2 = Mock()
+            mock_diff_item2.a_path = "README.md"
+            mock_diff_item2.b_path = "README.md"
+
+            mock_diff_item3 = Mock()
+            mock_diff_item3.a_path = "config.json"
+            mock_diff_item3.b_path = "config.json"
+
+            # Mock index.diff("HEAD") to return staged changes
+            mock_repo.index.diff.return_value = [
+                mock_diff_item1,
+                mock_diff_item2,
+                mock_diff_item3,
+            ]
+            mock_repo_class.return_value = mock_repo
+
+            files = scanner.get_staged_files("/fake/path")
+
+            # Should only include .py and .md files
+            assert "test.py" in files
+            assert "README.md" in files
+            assert "config.json" not in files
+
+    def test_get_staged_files_handles_new_files(self):
+        """Test that get_staged_files includes newly added files."""
+        db_session = Mock()
+        scanner = RepositoryScanner(db_session)
+
+        with patch("drep.core.scanner.Repo") as mock_repo_class:
+            mock_repo = Mock()
+
+            # Mock new file (a_path is None)
+            mock_new_file = Mock()
+            mock_new_file.a_path = None
+            mock_new_file.b_path = "new_file.py"
+
+            mock_repo.index.diff.return_value = [mock_new_file]
+            mock_repo_class.return_value = mock_repo
+
+            files = scanner.get_staged_files("/fake/path")
+
+            # Should include new file
+            assert "new_file.py" in files
+
+    def test_get_staged_files_handles_deleted_files(self):
+        """Test that get_staged_files excludes deleted files."""
+        db_session = Mock()
+        scanner = RepositoryScanner(db_session)
+
+        with patch("drep.core.scanner.Repo") as mock_repo_class:
+            mock_repo = Mock()
+
+            # Mock deleted file (b_path is None)
+            mock_deleted_file = Mock()
+            mock_deleted_file.a_path = "deleted.py"
+            mock_deleted_file.b_path = None
+
+            # Mock modified file (should be included)
+            mock_modified_file = Mock()
+            mock_modified_file.a_path = "modified.py"
+            mock_modified_file.b_path = "modified.py"
+
+            mock_repo.index.diff.return_value = [
+                mock_deleted_file,
+                mock_modified_file,
+            ]
+            mock_repo_class.return_value = mock_repo
+
+            files = scanner.get_staged_files("/fake/path")
+
+            # Should NOT include deleted file
+            assert "deleted.py" not in files
+            # Should include modified file
+            assert "modified.py" in files
+
+    def test_get_staged_files_handles_renamed_files(self):
+        """Test that get_staged_files handles renamed files correctly."""
+        db_session = Mock()
+        scanner = RepositoryScanner(db_session)
+
+        with patch("drep.core.scanner.Repo") as mock_repo_class:
+            mock_repo = Mock()
+
+            # Mock renamed file (a_path != b_path)
+            mock_renamed = Mock()
+            mock_renamed.a_path = "old_name.py"
+            mock_renamed.b_path = "new_name.py"
+
+            mock_repo.index.diff.return_value = [mock_renamed]
+            mock_repo_class.return_value = mock_repo
+
+            files = scanner.get_staged_files("/fake/path")
+
+            # Should include new name, not old name
+            assert "new_name.py" in files
+            assert "old_name.py" not in files
+
+    def test_get_staged_files_returns_empty_when_nothing_staged(self):
+        """Test that get_staged_files returns empty list when nothing staged."""
+        db_session = Mock()
+        scanner = RepositoryScanner(db_session)
+
+        with patch("drep.core.scanner.Repo") as mock_repo_class:
+            mock_repo = Mock()
+            mock_repo.index.diff.return_value = []
+            mock_repo_class.return_value = mock_repo
+
+            files = scanner.get_staged_files("/fake/path")
+
+            assert files == []
+
+    def test_get_staged_files_raises_on_non_git_repository(self):
+        """Test that get_staged_files raises ValueError for non-git directory."""
+        from git.exc import InvalidGitRepositoryError
+
+        db_session = Mock()
+        scanner = RepositoryScanner(db_session)
+
+        with patch("drep.core.scanner.Repo") as mock_repo_class:
+            mock_repo_class.side_effect = InvalidGitRepositoryError("/not/git")
+
+            with pytest.raises(ValueError) as exc_info:
+                scanner.get_staged_files("/not/git")
+
+            assert "Not a git repository" in str(exc_info.value)
+            assert "/not/git" in str(exc_info.value)
+            assert "git init" in str(exc_info.value)
+
+    def test_get_staged_files_handles_initial_commit(self):
+        """Test that get_staged_files handles initial commit (no HEAD)."""
+        from git.exc import GitCommandError
+
+        db_session = Mock()
+        scanner = RepositoryScanner(db_session)
+
+        with patch("drep.core.scanner.Repo") as mock_repo_class:
+            mock_repo = Mock()
+
+            # First call to diff("HEAD") raises GitCommandError for HEAD
+            # Second call to diff(None) returns staged files
+            def diff_side_effect(ref):
+                if ref == "HEAD":
+                    raise GitCommandError("git diff", 128, stderr="unknown revision 'HEAD'")
+                else:
+                    # Return some staged files on fallback
+                    mock_diff_item = Mock()
+                    mock_diff_item.b_path = "new_file.py"
+                    return [mock_diff_item]
+
+            mock_repo.index.diff.side_effect = diff_side_effect
+            mock_repo_class.return_value = mock_repo
+
+            files = scanner.get_staged_files("/fake/path")
+
+            # Should fall back to diff(None) for initial commit
+            assert files == ["new_file.py"]
+            assert mock_repo.index.diff.call_count == 2
+            mock_repo.index.diff.assert_any_call("HEAD")
+            mock_repo.index.diff.assert_any_call(None)
+
+    def test_get_staged_files_raises_on_git_command_error(self):
+        """Test that get_staged_files raises RuntimeError for other git errors."""
+        from git.exc import GitCommandError
+
+        db_session = Mock()
+        scanner = RepositoryScanner(db_session)
+
+        with patch("drep.core.scanner.Repo") as mock_repo_class:
+            mock_repo = Mock()
+            # Git error that's NOT about HEAD
+            mock_repo.index.diff.side_effect = GitCommandError(
+                "git diff", 128, stderr="corrupted index"
+            )
+            mock_repo_class.return_value = mock_repo
+
+            with pytest.raises(RuntimeError) as exc_info:
+                scanner.get_staged_files("/fake/path")
+
+            assert "Git operation failed" in str(exc_info.value)
+
+    def test_get_staged_files_handles_uppercase_extensions(self):
+        """Test that get_staged_files handles uppercase file extensions (.PY, .MD)."""
+        db_session = Mock()
+        scanner = RepositoryScanner(db_session)
+
+        with patch("drep.core.scanner.Repo") as mock_repo_class:
+            mock_repo = Mock()
+
+            # Create mock diff items with uppercase extensions
+            mock_diff_items = []
+            for filename in ["TEST.PY", "README.MD", "script.Py", "doc.Md", "other.TXT"]:
+                mock_diff_item = Mock()
+                mock_diff_item.b_path = filename
+                mock_diff_items.append(mock_diff_item)
+
+            mock_repo.index.diff.return_value = mock_diff_items
+            mock_repo_class.return_value = mock_repo
+
+            files = scanner.get_staged_files("/fake/path")
+
+            # Should match case-insensitively
+            assert "TEST.PY" in files
+            assert "README.MD" in files
+            assert "script.Py" in files
+            assert "doc.Md" in files
+            assert "other.TXT" not in files  # Wrong extension
+            assert len(files) == 4

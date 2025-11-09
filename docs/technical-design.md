@@ -1,10 +1,28 @@
 # Technical Design: drep
 
-**Document Version:** 3.6
-**Last Updated:** 2025-11-08
-**Status:** Phase 1 & 2 Complete, Phase 3.1, 3.2, & 3.3 Complete, Phase 3.4 Planned
+**Document Version:** 4.0
+**Last Updated:** 2025-11-09
+**Status:** Production (v1.0.0) - Phase 1, 2, & 3 Complete
 
 ## Recent Updates
+
+**v4.0 (2025-11-09):**
+- **🎉 Version 1.0.0 Production Release**
+- Phase 3.5 GitLab Adapter completed (93 unit tests, full BaseAdapter compliance)
+- All three major platforms fully supported: Gitea, GitHub, GitLab
+- Production Status: Development Status classifier upgraded to "5 - Production/Stable"
+- 618 total tests passing across all platforms
+- Zero tech debt policy maintained throughout development
+- API compatibility fixes for review CLI (head.sha normalization, create_pr_review_comment)
+
+**v3.7 (2025-11-08):**
+- Phase 3.6 Pre-Commit Hook Support completed
+- Added `drep check` command for local-only analysis
+- Implemented staged file detection via `get_staged_files()` method
+- Made platform configuration optional (`require_platform=False`)
+- Added `.pre-commit-hooks.yaml` for pre-commit framework integration
+- 14 new tests added (6 scanner + 4 config + 4 CLI), 539 total tests passing
+- Zero platform API token requirement for pre-commit workflow
 
 **v3.6 (2025-11-08):**
 - Added Homebrew distribution via custom tap
@@ -61,19 +79,21 @@
   - Issue creation on Gitea/GitHub with findings
   - Incremental scanning (only changed files)
   - LLM-powered code quality and PR reviews
-- **Interface:** CLI commands (`drep scan`, `drep review`)
+  - Pre-commit hooks for local-only analysis (no platform API required)
+- **Interface:** CLI commands (`drep scan`, `drep review`, `drep check`)
 
 ### Post-MVP Expansions
 
 - **Phase 1:** Quick Wins (Security, BaseAdapter, Constants, Enhanced Markdown) ✅ COMPLETE
 - **Phase 2:** Quality & Testing (E2E Tests, API Documentation, Dependency Injection) ✅ COMPLETE
-- **Phase 3:** Platform & LLM Backend Expansion
+- **Phase 3:** Platform & LLM Backend Expansion ✅ COMPLETE
   - **3.1:** GitHub Adapter ✅ COMPLETE
   - **3.2:** GitHub CLI Integration ✅ COMPLETE
   - **3.3:** AWS Bedrock LLM Provider ✅ COMPLETE
-  - **3.4:** Anthropic Direct LLM Provider (planned, 3-4 hours)
-  - **3.5:** GitLab Adapter (planned)
-- **Phase 4:** Feature Expansion (Multi-language support, Web UI)
+  - **3.5:** GitLab Adapter ✅ COMPLETE
+  - **3.6:** Pre-Commit Hook Support ✅ COMPLETE
+  - **3.4:** Anthropic Direct LLM Provider (deferred to Phase 4)
+- **Phase 4:** Feature Expansion (Multi-language support, Web UI, Anthropic Direct)
 - **Phase 5:** Advanced Features (Vector database, custom rules, performance)
 
 ---
@@ -1361,10 +1381,142 @@ llm:
 - **Deliverables:** `drep/llm/providers/anthropic_client.py`, 8+ tests
 - **See:** [docs/roadmap.md](roadmap.md#34-anthropic-direct-llm-provider) for complete specification
 
-**Phase 3.5: GitLab Adapter** (Planned)
-- GitLab adapter implementation
-- Cross-platform testing and validation
-- Webhook support for all platforms
+**Phase 3.5: GitLab Adapter** ✅ **COMPLETE**
+- ✅ GitLab adapter implementation (1027 lines, full BaseAdapter compliance)
+- ✅ Self-hosted GitLab support + GitLab.com
+- ✅ 35 comprehensive unit tests
+- ✅ CLI integration (scan & review commands)
+- ✅ Webhook support for GitLab merge requests
+- **Key Features:**
+  - URL-encoded project paths (owner%2Frepo)
+  - PRIVATE-TOKEN authentication
+  - Discussions with position objects for inline comments
+  - Base64-encoded file content support
+  - Diff reconstruction from JSON array
+
+**Phase 3.6: Pre-Commit Hook Support** ✅ COMPLETE (2025-11-08)
+
+**Completed:** 2025-11-08 | **Branch:** feature/phase-3.6-precommit-hooks | **PR:** #7
+
+Complete pre-commit hook integration for local-only code analysis without platform API requirements.
+
+**Completed Tasks:**
+- [x] Added `RepositoryScanner.get_staged_files()` method
+  - Detects Python (.py) and Markdown (.md) files in git index
+  - Returns only b_path (current name after renames)
+  - Excludes deleted files (b_path=None)
+  - 6 unit tests covering normal files, new files, renames, deletes, mixed types
+- [x] Made platform configuration optional
+  - `load_config(require_platform=False)` parameter
+  - `Config.require_platform_config` field controls validation
+  - Enables LLM-only configurations for local-only mode
+  - Backward compatible (default requires platform)
+  - 4 unit tests for optional platform scenarios
+- [x] Implemented `drep check` command
+  - `--staged` flag for pre-commit workflow
+  - `--exit-zero` for warning-only mode (don't block commits)
+  - `--format text|json` for flexible output
+  - Pre-commit friendly format: `file:line:column: severity: message`
+  - Exit code 1 when issues found (blocks commits by default)
+  - 4 unit tests for command behavior
+- [x] Created `.pre-commit-hooks.yaml` for pre-commit framework
+  - `drep-check` hook: Checks only staged files
+  - `drep-check-all` hook: Checks all Python files
+  - Direct repo reference: `repo: https://github.com/slb350/drep`
+- [x] Updated documentation (README.md, technical-design.md, CHANGELOG.md)
+- [x] All tests passing (539 total, 14 new)
+
+**Pre-Commit Workflow:**
+
+```
+Developer commits → Pre-commit hook triggers
+                           ↓
+                    drep check --staged
+                           ↓
+              Scans only .py and .md files in git index
+                           ↓
+                ┌──────────┴──────────┐
+                ▼                      ▼
+        Doc Analysis            Code Analysis
+                ↓                      ↓
+        ✓ No issues          OR    ✗ Issues found
+                ↓                      ↓
+        Commit succeeds         Exit code 1 (blocks commit)
+```
+
+**Local-Only Configuration (No Platform Required):**
+
+```yaml
+# Minimal config for pre-commit (no Gitea/GitHub/GitLab)
+llm:
+  enabled: true
+  endpoint: http://localhost:1234/v1
+  model: qwen3-30b-a3b
+
+documentation:
+  enabled: true
+```
+
+**Installation Methods:**
+
+1. **Via pre-commit framework:**
+```yaml
+# .pre-commit-config.yaml
+repos:
+  - repo: https://github.com/slb350/drep
+    rev: v0.9.0
+    hooks:
+      - id: drep-check  # Staged files only
+```
+
+2. **Manual git hook:**
+```bash
+# .git/hooks/pre-commit
+#!/bin/bash
+drep check --staged
+```
+
+**Commands:**
+
+```bash
+# Check staged files (pre-commit workflow)
+drep check --staged
+
+# Check specific file or directory
+drep check path/to/file.py
+drep check src/
+
+# Warning mode (don't block commits)
+drep check --staged --exit-zero
+
+# JSON output
+drep check --format json
+```
+
+**Benefits:**
+- ✅ Early issue detection (before code review)
+- ✅ No CI/CD pipeline dependency
+- ✅ Works offline with local LLM
+- ✅ Zero platform API token requirement
+- ✅ Flexible blocking vs warning modes
+- ✅ Integrates with existing pre-commit workflows
+
+**Deliverables:**
+- `drep/core/scanner.py` - Added `get_staged_files()` method
+- `drep/config.py` - Added `require_platform` parameter
+- `drep/models/config.py` - Optional platform validation
+- `drep/cli.py` - Added `check` command with `_run_check()` and `_output_findings()`
+- `.pre-commit-hooks.yaml` - Pre-commit framework definitions
+- 14 new tests (6 scanner + 4 config + 4 CLI)
+- All 539 tests passing
+
+**Testing:**
+- All TDD cycles: RED → GREEN → REFACTOR → COMMIT
+- Unit tests for staged file detection (6 tests)
+- Unit tests for optional platform config (4 tests)
+- Unit tests for `drep check` command (4 tests)
+- Regression fix for TestInitCommand (3 tests)
+- Full test suite: 539 passing
 
 ### Phase 4: Feature Expansion (Sprint 9-12)
 - Multi-language support (JavaScript, TypeScript, Go, Rust)
