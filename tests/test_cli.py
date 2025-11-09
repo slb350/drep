@@ -293,6 +293,43 @@ class TestInitCommand:
                 assert Path("config.yaml").exists()
                 assert Path("config.yaml").read_text() == "existing: config"
 
+    def test_init_handles_file_write_permission_denied(self, runner, tmp_path):
+        """Test init handles PermissionError when writing config file."""
+        from unittest.mock import patch
+
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            # Mock write_text to raise PermissionError
+            with patch("pathlib.Path.write_text") as mock_write:
+                mock_write.side_effect = PermissionError("Permission denied")
+
+                # Wizard inputs (minimal)
+                inputs = "1\ngitea\n\n\nn\ny\nn\nn\nn\nn\n"
+                result = runner.invoke(cli, ["init"], input=inputs)
+
+                # Should abort with clear error message
+                assert result.exit_code == 1
+                assert "ERROR: Permission denied writing to" in result.output
+                assert "Check file permissions" in result.output
+
+    def test_init_handles_file_write_disk_full(self, runner, tmp_path):
+        """Test init handles OSError when disk is full."""
+        from unittest.mock import patch
+
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            # Mock write_text to raise OSError (disk full)
+            with patch("pathlib.Path.write_text") as mock_write:
+                mock_write.side_effect = OSError(28, "No space left on device")
+
+                # Wizard inputs (minimal)
+                inputs = "1\ngitea\n\n\nn\ny\nn\nn\nn\nn\n"
+                result = runner.invoke(cli, ["init"], input=inputs)
+
+                # Should abort with clear error message
+                assert result.exit_code == 1
+                assert "ERROR: Failed to write config:" in result.output
+                assert "No space left on device" in result.output
+                assert "Check disk space and permissions" in result.output
+
     def test_init_template_structure(self, runner, tmp_path):
         """Test that init creates valid YAML template."""
         with runner.isolated_filesystem(temp_dir=tmp_path):
