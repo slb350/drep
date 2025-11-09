@@ -974,6 +974,100 @@ class TestPlatformURLValidation:
             assert "https://gitlab.internal.company.com" in config_content
 
 
+class TestAdvancedSettingsBoundaries:
+    """Tests for advanced LLM settings boundary validation."""
+
+    def test_init_advanced_settings_temperature_too_high(self, runner, tmp_path):
+        """Test temperature validation rejects values > 2.0."""
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            # Try OpenAI with advanced settings, temperature too high
+            # Invalid: 3.0 (max is 2.0)
+            # Valid: 0.7
+            inputs = (
+                "1\ngitea\n\n\ny\nopenai-compatible\n\n\nn\ny\n"
+                "3.0\n0.7\n"  # temp too high, then valid
+                "\n\n\n\n\n"  # defaults: max_tokens, timeout, retries, concurrent, req/min
+                "n\ny\nn\nn\nn\nn\n"  # cache, docs, markdown, custom_dict, db, env
+            )
+            result = runner.invoke(cli, ["init"], input=inputs)
+
+            # Should succeed after retry
+            assert result.exit_code == 0
+            # Verify error message appeared (Click's FloatRange error)
+            assert "not in the range" in result.output
+            # Verify config created with valid temperature
+            config_content = Path("config.yaml").read_text()
+            assert "temperature: 0.7" in config_content
+
+    def test_init_advanced_settings_temperature_too_low(self, runner, tmp_path):
+        """Test temperature validation rejects values < 0.0."""
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            # Try OpenAI with advanced settings, temperature too low
+            # Invalid: -0.1 (min is 0.0)
+            # Valid: 0.2
+            inputs = (
+                "1\ngitea\n\n\ny\nopenai-compatible\n\n\nn\ny\n"
+                "-0.1\n0.2\n"  # temp too low, then valid
+                "\n\n\n\n\n"  # defaults: max_tokens, timeout, retries, concurrent, req/min
+                "n\ny\nn\nn\nn\nn\n"
+            )
+            result = runner.invoke(cli, ["init"], input=inputs)
+
+            # Should succeed after retry
+            assert result.exit_code == 0
+            # Verify error message appeared (Click's FloatRange error)
+            assert "not in the range" in result.output
+            # Verify config created with valid temperature
+            config_content = Path("config.yaml").read_text()
+            assert "temperature: 0.2" in config_content
+
+    def test_init_advanced_settings_max_tokens_negative(self, runner, tmp_path):
+        """Test max_tokens validation rejects negative values."""
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            # Try OpenAI with advanced settings, max_tokens negative
+            # Invalid: -100 (min is 100)
+            # Valid: 8000
+            inputs = (
+                "1\ngitea\n\n\ny\nopenai-compatible\n\n\nn\ny\n"
+                "\n"  # temp default
+                "-100\n8000\n"  # max_tokens negative, then valid
+                "\n\n\n\n"  # defaults: timeout, retries, concurrent, req/min
+                "n\ny\nn\nn\nn\nn\n"
+            )
+            result = runner.invoke(cli, ["init"], input=inputs)
+
+            # Should succeed after retry
+            assert result.exit_code == 0
+            # Verify error message appeared (Click's IntRange error)
+            assert "not in the range" in result.output
+            # Verify config created with valid max_tokens
+            config_content = Path("config.yaml").read_text()
+            assert "max_tokens: 8000" in config_content
+
+    def test_init_advanced_settings_max_tokens_too_large(self, runner, tmp_path):
+        """Test max_tokens validation rejects values > 20000."""
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            # Try OpenAI with advanced settings, max_tokens too large
+            # Invalid: 25000 (max is 20000)
+            # Valid: 16000
+            inputs = (
+                "1\ngitea\n\n\ny\nopenai-compatible\n\n\nn\ny\n"
+                "\n"  # temp default
+                "25000\n16000\n"  # max_tokens too large, then valid
+                "\n\n\n\n"  # defaults: timeout, retries, concurrent, req/min
+                "n\ny\nn\nn\nn\nn\n"
+            )
+            result = runner.invoke(cli, ["init"], input=inputs)
+
+            # Should succeed after retry
+            assert result.exit_code == 0
+            # Verify error message appeared (Click's IntRange error)
+            assert "not in the range" in result.output
+            # Verify config created with valid max_tokens
+            config_content = Path("config.yaml").read_text()
+            assert "max_tokens: 16000" in config_content
+
+
 class TestScanCommand:
     """Tests for drep scan command."""
 
