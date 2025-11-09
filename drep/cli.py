@@ -813,15 +813,25 @@ fi
                 from drep.llm.metrics import MetricsCollector
 
                 metrics_file = _Path.home() / ".drep" / "metrics.json"
+                metrics_file.parent.mkdir(parents=True, exist_ok=True)
                 collector = MetricsCollector(metrics_file)
                 collector.current_session = metrics
                 await collector.save()
-            except Exception as e:
+            except PermissionError:
                 import logging
 
                 logger = logging.getLogger(__name__)
-                logger.warning(f"Failed to persist LLM metrics: {e}")
-                click.echo(f"Warning: failed to persist metrics: {e}")
+                logger.error(f"Permission denied writing metrics to {metrics_file}")
+                click.echo(f"Warning: Cannot save metrics to {metrics_file}", err=True)
+                click.echo(f"  Fix: chmod 755 {metrics_file.parent}", err=True)
+            except OSError as e:
+                import logging
+
+                logger = logging.getLogger(__name__)
+                logger.error(f"Error writing metrics: {e}")
+                click.echo(f"Warning: Cannot save metrics: {e}", err=True)
+                click.echo("  Check disk space and filesystem permissions.", err=True)
+            # KeyboardInterrupt, MemoryError, and other exceptions propagate naturally
 
             if show_metrics:
                 click.echo("\n" + "=" * 60)
