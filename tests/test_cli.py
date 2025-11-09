@@ -654,6 +654,48 @@ class TestInitCommand:
             assert "LLM_API_KEY" in result.output
             assert "GITHUB_TOKEN" in result.output
 
+    def test_init_backup_contains_original_content(self, runner, tmp_path):
+        """Test that backup file preserves original config content."""
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            # Create initial config
+            original_content = "original: configuration\ndata: test"
+            Path("config.yaml").write_text(original_content)
+
+            # Overwrite config
+            inputs = "1\ny\n1\ngithub\nn\nowner/*\nn\ny\nn\nn\nn\nn\n"
+            result = runner.invoke(cli, ["init"], input=inputs)
+
+            assert result.exit_code == 0
+            assert Path("config.yaml.backup").exists()
+            backup_content = Path("config.yaml.backup").read_text()
+            assert backup_content == original_content
+
+    def test_init_custom_dictionary_excessive_whitespace(self, runner, tmp_path):
+        """Test custom dictionary handles excessive whitespace correctly."""
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            # Custom dictionary with excessive whitespace
+            inputs = "1\ngithub\nn\nowner/*\nn\ny\ny\ny\n  word1  ,  word2  ,   word3   \nn\nn\n"
+            result = runner.invoke(cli, ["init"], input=inputs)
+
+            assert result.exit_code == 0
+            config_content = Path("config.yaml").read_text()
+            # Words should be stripped
+            assert "word1" in config_content
+            assert "word2" in config_content
+            assert "word3" in config_content
+
+    def test_init_custom_dictionary_empty_after_strip(self, runner, tmp_path):
+        """Test custom dictionary handles empty string after stripping."""
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            # Custom dictionary with only whitespace
+            inputs = "1\ngithub\nn\nowner/*\nn\ny\ny\ny\n    \nn\nn\n"
+            result = runner.invoke(cli, ["init"], input=inputs)
+
+            assert result.exit_code == 0
+            config_content = Path("config.yaml").read_text()
+            # Empty custom_dictionary should result in empty list
+            assert "custom_dictionary: []" in config_content
+
 
 class TestScanCommand:
     """Tests for drep scan command."""
