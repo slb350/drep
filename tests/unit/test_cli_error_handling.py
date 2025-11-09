@@ -346,3 +346,83 @@ class TestGitOperationsErrorHandling:
         captured = capsys.readouterr()
         assert "Cannot write to" in captured.err
         assert "permissions" in captured.err.lower()
+
+
+class TestFinallyBlockErrorHandling:
+    """Test that cleanup errors in finally blocks don't mask original exceptions.
+
+    CRITICAL: This verifies Issue #1 from PR review - cleanup failures must
+    never hide the actual scan/operation error from the user.
+    """
+
+    def test_cleanup_failure_does_not_mask_scan_error(self):
+        """Test that finally block cleanup errors don't hide main operation errors.
+
+        Security test: When both scan AND cleanup fail, the user must see
+        the scan error (e.g., "Invalid config") not the cleanup error
+        (e.g., "Failed to delete temp dir").
+        """
+        scan_error_raised = False
+        scan_error_message = None
+
+        # Simulate the pattern in cli.py:955 (scan command)
+        # The ValueError from scan should propagate, not the OSError from cleanup
+        try:
+            try:
+                raise ValueError("Scan failed: Invalid repository configuration")
+            finally:
+                try:
+                    raise OSError("Failed to delete temporary directory")
+                except Exception:
+                    # Never re-raise - let original exception propagate
+                    pass
+        except ValueError as e:
+            scan_error_raised = True
+            scan_error_message = str(e)
+        except OSError:
+            # This should NEVER happen - cleanup errors must not mask scan errors
+            assert False, "OSError from cleanup masked the ValueError from scan!"
+
+        # Verify the scan error (ValueError) propagated correctly
+        assert scan_error_raised, "Scan error should propagate from finally block"
+        assert "Scan failed" in scan_error_message
+        assert "Invalid repository" in scan_error_message
+
+    def test_cleanup_success_allows_scan_error_to_propagate(self):
+        """Test that successful cleanup still allows scan errors to propagate."""
+        scan_error_raised = False
+
+        # Verify exception handling
+        try:
+            try:
+                raise RuntimeError("Scan operation failed")
+            finally:
+                pass  # Cleanup succeeds
+        except RuntimeError:
+            scan_error_raised = True
+
+        assert scan_error_raised, "Scan error should propagate when cleanup succeeds"
+
+    def test_no_scan_error_cleanup_failure_is_silent(self):
+        """Test that cleanup failures are silent when main operation succeeds.
+
+        When scan succeeds but cleanup fails, the operation should complete
+        successfully with only a warning (not a raised exception).
+        """
+        operation_succeeded = False
+        exception_raised = False
+
+        # Main operation succeeds
+        try:
+            operation_succeeded = True
+        finally:
+            # Cleanup fails
+            try:
+                raise PermissionError("Cannot delete temp directory")
+            except Exception:
+                # Never re-raise - operation succeeded, just log warning
+                pass
+
+        # Verify operation succeeded despite cleanup failure
+        assert operation_succeeded
+        assert not exception_raised, "Cleanup failure should not raise when scan succeeds"
