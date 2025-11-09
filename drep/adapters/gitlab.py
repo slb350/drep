@@ -726,13 +726,11 @@ class GitLabAdapter(BaseAdapter):
             # Validate required fields exist (paths can be null for new/deleted files)
             if "old_path" not in diff_obj:
                 raise ValueError(
-                    f"GitLab API diff object at index {i} missing required "
-                    f"'old_path' field"
+                    f"GitLab API diff object at index {i} missing required " f"'old_path' field"
                 )
             if "new_path" not in diff_obj:
                 raise ValueError(
-                    f"GitLab API diff object at index {i} missing required "
-                    f"'new_path' field"
+                    f"GitLab API diff object at index {i} missing required " f"'new_path' field"
                 )
 
             # Add file header
