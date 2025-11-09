@@ -458,6 +458,72 @@ async def test_get_pr_diff_empty():
         await adapter.close()
 
 
+@pytest.mark.asyncio
+@respx.mock
+async def test_get_pr_diff_missing_old_path():
+    """Test get_pr_diff() validates required 'old_path' field in diff objects."""
+    from drep.adapters.gitlab import GitLabAdapter
+
+    # Mock diff missing 'old_path'
+    diffs = [{"new_path": "file.py", "diff": "@@ -1 +1 @@\n"}]
+
+    respx.get(
+        "https://gitlab.com/api/v4/projects/owner%2Frepo/merge_requests/42/diffs"
+    ).mock(return_value=httpx.Response(200, json=diffs))
+
+    adapter = GitLabAdapter("glpat_token")
+
+    try:
+        with pytest.raises(ValueError, match="missing required 'old_path' field"):
+            await adapter.get_pr_diff("owner", "repo", 42)
+    finally:
+        await adapter.close()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_get_pr_diff_missing_new_path():
+    """Test get_pr_diff() validates required 'new_path' field in diff objects."""
+    from drep.adapters.gitlab import GitLabAdapter
+
+    # Mock diff missing 'new_path'
+    diffs = [{"old_path": "file.py", "diff": "@@ -1 +1 @@\n"}]
+
+    respx.get(
+        "https://gitlab.com/api/v4/projects/owner%2Frepo/merge_requests/42/diffs"
+    ).mock(return_value=httpx.Response(200, json=diffs))
+
+    adapter = GitLabAdapter("glpat_token")
+
+    try:
+        with pytest.raises(ValueError, match="missing required 'new_path' field"):
+            await adapter.get_pr_diff("owner", "repo", 42)
+    finally:
+        await adapter.close()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_get_pr_diff_invalid_object_type():
+    """Test get_pr_diff() validates diff objects are dicts, not strings/other types."""
+    from drep.adapters.gitlab import GitLabAdapter
+
+    # Mock diff with string instead of dict
+    diffs = ["invalid string object"]
+
+    respx.get(
+        "https://gitlab.com/api/v4/projects/owner%2Frepo/merge_requests/42/diffs"
+    ).mock(return_value=httpx.Response(200, json=diffs))
+
+    adapter = GitLabAdapter("glpat_token")
+
+    try:
+        with pytest.raises(ValueError, match="diff object at index 0 is not a dict"):
+            await adapter.get_pr_diff("owner", "repo", 42)
+    finally:
+        await adapter.close()
+
+
 # ===== create_pr_comment() Tests =====
 
 

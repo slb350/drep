@@ -671,6 +671,9 @@ class GitLabAdapter(BaseAdapter):
         Returns:
             Unified diff string
 
+        Raises:
+            ValueError: If diff objects are malformed or missing required fields
+
         Example:
             diffs = [
                 {
@@ -685,10 +688,29 @@ class GitLabAdapter(BaseAdapter):
             )
         """
         lines = []
-        for diff_obj in diffs:
+        for i, diff_obj in enumerate(diffs):
+            # Validate diff object is a dict
+            if not isinstance(diff_obj, dict):
+                raise ValueError(
+                    f"GitLab API diff object at index {i} is not a dict: "
+                    f"got {type(diff_obj).__name__}"
+                )
+
+            # Validate required fields exist (paths can be null for new/deleted files)
+            if "old_path" not in diff_obj:
+                raise ValueError(
+                    f"GitLab API diff object at index {i} missing required "
+                    f"'old_path' field"
+                )
+            if "new_path" not in diff_obj:
+                raise ValueError(
+                    f"GitLab API diff object at index {i} missing required "
+                    f"'new_path' field"
+                )
+
             # Add file header
-            old_path = diff_obj.get("old_path", "/dev/null")
-            new_path = diff_obj.get("new_path", "/dev/null")
+            old_path = diff_obj["old_path"]
+            new_path = diff_obj["new_path"]
             lines.append(f"diff --git a/{old_path} b/{new_path}")
 
             # Add diff content (GitLab provides unified diff format in 'diff' field)
