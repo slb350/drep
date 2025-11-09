@@ -533,6 +533,12 @@ class GitLabAdapter(BaseAdapter):
                 extra={"repo_id": f"{owner}/{repo}", "mr_iid": pr_number},
             )
 
+            # Normalize response to match GitHub/Gitea structure expected by callers
+            # Add 'head' field with 'sha' extracted from diff_refs['head_sha']
+            # This allows review CLI to use pr['head']['sha'] consistently across platforms
+            if "head" not in data:
+                data["head"] = {"sha": diff_refs["head_sha"]}
+
             return data
 
         # Handle network timeout errors
@@ -986,6 +992,42 @@ class GitLabAdapter(BaseAdapter):
                 f"Failed to create review comment on MR !{pr_number} in {owner}/{repo}: "
                 f"{e.response.text}"
             )
+
+    async def create_pr_review_comment(
+        self,
+        owner: str,
+        repo: str,
+        pr_number: int,
+        commit_sha: str,
+        file_path: str,
+        line: int,
+        body: str,
+    ) -> None:
+        """Post an inline review comment on specific line (Gitea-compatible interface).
+
+        This method provides the same interface as Gitea/GitHub adapters for compatibility
+        with PRReviewAnalyzer, which calls adapter.create_pr_review_comment().
+
+        Args:
+            owner: Project namespace
+            repo: Project name
+            pr_number: Merge request IID
+            commit_sha: Commit SHA (ignored for GitLab - uses head_sha from diff_refs)
+            file_path: File path relative to repo root
+            line: Line number in new version
+            body: Comment body (markdown supported)
+
+        Raises:
+            ValueError: If review comment creation fails
+
+        Note:
+            GitLab uses discussions with position objects, not commit-based reviews.
+            The commit_sha parameter is accepted for API compatibility but not used.
+            Instead, GitLab requires base_sha/head_sha/start_sha from MR diff_refs.
+        """
+        # Delegate to post_review_comment which implements GitLab-specific logic
+        # The commit_sha parameter is ignored as GitLab uses diff_refs instead
+        await self.post_review_comment(owner, repo, pr_number, file_path, line, body)
 
     async def get_file_content(self, owner: str, repo: str, file_path: str, ref: str) -> str:
         """Get file content at a specific git reference.
