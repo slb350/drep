@@ -16,6 +16,90 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Multi-repository analysis features
 - Anthropic Direct API provider (Phase 3.4)
 
+## [1.1.0] - 2025-11-09
+
+### Added - Interactive Configuration Wizard 🧙‍♂️
+
+**Feature Release:** Comprehensive `drep init` wizard for guided configuration setup!
+
+- **Interactive CLI Wizard**: Step-by-step configuration generator
+  - Platform selection (Gitea, GitHub, GitLab)
+  - Enterprise server detection (GitHub Enterprise, self-hosted GitLab/Gitea)
+  - Repository pattern configuration with wildcard support
+  - LLM provider selection (OpenAI-compatible, AWS Bedrock, Anthropic)
+  - Documentation analysis settings with markdown linting options
+  - Custom database URL configuration
+  - Advanced LLM settings (temperature, max tokens, rate limits)
+  - Environment variable verification and guidance
+
+- **Config Discovery**: Flexible configuration file locations
+  - Current directory: `./config.yaml` (project-specific)
+  - User config directory: `~/Library/Application Support/drep/config.yaml` (system-wide)
+  - User selects preferred location during wizard
+
+- **Input Validation**: Real-time validation with helpful error messages
+  - `URLType`: HTTP/HTTPS URL validation with scheme checking
+  - `RepositoryListType`: Repository pattern validation (`owner/repo`, `owner/*`)
+  - `BedrockModelType`: AWS Bedrock model ID validation (anthropic.*, amazon.*, etc.)
+  - `DatabaseURLType`: SQLAlchemy database URL validation
+  - `NonEmptyString`: Required field validation
+  - Duplicate repository pattern detection and deduplication
+
+- **Strongly-Typed Wizard Models**: 7 new frozen dataclasses
+  - `GitHubPlatformData`: GitHub platform configuration with optional enterprise URL
+  - `GiteaPlatformData`: Gitea platform configuration
+  - `GitLabPlatformData`: GitLab platform configuration
+  - `OpenAILLMData`: OpenAI-compatible LLM configuration
+  - `BedrockLLMData`: AWS Bedrock LLM configuration with region/model
+  - `BedrockRegionModel`: Nested Bedrock region and model settings
+  - `AnthropicLLMData`: Anthropic API configuration
+  - `DocumentationConfigData`: Documentation analysis settings
+  - All models use tuples for immutability (not lists)
+  - `to_dict()` methods convert tuples → lists for YAML serialization
+
+### Testing - Security & Integration
+- **13 new tests added** (795 total tests passing)
+
+**Finally Block Error Handling (3 tests)**:
+- Test cleanup errors don't mask scan errors (ValueError vs OSError)
+- Test successful cleanup allows scan error propagation
+- Test cleanup failure is silent when main operation succeeds
+- **Finding**: All finally blocks already correct - verification tests added
+
+**Token Leakage Prevention (5 tests)**:
+- Test GitHub token never logged (caplog + stdout + config file)
+- Test Gitea token never logged
+- Test Anthropic API key never logged
+- Test environment variable checks mask token values
+- Test multiple tokens all masked simultaneously
+- **Security**: Wizard uses placeholders (`${GITHUB_TOKEN}`) not actual values
+
+**End-to-End Integration (5 tests)**:
+- Test GitHub end-to-end (wizard → load_config → adapter creation)
+- Test Gitea + Bedrock end-to-end (complex nested config)
+- Test GitLab + Anthropic end-to-end
+- Test custom database URL configuration
+- Test malformed YAML caught gracefully by validator
+- **Integration**: Verifies complete workflow from wizard → scan
+
+### Changed
+- **CLI Workflow**: `drep init` now generates fully validated configurations
+- **User Experience**: Guided setup replaces manual YAML editing
+- **Error Prevention**: Input validation catches issues before config file creation
+- **Security**: Environment variable placeholders prevent token leakage
+
+### Improved
+- **Validation**: Click validators provide immediate feedback during input
+- **Documentation**: Inline help text and examples throughout wizard
+- **Defaults**: Sensible defaults for all optional settings (temperature=0.2, max_tokens=4000)
+- **Error Messages**: Clear, actionable messages for validation failures
+
+### Development
+- **Zero Tech Debt Policy**: All 3 critical PR review issues resolved
+- **TDD Methodology**: All 13 tests written first, then features implemented
+- **Type Safety**: Strongly-typed wizard models prevent runtime errors
+- **Immutability**: Frozen dataclasses with tuple-based collections
+
 ## [1.0.0] - 2025-11-09
 
 ### Added - GitLab Platform Support (Phase 3.5) 🎉
