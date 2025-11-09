@@ -2006,3 +2006,164 @@ class TestTokenLeakagePrevention:
             assert "secret_anthropic_abc" not in config_content
             assert "${GITHUB_TOKEN}" in config_content
             assert "${ANTHROPIC_API_KEY}" in config_content
+
+
+class TestEndToEndIntegration:
+    """INTEGRATION: Test complete workflow from wizard → load → validate → use.
+
+    These tests verify Issue #3 from PR review - the entire pipeline works:
+    wizard creates config → config loads correctly → config validates → scan can use it.
+    """
+
+    def test_github_end_to_end_workflow(self, runner, tmp_path, monkeypatch):
+        """Test GitHub config created by wizard loads and validates correctly.
+
+        Integration test: Verifies entire pipeline from wizard → load → validate.
+        """
+        monkeypatch.setenv("GITHUB_TOKEN", "test_token_value")
+
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            # Step 1: Create config via wizard
+            inputs = "1\ngithub\nn\nowner/*\nn\ny\nn\nn\nn\nn\n"
+            result = runner.invoke(cli, ["init"], input=inputs)
+            assert result.exit_code == 0
+
+            # Step 2: Verify config file exists
+            config_path = Path("config.yaml")
+            assert config_path.exists()
+
+            # Step 3: Load config using load_config()
+            from drep.config import load_config
+
+            config = load_config(str(config_path))
+
+            # Step 4: Verify structure
+            assert config.github is not None
+            assert config.github.token.get_secret_value() == "test_token_value"
+            assert config.github.repositories == ["owner/*"]
+            assert config.github.url == "https://api.github.com"  # Default GitHub.com API
+
+            # Step 5: Verify config is usable (adapter can be created)
+            from drep.adapters.github import GitHubAdapter
+
+            adapter = GitHubAdapter(
+                token=config.github.token.get_secret_value(),
+                url=str(config.github.url) if config.github.url else None,
+            )
+            assert adapter is not None
+
+    def test_gitea_with_bedrock_end_to_end(self, runner, tmp_path, monkeypatch):
+        """Test Gitea + Bedrock config workflow (complex nested config)."""
+        monkeypatch.setenv("GITEA_TOKEN", "test_gitea_token")
+
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            # Create Gitea + Bedrock config
+            inputs = (
+                "1\ngitea\nhttp://localhost:3000\nowner/*\n"  # Gitea
+                "y\nbedrock\nus-east-1\nanthropic.claude-sonnet-4-5-20250929-v1:0\n"  # Bedrock
+                "n\nn\nn\nn\nn\n"  # Skip advanced/cache/doc
+            )
+            result = runner.invoke(cli, ["init"], input=inputs)
+            assert result.exit_code == 0
+
+            # Load and verify
+            from drep.config import load_config
+
+            config = load_config("config.yaml")
+
+            # Verify Gitea config
+            assert config.gitea is not None
+            assert config.gitea.token.get_secret_value() == "test_gitea_token"
+            assert config.gitea.url == "http://localhost:3000"
+            assert config.gitea.repositories == ["owner/*"]
+
+            # Verify Bedrock LLM config
+            assert config.llm is not None
+            assert config.llm.provider == "bedrock"
+            assert config.llm.bedrock.region == "us-east-1"
+            assert "anthropic.claude" in config.llm.bedrock.model
+
+            # Verify adapter can be created
+            from drep.adapters.gitea import GiteaAdapter
+
+            adapter = GiteaAdapter(
+                url=config.gitea.url,
+                token=config.gitea.token.get_secret_value(),
+            )
+            assert adapter is not None
+
+    def test_gitlab_with_anthropic_end_to_end(self, runner, tmp_path, monkeypatch):
+        """Test GitLab + Anthropic config workflow."""
+        monkeypatch.setenv("GITLAB_TOKEN", "test_gitlab_token")
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "test_anthropic_key")
+
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            inputs = (
+                "1\ngitlab\nn\ngroup/*\n"  # GitLab
+                "y\nanthropic\nclaude-sonnet-4-5-20250929\n"  # Anthropic
+                "n\nn\nn\nn\nn\n"  # Skip advanced
+            )
+            result = runner.invoke(cli, ["init"], input=inputs)
+            assert result.exit_code == 0
+
+            from drep.config import load_config
+
+            config = load_config("config.yaml")
+
+            # Verify GitLab config
+            assert config.gitlab is not None
+            assert config.gitlab.token.get_secret_value() == "test_gitlab_token"
+            assert config.gitlab.repositories == ["group/*"]
+
+            # Verify Anthropic LLM config
+            assert config.llm is not None
+            assert config.llm.provider == "anthropic"
+            # Note: api_key is a plain string in LLMConfig, not SecretStr
+            assert config.llm.api_key == "test_anthropic_key"
+            assert config.llm.model == "claude-sonnet-4-5-20250929"
+
+            # Verify adapter can be created
+            from drep.adapters.gitlab import GitLabAdapter
+
+            adapter = GitLabAdapter(
+                token=config.gitlab.token.get_secret_value(),
+                url=str(config.gitlab.url) if config.gitlab.url else None,
+            )
+            assert adapter is not None
+
+    def test_config_with_custom_database_end_to_end(self, runner, tmp_path, monkeypatch):
+        """Test config with custom database URL."""
+        monkeypatch.setenv("GITHUB_TOKEN", "test_token")
+
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            inputs = (
+                "1\ngithub\nn\nowner/*\n"  # GitHub
+                "n\n"  # No LLM
+                "y\nn\nn\n"  # Doc: enabled, no markdown, no dict
+                "y\nsqlite:///custom.db\n"  # Custom database
+                "n\n"  # No env check
+            )
+            result = runner.invoke(cli, ["init"], input=inputs)
+            assert result.exit_code == 0
+
+            from drep.config import load_config
+
+            config = load_config("config.yaml")
+
+            # Verify custom database
+            assert config.database_url == "sqlite:///custom.db"
+
+    def test_config_validation_catches_malformed_yaml(self, runner, tmp_path):
+        """Test that malformed YAML is caught gracefully."""
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            # Create intentionally broken YAML
+            config_path = Path("config.yaml")
+            config_path.write_text("invalid: yaml: structure: [unclosed")
+
+            # Try to validate
+            result = runner.invoke(cli, ["validate", str(config_path)])
+
+            # Should fail with validation error
+            assert result.exit_code != 0
+            # Error message should be helpful (not a stack trace)
+            assert "error" in result.output.lower() or "invalid" in result.output.lower()
