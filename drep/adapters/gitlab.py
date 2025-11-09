@@ -148,10 +148,19 @@ class GitLabAdapter(BaseAdapter):
             # Always propagate user interrupts, system exit signals, and async cancellations
             logger.info("Close interrupted by user or system")
             raise
+        except (httpx.CloseError, RuntimeError) as e:
+            # Expected errors during close - suppress to avoid masking original errors
+            logger.warning(
+                f"Non-critical error closing GitLab client: {e}",
+                extra={"error_type": type(e).__name__},
+            )
         except Exception as e:
-            # Suppress cleanup errors to avoid masking original errors in finally blocks
-            # (httpx.CloseError, RuntimeError, etc.)
-            logger.warning(f"Non-critical error closing GitLab client: {e}")
+            # Unexpected errors - log at ERROR level with full traceback for debugging
+            logger.error(
+                f"Unexpected error closing GitLab adapter: {e}",
+                extra={"error_type": type(e).__name__},
+                exc_info=True,
+            )
 
     def _encode_project_path(self, owner: str, repo: str) -> str:
         """Encode project path for GitLab API.
@@ -197,8 +206,20 @@ class GitLabAdapter(BaseAdapter):
 
         # If we got 429, we're rate limited - always raise
         # Parse headers for better error message, but don't depend on them
-        reset_time = response.headers.get("RateLimit-Reset", "unknown")
-        remaining_str = response.headers.get("RateLimit-Remaining", "unknown")
+        reset_time_raw = response.headers.get("RateLimit-Reset", "unknown")
+
+        # Convert Unix timestamp to human-readable format
+        if reset_time_raw != "unknown":
+            try:
+                from datetime import datetime
+
+                reset_dt = datetime.fromtimestamp(int(reset_time_raw))
+                reset_time = reset_dt.strftime("%Y-%m-%d %H:%M:%S UTC")
+            except (ValueError, OverflowError, OSError):
+                # Invalid timestamp - truncate if too long
+                reset_time = str(reset_time_raw)[:50]
+        else:
+            reset_time = "unknown"
 
         context = f" for {owner}/{repo}" if owner and repo else ""
         repo_id = f"{owner}/{repo}" if owner and repo else None
@@ -208,14 +229,14 @@ class GitLabAdapter(BaseAdapter):
             extra={
                 "repo_id": repo_id,
                 "reset_time": reset_time,
-                "remaining": remaining_str,
+                "reset_time_raw": reset_time_raw,
             },
         )
 
         raise ValueError(
-            f"GitLab API rate limit exceeded. "
-            f"Remaining: {remaining_str}, Resets at {reset_time}. "
-            "Wait or use a different token."
+            f"GitLab API rate limit exceeded (HTTP 429). "
+            f"Resets at {reset_time}. "
+            "Wait and retry, or use a different token."
         )
 
     # ===== Repository Methods =====
