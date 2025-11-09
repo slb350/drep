@@ -95,7 +95,8 @@ class RepositoryListType(click.ParamType):
             self.fail("Must provide at least one repository pattern", param, ctx)
 
         # Validate each pattern: owner/repo or owner/*
-        pattern = re.compile(r"^[a-zA-Z0-9_-]+/[a-zA-Z0-9_*-]+$")
+        # Allow alphanumeric, underscores, hyphens, and dots in owner/repo names
+        pattern = re.compile(r"^[a-zA-Z0-9_.-]+/[a-zA-Z0-9_.*-]+$")
         invalid = []
 
         for repo in repos:

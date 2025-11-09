@@ -63,6 +63,24 @@ class TestURLType:
         with pytest.raises(BadParameter, match="cannot be empty"):
             validator.convert("", None, None)
 
+    def test_url_with_query_parameters(self):
+        """Test URL with query parameters is accepted."""
+        validator = URLType()
+        result = validator.convert("https://api.example.com/v1?key=value&foo=bar", None, None)
+        assert result == "https://api.example.com/v1?key=value&foo=bar"
+
+    def test_url_with_ipv4_address(self):
+        """Test URL with IPv4 address is accepted."""
+        validator = URLType()
+        result = validator.convert("http://192.168.1.14:3000", None, None)
+        assert result == "http://192.168.1.14:3000"
+
+    def test_url_with_ipv6_address(self):
+        """Test URL with IPv6 address is accepted."""
+        validator = URLType()
+        result = validator.convert("http://[::1]:8080", None, None)
+        assert result == "http://[::1]:8080"
+
 
 class TestRepositoryListType:
     """Tests for RepositoryListType validator."""
@@ -120,6 +138,26 @@ class TestRepositoryListType:
         validator = RepositoryListType()
         with pytest.raises(BadParameter, match="Must provide at least one"):
             validator.convert(",,,", None, None)
+
+    def test_repository_whitespace_in_individual_repos(self):
+        """Test whitespace in individual repository names is handled."""
+        validator = RepositoryListType()
+        result = validator.convert(" owner/repo1 , owner/repo2 ", None, None)
+        assert result == ["owner/repo1", "owner/repo2"]
+
+    def test_repository_pattern_allows_dots(self):
+        """Test repository patterns with dots are accepted."""
+        validator = RepositoryListType()
+        result = validator.convert("my.org/my.repo, user.name/project.name", None, None)
+        assert result == ["my.org/my.repo", "user.name/project.name"]
+
+    def test_repository_pattern_detects_duplicates(self):
+        """Test duplicate repository patterns are preserved (user responsibility)."""
+        validator = RepositoryListType()
+        # Note: Current implementation does NOT deduplicate - this test documents behavior
+        result = validator.convert("owner/repo, owner/repo", None, None)
+        assert result == ["owner/repo", "owner/repo"]
+        # This is intentional - let users specify duplicates if they want
 
 
 class TestBedrockModelType:
@@ -250,3 +288,9 @@ class TestNonEmptyString:
         validator = NonEmptyString()
         with pytest.raises(BadParameter, match="cannot be empty"):
             validator.convert("   ", None, None)
+
+    def test_nonempty_string_tab_characters(self):
+        """Test string with tab characters is stripped."""
+        validator = NonEmptyString()
+        result = validator.convert("\t\tmodel-name\t\t", None, None)
+        assert result == "model-name"
