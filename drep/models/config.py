@@ -31,6 +31,21 @@ class GitHubConfig(BaseModel):
     )
 
 
+class GitLabConfig(BaseModel):
+    """GitLab platform configuration."""
+
+    url: Optional[str] = Field(
+        default=None,
+        description=(
+            "GitLab base URL (None = gitlab.com, " "or https://gitlab.example.com for self-hosted)"
+        ),
+    )
+    token: SecretStr = Field(..., description="GitLab personal access token (requires api scope)")
+    repositories: List[str] = Field(
+        ..., description="Projects to monitor (e.g., 'owner/repo', 'owner/*')"
+    )
+
+
 class DocumentationConfig(BaseModel):
     """Documentation analysis settings."""
 
@@ -178,7 +193,7 @@ class LLMConfig(BaseModel):
 class Config(BaseModel):
     """Main configuration.
 
-    At least one platform (gitea or github) must be configured.
+    At least one platform (gitea, github, or gitlab) must be configured.
     """
 
     gitea: Optional[GiteaConfig] = Field(
@@ -186,6 +201,9 @@ class Config(BaseModel):
     )
     github: Optional[GitHubConfig] = Field(
         default=None, description="GitHub platform configuration (optional)"
+    )
+    gitlab: Optional[GitLabConfig] = Field(
+        default=None, description="GitLab platform configuration (optional)"
     )
     documentation: DocumentationConfig = Field(default_factory=DocumentationConfig)
     database_url: str = "sqlite:///./drep.db"
@@ -202,7 +220,7 @@ class Config(BaseModel):
         """Ensure at least one platform is configured.
 
         Raises:
-            ValueError: If neither gitea nor github is configured (when required)
+            ValueError: If no platform is configured (when required)
 
         Note:
             Platform validation is skipped when require_platform_config=False
@@ -213,9 +231,9 @@ class Config(BaseModel):
             return self
 
         # Validate platform presence
-        if self.gitea is None and self.github is None:
+        if self.gitea is None and self.github is None and self.gitlab is None:
             raise ValueError(
                 "At least one platform must be configured. "
-                "Please provide 'gitea' or 'github' configuration."
+                "Please provide 'gitea', 'github', or 'gitlab' configuration."
             )
         return self
