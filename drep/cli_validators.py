@@ -199,15 +199,20 @@ class DatabaseURLType(click.ParamType):
         scheme = value.split("://")[0]
 
         if scheme not in self.KNOWN_SCHEMES:
-            # Warn but don't fail for unknown schemes
+            # Warn but don't fail for unknown schemes - SQLAlchemy supports many
+            # database backends (Oracle, MSSQL, etc.) that we don't explicitly list.
+            # Let users proceed with caution rather than blocking valid use cases.
             click.echo(
                 f"Warning: Unrecognized database scheme {scheme!r}. "
                 f"Known schemes: {', '.join(self.KNOWN_SCHEMES)}",
                 err=True,
             )
 
-            if not click.confirm("Continue anyway?", default=False):
-                self.fail("Database URL validation cancelled by user", param, ctx)
+            # Log the unknown scheme usage for debugging
+            import logging
+
+            logger = logging.getLogger(__name__)
+            logger.debug(f"User using unrecognized database scheme: {value} (scheme={scheme})")
 
         return value
 

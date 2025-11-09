@@ -201,6 +201,28 @@ class TestDatabaseURLType:
         with pytest.raises(BadParameter, match="cannot be empty"):
             validator.convert("", None, None)
 
+    def test_unknown_database_scheme_warns_only(self):
+        """Test unknown database scheme shows warning but proceeds without prompt."""
+        from unittest.mock import patch
+
+        validator = DatabaseURLType()
+
+        # Mock click.echo to capture warning
+        with patch("drep.cli_validators.click.echo") as mock_echo:
+            result = validator.convert("mongodb://localhost/db", None, None)
+
+            # Should accept the URL
+            assert result == "mongodb://localhost/db"
+
+            # Should show warning
+            mock_echo.assert_called_once()
+            warning_message = mock_echo.call_args[0][0]
+            assert "Unrecognized database scheme" in warning_message
+            assert "mongodb" in warning_message
+
+            # Verify warning goes to stderr
+            assert mock_echo.call_args[1].get("err") is True
+
 
 class TestNonEmptyString:
     """Tests for NonEmptyString validator."""
