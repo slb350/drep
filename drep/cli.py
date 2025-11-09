@@ -692,8 +692,11 @@ async def _run_scan(
         askpass_script = Path(temp_dir) / "askpass.sh"
         token_file = Path(temp_dir) / ".git-token"
 
-        # Write token to temporary file with owner-only read permissions
-        # This prevents token exposure in process environment variables
+        # SECURITY: Write token to file instead of environment variable
+        # Threat model: Process listings (ps, /proc) can expose environment variables
+        # to other users on the system. File-based authentication with chmod 0o600 ensures
+        # only the current user (process owner) can read the token, preventing exposure
+        # in multi-user environments. The askpass script reads from this file securely.
         token_file.write_text(git_token)
         token_file.chmod(0o600)  # Owner read/write only
 

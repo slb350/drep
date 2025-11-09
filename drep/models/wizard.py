@@ -29,6 +29,7 @@ class PlatformConfig:
             ValueError: If platform config is missing 'token' field
         """
         # Get the platform-specific config dict (config is {"platform": {...}})
+        # Convert platform_name to lowercase to match YAML key format: "GitHub" → "github"
         platform_key = self.platform_name.lower()
         platform_dict = self.config.get(platform_key, {})
 

@@ -105,7 +105,7 @@ class RepositoryListType(click.ParamType):
             self.fail("Must provide at least one repository pattern", param, ctx)
 
         # Validate each pattern: owner/repo or owner/*
-        # Allow alphanumeric, underscores, hyphens, and dots in owner/repo names
+        # Allowed characters: a-z, A-Z, 0-9, underscore (_), hyphen (-), dot (.), and asterisk (*)
         pattern = re.compile(r"^[a-zA-Z0-9_.-]+/[a-zA-Z0-9_.*-]+$")
         invalid = []
 
@@ -208,9 +208,10 @@ class DatabaseURLType(click.ParamType):
         scheme = value.split("://")[0]
 
         if scheme not in self.KNOWN_SCHEMES:
-            # Warn but don't fail for unknown schemes - SQLAlchemy supports many
-            # database backends (Oracle, MSSQL, etc.) that we don't explicitly list.
-            # Let users proceed with caution rather than blocking valid use cases.
+            # Accept unknown database schemes with a warning. SQLAlchemy supports many
+            # database backends (Oracle, MSSQL, etc.) beyond our explicitly listed
+            # schemes (sqlite, postgresql, mysql). The validator logs the unknown scheme
+            # and displays a warning, then accepts the URL to support valid use cases.
             logger.debug(f"DatabaseURLType: unknown scheme {scheme!r} in {value!r}")
             click.echo(
                 f"Warning: Unrecognized database scheme {scheme!r}. "

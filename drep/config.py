@@ -23,12 +23,10 @@ def find_config_file(explicit_path: str | None = None) -> Path:
         explicit_path: Explicit config path (highest priority)
 
     Returns:
-        Path to config file (first one found, or user config path if none exist)
-
-    Note:
-        This function returns a path even if the file doesn't exist yet.
-        For `drep init`, it returns where the config SHOULD be created.
-        For other commands, use load_config() which will raise FileNotFoundError.
+        Path to config file (first one found, or user config path if none exist).
+        The returned path may not exist yet - for `drep init`, it indicates where
+        the config should be created. For other commands, use load_config() which
+        validates file existence and raises FileNotFoundError if missing.
     """
     # 1. Explicit path (highest priority)
     if explicit_path:
