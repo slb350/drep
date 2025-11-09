@@ -462,24 +462,31 @@ def init():
         click.echo("   Configure AWS credentials (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY)")
 
     if click.confirm("\nCheck if required environment variables are set?", default=False):
-        missing = []
-        if env_var not in os.environ:
-            missing.append(env_var)
-        if provider == "anthropic" and "ANTHROPIC_API_KEY" not in os.environ:
-            missing.append("ANTHROPIC_API_KEY")
-        if (
-            provider == "openai-compatible"
-            and "${LLM_API_KEY}" in yaml.dump(config_dict)
-            and "LLM_API_KEY" not in os.environ
-        ):
-            missing.append("LLM_API_KEY")
+        try:
+            missing = []
+            if env_var not in os.environ:
+                missing.append(env_var)
+            if provider == "anthropic" and "ANTHROPIC_API_KEY" not in os.environ:
+                missing.append("ANTHROPIC_API_KEY")
+            if (
+                provider == "openai-compatible"
+                and "${LLM_API_KEY}" in yaml.dump(config_dict)
+                and "LLM_API_KEY" not in os.environ
+            ):
+                missing.append("LLM_API_KEY")
 
-        if missing:
-            click.echo("WARNING: Missing environment variables:", err=True)
-            for var in missing:
-                click.echo(f"  - {var}", err=True)
-        else:
-            click.echo("✓ All required environment variables are set!")
+            if missing:
+                click.echo("WARNING: Missing environment variables:", err=True)
+                for var in missing:
+                    click.echo(f"  - {var}", err=True)
+            else:
+                click.echo("✓ All required environment variables are set!")
+        except Exception as e:
+            click.echo(
+                f"WARNING: Cannot check environment variables: {e}\n"
+                f"Please verify manually.",
+                err=True,
+            )
 
     click.echo("\n2. Validate your configuration:")
     click.echo("   drep validate")
