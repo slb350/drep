@@ -357,7 +357,15 @@ def _write_and_validate_config(config_dict, config_path):
         click.echo(f"\nConfig file: {config_path}", err=True)
         click.echo("Please re-run 'drep init' or fix manually.", err=True)
         raise click.Abort()
-    # DO NOT catch Exception - let unexpected errors propagate with stack trace
+
+    # SECURITY: DO NOT catch Exception here
+    # Rationale: Broad exception handlers (except Exception) hide critical bugs:
+    # - KeyboardInterrupt: User should be able to interrupt the wizard
+    # - MemoryError: System resource exhaustion should propagate
+    # - ImportError: Missing dependencies should fail loudly
+    # - RuntimeError: Unexpected errors need full stack traces for debugging
+    # Only catch specific, recoverable exceptions (ValidationError, ValueError).
+    # Unexpected errors should crash with stack traces, not silent failures.
 
 
 @cli.command()
@@ -365,17 +373,36 @@ def init():
     """Initialize drep configuration with interactive setup wizard.
 
     Guides the user through a multi-step wizard to configure:
-    1. Platform selection (GitHub/Gitea/GitLab) with platform-specific options
-    2. LLM configuration (optional) - supports OpenAI-compatible, Bedrock, Anthropic
-    3. Documentation analysis settings
-    4. Database configuration
+    1. Configuration location (current directory or user config directory)
+    2. Platform selection (GitHub/Gitea/GitLab) with platform-specific options
+    3. LLM configuration (optional) - supports OpenAI-compatible, Bedrock, Anthropic
+    4. Documentation analysis settings (markdown checks, custom dictionary)
+    5. Database configuration (SQLite, PostgreSQL, MySQL, etc.)
+    6. Environment variable verification (optional)
 
-    Creates config.yaml in either the current directory (project-specific)
-    or user config directory (system-wide). Prompts before overwriting
-    if the file already exists. Validates configuration structure after creation.
+    Creates config.yaml in the chosen location. If the file already exists,
+    creates a backup (.yaml.backup) before overwriting. All inputs are validated
+    at entry time using custom Click validators to prevent invalid configurations.
+
+    Error Handling:
+    - Backup failures abort the wizard to prevent data loss
+    - File write errors (PermissionError, OSError) show clear error messages
+    - YAML serialization errors are caught and reported
+    - Config validation failures show detailed field-level errors
+    - Environment variable checks wrapped in try-except for restricted environments
+
+    Security:
+    - Never stores secrets in config (uses ${ENV_VAR} placeholders)
+    - All validators enforce strict format requirements
+    - Optional environment variable verification to catch missing credentials
+    - Backup mechanism prevents accidental config loss
+
+    Exit Codes:
+    - 0: Configuration created and validated successfully
+    - 1: User aborted, validation failed, or unrecoverable error occurred
 
     Raises:
-        click.Abort: If configuration validation fails or file cannot be written
+        click.Abort: If backup creation fails, file cannot be written, or validation fails
     """
     click.echo("=" * 60)
     click.echo("Welcome to drep configuration setup!")
@@ -410,6 +437,10 @@ def init():
     if config_path.exists():
         click.echo()
         if click.confirm(f"{config_path} already exists. Overwrite?", default=False):
+            # SECURITY: Always create backup before overwriting config
+            # Rationale: Prevents catastrophic data loss if wizard fails mid-write.
+            # If backup creation fails, ABORT rather than risk overwriting without backup.
+            # Users can recover from backup if config write fails or produces invalid config.
             backup_path = config_path.with_suffix(".yaml.backup")
             try:
                 shutil.copy(config_path, backup_path)
@@ -465,6 +496,11 @@ def init():
         click.echo("   Configure AWS credentials (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY)")
 
     if click.confirm("\nCheck if required environment variables are set?", default=False):
+        # SECURITY: Wrap env var checking in try-except
+        # Rationale: In restricted environments (containers, sandboxes), os.environ
+        # access may raise exceptions. Rather than crash the wizard, catch all
+        # exceptions and show a warning. Users can verify manually if needed.
+        # This is a convenience feature, not security-critical.
         try:
             missing = []
             if platform_config.env_var not in os.environ:
