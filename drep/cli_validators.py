@@ -5,12 +5,15 @@ at input time, ensuring users cannot enter invalid values that would fail
 during configuration loading.
 """
 
+import logging
 import re
 from urllib.parse import urlparse
 
 import click
 
 from drep.constants import BEDROCK_VALID_PREFIXES
+
+logger = logging.getLogger(__name__)
 
 
 class URLType(click.ParamType):
@@ -37,24 +40,29 @@ class URLType(click.ParamType):
             click.BadParameter: If URL is invalid
         """
         if not value:
+            logger.debug("URLType validation failed: empty value")
             self.fail("URL cannot be empty", param, ctx)
 
         parsed = urlparse(value)
 
         # Check for required components
         if not parsed.scheme:
+            logger.debug(f"URLType validation failed: missing scheme in {value!r}")
             self.fail(
                 f"{value!r} is missing URL scheme (must start with http:// or https://)", param, ctx
             )
 
         if parsed.scheme not in ("http", "https"):
+            logger.debug(f"URLType validation failed: invalid scheme {parsed.scheme!r} in {value!r}")
             self.fail(
                 f"{value!r} is missing URL scheme (must start with http:// or https://)", param, ctx
             )
 
         if not parsed.netloc:
+            logger.debug(f"URLType validation failed: missing hostname in {value!r}")
             self.fail(f"{value!r} is missing hostname", param, ctx)
 
+        logger.debug(f"URLType validated: {value!r}")
         return value
 
 
@@ -105,6 +113,7 @@ class RepositoryListType(click.ParamType):
 
         if invalid:
             examples = "\n".join(f"  - {r}" for r in invalid)
+            logger.debug(f"RepositoryListType validation failed: invalid patterns {invalid}")
             self.fail(
                 f"Invalid repository pattern(s):\n{examples}\n"
                 f"Format must be 'owner/repo' or 'owner/*'",
@@ -112,6 +121,7 @@ class RepositoryListType(click.ParamType):
                 ctx,
             )
 
+        logger.debug(f"RepositoryListType validated: {len(repos)} patterns")
         return repos
 
 
@@ -139,16 +149,19 @@ class BedrockModelType(click.ParamType):
             click.BadParameter: If model ID is invalid
         """
         if not value:
+            logger.debug("BedrockModelType validation failed: empty value")
             self.fail("Model ID cannot be empty", param, ctx)
 
         if not any(value.startswith(prefix) for prefix in BEDROCK_VALID_PREFIXES):
             prefixes_str = ", ".join(BEDROCK_VALID_PREFIXES)
+            logger.debug(f"BedrockModelType validation failed: invalid prefix in {value!r}")
             self.fail(
                 f"Invalid Bedrock model ID: {value!r}\n" f"Must start with one of: {prefixes_str}",
                 param,
                 ctx,
             )
 
+        logger.debug(f"BedrockModelType validated: {value!r}")
         return value
 
 
@@ -178,9 +191,11 @@ class DatabaseURLType(click.ParamType):
             click.BadParameter: If URL is invalid
         """
         if not value:
+            logger.debug("DatabaseURLType validation failed: empty value")
             self.fail("Database URL cannot be empty", param, ctx)
 
         if "://" not in value:
+            logger.debug(f"DatabaseURLType validation failed: missing '://' in {value!r}")
             self.fail(
                 f"{value!r} is not a valid database URL\n"
                 f"Must contain '://' (e.g., sqlite:///./drep.db)",
@@ -194,18 +209,14 @@ class DatabaseURLType(click.ParamType):
             # Warn but don't fail for unknown schemes - SQLAlchemy supports many
             # database backends (Oracle, MSSQL, etc.) that we don't explicitly list.
             # Let users proceed with caution rather than blocking valid use cases.
+            logger.debug(f"DatabaseURLType: unknown scheme {scheme!r} in {value!r}")
             click.echo(
                 f"Warning: Unrecognized database scheme {scheme!r}. "
                 f"Known schemes: {', '.join(self.KNOWN_SCHEMES)}",
                 err=True,
             )
 
-            # Log the unknown scheme usage for debugging
-            import logging
-
-            logger = logging.getLogger(__name__)
-            logger.debug(f"User using unrecognized database scheme: {value} (scheme={scheme})")
-
+        logger.debug(f"DatabaseURLType validated: {value!r} (scheme={scheme})")
         return value
 
 
@@ -232,6 +243,9 @@ class NonEmptyString(click.ParamType):
             click.BadParameter: If string is empty
         """
         if not value or not value.strip():
+            logger.debug("NonEmptyString validation failed: empty or whitespace-only value")
             self.fail("Value cannot be empty", param, ctx)
 
-        return value.strip()
+        result = value.strip()
+        logger.debug(f"NonEmptyString validated: {result!r}")
+        return result
