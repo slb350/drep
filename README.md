@@ -9,7 +9,7 @@
 
 Automated code review and documentation improvement tool for **Gitea, GitHub, and GitLab**. Powered by your choice of LLM backend: local models (LM Studio, Ollama, llama.cpp), AWS Bedrock (Claude 4.5), or Anthropic's Claude API.
 
-> **Production Ready (v1.0.0):** Full support for Python repositories on all three major git platforms: Gitea, GitHub, and GitLab. Support for additional languages and direct Anthropic API provider coming soon.
+> **v1.1.0:** Interactive configuration wizard with guided setup! Full support for Python repositories on all three major git platforms: Gitea, GitHub, and GitLab. Support for additional languages and direct Anthropic API provider coming soon.
 
 ## Features
 
@@ -58,11 +58,95 @@ drep includes intelligent code analysis powered by local LLMs via OpenAI-compati
 
 ### Quick Start
 
-#### Option 1: Local Models (LM Studio)
+#### Step 1: Install drep
+
+```bash
+pip install drep-ai
+```
+
+#### Step 2: Initialize Configuration (Interactive Wizard) 🧙‍♂️
+
+```bash
+drep init
+```
+
+The interactive wizard guides you through:
+1. **Config Location**: Choose between current directory or user config directory
+2. **Platform Selection**: Gitea, GitHub, or GitLab
+3. **Enterprise Servers**: Detect and configure GitHub Enterprise, self-hosted GitLab/Gitea
+4. **Repository Patterns**: Use wildcards (`owner/*`) or specific repos (`owner/repo`)
+5. **LLM Backend**: OpenAI-compatible (local), AWS Bedrock, or Anthropic
+6. **Documentation Settings**: Enable markdown linting, custom dictionaries
+7. **Advanced Options**: Database URL, LLM temperature, rate limits
+
+**Example Wizard Flow:**
+
+```bash
+$ drep init
+
+============================================================
+Welcome to drep configuration setup!
+============================================================
+
+Where should the configuration be created?
+
+  1. Current directory (./config.yaml)
+     Use for project-specific configuration
+
+  2. User config directory (/Users/you/Library/Application Support/drep/config.yaml)
+     Use for system-wide configuration (recommended for pip/brew install)
+
+Choose location (1, 2) [2]: 1
+
+Step 1: Git Platform Configuration
+------------------------------------------------------------
+Which git platform are you using? (github, gitea, gitlab) [github]: github
+
+GitHub Configuration:
+Are you using GitHub Enterprise? [y/N]: n
+
+Repository Configuration:
+Examples: 'your-org/*' (all repos), 'owner/repo' (single repo)
+Enter repositories (comma-separated) [your-org/*]: slb350/*
+
+Step 2: LLM Configuration
+------------------------------------------------------------
+Enable LLM-powered code analysis? [Y/n]: y
+Choose LLM provider (openai-compatible, bedrock, anthropic) [openai-compatible]: openai-compatible
+
+OpenAI-Compatible Configuration:
+API Endpoint [http://localhost:1234/v1]:
+Model name [qwen3-30b-a3b]:
+Require API key? [y/N]: n
+
+... (more wizard steps) ...
+
+============================================================
+✓ Configuration created successfully!
+============================================================
+
+Config location: config.yaml
+
+Next steps:
+1. Set the GITHUB_TOKEN environment variable:
+   export GITHUB_TOKEN='your-api-token-here'
+
+2. Validate your configuration:
+   drep validate
+
+3. Start scanning repositories:
+   drep scan owner/repo
+```
+
+#### Manual Configuration (Alternative)
+
+For advanced users who prefer YAML editing:
+
+**Option 1: Local Models (LM Studio)**
 
 1. Install LM Studio: https://lmstudio.ai/
 2. Download a model (Qwen3-30B-A3B recommended)
-3. Configure drep:
+3. Create `config.yaml`:
 
 ```yaml
 llm:
