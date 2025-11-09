@@ -147,14 +147,9 @@ class TestInitCommand:
             # Create existing config
             Path("config.yaml").write_text("existing: config")
 
-<<<<<<< HEAD
             # Run init and confirm, then provide minimal inputs
             inputs = "y\ngitea\n\n\nn\ny\nn\nn\nn\n"
             result = runner.invoke(cli, ["init"], input=inputs)
-=======
-            # Run init and confirm (y for overwrite, gitea for platform)
-            result = runner.invoke(cli, ["init"], input="y\ngitea\n")
->>>>>>> origin/main
 
             assert result.exit_code == 0
             assert "✓ Configuration created successfully!" in result.output
@@ -167,14 +162,9 @@ class TestInitCommand:
     def test_init_template_structure(self, runner, tmp_path):
         """Test that init creates valid YAML template."""
         with runner.isolated_filesystem(temp_dir=tmp_path):
-<<<<<<< HEAD
             # Minimal inputs
             inputs = "gitea\n\n\nn\ny\nn\nn\nn\n"
             result = runner.invoke(cli, ["init"], input=inputs)
-=======
-            # Provide "gitea" as platform choice
-            result = runner.invoke(cli, ["init"], input="gitea\n")
->>>>>>> origin/main
 
             assert result.exit_code == 0
 
