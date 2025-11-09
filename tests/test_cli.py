@@ -609,6 +609,51 @@ class TestInitCommand:
     # This is an edge case (restricted environments blocking os.environ access) that is
     # extremely rare in practice.
 
+    def test_init_env_check_shows_missing_vars(self, runner, tmp_path, monkeypatch):
+        """Test env check shows warning when vars are missing."""
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            # Clear environment variables
+            monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+            monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+
+            # Wizard inputs: location + GitHub + Anthropic + docs + db + env check yes
+            inputs = "1\ngithub\nn\nowner/*\ny\nanthropic\nclaude-sonnet-4-5-20250929\nn\nn\ny\nn\nn\nn\ny\n"
+            result = runner.invoke(cli, ["init"], input=inputs)
+
+            assert result.exit_code == 0
+            assert "WARNING: Missing environment variables:" in result.output
+            assert "GITHUB_TOKEN" in result.output
+            assert "ANTHROPIC_API_KEY" in result.output
+
+    def test_init_env_check_all_set(self, runner, tmp_path, monkeypatch):
+        """Test env check shows success when all vars are set."""
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            # Set required environment variables
+            monkeypatch.setenv("GITEA_TOKEN", "test-token")
+
+            # Wizard inputs: location + Gitea + no LLM + docs + db + env check yes
+            inputs = "1\ngitea\nhttp://localhost:3000\nowner/*\nn\ny\nn\nn\nn\ny\n"
+            result = runner.invoke(cli, ["init"], input=inputs)
+
+            assert result.exit_code == 0
+            assert "✓ All required environment variables are set!" in result.output
+
+    def test_init_env_check_detects_llm_api_key(self, runner, tmp_path, monkeypatch):
+        """Test env check detects missing LLM_API_KEY for openai-compatible."""
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            # Clear environment variables
+            monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+            monkeypatch.delenv("LLM_API_KEY", raising=False)
+
+            # Wizard inputs: location + GitHub + OpenAI-compatible with API key + docs + db + env check yes
+            inputs = "1\ngithub\nn\nowner/*\ny\nopenai-compatible\nhttp://localhost:1234/v1\nqwen3-30b-a3b\ny\nn\nn\ny\nn\nn\nn\ny\n"
+            result = runner.invoke(cli, ["init"], input=inputs)
+
+            assert result.exit_code == 0
+            assert "WARNING: Missing environment variables:" in result.output
+            assert "LLM_API_KEY" in result.output
+            assert "GITHUB_TOKEN" in result.output
+
 
 class TestScanCommand:
     """Tests for drep scan command."""
