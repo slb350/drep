@@ -187,20 +187,41 @@ drep supports **GitHub**, **Gitea**, and **GitLab**. The `init` command will ask
 drep init
 ```
 
-You'll be prompted to choose your platform:
+You'll be prompted to choose where to store the configuration and which platform to use:
 
 ```
+Where should the configuration be created?
+
+  1. Current directory (./config.yaml)
+     Use for project-specific configuration
+
+  2. User config directory (~/.config/drep/config.yaml)
+     Use for system-wide configuration (recommended for pip/brew install)
+
+Choose location (1, 2) [2]: 2
+
+Step 1: Platform Configuration
+------------------------------------------------------------
 Which git platform are you using?
 Choose platform (github, gitea, gitlab) [github]: github
-✓ Created config.yaml for GitHub
+
+✓ Configuration created successfully!
+------------------------------------------------------------
+Config location: /Users/yourname/.config/drep/config.yaml
 
 Next steps:
-1. Edit config.yaml to configure your GitHub URL (if needed)
-2. Set GITHUB_TOKEN environment variable with your API token
-3. Update the repositories list to match your org/repos
-
-Then run: drep scan owner/repo
+1. Set the GITHUB_TOKEN environment variable:
+   export GITHUB_TOKEN='your-api-token-here'
 ```
+
+**Config File Discovery:**
+drep automatically finds your config file in this order:
+1. Explicit `--config` path (if provided)
+2. `DREP_CONFIG` environment variable
+3. `./config.yaml` (project-specific)
+4. `~/.config/drep/config.yaml` (user config)
+
+This means you can run `drep scan owner/repo` without specifying `--config` - it will automatically find your configuration!
 
 #### Step 2: Set Your API Token
 
@@ -234,7 +255,7 @@ export GITLAB_TOKEN="your_token_here"
 
 #### Step 3: Configure Repositories (Optional)
 
-Edit `config.yaml` to specify which repositories to monitor:
+Edit your config file (location shown in `drep init` output) to specify which repositories to monitor:
 
 ```yaml
 # For GitHub:
@@ -617,36 +638,41 @@ export GITEA_TOKEN="your-token"
 # export GITHUB_TOKEN="your-token"
 # export GITLAB_TOKEN="your-token"
 
-# Override config file location
+# Config file location (part of auto-discovery hierarchy)
 export DREP_CONFIG="/path/to/config.yaml"
 
-# Override LLM endpoint
+# Override LLM endpoint (optional)
 export DREP_LLM_ENDPOINT="http://localhost:11434"
 ```
 
 ## CLI Commands
 
+All commands auto-discover your config file. Use `--config` only to override the default discovery.
+
 ```bash
-# Initialize configuration
-drep init [--config config.yaml]
+# Initialize configuration (prompts for location)
+drep init
 
-# Validate configuration
-drep validate [--config config.yaml]
+# Validate configuration (auto-discovers config)
+drep validate
 
-# Check local files (pre-commit friendly, no platform API required)
-drep check [PATH] [--staged] [--exit-zero] [--format text|json] [--config config.yaml]
+# Check local files (pre-commit friendly, config optional)
+drep check [PATH] [--staged] [--exit-zero] [--format text|json]
 
-# Start web server
+# Start web server (auto-discovers config)
 drep serve [--host 0.0.0.0] [--port 8000]
 
-# Manual repository scan
-drep scan owner/repo [--platform gitea] [--config config.yaml]
+# Manual repository scan (auto-discovers config)
+drep scan owner/repo
 
-# Review a pull request
-drep review owner/repo PR_NUMBER [--no-post] [--platform gitea] [--config config.yaml]
+# Review a pull request (auto-discovers config)
+drep review owner/repo PR_NUMBER [--no-post]
 
 # View metrics
 drep metrics [--detailed] [--export FILE] [--days N]
+
+# Override config file location (any command)
+drep scan owner/repo --config /path/to/config.yaml
 ```
 
 ## Architecture
