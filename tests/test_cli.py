@@ -262,7 +262,10 @@ class TestInitCommand:
                 # Should abort with error
                 assert result.exit_code == 1
                 assert "ERROR: Cannot create backup" in result.output
-                assert "Permission denied" in result.output or "Cannot safely overwrite" in result.output
+                assert (
+                    "Permission denied" in result.output
+                    or "Cannot safely overwrite" in result.output
+                )
 
                 # Original config should still exist unchanged
                 assert Path("config.yaml").exists()
@@ -287,7 +290,9 @@ class TestInitCommand:
                 # Should abort with error
                 assert result.exit_code == 1
                 assert "ERROR: Cannot create backup" in result.output
-                assert "No space left" in result.output or "Cannot safely overwrite" in result.output
+                assert (
+                    "No space left" in result.output or "Cannot safely overwrite" in result.output
+                )
 
                 # Original config should still exist unchanged
                 assert Path("config.yaml").exists()
@@ -333,6 +338,7 @@ class TestInitCommand:
     def test_init_handles_yaml_serialization_error(self, runner, tmp_path):
         """Test init handles YAML serialization errors gracefully."""
         from unittest.mock import patch
+
         import yaml
 
         with runner.isolated_filesystem(temp_dir=tmp_path):
@@ -347,7 +353,10 @@ class TestInitCommand:
                 # Should abort with clear error message
                 assert result.exit_code == 1
                 assert "ERROR: Failed to serialize configuration" in result.output
-                assert "Cannot serialize non-standard type" in result.output or "This is a bug" in result.output
+                assert (
+                    "Cannot serialize non-standard type" in result.output
+                    or "This is a bug" in result.output
+                )
 
     def test_init_template_structure(self, runner, tmp_path):
         """Test that init creates valid YAML template."""
@@ -543,8 +552,9 @@ class TestInitCommand:
 
     def test_init_handles_pydantic_validation_error(self, runner, tmp_path):
         """Test init formats Pydantic ValidationError correctly."""
-        from pydantic_core import ValidationError
         from unittest.mock import patch
+
+        from pydantic_core import ValidationError
 
         with runner.isolated_filesystem(temp_dir=tmp_path):
             # Mock load_config to raise ValidationError with multiple fields
@@ -616,8 +626,11 @@ class TestInitCommand:
             monkeypatch.delenv("GITHUB_TOKEN", raising=False)
             monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
 
-            # Wizard inputs: location + GitHub + Anthropic + docs + db + env check yes
-            inputs = "1\ngithub\nn\nowner/*\ny\nanthropic\nclaude-sonnet-4-5-20250929\nn\nn\ny\nn\nn\nn\ny\n"
+            # Wizard: location + GitHub + Anthropic + docs + db + env check
+            inputs = (
+                "1\ngithub\nn\nowner/*\ny\nanthropic\n"
+                "claude-sonnet-4-5-20250929\nn\nn\ny\nn\nn\nn\ny\n"
+            )
             result = runner.invoke(cli, ["init"], input=inputs)
 
             assert result.exit_code == 0
@@ -645,8 +658,12 @@ class TestInitCommand:
             monkeypatch.delenv("GITHUB_TOKEN", raising=False)
             monkeypatch.delenv("LLM_API_KEY", raising=False)
 
-            # Wizard inputs: location + GitHub + OpenAI-compatible with API key + docs + db + env check yes
-            inputs = "1\ngithub\nn\nowner/*\ny\nopenai-compatible\nhttp://localhost:1234/v1\nqwen3-30b-a3b\ny\nn\nn\ny\nn\nn\nn\ny\n"
+            # Wizard: location + GitHub + OpenAI-compatible + docs + db + env check
+            inputs = (
+                "1\ngithub\nn\nowner/*\ny\nopenai-compatible\n"
+                "http://localhost:1234/v1\nqwen3-30b-a3b\ny\nn\nn\n"
+                "y\nn\nn\nn\ny\n"
+            )
             result = runner.invoke(cli, ["init"], input=inputs)
 
             assert result.exit_code == 0

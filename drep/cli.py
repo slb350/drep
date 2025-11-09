@@ -22,11 +22,11 @@ from drep.cli_validators import (
     URLType,
 )
 from drep.config import find_config_file, get_user_config_dir, load_config
-from drep.models.wizard import DocumentationConfig, LLMConfig, PlatformConfig
 from drep.core.issue_manager import IssueManager
 from drep.core.scanner import RepositoryScanner
 from drep.db import init_database
 from drep.documentation.analyzer import DocumentationAnalyzer
+from drep.models.wizard import DocumentationConfig, LLMConfig, PlatformConfig
 
 
 class OutputFormat(str, Enum):
@@ -488,7 +488,11 @@ def init():
     click.echo(f"1. Set the {platform_config.env_var} environment variable:")
     click.echo(f"   export {platform_config.env_var}='your-api-token-here'")
 
-    if llm_config and llm_config.provider == "openai-compatible" and "${LLM_API_KEY}" in yaml.dump(config_dict):
+    if (
+        llm_config
+        and llm_config.provider == "openai-compatible"
+        and "${LLM_API_KEY}" in yaml.dump(config_dict)
+    ):
         click.echo("   export LLM_API_KEY='your-llm-api-key'")
     elif llm_config and llm_config.provider == "anthropic":
         click.echo("   export ANTHROPIC_API_KEY='your-anthropic-api-key'")
@@ -505,7 +509,11 @@ def init():
             missing = []
             if platform_config.env_var not in os.environ:
                 missing.append(platform_config.env_var)
-            if llm_config and llm_config.provider == "anthropic" and "ANTHROPIC_API_KEY" not in os.environ:
+            if (
+                llm_config
+                and llm_config.provider == "anthropic"
+                and "ANTHROPIC_API_KEY" not in os.environ
+            ):
                 missing.append("ANTHROPIC_API_KEY")
             if (
                 llm_config
@@ -523,8 +531,7 @@ def init():
                 click.echo("✓ All required environment variables are set!")
         except Exception as e:
             click.echo(
-                f"WARNING: Cannot check environment variables: {e}\n"
-                f"Please verify manually.",
+                f"WARNING: Cannot check environment variables: {e}\n" f"Please verify manually.",
                 err=True,
             )
 

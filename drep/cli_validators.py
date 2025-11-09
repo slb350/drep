@@ -53,7 +53,9 @@ class URLType(click.ParamType):
             )
 
         if parsed.scheme not in ("http", "https"):
-            logger.debug(f"URLType validation failed: invalid scheme {parsed.scheme!r} in {value!r}")
+            logger.debug(
+                f"URLType validation failed: invalid scheme {parsed.scheme!r} in {value!r}"
+            )
             self.fail(
                 f"{value!r} is missing URL scheme (must start with http:// or https://)", param, ctx
             )

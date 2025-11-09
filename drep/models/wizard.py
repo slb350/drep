@@ -5,7 +5,7 @@ collected during the init wizard, replacing error-prone tuple returns.
 """
 
 from dataclasses import dataclass
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
 
 @dataclass(frozen=True)
@@ -33,9 +33,7 @@ class PlatformConfig:
         platform_dict = self.config.get(platform_key, {})
 
         if "token" not in platform_dict:
-            raise ValueError(
-                f"Platform config for {self.platform_name} must include 'token' field"
-            )
+            raise ValueError(f"Platform config for {self.platform_name} must include 'token' field")
 
 
 @dataclass(frozen=True)
