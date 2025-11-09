@@ -1,10 +1,19 @@
 # Technical Design: drep
 
-**Document Version:** 3.7
-**Last Updated:** 2025-11-08
-**Status:** Phase 1 & 2 Complete, Phase 3.1, 3.2, 3.3, & 3.6 Complete, Phase 3.4 & 3.5 Planned
+**Document Version:** 4.0
+**Last Updated:** 2025-11-09
+**Status:** Production (v1.0.0) - Phase 1, 2, & 3 Complete
 
 ## Recent Updates
+
+**v4.0 (2025-11-09):**
+- **🎉 Version 1.0.0 Production Release**
+- Phase 3.5 GitLab Adapter completed (93 unit tests, full BaseAdapter compliance)
+- All three major platforms fully supported: Gitea, GitHub, GitLab
+- Production Status: Development Status classifier upgraded to "5 - Production/Stable"
+- 618 total tests passing across all platforms
+- Zero tech debt policy maintained throughout development
+- API compatibility fixes for review CLI (head.sha normalization, create_pr_review_comment)
 
 **v3.7 (2025-11-08):**
 - Phase 3.6 Pre-Commit Hook Support completed
@@ -77,14 +86,14 @@
 
 - **Phase 1:** Quick Wins (Security, BaseAdapter, Constants, Enhanced Markdown) ✅ COMPLETE
 - **Phase 2:** Quality & Testing (E2E Tests, API Documentation, Dependency Injection) ✅ COMPLETE
-- **Phase 3:** Platform & LLM Backend Expansion
+- **Phase 3:** Platform & LLM Backend Expansion ✅ COMPLETE
   - **3.1:** GitHub Adapter ✅ COMPLETE
   - **3.2:** GitHub CLI Integration ✅ COMPLETE
   - **3.3:** AWS Bedrock LLM Provider ✅ COMPLETE
-  - **3.4:** Anthropic Direct LLM Provider (planned, 3-4 hours)
   - **3.5:** GitLab Adapter ✅ COMPLETE
   - **3.6:** Pre-Commit Hook Support ✅ COMPLETE
-- **Phase 4:** Feature Expansion (Multi-language support, Web UI)
+  - **3.4:** Anthropic Direct LLM Provider (deferred to Phase 4)
+- **Phase 4:** Feature Expansion (Multi-language support, Web UI, Anthropic Direct)
 - **Phase 5:** Advanced Features (Vector database, custom rules, performance)
 
 ---
