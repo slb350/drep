@@ -780,11 +780,49 @@ async def test_create_pr_review_comment_sends_correct_payload():
         # Verify payload structure
         payload = request_data["payload"]
         assert payload["commit_id"] == "abc123def456"
-        assert payload["body"] == ""  # Empty to prevent duplicate comments
+        assert payload["body"] == "Consider adding error handling here"
         assert len(payload["comments"]) == 1
         assert payload["comments"][0]["path"] == "src/module.py"
         assert payload["comments"][0]["new_position"] == 15
         assert payload["comments"][0]["body"] == "Consider adding error handling here"
+    finally:
+        await adapter.close()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_create_pr_review_comment_uses_fallback_body_for_empty_comment():
+    """Ensure create_pr_review_comment() still sends a non-empty review body."""
+    from drep.adapters.gitea import GiteaAdapter, REVIEW_BODY_PLACEHOLDER
+
+    request_data = {}
+
+    def capture_request(request):
+        import json
+
+        request_data["payload"] = json.loads(request.content)
+        return httpx.Response(201, json={"id": 456})
+
+    respx.post("http://192.168.1.14:3000/api/v1/repos/steve/drep/pulls/42/reviews").mock(
+        side_effect=capture_request
+    )
+
+    adapter = GiteaAdapter("http://192.168.1.14:3000", "token")
+
+    try:
+        await adapter.create_pr_review_comment(
+            owner="steve",
+            repo="drep",
+            pr_number=42,
+            commit_sha="abc123def456",
+            file_path="src/module.py",
+            line=15,
+            body="",
+        )
+
+        payload = request_data["payload"]
+        assert payload["body"] == REVIEW_BODY_PLACEHOLDER
+        assert payload["comments"][0]["body"] == ""
     finally:
         await adapter.close()
 
