@@ -15,6 +15,7 @@ Key Differences from GitHub:
 
 import asyncio
 import base64
+import binascii
 import json
 import logging
 import urllib.parse
@@ -1125,7 +1126,7 @@ class GitLabAdapter(BaseAdapter):
                     f"File {file_path} in {owner}/{repo}@{ref} is binary or non-UTF8. "
                     "GitLab adapter only supports text files."
                 )
-            except (base64.binascii.Error, ValueError):
+            except (binascii.Error, ValueError):
                 logger.error(
                     f"Failed to decode base64 for {file_path} in {owner}/{repo}@{ref}",
                     extra={"repo_id": f"{owner}/{repo}", "file_path": file_path, "ref": ref},

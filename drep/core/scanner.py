@@ -7,7 +7,7 @@ from typing import Callable, List, Optional, Tuple
 
 from git import Repo
 
-from drep.adapters.gitea import GiteaAdapter
+from drep.adapters.base import BaseAdapter
 from drep.code_quality.analyzer import CodeQualityAnalyzer
 from drep.core.performance import ProgressTracker
 from drep.db.models import RepositoryScan
@@ -24,18 +24,24 @@ logger = logging.getLogger(__name__)
 class RepositoryScanner:
     """Scans repositories with incremental diff support and optional LLM-powered analysis."""
 
+    # Populated only when LLM analysis is enabled; otherwise None.
+    llm_client: Optional[LLMClient]
+    code_analyzer: Optional[CodeQualityAnalyzer]
+    docstring_generator: Optional[DocstringGenerator]
+    pr_analyzer: Optional[PRReviewAnalyzer]
+
     def __init__(
         self,
         db_session,
         config: Optional[Config] = None,
-        gitea_adapter: Optional[GiteaAdapter] = None,
+        gitea_adapter: Optional[BaseAdapter] = None,
     ):
         """Initialize scanner with database session and optional config.
 
         Args:
             db_session: SQLAlchemy database session for querying/storing scan metadata
             config: Optional Config object for LLM-powered analysis
-            gitea_adapter: Optional GiteaAdapter for PR review functionality
+            gitea_adapter: Optional platform adapter (Gitea/GitHub/GitLab) for PR review
         """
         self.db = db_session
         self.config = config
@@ -65,7 +71,9 @@ class RepositoryScanner:
 
             self.llm_client = LLMClient(
                 endpoint=str(config.llm.endpoint),
-                model=config.llm.model,
+                # For openai-compatible, config validation guarantees a model; for
+                # bedrock the model is taken from bedrock_model inside LLMClient.
+                model=config.llm.model or "",
                 api_key=config.llm.api_key,
                 temperature=config.llm.temperature,
                 max_tokens=config.llm.max_tokens,
@@ -180,15 +188,11 @@ class RepositoryScanner:
             List of relative file paths (e.g., ["src/main.py", "README.md"])
         """
         files = []
-        repo_path = Path(repo_path)
+        root = Path(repo_path)
 
         for pattern in ["**/*.py", "**/*.md"]:
             files.extend(
-                [
-                    str(f.relative_to(repo_path))
-                    for f in repo_path.glob(pattern)
-                    if not self._should_ignore(f)
-                ]
+                [str(f.relative_to(root)) for f in root.glob(pattern) if not self._should_ignore(f)]
             )
 
         return files

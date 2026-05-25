@@ -34,6 +34,7 @@ def test_base_adapter_has_required_abstract_methods():
         "get_pr_diff",
         "create_pr_comment",
         "post_review_comment",
+        "create_pr_review_comment",
         "get_file_content",
         "close",
     }
@@ -92,6 +93,18 @@ def test_complete_subclass_can_be_instantiated():
             owner: str,
             repo: str,
             pr_number: int,
+            file_path: str,
+            line: int,
+            body: str,
+        ) -> None:
+            pass
+
+        async def create_pr_review_comment(
+            self,
+            owner: str,
+            repo: str,
+            pr_number: int,
+            commit_sha: str,
             file_path: str,
             line: int,
             body: str,

@@ -2,7 +2,11 @@
 
 import ast
 from dataclasses import dataclass
-from typing import List, Optional, Tuple
+from typing import List, Optional, Tuple, Union
+
+# A node that defines a function (sync or async). Both expose .args, .name,
+# .returns, .lineno, .end_lineno and .decorator_list.
+FuncDefNode = Union[ast.FunctionDef, ast.AsyncFunctionDef]
 
 
 @dataclass
@@ -30,9 +34,9 @@ class ClassInfo:
     is_public: bool
 
 
-def _collect_function_nodes(node: ast.AST) -> List[Tuple[ast.AST, ast.AST]]:
+def _collect_function_nodes(node: ast.AST) -> List[Tuple[FuncDefNode, ast.AST]]:
     """Collect all function and async function nodes with their parent node."""
-    function_nodes: List[Tuple[ast.AST, ast.AST]] = []
+    function_nodes: List[Tuple[FuncDefNode, ast.AST]] = []
 
     for child in ast.iter_child_nodes(node):
         if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):

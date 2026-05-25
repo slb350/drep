@@ -6,13 +6,14 @@ import shutil
 import tempfile
 from enum import Enum
 from pathlib import Path
-from typing import Optional
+from typing import Dict, Optional
 
 import click
 import yaml
 from git import GitCommandError, InvalidGitRepositoryError, Repo
 from pydantic_core import ValidationError
 
+from drep.adapters.base import BaseAdapter
 from drep.adapters.gitea import GiteaAdapter
 from drep.cli_validators import (
     BedrockModelType,
@@ -277,14 +278,11 @@ def _collect_llm_config() -> Optional[LLMConfig]:
 
     # Create strongly-typed data model based on provider
     if provider == "openai-compatible":
-        llm_data = OpenAILLMData(**llm_config)
-        return LLMConfig(data=llm_data)
+        return LLMConfig(data=OpenAILLMData(**llm_config))
     elif provider == "bedrock":
-        llm_data = BedrockLLMData(**llm_config)
-        return LLMConfig(data=llm_data)
+        return LLMConfig(data=BedrockLLMData(**llm_config))
     else:  # anthropic
-        llm_data = AnthropicLLMData(**llm_config)
-        return LLMConfig(data=llm_data)
+        return LLMConfig(data=AnthropicLLMData(**llm_config))
 
 
 def _collect_documentation_config() -> DocumentationConfig:
@@ -658,7 +656,7 @@ async def _run_scan(
 
     # Determine which adapter to use (prefer Gitea for backward compatibility)
     platform = None
-    adapter = None
+    adapter: Optional[BaseAdapter] = None
     git_url = None
     git_token = None
 
@@ -1074,7 +1072,7 @@ async def _run_review(
 
     # Determine which adapter to use (prefer Gitea for backward compatibility)
     platform = None
-    adapter = None
+    adapter: Optional[BaseAdapter] = None
 
     if config.gitea is not None:
         # Use Gitea adapter
@@ -1134,7 +1132,7 @@ async def _run_review(
         # Show comments summary
         if result.comments:
             click.echo("\nComment breakdown:")
-            severity_counts = {}
+            severity_counts: Dict[str, int] = {}
             for comment in result.comments:
                 severity_counts[comment.severity] = severity_counts.get(comment.severity, 0) + 1
             for severity, count in sorted(severity_counts.items()):

@@ -34,15 +34,15 @@ def _extract_owner_repo(payload: Dict[str, Any]) -> Optional[Tuple[str, str]]:
     # Try owner object with various keys
     owner_obj = repo.get("owner") or {}
     for key in ("login", "username", "name"):
-        owner = owner_obj.get(key)
-        if owner:
+        owner_val = owner_obj.get(key)
+        if owner_val:
             break
     else:
-        owner = None
+        owner_val = None
 
-    name = repo.get("name")
-    if owner and name:
-        return str(owner), str(name)
+    name_val = repo.get("name")
+    if owner_val and name_val:
+        return str(owner_val), str(name_val)
 
     return None
 

@@ -37,8 +37,13 @@ class GitHubConfig(BaseModel):
     repositories: List[str] = Field(
         ..., description="Repository patterns (e.g., owner/repo or owner/*)"
     )
+    # User-provided URLs are validated as HttpUrl, but the default is intentionally
+    # a bare string: pydantic does not validate defaults, so it is stored verbatim
+    # (no trailing slash). This avoids double slashes when the adapter builds request
+    # URLs and is relied upon by the tests. mypy can't express "HttpUrl field with a
+    # str default", hence the targeted ignore.
     url: HttpUrl = Field(
-        default="https://api.github.com",
+        default="https://api.github.com",  # type: ignore[assignment]
         description=(
             "GitHub API URL (default: https://api.github.com, " "use custom for GitHub Enterprise)"
         ),

@@ -177,6 +177,37 @@ class BaseAdapter(ABC):
         pass
 
     @abstractmethod
+    async def create_pr_review_comment(
+        self,
+        owner: str,
+        repo: str,
+        pr_number: int,
+        commit_sha: str,
+        file_path: str,
+        line: int,
+        body: str,
+    ) -> None:
+        """Post an inline review comment on a specific line of a known commit.
+
+        This is the lower-level primitive used by the PR review workflow when the
+        head commit SHA is already known. ``post_review_comment`` is the
+        higher-level variant that resolves the commit SHA first.
+
+        Args:
+            owner: Repository owner
+            repo: Repository name
+            pr_number: Pull request number
+            commit_sha: Commit SHA to comment on (usually the PR head)
+            file_path: File path relative to repo root
+            line: Line number in the new version (after changes)
+            body: Comment body (markdown supported)
+
+        Raises:
+            ValueError: If review comment creation fails
+        """
+        pass
+
+    @abstractmethod
     async def get_file_content(self, owner: str, repo: str, file_path: str, ref: str) -> str:
         """Get file content at a specific git reference.
 

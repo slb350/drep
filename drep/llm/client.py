@@ -77,7 +77,13 @@ import subprocess  # For executing git commands to get commit SHA
 import time  # For rate limiting time calculations
 from dataclasses import dataclass  # For simple data classes (LLMResponse)
 from pathlib import Path  # For cross-platform file path handling
-from typing import Any, Dict, Optional, Type  # Type hints for better IDE support and clarity
+from typing import (  # Type hints for better IDE support and clarity
+    TYPE_CHECKING,
+    Any,
+    Dict,
+    Optional,
+    Type,
+)
 
 import httpx  # Modern async HTTP client (fallback when open-agent-sdk unavailable)
 from pydantic import BaseModel  # For JSON schema validation and type safety
@@ -90,6 +96,9 @@ from drep.constants import (
 )
 from drep.llm.circuit_breaker import CircuitBreaker  # Prevents cascade failures
 from drep.llm.metrics import LLMMetrics  # Tracks usage statistics for cost monitoring
+
+if TYPE_CHECKING:
+    from drep.llm.cache import IntelligentCache
 
 logger = logging.getLogger(__name__)
 
@@ -961,7 +970,8 @@ class LLMClient:
         # 2. HTTP (httpx): Fallback, universal compatibility
 
         self._using_open_agent = False  # Flag to track which backend is active
-        self.client = None  # Will be AsyncOpenAI instance or compat shim
+        # AsyncOpenAI instance or HTTP compat shim; both expose .chat.completions.create
+        self.client: Any = None
 
         # Try to initialize open-agent-sdk (preferred backend)
         try:
@@ -1000,7 +1010,9 @@ class LLMClient:
 
             # Create async HTTP client with base URL and headers
             # This will be used to make POST requests to /chat/completions
-            self.http = httpx.AsyncClient(base_url=self.endpoint, headers=headers, timeout=timeout)
+            self.http = httpx.AsyncClient(
+                base_url=self.endpoint or "", headers=headers, timeout=timeout
+            )
 
         # === COMPATIBILITY SHIM FOR HTTP BACKEND ===
         # The following classes create an OpenAI SDK-like interface for our HTTP client.
@@ -1176,7 +1188,10 @@ class LLMClient:
                     # Make request
                     start_time = time.time()
 
-                    # Use Bedrock provider if configured
+                    # Use Bedrock provider if configured.
+                    # Bedrock returns a dict; the OpenAI-compatible path returns an
+                    # SDK-like object, so the handling below branches on provider.
+                    response: Any
                     if self._provider == "bedrock":
                         response = await self.bedrock_client.chat_completion(
                             messages=[
@@ -1310,7 +1325,9 @@ class LLMClient:
                     )
 
         # All retries failed
-        raise last_exception
+        if last_exception is not None:
+            raise last_exception
+        raise RuntimeError("LLM request failed but no exception was captured")
 
     async def analyze_code_json(
         self,
@@ -1440,7 +1457,7 @@ class LLMClient:
         # Get schema fields
         fields = schema.model_fields
 
-        result = {}
+        result: Dict[str, Any] = {}
         for field_name, field_info in fields.items():
             # Try to extract field value using various patterns
             patterns = [

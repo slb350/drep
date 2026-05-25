@@ -3,7 +3,7 @@
 import logging
 from typing import Any, Dict, List
 
-from drep.adapters.gitea import GiteaAdapter
+from drep.adapters.base import BaseAdapter
 from drep.llm.client import LLMClient
 from drep.models.pr_review_findings import PRReviewResult
 from drep.pr_review.diff_parser import DiffHunk, parse_diff
@@ -89,12 +89,12 @@ Return JSON only:
 class PRReviewAnalyzer:
     """Analyzes PR diffs using LLM and posts review comments."""
 
-    def __init__(self, llm_client: LLMClient, gitea_adapter: GiteaAdapter):
+    def __init__(self, llm_client: LLMClient, gitea_adapter: BaseAdapter):
         """Initialize PR review analyzer.
 
         Args:
             llm_client: LLM client instance for code analysis
-            gitea_adapter: Gitea adapter for API calls
+            gitea_adapter: Platform adapter (Gitea/GitHub/GitLab) for API calls
         """
         self.llm = llm_client
         self.gitea = gitea_adapter

@@ -7,7 +7,7 @@ packages = ["drep"]
 
 [project]
 name = "drep-ai"
-version = "1.1.1"
+version = "1.1.2"
 description = "AI-powered code review and documentation quality tool for Gitea, GitHub, and GitLab"
 authors = [
     {name = "drep Contributors"},
@@ -54,6 +54,15 @@ target-version = "py310"
 [tool.ruff.lint]
 select = ["E", "F", "I"]
 ignore = []
+
+[tool.mypy]
+python_version = "3.10"
+plugins = ["pydantic.mypy"]
+
+# Third-party packages that ship no type stubs / py.typed marker.
+[[tool.mypy.overrides]]
+module = ["boto3.*", "botocore.*"]
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

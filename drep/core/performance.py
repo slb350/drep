@@ -4,23 +4,25 @@ import asyncio
 import logging
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from typing import Any, Callable, List, Optional
+from typing import Any, AsyncIterator, Callable, List, Optional
 
 logger = logging.getLogger(__name__)
 
 # Compatibility: asyncio.timeout is only available in Python 3.11+
 # Provide a minimal polyfill for Python 3.10 environments.
 try:  # Python 3.11+
-    from asyncio import timeout as _asyncio_timeout
+    from asyncio import timeout as _asyncio_timeout  # type: ignore[attr-defined,unused-ignore]
 except Exception:  # Python 3.10 fallback
 
     @asynccontextmanager
-    async def _asyncio_timeout(delay: float):
+    async def _asyncio_timeout(delay: float) -> AsyncIterator[None]:  # type: ignore[misc]
         """A minimal context manager emulating asyncio.timeout for 3.10.
 
         Cancels the current task after the specified delay, raising TimeoutError.
         """
         task = asyncio.current_task()
+        if task is None:
+            raise RuntimeError("_asyncio_timeout must be used inside a running task")
         loop = asyncio.get_event_loop()
         handle = loop.call_later(delay, task.cancel)
         try:
