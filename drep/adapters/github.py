@@ -2,9 +2,10 @@
 
 import asyncio
 import base64
+import binascii
 import json
 import logging
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 import httpx
 
@@ -307,7 +308,7 @@ class GitHubAdapter(BaseAdapter):
                 - HTTP errors (401 Unauthorized, 403 Forbidden, 500 Server Error, etc.)
         """
         url = f"{self.url}/repos/{owner}/{repo}/issues"
-        payload = {"title": title, "body": body}
+        payload: Dict[str, Any] = {"title": title, "body": body}
 
         # GitHub uses label names directly (not IDs like Gitea)
         if labels:
@@ -939,7 +940,7 @@ class GitHubAdapter(BaseAdapter):
                     f"File {file_path} in {owner}/{repo}@{ref} is binary or non-UTF8. "
                     "GitHub adapter only supports text files."
                 )
-            except (base64.binascii.Error, ValueError):
+            except (binascii.Error, ValueError):
                 logger.error(
                     f"Failed to decode base64 for {file_path} in {owner}/{repo}@{ref}",
                     extra={"repo_id": f"{owner}/{repo}", "file_path": file_path, "ref": ref},

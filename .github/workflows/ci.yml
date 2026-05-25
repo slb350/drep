@@ -45,6 +45,10 @@ jobs:
         run: |
           black --check drep
 
+      - name: Type check (mypy)
+        run: |
+          mypy drep
+
       - name: Run unit tests (exclude integration)
         run: |
           pytest -q -k "not integration"
