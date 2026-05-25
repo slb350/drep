@@ -13,7 +13,7 @@
 
 Automated code review and documentation improvement tool for **Gitea, GitHub, and GitLab**. Powered by your choice of LLM backend: local models (LM Studio, Ollama, llama.cpp), AWS Bedrock (Claude 4.5), or Anthropic's Claude API.
 
-> **v1.1.0:** Interactive configuration wizard with guided setup! Full support for Python repositories on all three major git platforms: Gitea, GitHub, and GitLab. Support for additional languages and direct Anthropic API provider coming soon.
+> **v1.1.1:** Fixes Gitea inline review comments being rejected with "review event requires a body" (#11). Interactive configuration wizard with guided setup, plus full support for Python repositories on all three major git platforms: Gitea, GitHub, and GitLab. Support for additional languages and direct Anthropic API provider coming soon.
 
 </div>
 

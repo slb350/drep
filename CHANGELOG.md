@@ -16,6 +16,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Multi-repository analysis features
 - Anthropic Direct API provider (Phase 3.4)
 
+## [1.1.1] - 2026-05-24
+
+### Fixed
+
+- **Gitea inline review comments rejected with "review event requires a body"** (#11):
+  `GiteaAdapter.create_pr_review_comment()` submitted the pull review with an
+  empty top-level `body`. Some Gitea versions enforce a non-empty body even when
+  inline comments are present, so every inline comment request was rejected and
+  no review feedback was posted.
+  - Both the `new_position` and `position` payloads now send a short generic
+    placeholder (`REVIEW_BODY_PLACEHOLDER`) as the review body.
+  - The actual finding still appears only in the inline comment, so it is not
+    duplicated as a review summary (preserving the original empty-body intent).
+
+### Testing
+- **1 new test added** (796 total passing, excluding integration)
+- `test_create_pr_review_comment_always_sends_non_empty_body`: regression test
+  asserting a non-empty body is sent even when the inline comment text is empty
+- Updated `test_create_pr_review_comment_sends_correct_payload` to assert the
+  placeholder body
+
+### Development
+- Fix contributed via PR #12 by Rain Wu (@facewhy); refined to use an
+  unconditional placeholder rather than echoing the finding text.
+
 ## [1.1.0] - 2025-11-09
 
 ### Added - Interactive Configuration Wizard 🧙‍♂️
