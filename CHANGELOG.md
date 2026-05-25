@@ -16,6 +16,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Multi-repository analysis features
 - Anthropic Direct API provider (Phase 3.4)
 
+## [1.1.2] - 2026-05-24
+
+### Changed - Type-Safety Hardening 🔍
+
+**Maintenance Release:** Internal type-safety improvements only — no user-facing
+behavior changes.
+
+- **mypy is now clean across `drep/`** (resolved all 62 pre-existing errors across
+  11 modules) and runs as a CI gate, so type regressions are caught automatically.
+- **`BaseAdapter` contract completed**: added `create_pr_review_comment`, which all
+  three adapters already implemented and the PR-review workflow depends on. The
+  `PRReviewAnalyzer`/`RepositoryScanner` adapter parameters were widened from
+  `GiteaAdapter` to `BaseAdapter`, so `drep review` against GitHub/GitLab is now
+  correctly typed.
+- **Modernized SQLAlchemy models** to use the 2.0 `DeclarativeBase`.
+
+### Fixed
+- **Incorrect exception reference** in the GitHub and GitLab adapters: caught
+  `base64.binascii.Error` (which only resolved by accident) is now the correct
+  `binascii.Error`.
+
+### Development
+- Added `[tool.mypy]` configuration (pydantic plugin; `ignore_missing_imports` for
+  boto3/botocore) and a `mypy drep` step to the CI workflow.
+
 ## [1.1.1] - 2026-05-24
 
 ### Fixed

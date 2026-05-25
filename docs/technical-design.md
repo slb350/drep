@@ -1,10 +1,18 @@
 # Technical Design: drep
 
-**Document Version:** 4.2
+**Document Version:** 4.3
 **Last Updated:** 2026-05-24
-**Status:** Production (v1.1.1) - Phase 1, 2, & 3 Complete
+**Status:** Production (v1.1.2) - Phase 1, 2, & 3 Complete
 
 ## Recent Updates
+
+**v4.3 (2026-05-24):**
+- **🔍 Version 1.1.2 Release - Type-Safety Hardening**
+- mypy clean across `drep/` (62 pre-existing errors resolved) and gated in CI
+- `create_pr_review_comment` added to the `BaseAdapter` contract; analyzer/scanner
+  adapter params widened to `BaseAdapter`
+- SQLAlchemy 2.0 `DeclarativeBase`; corrected `binascii.Error` references
+- No user-facing behavior changes; 796 tests passing
 
 **v4.2 (2026-05-24):**
 - **🐛 Version 1.1.1 Release - Gitea inline review-comment fix (#11)**
