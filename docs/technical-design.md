@@ -1,10 +1,18 @@
 # Technical Design: drep
 
-**Document Version:** 4.1
-**Last Updated:** 2025-11-09
-**Status:** Production (v1.1.0 Release Candidate) - Phase 1, 2, & 3 Complete
+**Document Version:** 4.2
+**Last Updated:** 2026-05-24
+**Status:** Production (v1.1.1) - Phase 1, 2, & 3 Complete
 
 ## Recent Updates
+
+**v4.2 (2026-05-24):**
+- **🐛 Version 1.1.1 Release - Gitea inline review-comment fix (#11)**
+- `GiteaAdapter.create_pr_review_comment()` now sends a non-empty top-level
+  review body; some Gitea versions reject an empty body ("review event requires
+  a body") even with inline comments, which blocked all inline review feedback
+- Finding text remains inline-only (placeholder used for the review summary)
+- 797 tests passing (796 previous + 1 regression test)
 
 **v4.1 (2025-11-09):**
 - **🎉 Version 1.1.0 Release Candidate - Interactive Configuration Wizard**
