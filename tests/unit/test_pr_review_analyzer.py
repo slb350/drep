@@ -77,10 +77,13 @@ async def test_review_pr_truncates_large_diff():
     }
 
     # Create a properly formatted diff > 20k chars
-    large_diff = """diff --git a/file.py b/file.py
+    large_diff = (
+        """diff --git a/file.py b/file.py
 @@ -1,1 +1,1000 @@
  old line
-""" + ("+" + "x" * 1000 + "\n") * 30
+"""
+        + ("+" + "x" * 1000 + "\n") * 30
+    )
     assert len(large_diff) > 20000
 
     gitea.get_pr_diff.return_value = large_diff

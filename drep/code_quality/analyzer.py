@@ -2,7 +2,6 @@
 
 import logging
 from pathlib import Path
-from typing import List
 
 from drep.llm.client import LLMClient
 from drep.models.findings import Finding
@@ -83,7 +82,7 @@ class CodeQualityAnalyzer:
 
     async def analyze_file(
         self, file_path: str, content: str, repo_id: str, commit_sha: str
-    ) -> List[Finding]:
+    ) -> list[Finding]:
         """Analyze Python file for code quality issues.
 
         Args:
@@ -138,8 +137,7 @@ class CodeQualityAnalyzer:
             )
 
             # Convert to Finding objects
-            findings = result.to_findings(file_path)
-            return findings
+            return result.to_findings(file_path)
 
         except ValueError as e:
             # JSON parsing failed after all strategies
@@ -152,8 +150,8 @@ class CodeQualityAnalyzer:
             return []
 
     async def analyze_files(
-        self, files: List[tuple[str, str]], repo_id: str, commit_sha: str
-    ) -> List[Finding]:
+        self, files: list[tuple[str, str]], repo_id: str, commit_sha: str
+    ) -> list[Finding]:
         """Analyze multiple Python files.
 
         Args:
@@ -164,7 +162,7 @@ class CodeQualityAnalyzer:
         Returns:
             Combined list of findings from all files
         """
-        all_findings: List[Finding] = []
+        all_findings: list[Finding] = []
 
         for file_path, content in files:
             findings = await self.analyze_file(file_path, content, repo_id, commit_sha)

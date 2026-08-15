@@ -7,6 +7,7 @@ during configuration loading.
 
 import logging
 import re
+from typing import ClassVar
 from urllib.parse import urlparse
 
 import click
@@ -106,11 +107,7 @@ class RepositoryListType(click.ParamType):
         # Validate each pattern: owner/repo or owner/*
         # Allowed characters: a-z, A-Z, 0-9, underscore (_), hyphen (-), dot (.), and asterisk (*)
         pattern = re.compile(r"^[a-zA-Z0-9_.-]+/[a-zA-Z0-9_.*-]+$")
-        invalid = []
-
-        for repo in repos:
-            if not pattern.match(repo):
-                invalid.append(repo)
+        invalid = [repo for repo in repos if not pattern.match(repo)]
 
         if invalid:
             examples = "\n".join(f"  - {r}" for r in invalid)
@@ -164,7 +161,7 @@ class BedrockModelType(click.ParamType):
             prefixes_str = ", ".join(BEDROCK_VALID_PREFIXES)
             logger.debug(f"BedrockModelType validation failed: invalid prefix in {value!r}")
             self.fail(
-                f"Invalid Bedrock model ID: {value!r}\n" f"Must start with one of: {prefixes_str}",
+                f"Invalid Bedrock model ID: {value!r}\nMust start with one of: {prefixes_str}",
                 param,
                 ctx,
             )
@@ -182,7 +179,7 @@ class DatabaseURLType(click.ParamType):
 
     name = "database-url"
 
-    KNOWN_SCHEMES = ["sqlite", "postgresql", "mysql", "mariadb"]
+    KNOWN_SCHEMES: ClassVar[list[str]] = ["sqlite", "postgresql", "mysql", "mariadb"]
 
     def convert(self, value, param, ctx):
         """Convert and validate database URL.

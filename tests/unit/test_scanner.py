@@ -725,11 +725,10 @@ class TestGetStagedFiles:
             def diff_side_effect(ref):
                 if ref == "HEAD":
                     raise GitCommandError("git diff", 128, stderr="unknown revision 'HEAD'")
-                else:
-                    # Return some staged files on fallback
-                    mock_diff_item = Mock()
-                    mock_diff_item.b_path = "new_file.py"
-                    return [mock_diff_item]
+                # Return some staged files on fallback
+                mock_diff_item = Mock()
+                mock_diff_item.b_path = "new_file.py"
+                return [mock_diff_item]
 
             mock_repo.index.diff.side_effect = diff_side_effect
             mock_repo_class.return_value = mock_repo

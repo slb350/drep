@@ -47,9 +47,10 @@ the service is determined to be down, then periodically tests recovery.
 """
 
 import logging
+from collections.abc import Callable
 from datetime import datetime, timedelta
 from enum import Enum
-from typing import Any, Callable, Dict, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -64,8 +65,6 @@ class CircuitState(Enum):
 
 class CircuitBreakerOpenError(Exception):
     """Raised when circuit breaker is open."""
-
-    pass
 
 
 class CircuitBreaker:
@@ -110,7 +109,7 @@ class CircuitBreaker:
         self.state = CircuitState.CLOSED
         self.failure_count = 0
         self.success_count = 0
-        self.last_failure_time: Optional[datetime] = None
+        self.last_failure_time: datetime | None = None
         self.half_open_calls = 0
 
     async def call(self, func: Callable, *args, **kwargs) -> Any:
@@ -213,7 +212,7 @@ class CircuitBreaker:
         """
         return self.state
 
-    def get_metrics(self) -> Dict[str, Any]:
+    def get_metrics(self) -> dict[str, Any]:
         """Get circuit breaker metrics.
 
         Returns:

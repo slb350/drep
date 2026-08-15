@@ -1,6 +1,6 @@
 """LLM-generated findings and code analysis results."""
 
-from typing import List, Literal
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -21,7 +21,7 @@ class CodeIssue(BaseModel):
     category: str = Field(
         ...,
         description=(
-            "Issue category " "(e.g., 'bug', 'security', 'best-practice', 'performance', 'style')"
+            "Issue category (e.g., 'bug', 'security', 'best-practice', 'performance', 'style')"
         ),
     )
     message: str = Field(..., description="Clear description of the issue")
@@ -36,12 +36,12 @@ class CodeAnalysisResult(BaseModel):
     Contains a list of issues and an overall summary.
     """
 
-    issues: List[CodeIssue] = Field(
+    issues: list[CodeIssue] = Field(
         default_factory=list, description="List of code quality issues found"
     )
     summary: str = Field(..., description="Overall code quality summary and recommendations")
 
-    def to_findings(self, file_path: str) -> List[Finding]:
+    def to_findings(self, file_path: str) -> list[Finding]:
         """Convert CodeAnalysisResult to generic Finding objects.
 
         Args:

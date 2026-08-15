@@ -9,7 +9,6 @@ By using an abstract base class, we ensure:
 """
 
 from abc import ABC, abstractmethod
-from typing import Dict, List, Optional
 
 
 class BaseAdapter(ABC):
@@ -30,7 +29,7 @@ class BaseAdapter(ABC):
         repo: str,
         title: str,
         body: str,
-        labels: Optional[List[str]] = None,
+        labels: list[str] | None = None,
     ) -> int:
         """Create an issue on the platform and return its number/ID.
 
@@ -57,10 +56,9 @@ class BaseAdapter(ABC):
                 labels=["bug", "high-priority"],
             )
         """
-        pass
 
     @abstractmethod
-    async def get_pr(self, owner: str, repo: str, pr_number: int) -> Dict:
+    async def get_pr(self, owner: str, repo: str, pr_number: int) -> dict:
         """Get pull request details.
 
         Args:
@@ -86,7 +84,6 @@ class BaseAdapter(ABC):
             pr = await adapter.get_pr(owner="user", repo="project", pr_number=42)
             print(f"PR #{pr['number']}: {pr['title']}")
         """
-        pass
 
     @abstractmethod
     async def get_pr_diff(self, owner: str, repo: str, pr_number: int) -> str:
@@ -111,7 +108,6 @@ class BaseAdapter(ABC):
             diff = await adapter.get_pr_diff(owner="user", repo="project", pr_number=42)
             print(f"Diff size: {len(diff)} bytes")
         """
-        pass
 
     @abstractmethod
     async def create_pr_comment(self, owner: str, repo: str, pr_number: int, body: str) -> None:
@@ -134,7 +130,6 @@ class BaseAdapter(ABC):
                 body="LGTM! Ready to merge.",
             )
         """
-        pass
 
     @abstractmethod
     async def post_review_comment(
@@ -174,7 +169,6 @@ class BaseAdapter(ABC):
                 body="Consider using a with statement here",
             )
         """
-        pass
 
     @abstractmethod
     async def create_pr_review_comment(
@@ -205,7 +199,6 @@ class BaseAdapter(ABC):
         Raises:
             ValueError: If review comment creation fails
         """
-        pass
 
     @abstractmethod
     async def get_file_content(self, owner: str, repo: str, file_path: str, ref: str) -> str:
@@ -232,7 +225,6 @@ class BaseAdapter(ABC):
                 ref="main",
             )
         """
-        pass
 
     @abstractmethod
     async def get_default_branch(self, owner: str, repo: str) -> str:
@@ -252,7 +244,6 @@ class BaseAdapter(ABC):
             branch = await adapter.get_default_branch(owner="user", repo="project")
             # Returns: "main"
         """
-        pass
 
     @abstractmethod
     async def close(self) -> None:
@@ -269,4 +260,3 @@ class BaseAdapter(ABC):
             finally:
                 await adapter.close()
         """
-        pass

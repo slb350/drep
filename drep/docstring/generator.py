@@ -17,7 +17,6 @@ Current capabilities:
 
 import logging
 import textwrap
-from typing import List, Optional
 
 from drep.docstring.ast_utils import FunctionInfo, extract_functions
 from drep.llm.client import LLMClient
@@ -114,7 +113,7 @@ class DocstringGenerator:
 
     async def analyze_file(
         self, file_path: str, content: str, repo_id: str, commit_sha: str
-    ) -> List[Finding]:
+    ) -> list[Finding]:
         """Analyze Python file for missing/poor docstrings.
 
         Args:
@@ -139,7 +138,7 @@ class DocstringGenerator:
         functions_to_analyze = [f for f in functions if self._should_analyze(f)]
 
         logger.debug(
-            f"Analyzing {len(functions_to_analyze)}/{len(functions)} " f"functions in {file_path}"
+            f"Analyzing {len(functions_to_analyze)}/{len(functions)} functions in {file_path}"
         )
 
         # Analyze each function
@@ -202,10 +201,7 @@ class DocstringGenerator:
             return False
 
         # Skip very simple functions (< 3 lines)
-        if func_info.complexity < 3:
-            return False
-
-        return True
+        return not func_info.complexity < 3
 
     def _is_poor_docstring(self, docstring: str) -> bool:
         """Check if docstring is poor quality.
@@ -237,10 +233,7 @@ class DocstringGenerator:
             "placeholder",
         ]
 
-        if any(phrase in docstring_lower for phrase in poor_phrases):
-            return True
-
-        return False
+        return bool(any(phrase in docstring_lower for phrase in poor_phrases))
 
     async def _generate_docstring(
         self,
@@ -249,7 +242,7 @@ class DocstringGenerator:
         full_content: str,
         repo_id: str,
         commit_sha: str,
-    ) -> Optional[Finding]:
+    ) -> Finding | None:
         """Generate docstring for function missing one.
 
         Args:
@@ -274,7 +267,7 @@ class DocstringGenerator:
         prompt = DOCSTRING_GENERATION_PROMPT_V2.format(
             function_name=func_info.name,
             args=", ".join(func_info.args) if func_info.args else "None",
-            returns=func_info.returns if func_info.returns else "None",
+            returns=func_info.returns or "None",
             decorators=", ".join(func_info.decorators) if func_info.decorators else "None",
             function_code=function_code,
         )

@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed - Tooling & Code Modernization 🧹
+
+**Maintenance:** Internal quality improvements only — no user-facing behavior changes.
+
+- **Ruff expanded from 3 rule groups to 16** (added pyupgrade, bugbear, simplify,
+  comprehensions, return, pie, perflint, use-pathlib, refurb, ruf, pylint C/E) and
+  the entire codebase brought into compliance (~450 issues resolved, including all
+  101 `raise`-without-`from` exception-chaining violations).
+- **Black replaced by `ruff format`** — one tool for lint + format; `black` removed
+  from dev dependencies.
+- **CI modernized**: lint/format/type checks split into a fast `lint` job; test
+  matrix now covers Python 3.10–3.14 (previously 3.13 only); actions bumped
+  (`checkout@v5`, `setup-python@v6`).
+- **Refactors**: deduplicated function/method AST extraction in
+  `drep/docstring/ast_utils.py`; hoisted stray function-level imports (documented
+  lazy imports kept with `noqa`); `open()` calls migrated to `pathlib`.
+- **Dependencies refreshed** across the board (`uv.lock` regenerated).
+
+### Fixed
+- **Fire-and-forget webhook tasks could be garbage-collected mid-run**:
+  `drep/server.py` now holds strong references to background scan/review tasks
+  until they complete (RUF006).
+
 ### Planned
 - Vector database integration for cross-file context
 - Custom rule definitions

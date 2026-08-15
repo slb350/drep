@@ -1,7 +1,6 @@
 """Configuration models for drep."""
 
 from pathlib import Path
-from typing import List, Optional
 
 from pydantic import (
     BaseModel,
@@ -23,7 +22,7 @@ class GiteaConfig(BaseModel):
 
     url: str = Field(..., description="Gitea base URL (e.g., http://192.168.1.14:3000)")
     token: SecretStr = Field(..., description="Gitea API token")
-    repositories: List[str] = Field(..., description="Repository patterns (e.g., steve/*)")
+    repositories: list[str] = Field(..., description="Repository patterns (e.g., steve/*)")
 
 
 class GitHubConfig(BaseModel):
@@ -34,7 +33,7 @@ class GitHubConfig(BaseModel):
     token: SecretStr = Field(
         ..., description="GitHub Personal Access Token (PAT) or GitHub App token"
     )
-    repositories: List[str] = Field(
+    repositories: list[str] = Field(
         ..., description="Repository patterns (e.g., owner/repo or owner/*)"
     )
     # User-provided URLs are validated as HttpUrl, but the default is intentionally
@@ -45,7 +44,7 @@ class GitHubConfig(BaseModel):
     url: HttpUrl = Field(
         default="https://api.github.com",  # type: ignore[assignment]
         description=(
-            "GitHub API URL (default: https://api.github.com, " "use custom for GitHub Enterprise)"
+            "GitHub API URL (default: https://api.github.com, use custom for GitHub Enterprise)"
         ),
     )
 
@@ -55,14 +54,14 @@ class GitLabConfig(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    url: Optional[str] = Field(
+    url: str | None = Field(
         default=None,
         description=(
-            "GitLab base URL (None = gitlab.com, " "or https://gitlab.example.com for self-hosted)"
+            "GitLab base URL (None = gitlab.com, or https://gitlab.example.com for self-hosted)"
         ),
     )
     token: SecretStr = Field(..., description="GitLab personal access token (requires api scope)")
-    repositories: List[str] = Field(
+    repositories: list[str] = Field(
         ..., description="Projects to monitor (e.g., 'owner/repo', 'owner/*')"
     )
 
@@ -73,11 +72,11 @@ class DocumentationConfig(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     enabled: bool = True
-    custom_dictionary: List[str] = Field(default_factory=list)
+    custom_dictionary: list[str] = Field(default_factory=list)
     markdown_checks: bool = Field(
         default=False,
         description=(
-            "Enable basic Markdown lint checks " "(headings, trailing whitespace, code fences)"
+            "Enable basic Markdown lint checks (headings, trailing whitespace, code fences)"
         ),
     )
 
@@ -135,19 +134,17 @@ class LLMConfig(BaseModel):
         default="openai-compatible",
         description="LLM provider: openai-compatible, bedrock, anthropic",
     )
-    endpoint: Optional[HttpUrl] = Field(
+    endpoint: HttpUrl | None = Field(
         default=None,
         description="OpenAI-compatible API endpoint (required for openai-compatible provider)",
     )
-    model: Optional[str] = Field(
+    model: str | None = Field(
         default=None, description="Model name to use (required for openai-compatible provider)"
     )
-    bedrock: Optional[BedrockConfig] = Field(
+    bedrock: BedrockConfig | None = Field(
         default=None, description="AWS Bedrock configuration (required if provider=bedrock)"
     )
-    api_key: Optional[str] = Field(
-        default=None, description="API key (optional for local endpoints)"
-    )
+    api_key: str | None = Field(default=None, description="API key (optional for local endpoints)")
     temperature: float = Field(default=0.2, ge=0.0, le=2.0, description="Sampling temperature")
     max_tokens: int = Field(
         default=8000, ge=100, le=20000, description="Maximum tokens per request"
@@ -217,18 +214,18 @@ class Config(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    gitea: Optional[GiteaConfig] = Field(
+    gitea: GiteaConfig | None = Field(
         default=None, description="Gitea platform configuration (optional)"
     )
-    github: Optional[GitHubConfig] = Field(
+    github: GitHubConfig | None = Field(
         default=None, description="GitHub platform configuration (optional)"
     )
-    gitlab: Optional[GitLabConfig] = Field(
+    gitlab: GitLabConfig | None = Field(
         default=None, description="GitLab platform configuration (optional)"
     )
     documentation: DocumentationConfig = Field(default_factory=DocumentationConfig)
     database_url: str = "sqlite:///./drep.db"
-    llm: Optional[LLMConfig] = Field(default=None, description="LLM configuration")
+    llm: LLMConfig | None = Field(default=None, description="LLM configuration")
 
     # Internal field to control platform validation (for pre-commit hooks)
     # Excluded from serialization but accessible in validators

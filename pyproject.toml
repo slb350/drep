@@ -43,17 +43,43 @@ dependencies = [
 [project.scripts]
 drep = "drep.cli:cli"
 
-[tool.black]
-line-length = 100
-target-version = ['py310']
-
 [tool.ruff]
 line-length = 100
 target-version = "py310"
 
 [tool.ruff.lint]
-select = ["E", "F", "I"]
-ignore = []
+select = [
+    "E",    # pycodestyle errors
+    "W",    # pycodestyle warnings
+    "F",    # pyflakes
+    "I",    # isort
+    "UP",   # pyupgrade
+    "B",    # flake8-bugbear
+    "SIM",  # flake8-simplify
+    "C4",   # flake8-comprehensions
+    "RET",  # flake8-return
+    "PIE",  # flake8-pie
+    "PERF", # perflint
+    "PTH",  # flake8-use-pathlib
+    "FURB", # refurb
+    "RUF",  # ruff-specific
+    "PLC",  # pylint convention
+    "PLE",  # pylint error
+    "PLC0415",  # import-outside-top-level (not included in the PLC group)
+]
+ignore = [
+    # Ambiguous-unicode rules flag intentional emoji/dashes in user-facing strings
+    # and comments (e.g. "ℹ", en dashes in docstring templates).
+    "RUF001",
+    "RUF002",
+    "RUF003",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Lazy imports keep `drep --help` startup fast and optional deps optional.
+"drep/cli.py" = ["PLC0415"]
+# Tests routinely import inside functions/fixtures for isolation.
+"tests/**" = ["PLC0415"]
 
 [tool.mypy]
 python_version = "3.10"
@@ -79,7 +105,6 @@ dev = [
   "pytest>=7.0",
   "pytest-asyncio>=0.21",
   "pytest-cov>=4.0",
-  "black>=23.0",
   "ruff>=0.5.0",
   "mypy>=1.8.0",
   "types-PyYAML>=6.0.12",

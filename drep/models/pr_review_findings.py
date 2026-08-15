@@ -1,6 +1,6 @@
 """Pydantic schemas for PR review findings."""
 
-from typing import List, Literal, Optional
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -18,7 +18,7 @@ class ReviewComment(BaseModel):
         ..., description="Severity level of the comment"
     )
     comment: str = Field(..., description="Review comment text")
-    suggestion: Optional[str] = Field(None, description="Suggested code fix (optional)")
+    suggestion: str | None = Field(None, description="Suggested code fix (optional)")
 
 
 class PRReviewResult(BaseModel):
@@ -28,9 +28,9 @@ class PRReviewResult(BaseModel):
     and any major concerns.
     """
 
-    comments: List[ReviewComment] = Field(
+    comments: list[ReviewComment] = Field(
         default_factory=list, description="List of inline review comments"
     )
     summary: str = Field(..., description="Overall PR assessment")
     approve: bool = Field(..., description="Whether to approve the PR")
-    concerns: List[str] = Field(default_factory=list, description="Major issues or blockers")
+    concerns: list[str] = Field(default_factory=list, description="Major issues or blockers")

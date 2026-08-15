@@ -168,13 +168,13 @@ class TestCacheOptimization:
         cache_key = cache._make_key("test", "code", "model", 0.2, "abc123")
         meta_file = tmp_path / f"{cache_key}.meta.json"
 
-        with open(meta_file, "r") as f:
+        with meta_file.open() as f:
             meta = json.load(f)
 
         # Set timestamp to 2 days ago
         meta["timestamp"] = time.time() - (2 * 86400)
 
-        with open(meta_file, "w") as f:
+        with meta_file.open("w") as f:
             json.dump(meta, f)
 
         # Optimize should remove expired entry

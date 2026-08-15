@@ -2,9 +2,10 @@
 
 import asyncio
 import logging
+from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from typing import Any, AsyncIterator, Callable, List, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -120,10 +121,10 @@ class ParallelAnalyzer:
 
     async def analyze_files_parallel(
         self,
-        files: List[str],
+        files: list[str],
         analyzer_func: Callable,
-        progress_callback: Optional[Callable[[ProgressTracker], None]] = None,
-    ) -> List[Any]:
+        progress_callback: Callable[[ProgressTracker], None] | None = None,
+    ) -> list[Any]:
         """Analyze files in parallel with memory management.
 
         Features:
@@ -143,7 +144,6 @@ class ParallelAnalyzer:
             return []
 
         tracker = ProgressTracker(total=len(files))
-        results = []
 
         async def analyze_with_tracking(file_path: str):
             """Analyze single file with tracking."""
@@ -173,13 +173,11 @@ class ParallelAnalyzer:
         )
 
         # Filter out None (failed) results
-        results = [r for r in all_results if r is not None]
-
-        return results
+        return [r for r in all_results if r is not None]
 
 
 @asynccontextmanager
-async def timeout_with_partial_results(timeout_seconds: float, partial_results: List):
+async def timeout_with_partial_results(timeout_seconds: float, partial_results: list):
     """Context manager that returns partial results on timeout.
 
     Usage:
@@ -201,7 +199,6 @@ async def timeout_with_partial_results(timeout_seconds: float, partial_results: 
     except TimeoutError:
         # Partial results are already in the list
         logger.warning(
-            f"Timeout after {timeout_seconds}s, "
-            f"returning {len(partial_results)} partial results"
+            f"Timeout after {timeout_seconds}s, returning {len(partial_results)} partial results"
         )
         raise

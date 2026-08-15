@@ -5,7 +5,7 @@ collected during the init wizard, replacing error-prone tuple returns.
 """
 
 from dataclasses import dataclass
-from typing import Any, Dict, Optional
+from typing import Any
 
 # ===== Strongly-Typed Platform Data Models =====
 
@@ -22,7 +22,7 @@ class GitHubPlatformData:
 
     token: str
     repositories: tuple[str, ...]
-    url: Optional[str] = None
+    url: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for YAML serialization.
@@ -78,7 +78,7 @@ class GitLabPlatformData:
 
     token: str
     repositories: tuple[str, ...]
-    url: Optional[str] = None
+    url: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for YAML serialization.
@@ -146,18 +146,18 @@ class OpenAILLMData:
     provider: str
     endpoint: str
     model: str
-    api_key: Optional[str] = None
-    temperature: Optional[float] = None
-    max_tokens: Optional[int] = None
-    timeout: Optional[int] = None
-    max_retries: Optional[int] = None
-    retry_delay: Optional[int] = None
-    exponential_backoff: Optional[bool] = None
-    max_concurrent_global: Optional[int] = None
-    max_concurrent_per_repo: Optional[int] = None
-    requests_per_minute: Optional[int] = None
-    max_tokens_per_minute: Optional[int] = None
-    cache: Optional[dict[str, Any]] = None
+    api_key: str | None = None
+    temperature: float | None = None
+    max_tokens: int | None = None
+    timeout: int | None = None
+    max_retries: int | None = None
+    retry_delay: int | None = None
+    exponential_backoff: bool | None = None
+    max_concurrent_global: int | None = None
+    max_concurrent_per_repo: int | None = None
+    requests_per_minute: int | None = None
+    max_tokens_per_minute: int | None = None
+    cache: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for YAML serialization.
@@ -223,17 +223,17 @@ class BedrockLLMData:
     enabled: bool
     provider: str
     bedrock: BedrockRegionModel
-    temperature: Optional[float] = None
-    max_tokens: Optional[int] = None
-    timeout: Optional[int] = None
-    max_retries: Optional[int] = None
-    retry_delay: Optional[int] = None
-    exponential_backoff: Optional[bool] = None
-    max_concurrent_global: Optional[int] = None
-    max_concurrent_per_repo: Optional[int] = None
-    requests_per_minute: Optional[int] = None
-    max_tokens_per_minute: Optional[int] = None
-    cache: Optional[dict[str, Any]] = None
+    temperature: float | None = None
+    max_tokens: int | None = None
+    timeout: int | None = None
+    max_retries: int | None = None
+    retry_delay: int | None = None
+    exponential_backoff: bool | None = None
+    max_concurrent_global: int | None = None
+    max_concurrent_per_repo: int | None = None
+    requests_per_minute: int | None = None
+    max_tokens_per_minute: int | None = None
+    cache: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for YAML serialization.
@@ -298,17 +298,17 @@ class AnthropicLLMData:
     provider: str
     api_key: str
     model: str
-    temperature: Optional[float] = None
-    max_tokens: Optional[int] = None
-    timeout: Optional[int] = None
-    max_retries: Optional[int] = None
-    retry_delay: Optional[int] = None
-    exponential_backoff: Optional[bool] = None
-    max_concurrent_global: Optional[int] = None
-    max_concurrent_per_repo: Optional[int] = None
-    requests_per_minute: Optional[int] = None
-    max_tokens_per_minute: Optional[int] = None
-    cache: Optional[dict[str, Any]] = None
+    temperature: float | None = None
+    max_tokens: int | None = None
+    timeout: int | None = None
+    max_retries: int | None = None
+    retry_delay: int | None = None
+    exponential_backoff: bool | None = None
+    max_concurrent_global: int | None = None
+    max_concurrent_per_repo: int | None = None
+    requests_per_minute: int | None = None
+    max_tokens_per_minute: int | None = None
+    cache: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for YAML serialization.
@@ -398,8 +398,8 @@ class PlatformConfig:
 
     env_var: str
     platform_name: str
-    config: Optional[Dict[str, Any]] = None  # Deprecated, for backward compatibility
-    data: Optional[GitHubPlatformData | GiteaPlatformData | GitLabPlatformData] = None
+    config: dict[str, Any] | None = None  # Deprecated, for backward compatibility
+    data: GitHubPlatformData | GiteaPlatformData | GitLabPlatformData | None = None
 
     def __post_init__(self) -> None:
         """Validate that exactly one of config or data is provided.
@@ -432,9 +432,8 @@ class PlatformConfig:
             # New strongly-typed format
             platform_key = self.platform_name.lower()
             return {platform_key: self.data.to_dict()}
-        else:
-            # Old dict format - return as-is
-            return self.config  # type: ignore
+        # Old dict format - return as-is
+        return self.config  # type: ignore
 
 
 @dataclass(frozen=True)
@@ -451,8 +450,8 @@ class LLMConfig:
     """
 
     provider: str = ""  # Deprecated, will be derived from data if using new format
-    config: Optional[Dict[str, Any]] = None  # Deprecated, for backward compatibility
-    data: Optional[OpenAILLMData | BedrockLLMData | AnthropicLLMData] = None
+    config: dict[str, Any] | None = None  # Deprecated, for backward compatibility
+    data: OpenAILLMData | BedrockLLMData | AnthropicLLMData | None = None
 
     def __post_init__(self) -> None:
         """Validate that exactly one of config or data is provided.
@@ -488,9 +487,8 @@ class LLMConfig:
         if self.data is not None:
             # New strongly-typed format
             return {"llm": self.data.to_dict()}
-        else:
-            # Old dict format - return as-is
-            return self.config  # type: ignore
+        # Old dict format - return as-is
+        return self.config  # type: ignore
 
 
 @dataclass(frozen=True)
@@ -505,8 +503,8 @@ class DocumentationConfig:
         data: Strongly-typed documentation data
     """
 
-    config: Optional[Dict[str, Any]] = None  # Deprecated, for backward compatibility
-    data: Optional[DocumentationConfigData] = None
+    config: dict[str, Any] | None = None  # Deprecated, for backward compatibility
+    data: DocumentationConfigData | None = None
 
     def __post_init__(self) -> None:
         """Validate that exactly one of config or data is provided.
@@ -535,6 +533,5 @@ class DocumentationConfig:
         if self.data is not None:
             # New strongly-typed format
             return {"documentation": self.data.to_dict()}
-        else:
-            # Old dict format - return as-is
-            return self.config  # type: ignore
+        # Old dict format - return as-is
+        return self.config  # type: ignore

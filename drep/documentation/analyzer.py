@@ -5,7 +5,6 @@ the LLM-based analysis is added.
 """
 
 import re
-from typing import List
 
 from drep.models.config import DocumentationConfig
 from drep.models.findings import DocumentationFindings, PatternIssue
@@ -39,8 +38,8 @@ class DocumentationAnalyzer:
 
         return findings
 
-    def _analyze_markdown(self, content: str) -> List[PatternIssue]:
-        issues: List[PatternIssue] = []
+    def _analyze_markdown(self, content: str) -> list[PatternIssue]:
+        issues: list[PatternIssue] = []
         lines = content.splitlines()
 
         # Track code fence state

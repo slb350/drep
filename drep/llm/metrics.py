@@ -5,7 +5,7 @@ import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -43,10 +43,10 @@ class LLMMetrics:
 
     # Session tracking
     session_start: datetime = field(default_factory=datetime.now)
-    last_request: Optional[datetime] = None
+    last_request: datetime | None = None
 
     # Per-analyzer breakdown
-    by_analyzer: Dict[str, Dict[str, int]] = field(default_factory=dict)
+    by_analyzer: dict[str, dict[str, int]] = field(default_factory=dict)
 
     def record_request(
         self,
@@ -136,7 +136,7 @@ class LLMMetrics:
         completion_cost = (self.total_tokens_completion / 1000) * self.cost_per_1k_completion_tokens
         return prompt_cost + completion_cost
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for JSON serialization.
 
         Returns:
@@ -228,14 +228,14 @@ class MetricsCollector:
             # Load existing metrics
             history = []
             if self.metrics_file.exists():
-                with open(self.metrics_file, "r") as f:
+                with self.metrics_file.open() as f:
                     history = json.load(f)
 
             # Append current session
             history.append(self.current_session.to_dict())
 
             # Write back
-            with open(self.metrics_file, "w") as f:
+            with self.metrics_file.open("w") as f:
                 json.dump(history, f, indent=2)
 
             logger.info(f"Saved metrics to {self.metrics_file}")
@@ -243,7 +243,7 @@ class MetricsCollector:
         except Exception as e:
             logger.error(f"Failed to save metrics: {e}")
 
-    def load_history(self, days: int = 30) -> List[Dict[str, Any]]:
+    def load_history(self, days: int = 30) -> list[dict[str, Any]]:
         """Load historical metrics.
 
         Args:
@@ -256,14 +256,12 @@ class MetricsCollector:
             return []
 
         try:
-            with open(self.metrics_file, "r") as f:
+            with self.metrics_file.open() as f:
                 history = json.load(f)
 
             # Filter to last N days
             cutoff = datetime.now() - timedelta(days=days)
-            filtered = [m for m in history if datetime.fromisoformat(m["session_start"]) > cutoff]
-
-            return filtered
+            return [m for m in history if datetime.fromisoformat(m["session_start"]) > cutoff]
 
         except Exception as e:
             logger.error(f"Failed to load metrics history: {e}")

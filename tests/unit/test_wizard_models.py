@@ -49,7 +49,7 @@ class TestPlatformConfig:
 
     def test_missing_token_raises_error(self):
         """Test that missing token field raises ValueError."""
-        with pytest.raises(ValueError, match="must include 'token' field"):
+        with pytest.raises(ValueError, match=r"must include 'token' field"):
             PlatformConfig(
                 config={"github": {"repositories": ["owner/*"]}},  # Missing token
                 env_var="GITHUB_TOKEN",
@@ -117,7 +117,7 @@ class TestLLMConfig:
 
     def test_missing_enabled_raises_error(self):
         """Test that missing enabled field raises ValueError."""
-        with pytest.raises(ValueError, match="must include 'enabled' field"):
+        with pytest.raises(ValueError, match=r"must include 'enabled' field"):
             LLMConfig(
                 config={"llm": {"provider": "openai-compatible"}},  # Missing enabled
                 provider="openai-compatible",
@@ -125,7 +125,7 @@ class TestLLMConfig:
 
     def test_missing_provider_raises_error(self):
         """Test that missing provider field raises ValueError."""
-        with pytest.raises(ValueError, match="must include 'provider' field"):
+        with pytest.raises(ValueError, match=r"must include 'provider' field"):
             LLMConfig(
                 config={"llm": {"enabled": True}},  # Missing provider
                 provider="openai-compatible",
@@ -160,7 +160,7 @@ class TestDocumentationConfig:
 
     def test_missing_enabled_raises_error(self):
         """Test that missing enabled field raises ValueError."""
-        with pytest.raises(ValueError, match="must include 'enabled' field"):
+        with pytest.raises(ValueError, match=r"must include 'enabled' field"):
             DocumentationConfig(
                 config={"documentation": {"markdown_checks": True}}  # Missing enabled
             )
@@ -191,7 +191,7 @@ class TestGitHubPlatformData:
         # Should be frozen (Python 3.13 raises FrozenInstanceError,
         # earlier versions raise AttributeError)
         with pytest.raises(
-            (AttributeError, Exception), match="can't set attribute|frozen|cannot assign"
+            (AttributeError, Exception), match=r"can't set attribute|frozen|cannot assign"
         ):
             data.token = "new-token"
 
@@ -292,7 +292,7 @@ class TestBedrockRegionModel:
         model = BedrockRegionModel(region="us-east-1", model="anthropic.claude-v2")
 
         with pytest.raises(
-            (AttributeError, Exception), match="can't set attribute|frozen|cannot assign"
+            (AttributeError, Exception), match=r"can't set attribute|frozen|cannot assign"
         ):
             model.region = "us-west-2"
 
@@ -327,7 +327,7 @@ class TestLLMConfigModels:
         )
 
         with pytest.raises(
-            (AttributeError, Exception), match="can't set attribute|frozen|cannot assign"
+            (AttributeError, Exception), match=r"can't set attribute|frozen|cannot assign"
         ):
             data.enabled = False
 
@@ -416,7 +416,7 @@ class TestDocumentationConfigStronglyTyped:
         )
 
         with pytest.raises(
-            (AttributeError, Exception), match="can't set attribute|frozen|cannot assign"
+            (AttributeError, Exception), match=r"can't set attribute|frozen|cannot assign"
         ):
             data.enabled = False
 

@@ -19,8 +19,7 @@ def mock_adapter():
 @pytest.fixture
 def mock_db():
     """Create a mock database session."""
-    db = MagicMock()
-    return db
+    return MagicMock()
 
 
 @pytest.fixture

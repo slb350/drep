@@ -1,7 +1,8 @@
 """PR Review Analyzer - LLM-powered code review for pull requests."""
 
 import logging
-from typing import Any, Dict, List
+import re
+from typing import Any
 
 from drep.adapters.base import BaseAdapter
 from drep.llm.client import LLMClient
@@ -98,7 +99,7 @@ class PRReviewAnalyzer:
         """
         self.llm = llm_client
         self.gitea = gitea_adapter
-        self._current_hunks: List[DiffHunk] = []  # Store hunks for validation
+        self._current_hunks: list[DiffHunk] = []  # Store hunks for validation
 
     async def review_pr(
         self,
@@ -147,9 +148,7 @@ class PRReviewAnalyzer:
         repo_id = f"{owner}/{repo}"
         result = await self._analyze_diff_with_llm(pr_data, hunks, repo_id)
 
-        logger.info(
-            f"Review complete: {len(result.comments)} comments, " f"approve={result.approve}"
-        )
+        logger.info(f"Review complete: {len(result.comments)} comments, approve={result.approve}")
 
         return result
 
@@ -173,8 +172,8 @@ class PRReviewAnalyzer:
 
     async def _analyze_diff_with_llm(
         self,
-        pr_data: Dict[str, Any],
-        hunks: List[DiffHunk],
+        pr_data: dict[str, Any],
+        hunks: list[DiffHunk],
         repo_id: str,
     ) -> PRReviewResult:
         """Send diff to LLM for review.
@@ -192,7 +191,7 @@ class PRReviewAnalyzer:
         for hunk in hunks:
             diff_lines.append(f"diff --git a/{hunk.file_path} b/{hunk.file_path}")
             diff_lines.append(
-                f"@@ -{hunk.old_start},{hunk.old_count} " f"+{hunk.new_start},{hunk.new_count} @@"
+                f"@@ -{hunk.old_start},{hunk.old_count} +{hunk.new_start},{hunk.new_count} @@"
             )
             diff_lines.extend(hunk.lines)
 
@@ -211,13 +210,11 @@ class PRReviewAnalyzer:
             omitted = len(diff_content) - 20000
 
             diff_content = (
-                f"{first_part}\n\n"
-                f"... [TRUNCATED: {omitted} characters omitted] ...\n\n"
-                f"{last_part}"
+                f"{first_part}\n\n... [TRUNCATED: {omitted} characters omitted] ...\n\n{last_part}"
             )
 
         # Build diff summary (list of changed files)
-        changed_files = list(set(hunk.file_path for hunk in hunks))
+        changed_files = list({hunk.file_path for hunk in hunks})
         diff_summary = "\n".join(f"- {f}" for f in changed_files)
 
         # Prepare prompt
@@ -227,7 +224,7 @@ class PRReviewAnalyzer:
             pr_author=pr_data.get("user", {}).get("login", "unknown"),
             base_branch=pr_data.get("base", {}).get("ref", "main"),
             head_branch=pr_data.get("head", {}).get("ref", "unknown"),
-            diff_summary=diff_summary if diff_summary else "(no files changed)",
+            diff_summary=diff_summary or "(no files changed)",
             diff_content=diff_content,
         )
 
@@ -241,9 +238,7 @@ class PRReviewAnalyzer:
         )
 
         # Convert to Pydantic model
-        result = PRReviewResult(**result_json)
-
-        return result
+        return PRReviewResult(**result_json)
 
     async def post_review(
         self,
@@ -326,8 +321,6 @@ class PRReviewAnalyzer:
                 posted_count += 1
             except ValueError as e:
                 # Sanitize error message to avoid logging tokens in URLs
-                import re
-
                 error_msg = str(e)
                 error_msg = re.sub(
                     r"(token|api_?key|password|secret)=[^&\s]+",

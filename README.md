@@ -803,7 +803,7 @@ pip install -e ".[dev]"
 pytest
 
 # Format code
-black drep/
+ruff format drep/
 ruff check drep/
 
 # Type checking

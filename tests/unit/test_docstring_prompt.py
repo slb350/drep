@@ -13,7 +13,7 @@ async def test_docstring_generator_uses_v2_prompt(monkeypatch):
     """DocstringGenerator should use the stricter JSON-only prompt (V2)."""
     captured = {"system_prompt": None}
 
-    async def capture_analyze_code_json(*args, **kwargs):  # noqa: ARG001
+    async def capture_analyze_code_json(*args, **kwargs):
         captured["system_prompt"] = kwargs.get("system_prompt")
         return {"docstring": "A.\n\nReturns:\n    None", "quality": "high", "reasoning": "Test"}
 

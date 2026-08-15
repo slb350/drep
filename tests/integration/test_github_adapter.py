@@ -242,6 +242,6 @@ async def test_github_get_default_branch_real_api(github_adapter):
 
     # Verify it's a reasonable branch name (no special characters that would break git)
     # Branch names can contain alphanumeric, hyphens, underscores, slashes
-    assert all(
-        c.isalnum() or c in "-_/" for c in branch
-    ), f"Branch name contains unexpected characters: {branch}"
+    assert all(c.isalnum() or c in "-_/" for c in branch), (
+        f"Branch name contains unexpected characters: {branch}"
+    )

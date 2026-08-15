@@ -334,38 +334,42 @@ class TestInitCommand:
         """Test init handles PermissionError when writing config file."""
         from unittest.mock import patch
 
-        with runner.isolated_filesystem(temp_dir=tmp_path):
+        with (
+            runner.isolated_filesystem(temp_dir=tmp_path),
+            patch("pathlib.Path.write_text") as mock_write,
+        ):
             # Mock write_text to raise PermissionError
-            with patch("pathlib.Path.write_text") as mock_write:
-                mock_write.side_effect = PermissionError("Permission denied")
+            mock_write.side_effect = PermissionError("Permission denied")
 
-                # Wizard inputs (minimal)
-                inputs = "1\ngitea\n\n\nn\ny\nn\nn\nn\nn\n"
-                result = runner.invoke(cli, ["init"], input=inputs)
+            # Wizard inputs (minimal)
+            inputs = "1\ngitea\n\n\nn\ny\nn\nn\nn\nn\n"
+            result = runner.invoke(cli, ["init"], input=inputs)
 
-                # Should abort with clear error message
-                assert result.exit_code == 1
-                assert "ERROR: Permission denied writing to" in result.output
-                assert "Check file permissions" in result.output
+            # Should abort with clear error message
+            assert result.exit_code == 1
+            assert "ERROR: Permission denied writing to" in result.output
+            assert "Check file permissions" in result.output
 
     def test_init_handles_file_write_disk_full(self, runner, tmp_path):
         """Test init handles OSError when disk is full."""
         from unittest.mock import patch
 
-        with runner.isolated_filesystem(temp_dir=tmp_path):
+        with (
+            runner.isolated_filesystem(temp_dir=tmp_path),
+            patch("pathlib.Path.write_text") as mock_write,
+        ):
             # Mock write_text to raise OSError (disk full)
-            with patch("pathlib.Path.write_text") as mock_write:
-                mock_write.side_effect = OSError(28, "No space left on device")
+            mock_write.side_effect = OSError(28, "No space left on device")
 
-                # Wizard inputs (minimal)
-                inputs = "1\ngitea\n\n\nn\ny\nn\nn\nn\nn\n"
-                result = runner.invoke(cli, ["init"], input=inputs)
+            # Wizard inputs (minimal)
+            inputs = "1\ngitea\n\n\nn\ny\nn\nn\nn\nn\n"
+            result = runner.invoke(cli, ["init"], input=inputs)
 
-                # Should abort with clear error message
-                assert result.exit_code == 1
-                assert "ERROR: Failed to write config:" in result.output
-                assert "No space left on device" in result.output
-                assert "Check disk space and permissions" in result.output
+            # Should abort with clear error message
+            assert result.exit_code == 1
+            assert "ERROR: Failed to write config:" in result.output
+            assert "No space left on device" in result.output
+            assert "Check disk space and permissions" in result.output
 
     def test_init_handles_yaml_serialization_error(self, runner, tmp_path):
         """Test init handles YAML serialization errors gracefully."""
@@ -373,22 +377,21 @@ class TestInitCommand:
 
         import yaml
 
-        with runner.isolated_filesystem(temp_dir=tmp_path):
+        with runner.isolated_filesystem(temp_dir=tmp_path), patch("yaml.dump") as mock_dump:
             # Mock yaml.dump to raise YAMLError
-            with patch("yaml.dump") as mock_dump:
-                mock_dump.side_effect = yaml.YAMLError("Cannot serialize non-standard type")
+            mock_dump.side_effect = yaml.YAMLError("Cannot serialize non-standard type")
 
-                # Wizard inputs (minimal)
-                inputs = "1\ngitea\n\n\nn\ny\nn\nn\nn\nn\n"
-                result = runner.invoke(cli, ["init"], input=inputs)
+            # Wizard inputs (minimal)
+            inputs = "1\ngitea\n\n\nn\ny\nn\nn\nn\nn\n"
+            result = runner.invoke(cli, ["init"], input=inputs)
 
-                # Should abort with clear error message
-                assert result.exit_code == 1
-                assert "ERROR: Failed to serialize configuration" in result.output
-                assert (
-                    "Cannot serialize non-standard type" in result.output
-                    or "This is a bug" in result.output
-                )
+            # Should abort with clear error message
+            assert result.exit_code == 1
+            assert "ERROR: Failed to serialize configuration" in result.output
+            assert (
+                "Cannot serialize non-standard type" in result.output
+                or "This is a bug" in result.output
+            )
 
     def test_init_template_structure(self, runner, tmp_path):
         """Test that init creates valid YAML template."""
@@ -569,18 +572,20 @@ class TestInitCommand:
         """Test that validation failures abort with error."""
         from unittest.mock import patch
 
-        with runner.isolated_filesystem(temp_dir=tmp_path):
+        with (
+            runner.isolated_filesystem(temp_dir=tmp_path),
+            patch("drep.cli.load_config") as mock_load,
+        ):
             # Mock load_config to raise ValueError
-            with patch("drep.cli.load_config") as mock_load:
-                mock_load.side_effect = ValueError(
-                    "OpenAI-compatible provider requires 'endpoint' field"
-                )
-                inputs = "1\ngitea\n\n\nn\ny\nn\nn\nn\nn\n"
-                result = runner.invoke(cli, ["init"], input=inputs)
+            mock_load.side_effect = ValueError(
+                "OpenAI-compatible provider requires 'endpoint' field"
+            )
+            inputs = "1\ngitea\n\n\nn\ny\nn\nn\nn\nn\n"
+            result = runner.invoke(cli, ["init"], input=inputs)
 
-                assert result.exit_code == 1
-                assert "ERROR: Configuration validation failed:" in result.output
-                assert "OpenAI-compatible provider requires 'endpoint' field" in result.output
+            assert result.exit_code == 1
+            assert "ERROR: Configuration validation failed:" in result.output
+            assert "OpenAI-compatible provider requires 'endpoint' field" in result.output
 
     def test_init_handles_pydantic_validation_error(self, runner, tmp_path):
         """Test init formats Pydantic ValidationError correctly."""
@@ -588,54 +593,58 @@ class TestInitCommand:
 
         from pydantic_core import ValidationError
 
-        with runner.isolated_filesystem(temp_dir=tmp_path):
+        with (
+            runner.isolated_filesystem(temp_dir=tmp_path),
+            patch("drep.cli.load_config") as mock_load,
+        ):
             # Mock load_config to raise ValidationError with multiple fields
-            with patch("drep.cli.load_config") as mock_load:
-                mock_load.side_effect = ValidationError.from_exception_data(
-                    "Config",
-                    [
-                        {
-                            "type": "missing",
-                            "loc": ("github", "token"),
-                            "msg": "Field required",
-                            "input": {},
-                        },
-                        {
-                            "type": "string_type",
-                            "loc": ("llm", "endpoint"),
-                            "msg": "Input should be a valid string",
-                            "input": 123,
-                        },
-                    ],
-                )
-                inputs = "1\ngithub\nn\n\nn\ny\nn\nn\nn\nn\n"
-                result = runner.invoke(cli, ["init"], input=inputs)
+            mock_load.side_effect = ValidationError.from_exception_data(
+                "Config",
+                [
+                    {
+                        "type": "missing",
+                        "loc": ("github", "token"),
+                        "msg": "Field required",
+                        "input": {},
+                    },
+                    {
+                        "type": "string_type",
+                        "loc": ("llm", "endpoint"),
+                        "msg": "Input should be a valid string",
+                        "input": 123,
+                    },
+                ],
+            )
+            inputs = "1\ngithub\nn\n\nn\ny\nn\nn\nn\nn\n"
+            result = runner.invoke(cli, ["init"], input=inputs)
 
-                assert result.exit_code == 1
-                assert "ERROR: Configuration validation failed:" in result.output
-                # Verify field paths are formatted correctly
-                assert "github -> token" in result.output
-                assert "llm -> endpoint" in result.output
-                # Verify helpful guidance
-                assert "Please re-run 'drep init' or fix manually" in result.output
+            assert result.exit_code == 1
+            assert "ERROR: Configuration validation failed:" in result.output
+            # Verify field paths are formatted correctly
+            assert "github -> token" in result.output
+            assert "llm -> endpoint" in result.output
+            # Verify helpful guidance
+            assert "Please re-run 'drep init' or fix manually" in result.output
 
     def test_init_unexpected_validation_error_propagates(self, runner, tmp_path):
         """Test unexpected validation exceptions propagate with stack trace."""
         from unittest.mock import patch
 
-        with runner.isolated_filesystem(temp_dir=tmp_path):
+        with (
+            runner.isolated_filesystem(temp_dir=tmp_path),
+            patch("drep.cli.load_config") as mock_load,
+        ):
             # Mock load_config to raise an unexpected exception
-            with patch("drep.cli.load_config") as mock_load:
-                mock_load.side_effect = RuntimeError("Unexpected error in config parsing")
-                inputs = "1\ngitea\n\n\nn\ny\nn\nn\nn\nn\n"
-                result = runner.invoke(cli, ["init"], input=inputs)
+            mock_load.side_effect = RuntimeError("Unexpected error in config parsing")
+            inputs = "1\ngitea\n\n\nn\ny\nn\nn\nn\nn\n"
+            result = runner.invoke(cli, ["init"], input=inputs)
 
-                # Unexpected exceptions should propagate (not exit cleanly)
-                assert result.exit_code == 1
-                # Should have exception information in result
-                assert result.exception is not None
-                assert isinstance(result.exception, RuntimeError)
-                assert "Unexpected error in config parsing" in str(result.exception)
+            # Unexpected exceptions should propagate (not exit cleanly)
+            assert result.exit_code == 1
+            # Should have exception information in result
+            assert result.exception is not None
+            assert isinstance(result.exception, RuntimeError)
+            assert "Unexpected error in config parsing" in str(result.exception)
 
     # NOTE: test_init_env_check_handles_exception - SKIPPED
     # Error handling for env var checks IS implemented in drep/cli.py lines 484-489.
@@ -941,7 +950,7 @@ class TestPlatformURLValidation:
             # Try Gitea with invalid URL, then valid URL
             # Invalid: "gitea-server" (missing protocol)
             # Valid: http://192.168.1.14:3000
-            inputs = "1\ngitea\ngitea-server\n" "http://192.168.1.14:3000\n" "\nn\ny\nn\nn\nn\nn\n"
+            inputs = "1\ngitea\ngitea-server\nhttp://192.168.1.14:3000\n\nn\ny\nn\nn\nn\nn\n"
             result = runner.invoke(cli, ["init"], input=inputs)
 
             # Should succeed after retry
@@ -959,9 +968,7 @@ class TestPlatformURLValidation:
             # Invalid: "my-gitlab" (missing protocol)
             # Valid: https://gitlab.internal.company.com
             inputs = (
-                "1\ngitlab\ny\nmy-gitlab\n"
-                "https://gitlab.internal.company.com\n"
-                "\nn\ny\nn\nn\nn\nn\n"
+                "1\ngitlab\ny\nmy-gitlab\nhttps://gitlab.internal.company.com\n\nn\ny\nn\nn\nn\nn\n"
             )
             result = runner.invoke(cli, ["init"], input=inputs)
 
@@ -1145,15 +1152,17 @@ class TestScanCommand:
                 )
             )
 
-            with patch("drep.cli.load_config") as mock_load:
-                with patch("drep.cli._run_scan", new_callable=AsyncMock) as mock_run:
-                    mock_load.return_value = gitea_config
+            with (
+                patch("drep.cli.load_config") as mock_load,
+                patch("drep.cli._run_scan", new_callable=AsyncMock) as mock_run,
+            ):
+                mock_load.return_value = gitea_config
 
-                    result = runner.invoke(cli, ["scan", "owner/repo"])
+                result = runner.invoke(cli, ["scan", "owner/repo"])
 
-                    # Verify _run_scan was called (command accepted)
-                    assert result.exit_code == 0
-                    mock_run.assert_called_once()
+                # Verify _run_scan was called (command accepted)
+                assert result.exit_code == 0
+                mock_run.assert_called_once()
 
     def test_scan_detects_github_adapter(self, runner, tmp_path):
         """Test that scan uses GitHubAdapter when github config present."""
@@ -1170,15 +1179,17 @@ class TestScanCommand:
                 github=GitHubConfig(token=SecretStr("ghp_test"), repositories=["owner/*"])
             )
 
-            with patch("drep.cli.load_config") as mock_load:
-                with patch("drep.cli._run_scan", new_callable=AsyncMock) as mock_run:
-                    mock_load.return_value = github_config
+            with (
+                patch("drep.cli.load_config") as mock_load,
+                patch("drep.cli._run_scan", new_callable=AsyncMock) as mock_run,
+            ):
+                mock_load.return_value = github_config
 
-                    result = runner.invoke(cli, ["scan", "owner/repo"])
+                result = runner.invoke(cli, ["scan", "owner/repo"])
 
-                    # Verify _run_scan was called (command accepted)
-                    assert result.exit_code == 0
-                    mock_run.assert_called_once()
+                # Verify _run_scan was called (command accepted)
+                assert result.exit_code == 0
+                mock_run.assert_called_once()
 
     def test_scan_prefers_gitea_when_both_configured(self, runner, tmp_path):
         """Test that scan prefers GiteaAdapter when both platforms configured."""
@@ -1200,15 +1211,17 @@ class TestScanCommand:
                 github=GitHubConfig(token=SecretStr("ghp_test"), repositories=["owner/*"]),
             )
 
-            with patch("drep.cli.load_config") as mock_load:
-                with patch("drep.cli._run_scan", new_callable=AsyncMock) as mock_run:
-                    mock_load.return_value = both_config
+            with (
+                patch("drep.cli.load_config") as mock_load,
+                patch("drep.cli._run_scan", new_callable=AsyncMock) as mock_run,
+            ):
+                mock_load.return_value = both_config
 
-                    result = runner.invoke(cli, ["scan", "owner/repo"])
+                result = runner.invoke(cli, ["scan", "owner/repo"])
 
-                    # Verify _run_scan was called
-                    assert result.exit_code == 0
-                    mock_run.assert_called_once()
+                # Verify _run_scan was called
+                assert result.exit_code == 0
+                mock_run.assert_called_once()
 
     def test_scan_rejects_no_platform_config(self, runner, tmp_path):
         """Test that scan rejects config with neither Gitea nor GitHub."""
@@ -1291,7 +1304,7 @@ class TestScanWorkflow:
         mock_scanner_class.return_value = scanner
 
         analyzer = MagicMock()
-        analyzer.analyze_file = AsyncMock(return_value=MagicMock(to_findings=lambda: []))
+        analyzer.analyze_file = AsyncMock(return_value=MagicMock(to_findings=list))
         mock_analyzer_class.return_value = analyzer
 
         issue_manager = MagicMock()
@@ -1380,7 +1393,7 @@ class TestScanWorkflow:
         mock_scanner_class.return_value = scanner
 
         analyzer = MagicMock()
-        analyzer.analyze_file = AsyncMock(return_value=MagicMock(to_findings=lambda: []))
+        analyzer.analyze_file = AsyncMock(return_value=MagicMock(to_findings=list))
         mock_analyzer_class.return_value = analyzer
 
         issue_manager = MagicMock()
@@ -1417,9 +1430,9 @@ class TestScanWorkflow:
             assert result.exit_code == 0
 
             # Verify token file had correct permissions (0o600)
-            assert (
-                token_file_permissions == "600"
-            ), f"Token file permissions were {token_file_permissions}, expected 600"
+            assert token_file_permissions == "600", (
+                f"Token file permissions were {token_file_permissions}, expected 600"
+            )
 
     @patch("drep.cli.IssueManager")
     @patch("drep.cli.DocumentationAnalyzer")
@@ -1468,7 +1481,7 @@ class TestScanWorkflow:
         mock_scanner_class.return_value = scanner
 
         analyzer = MagicMock()
-        analyzer.analyze_file = AsyncMock(return_value=MagicMock(to_findings=lambda: []))
+        analyzer.analyze_file = AsyncMock(return_value=MagicMock(to_findings=list))
         mock_analyzer_class.return_value = analyzer
 
         issue_manager = MagicMock()
@@ -1503,9 +1516,9 @@ class TestScanWorkflow:
             assert result.exit_code == 0
 
             # Verify askpass script had correct permissions (0o700)
-            assert (
-                askpass_permissions == "700"
-            ), f"Askpass script permissions were {askpass_permissions}, expected 700"
+            assert askpass_permissions == "700", (
+                f"Askpass script permissions were {askpass_permissions}, expected 700"
+            )
 
     @patch("drep.cli.IssueManager")
     @patch("drep.cli.DocumentationAnalyzer")
@@ -1554,7 +1567,7 @@ class TestScanWorkflow:
         mock_scanner_class.return_value = scanner
 
         analyzer = MagicMock()
-        analyzer.analyze_file = AsyncMock(return_value=MagicMock(to_findings=lambda: []))
+        analyzer.analyze_file = AsyncMock(return_value=MagicMock(to_findings=list))
         mock_analyzer_class.return_value = analyzer
 
         issue_manager = MagicMock()
@@ -1586,16 +1599,16 @@ class TestScanWorkflow:
 
             # Verify token is NOT in environment variables
             assert git_env is not None, "Git environment should have been captured"
-            assert (
-                "DREP_GIT_TOKEN" not in git_env
-            ), "Token should NOT be in DREP_GIT_TOKEN environment variable"
+            assert "DREP_GIT_TOKEN" not in git_env, (
+                "Token should NOT be in DREP_GIT_TOKEN environment variable"
+            )
 
             # Verify no environment variable contains the token value
             token_value = "test-token-secret"
             for key, value in git_env.items():
-                assert token_value not in str(
-                    value
-                ), f"Token found in environment variable {key}: {value}"
+                assert token_value not in str(value), (
+                    f"Token found in environment variable {key}: {value}"
+                )
 
             # Verify GIT_ASKPASS is set (our security mechanism)
             assert "GIT_ASKPASS" in git_env, "GIT_ASKPASS should be set for secure token handling"
@@ -1649,7 +1662,7 @@ class TestScanWorkflow:
         mock_scanner_class.return_value = scanner
 
         analyzer = MagicMock()
-        analyzer.analyze_file = AsyncMock(return_value=MagicMock(to_findings=lambda: []))
+        analyzer.analyze_file = AsyncMock(return_value=MagicMock(to_findings=list))
         mock_analyzer_class.return_value = analyzer
 
         issue_manager = MagicMock()
@@ -1984,9 +1997,7 @@ class TestTokenLeakagePrevention:
         with runner.isolated_filesystem(temp_dir=tmp_path):
             # Run wizard with GitHub + Anthropic
             inputs = (
-                "1\ngithub\nn\nowner/*\n"
-                "y\nanthropic\nclaude-sonnet-4-5-20250929\n"
-                "n\nn\nn\nn\nn\n"
+                "1\ngithub\nn\nowner/*\ny\nanthropic\nclaude-sonnet-4-5-20250929\nn\nn\nn\nn\nn\n"
             )
             result = runner.invoke(cli, ["init"], input=inputs)
 
