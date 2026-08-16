@@ -119,9 +119,7 @@ def load_config(config_path: str, strict: bool = False, require_platform: bool =
 
     # In strict mode, fail on any placeholders that survived substitution
     if strict and unresolved:
-        raise ValueError(
-            f"Missing required environment variables: {', '.join(sorted(unresolved))}"
-        )
+        raise ValueError(f"Missing required environment variables: {', '.join(sorted(unresolved))}")
 
     # Pass require_platform flag to Config model
     raw_config["require_platform_config"] = require_platform

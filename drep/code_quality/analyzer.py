@@ -182,4 +182,4 @@ class CodeQualityAnalyzer:
             True if file should be analyzed, False otherwise
         """
         path = Path(file_path)
-        return path.suffix == ".py"
+        return path.suffix.lower() == ".py"
