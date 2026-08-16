@@ -185,3 +185,61 @@ class TestWebhookHardening:
             resp = self._post(client, None, raw=b'{"repository": {"full_name": "owner/repo"}}')
         assert resp.status_code == 200
         assert any("webhook" in r.message.lower() for r in caplog.records)
+
+
+class TestWebhookSecretLoading:
+    """_load_webhook_secret: caching, missing file, and fail-closed behavior."""
+
+    def test_missing_config_file_means_no_secret(self, tmp_path):
+        from drep.server import _load_webhook_secret
+
+        assert _load_webhook_secret(str(tmp_path / "nope.yaml")) is None
+
+    def test_reads_secret_and_caches_by_mtime(self, tmp_path):
+        from drep.server import _WEBHOOK_SECRET_CACHE, _load_webhook_secret
+
+        cfg = tmp_path / "config.yaml"
+        cfg.write_text("webhook_secret: sekrit\n")
+        _WEBHOOK_SECRET_CACHE.pop(str(cfg), None)
+
+        assert _load_webhook_secret(str(cfg)) == "sekrit"
+        # Second read is served from cache without re-parsing
+        assert str(cfg) in _WEBHOOK_SECRET_CACHE
+        assert _load_webhook_secret(str(cfg)) == "sekrit"
+
+    def test_env_placeholder_is_substituted(self, tmp_path, monkeypatch):
+        from drep.server import _WEBHOOK_SECRET_CACHE, _load_webhook_secret
+
+        monkeypatch.setenv("DREP_TEST_HOOK_SECRET", "from-env")
+        cfg = tmp_path / "config.yaml"
+        cfg.write_text("webhook_secret: ${DREP_TEST_HOOK_SECRET}\n")
+        _WEBHOOK_SECRET_CACHE.pop(str(cfg), None)
+
+        assert _load_webhook_secret(str(cfg)) == "from-env"
+
+    def test_unparseable_config_raises_rather_than_failing_open(self, tmp_path):
+        from drep.server import _WEBHOOK_SECRET_CACHE, _load_webhook_secret
+
+        cfg = tmp_path / "config.yaml"
+        cfg.write_text("webhook_secret: [unclosed\n")
+        _WEBHOOK_SECRET_CACHE.pop(str(cfg), None)
+
+        with pytest.raises(Exception):  # noqa: B017 - any parse failure must propagate
+            _load_webhook_secret(str(cfg))
+
+    def test_broken_config_returns_503(self, monkeypatch):
+        """A config that cannot be read rejects the webhook instead of accepting it."""
+
+        def boom(_path):
+            raise ValueError("bad config")
+
+        monkeypatch.setattr("drep.server._load_webhook_secret", boom)
+        monkeypatch.setattr("drep.server._run_scan", AsyncMock())
+
+        client = TestClient(app, raise_server_exceptions=False)
+        resp = client.post(
+            "/webhooks/gitea",
+            content=b'{"repository": {"full_name": "owner/repo"}}',
+            headers={"X-Gitea-Event": "push"},
+        )
+        assert resp.status_code == 503

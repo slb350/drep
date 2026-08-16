@@ -403,7 +403,7 @@ async def _run_review(
     platform, adapter, _git_url, _git_token = _resolve_platform(config, owner, repo)
 
     # Initialize components
-    scanner = RepositoryScanner(init_database(config.database_url), config, gitea_adapter=adapter)
+    scanner = RepositoryScanner(init_database(config.database_url), config, adapter=adapter)
 
     try:
         # Check PR analyzer is available

@@ -37,14 +37,14 @@ class RepositoryScanner:
         self,
         db_session,
         config: Config | None = None,
-        gitea_adapter: BaseAdapter | None = None,
+        adapter: BaseAdapter | None = None,
     ):
         """Initialize scanner with database session and optional config.
 
         Args:
             db_session: SQLAlchemy database session for querying/storing scan metadata
             config: Optional Config object for LLM-powered analysis
-            gitea_adapter: Optional platform adapter (Gitea/GitHub/GitLab) for PR review
+            adapter: Optional platform adapter (Gitea/GitHub/GitLab) for PR review
         """
         self.db = db_session
         self.config = config
@@ -101,8 +101,8 @@ class RepositoryScanner:
             self.docstring_generator = DocstringGenerator(self.llm_client)
 
             # Create PR review analyzer if gitea adapter provided
-            if gitea_adapter:
-                self.pr_analyzer = PRReviewAnalyzer(self.llm_client, gitea_adapter)
+            if adapter:
+                self.pr_analyzer = PRReviewAnalyzer(self.llm_client, adapter)
             else:
                 self.pr_analyzer = None
         else:

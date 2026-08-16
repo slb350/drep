@@ -1,5 +1,6 @@
 """PR Review Analyzer - LLM-powered code review for pull requests."""
 
+import asyncio
 import logging
 import re
 from dataclasses import dataclass
@@ -31,6 +32,14 @@ class PreparedReview:
     result: PRReviewResult
     anchor: ReviewAnchor
     added_lines: dict[str, frozenset[int]]
+
+    def is_added_line(self, file_path: str, line: int) -> bool:
+        """Return True if the line is an added line in the reviewed diff.
+
+        Lives here rather than on the analyzer: it reads nothing but this
+        object's own added_lines index.
+        """
+        return line in self.added_lines.get(file_path, frozenset())
 
 
 # Prompt template for PR reviews
@@ -111,15 +120,15 @@ Return JSON only:
 class PRReviewAnalyzer:
     """Analyzes PR diffs using LLM and posts review comments."""
 
-    def __init__(self, llm_client: LLMClient, gitea_adapter: BaseAdapter):
+    def __init__(self, llm_client: LLMClient, adapter: BaseAdapter):
         """Initialize PR review analyzer.
 
         Args:
             llm_client: LLM client instance for code analysis
-            gitea_adapter: Platform adapter (Gitea/GitHub/GitLab) for API calls
+            adapter: Platform adapter (Gitea/GitHub/GitLab) for API calls
         """
         self.llm = llm_client
-        self.gitea = gitea_adapter
+        self.adapter = adapter
 
     async def review_pr(
         self,
@@ -149,17 +158,18 @@ class PRReviewAnalyzer:
             ValueError: If PR not found or other platform errors
             Exception: If LLM analysis fails
         """
-        # Fetch the review anchor once; every inline comment of this review
+        # The PR payload and the diff are independent fetches — issue them
+        # together. The payload serves both the LLM prompt and the review
+        # anchor, so it is fetched once rather than once per consumer.
+        logger.info(f"Fetching PR #{pr_number} and diff from {owner}/{repo}")
+        pr_data, diff_text = await asyncio.gather(
+            self.adapter.get_pr(owner, repo, pr_number),
+            self.adapter.get_pr_diff(owner, repo, pr_number),
+        )
+
+        # Derive the review anchor once; every inline comment of this review
         # will be posted against this single consistent snapshot
-        anchor = await self.gitea.get_review_anchor(owner, repo, pr_number)
-
-        # Fetch PR details for the LLM prompt
-        logger.info(f"Fetching PR #{pr_number} from {owner}/{repo}")
-        pr_data = await self.gitea.get_pr(owner, repo, pr_number)
-
-        # Fetch PR diff
-        logger.info(f"Fetching diff for PR #{pr_number}")
-        diff_text = await self.gitea.get_pr_diff(owner, repo, pr_number)
+        anchor = self.adapter.anchor_from_pr(pr_data, owner, repo, pr_number)
 
         # Parse diff into hunks
         hunks = parse_diff(diff_text)
@@ -167,49 +177,47 @@ class PRReviewAnalyzer:
 
         # Analyze with LLM
         repo_id = f"{owner}/{repo}"
-        result = await self._analyze_diff_with_llm(pr_data, hunks, repo_id)
+        result = await self._analyze_diff_with_llm(
+            pr_data, diff_text, hunks, repo_id, anchor.commit_sha
+        )
 
-        # Index added line numbers per file for validation during posting
-        added_lines: dict[str, frozenset[int]] = {}
+        # Index added line numbers per file for validation during posting.
+        # Accumulate in mutable sets and freeze once: rebuilding a frozenset per
+        # hunk with `|` is quadratic in files with many hunks.
+        line_index: dict[str, set[int]] = {}
         for hunk in hunks:
-            hunk_lines = {line_num for line_num, _ in hunk.get_added_lines()}
-            added_lines[hunk.file_path] = added_lines.get(hunk.file_path, frozenset()) | hunk_lines
+            line_index.setdefault(hunk.file_path, set()).update(
+                line_num for line_num, _ in hunk.get_added_lines()
+            )
+        added_lines = {path: frozenset(lines) for path, lines in line_index.items()}
 
         logger.info(f"Review complete: {len(result.comments)} comments, approve={result.approve}")
 
         return PreparedReview(result=result, anchor=anchor, added_lines=added_lines)
 
-    @staticmethod
-    def _is_valid_comment_line(prepared: PreparedReview, file_path: str, line: int) -> bool:
-        """Validate that a line number corresponds to an added line in the reviewed diff."""
-        return line in prepared.added_lines.get(file_path, frozenset())
-
     async def _analyze_diff_with_llm(
         self,
         pr_data: dict[str, Any],
+        diff_text: str,
         hunks: list[DiffHunk],
         repo_id: str,
+        commit_sha: str,
     ) -> PRReviewResult:
         """Send diff to LLM for review.
 
         Args:
-            pr_data: PR details from Gitea
-            hunks: Parsed diff hunks
-            repo_id: Repository identifier (owner/repo)
+            pr_data: PR details from the platform
+            diff_text: Raw unified diff (already fetched; not re-serialized from hunks)
+            hunks: Parsed diff hunks, used for the changed-file summary
+            repo_id: Repository identifier (owner/repo), for per-repo rate limiting
+            commit_sha: Head commit SHA, for cache invalidation
 
         Returns:
             PRReviewResult from LLM analysis
         """
-        # Reconstruct diff from hunks
-        diff_lines = []
-        for hunk in hunks:
-            diff_lines.append(f"diff --git a/{hunk.file_path} b/{hunk.file_path}")
-            diff_lines.append(
-                f"@@ -{hunk.old_start},{hunk.old_count} +{hunk.new_start},{hunk.new_count} @@"
-            )
-            diff_lines.extend(hunk.lines)
-
-        diff_content = "\n".join(diff_lines)
+        # Use the diff as fetched. It was previously re-serialized from the
+        # parsed hunks — a second full pass producing near-identical text.
+        diff_content = diff_text
 
         # Truncate if too large (> 20k chars)
         max_diff_size = 20000
@@ -248,6 +256,8 @@ class PRReviewAnalyzer:
             system_prompt=prompt,
             code="",  # Diff is in prompt
             schema=PRReviewResult,
+            repo_id=repo_id,
+            commit_sha=commit_sha,
             analyzer="pr_review",
         )
 
@@ -278,7 +288,7 @@ class PRReviewAnalyzer:
 """
 
         logger.info(f"Posting summary comment to PR #{pr_number}")
-        await self.gitea.create_pr_comment(
+        await self.adapter.create_pr_comment(
             owner=owner,
             repo=repo,
             pr_number=pr_number,
@@ -292,7 +302,7 @@ class PRReviewAnalyzer:
 
         for comment in result.comments:
             # Validate that the line number exists in the reviewed diff
-            if not self._is_valid_comment_line(prepared, comment.file_path, comment.line):
+            if not prepared.is_added_line(comment.file_path, comment.line):
                 logger.warning(
                     f"Skipping comment for {comment.file_path}:{comment.line} - "
                     f"line not found in diff (LLM may have miscounted or diff was truncated)"
@@ -315,7 +325,7 @@ class PRReviewAnalyzer:
                 comment_body += f"\n\n**Suggested fix:**\n```python\n{comment.suggestion}\n```"
 
             try:
-                await self.gitea.create_pr_review_comment(
+                await self.adapter.create_pr_review_comment(
                     anchor=anchor,
                     file_path=comment.file_path,
                     line=comment.line,

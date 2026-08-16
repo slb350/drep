@@ -68,6 +68,57 @@ def get_user_config_dir() -> Path:
     return Path(click.get_app_dir("drep"))
 
 
+def load_raw_config(config_path: str | Path, strict: bool = False) -> dict[str, Any]:
+    """Read a config file into a plain dict with ``${VAR}`` placeholders resolved.
+
+    The parse-and-substitute half of :func:`load_config`, without Pydantic
+    validation. Callers that need a single key (the webhook server reading
+    ``webhook_secret``) use this so they do not depend on the rest of the
+    config validating, and do not have to re-implement the read.
+
+    Args:
+        config_path: Path to the YAML configuration file
+        strict: If True, raise if any ``${VAR}`` placeholder is unresolved
+
+    Returns:
+        The parsed mapping with environment variables substituted
+
+    Raises:
+        FileNotFoundError: If config file doesn't exist
+        ValueError: If config is empty, not a mapping, or (strict) has unresolved vars
+        yaml.YAMLError: If YAML is malformed
+    """
+    config_file = Path(config_path)
+
+    if not config_file.exists():
+        raise FileNotFoundError(f"Config file not found: {config_path}")
+
+    with config_file.open() as f:
+        raw_config = yaml.safe_load(f)
+
+    # Check for empty or malformed YAML
+    if raw_config is None:
+        raise ValueError(f"Config file is empty: {config_path}")
+    if not isinstance(raw_config, dict):
+        raise ValueError(
+            f"Config file must contain a YAML mapping/dictionary, "
+            f"got {type(raw_config).__name__}: {config_path}"
+        )
+
+    # Substitute environment variables over the parsed tree.
+    # Values are substituted as plain strings — they must never be re-parsed
+    # as YAML (the old dump->substitute->reload round-trip re-typed "true"
+    # to bool, "123" to int, and let values like "a: b" corrupt the structure).
+    unresolved: set[str] = set()
+    resolved: dict[str, Any] = _substitute_tree(raw_config, unresolved)
+
+    # In strict mode, fail on any placeholders that survived substitution
+    if strict and unresolved:
+        raise ValueError(f"Missing required environment variables: {', '.join(sorted(unresolved))}")
+
+    return resolved
+
+
 def load_config(config_path: str, strict: bool = False, require_platform: bool = True) -> Config:
     """Load and validate configuration from YAML file.
 
@@ -92,34 +143,7 @@ def load_config(config_path: str, strict: bool = False, require_platform: bool =
         Setting require_platform=False is useful for pre-commit hooks where
         you want local-only analysis without platform API integration.
     """
-    config_file = Path(config_path)
-
-    if not config_file.exists():
-        raise FileNotFoundError(f"Config file not found: {config_path}")
-
-    # Read YAML
-    with config_file.open() as f:
-        raw_config = yaml.safe_load(f)
-
-    # Check for empty or malformed YAML
-    if raw_config is None:
-        raise ValueError(f"Config file is empty: {config_path}")
-    if not isinstance(raw_config, dict):
-        raise ValueError(
-            f"Config file must contain a YAML mapping/dictionary, "
-            f"got {type(raw_config).__name__}: {config_path}"
-        )
-
-    # Substitute environment variables over the parsed tree.
-    # Values are substituted as plain strings — they must never be re-parsed
-    # as YAML (the old dump->substitute->reload round-trip re-typed "true"
-    # to bool, "123" to int, and let values like "a: b" corrupt the structure).
-    unresolved: set[str] = set()
-    raw_config = _substitute_tree(raw_config, unresolved)
-
-    # In strict mode, fail on any placeholders that survived substitution
-    if strict and unresolved:
-        raise ValueError(f"Missing required environment variables: {', '.join(sorted(unresolved))}")
+    raw_config = load_raw_config(config_path, strict=strict)
 
     # Pass require_platform flag to Config model
     raw_config["require_platform_config"] = require_platform
@@ -144,6 +168,10 @@ def _substitute_tree(node: Any, unresolved: set[str]) -> Any:
     if isinstance(node, list):
         return [_substitute_tree(item, unresolved) for item in node]
     if isinstance(node, str):
+        # Most strings hold no placeholder; skip building a closure and running
+        # the regex for them (this walks every string in the config).
+        if "${" not in node:
+            return node
 
         def replacer(match: re.Match[str]) -> str:
             var_name = match.group(1)

@@ -203,3 +203,38 @@ class TestFindingCacheIssueNumberMigration:
             session.commit()
         session.rollback()
         session.close()
+
+    def test_migrated_table_matches_the_model(self, tmp_path):
+        """The rebuilt table is derived from FindingCache, so it cannot drift from it.
+
+        The migration used to restate the DDL as a raw SQL string; a new column
+        on the model would then have been silently dropped for any legacy
+        database that still trips this path.
+        """
+        import sqlite3
+
+        from drep.db import init_database
+        from drep.db.models import FindingCache
+
+        db_path = tmp_path / "legacy.db"
+        self._make_legacy_db(db_path)
+
+        session = init_database(f"sqlite:///{db_path}")
+        session.close()
+
+        conn = sqlite3.connect(db_path)
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(finding_cache)")}
+        index_rows = list(conn.execute("PRAGMA index_list(finding_cache)"))
+        # SQLite implements a table-level UNIQUE as an unnamed autoindex, so
+        # identify it by the columns it covers rather than by name.
+        unique_column_sets = {
+            tuple(r[2] for r in conn.execute(f"PRAGMA index_info({row[1]!r})"))
+            for row in index_rows
+            if row[2]  # unique
+        }
+        conn.close()
+
+        assert columns == {c.name for c in FindingCache.__table__.columns}
+        # Model-declared index and unique constraint both survive the rebuild
+        assert "idx_finding_hash" in {row[1] for row in index_rows}
+        assert ("owner", "repo", "finding_hash") in unique_column_sets

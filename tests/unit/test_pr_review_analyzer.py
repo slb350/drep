@@ -1,6 +1,6 @@
 """Unit tests for PR Review Analyzer."""
 
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
@@ -12,9 +12,10 @@ def _anchor(owner: str = "steve", repo: str = "drep", pr_number: int = 42, sha: 
 
 
 def _mock_adapter(pr_data: dict | None = None, diff_text: str = "") -> AsyncMock:
-    """Build a mocked adapter with a working get_review_anchor."""
+    """Build a mocked adapter deriving its anchor from the PR payload."""
     gitea = AsyncMock()
-    gitea.get_review_anchor.return_value = _anchor()
+    # anchor_from_pr is a pure (sync) derivation, not a coroutine
+    gitea.anchor_from_pr = Mock(return_value=_anchor())
     gitea.get_pr.return_value = pr_data or {
         "number": 42,
         "title": "Add feature X",
@@ -72,9 +73,9 @@ async def test_review_pr_success():
     assert prepared.anchor == _anchor()
     assert prepared.added_lines == {"test.py": frozenset({2})}
 
-    # Verify adapter methods were called
-    gitea.get_review_anchor.assert_called_once_with("steve", "drep", 42)
+    # The PR payload is fetched exactly once and reused for prompt and anchor
     gitea.get_pr.assert_called_once_with("steve", "drep", 42)
+    gitea.anchor_from_pr.assert_called_once()
     gitea.get_pr_diff.assert_called_once_with("steve", "drep", 42)
 
     # Verify LLM was called
@@ -153,19 +154,25 @@ async def test_analyze_diff_with_llm():
             lines=[" line1", "+line2", " line3"],
         )
     ]
+    diff_text = "diff --git a/test.py b/test.py\n@@ -1,2 +1,3 @@\n line1\n+line2\n line3\n"
 
-    await analyzer._analyze_diff_with_llm(pr_data, hunks, "steve/drep")
+    await analyzer._analyze_diff_with_llm(pr_data, diff_text, hunks, "steve/drep", "abc123")
 
     # Verify LLM was called
     assert llm.analyze_code_json.called
 
-    # Check that prompt includes PR details
     call_args = llm.analyze_code_json.call_args
     prompt = call_args[1]["system_prompt"]
 
+    # Check that prompt includes PR details
     assert "Test PR" in prompt
     assert "steve" in prompt
     assert "test.py" in prompt
+    # The fetched diff is passed through verbatim, not re-serialized from hunks
+    assert diff_text in prompt
+    # repo_id and commit_sha reach the LLM client (per-repo limiting, cache key)
+    assert call_args[1]["repo_id"] == "steve/drep"
+    assert call_args[1]["commit_sha"] == "abc123"
 
 
 @pytest.mark.asyncio
@@ -260,7 +267,7 @@ async def test_review_pr_handles_gitea_error():
     from drep.pr_review.analyzer import PRReviewAnalyzer
 
     gitea = AsyncMock()
-    gitea.get_review_anchor.side_effect = ValueError("PR not found")
+    gitea.get_pr.side_effect = ValueError("PR not found")
 
     llm = AsyncMock()
 
@@ -449,10 +456,10 @@ async def test_posted_review_validates_against_its_own_diff():
     assert call.kwargs["line"] == 2
 
 
-def test_is_valid_comment_line():
-    """Test _is_valid_comment_line() validates against the prepared review."""
+def test_is_added_line():
+    """PreparedReview.is_added_line() validates against the reviewed diff."""
     from drep.models.pr_review_findings import PRReviewResult
-    from drep.pr_review.analyzer import PreparedReview, PRReviewAnalyzer
+    from drep.pr_review.analyzer import PreparedReview
 
     prepared = PreparedReview(
         result=PRReviewResult(comments=[], summary="s", approve=True, concerns=[]),
@@ -464,14 +471,14 @@ def test_is_valid_comment_line():
     )
 
     # Valid lines (added lines)
-    assert PRReviewAnalyzer._is_valid_comment_line(prepared, "test.py", 2) is True
-    assert PRReviewAnalyzer._is_valid_comment_line(prepared, "test.py", 4) is True
-    assert PRReviewAnalyzer._is_valid_comment_line(prepared, "test.py", 6) is True
-    assert PRReviewAnalyzer._is_valid_comment_line(prepared, "other.py", 11) is True
+    assert prepared.is_added_line("test.py", 2) is True
+    assert prepared.is_added_line("test.py", 4) is True
+    assert prepared.is_added_line("test.py", 6) is True
+    assert prepared.is_added_line("other.py", 11) is True
 
     # Invalid lines (not added, removed, or non-existent)
-    assert PRReviewAnalyzer._is_valid_comment_line(prepared, "test.py", 1) is False
-    assert PRReviewAnalyzer._is_valid_comment_line(prepared, "test.py", 3) is False
-    assert PRReviewAnalyzer._is_valid_comment_line(prepared, "test.py", 5) is False
-    assert PRReviewAnalyzer._is_valid_comment_line(prepared, "test.py", 999) is False
-    assert PRReviewAnalyzer._is_valid_comment_line(prepared, "nonexistent.py", 1) is False
+    assert prepared.is_added_line("test.py", 1) is False
+    assert prepared.is_added_line("test.py", 3) is False
+    assert prepared.is_added_line("test.py", 5) is False
+    assert prepared.is_added_line("test.py", 999) is False
+    assert prepared.is_added_line("nonexistent.py", 1) is False

@@ -14,12 +14,11 @@ from collections.abc import Coroutine
 from pathlib import Path
 from typing import Any
 
-import yaml
 from fastapi import FastAPI, Header, HTTPException, Request
 
 from drep import __version__
-from drep.cli import _run_review, _run_scan
-from drep.config import _substitute_tree, find_config_file
+from drep.cli_workflows import _run_review, _run_scan
+from drep.config import find_config_file, load_raw_config
 
 logger = logging.getLogger(__name__)
 
@@ -77,25 +76,43 @@ def _extract_owner_repo(payload: dict[str, Any]) -> tuple[str, str] | None:
     return None
 
 
+# Cache of resolved webhook secrets, keyed by config path -> (mtime, secret).
+# Without this every webhook request re-reads and re-parses the config file on
+# the event loop just to read one key.
+_WEBHOOK_SECRET_CACHE: dict[str, tuple[float, str | None]] = {}
+
+
 def _load_webhook_secret(config_path: str) -> str | None:
     """Read the optional webhook secret from the config file.
 
     Deliberately lightweight (raw YAML + env substitution, no full Config
-    validation) so webhook handling does not depend on the rest of the
-    config being valid; scan/review workflows validate the full config
-    themselves.
+    validation) so webhook handling does not depend on the rest of the config
+    being valid; scan/review workflows validate the full config themselves.
+
+    A missing config file means "no secret configured". A config file that
+    exists but cannot be parsed raises: silently treating it as unset would
+    downgrade the endpoint to accepting unauthenticated requests on a typo.
+
+    Raises:
+        ValueError: If the config file exists but is empty or not a mapping
+        yaml.YAMLError: If the config file exists but is malformed
+        OSError: If the config file exists but cannot be read
     """
     try:
-        with Path(config_path).open() as f:
-            raw = yaml.safe_load(f)
-        if not isinstance(raw, dict):
-            return None
-        resolved: dict[str, Any] = _substitute_tree(raw, set())
-        secret = resolved.get("webhook_secret")
-        return str(secret) if secret else None
-    except Exception:
-        logger.warning("Could not read webhook_secret from %s; treating as unset", config_path)
+        mtime = Path(config_path).stat().st_mtime
+    except FileNotFoundError:
+        logger.warning("No config file at %s; treating webhook_secret as unset", config_path)
         return None
+
+    cached = _WEBHOOK_SECRET_CACHE.get(config_path)
+    if cached is not None and cached[0] == mtime:
+        return cached[1]
+
+    raw = load_raw_config(config_path)
+    secret_value = raw.get("webhook_secret")
+    secret = str(secret_value) if secret_value else None
+    _WEBHOOK_SECRET_CACHE[config_path] = (mtime, secret)
+    return secret
 
 
 def _verify_signature(raw_body: bytes, signature: str | None, secret: str) -> bool:
@@ -117,7 +134,16 @@ async def webhook_gitea(
 
     # Optional HMAC secret verification: when configured, requests without
     # a valid X-Gitea-Signature are rejected before any work is scheduled.
-    secret = _load_webhook_secret(config_path)
+    # A broken config fails closed (503) rather than silently accepting
+    # unauthenticated requests.
+    try:
+        secret = _load_webhook_secret(config_path)
+    except Exception as e:
+        logger.error("Could not read webhook_secret from %s: %s", config_path, e)
+        raise HTTPException(
+            status_code=503, detail="drep configuration is unreadable; refusing webhook"
+        ) from e
+
     if secret is None:
         logger.warning(
             "webhook_secret is not configured; accepting unauthenticated webhook requests"

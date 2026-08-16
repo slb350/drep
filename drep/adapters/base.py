@@ -179,9 +179,10 @@ class BaseAdapter(ABC):
     async def get_review_anchor(self, owner: str, repo: str, pr_number: int) -> ReviewAnchor:
         """Fetch the immutable review anchor for a PR/MR (single network call).
 
-        Default implementation resolves the head commit SHA from the PR data.
-        Platforms needing richer positioning data (e.g., GitLab diff_refs)
-        override this to return their anchor subclass.
+        One-shot convenience for callers that do not already hold the PR data.
+        A caller that has it (the review workflow, which needs the same payload
+        for the LLM prompt) should call :meth:`anchor_from_pr` directly rather
+        than paying for a second identical fetch.
 
         Args:
             owner: Repository owner
@@ -192,6 +193,27 @@ class BaseAdapter(ABC):
             ReviewAnchor bound to this PR/MR's current head
         """
         pr_data = await self.get_pr(owner, repo, pr_number)
+        return self.anchor_from_pr(pr_data, owner, repo, pr_number)
+
+    def anchor_from_pr(self, pr_data: dict, owner: str, repo: str, pr_number: int) -> ReviewAnchor:
+        """Derive the review anchor from an already-fetched PR payload.
+
+        Pure derivation, no I/O. Default implementation resolves the head commit
+        SHA. Platforms needing richer positioning data (e.g., GitLab diff_refs)
+        override this to return their anchor subclass.
+
+        Args:
+            pr_data: PR/MR payload as returned by ``get_pr``
+            owner: Repository owner
+            repo: Repository name
+            pr_number: Pull request / merge request number
+
+        Returns:
+            ReviewAnchor bound to this PR/MR's current head
+
+        Raises:
+            ValueError: If the payload lacks the required positioning data
+        """
         head_sha = (pr_data.get("head") or {}).get("sha")
         if not head_sha:
             raise ValueError(

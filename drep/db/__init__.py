@@ -2,11 +2,12 @@
 
 import logging
 
-from sqlalchemy import create_engine
+from sqlalchemy import MetaData, create_engine
 from sqlalchemy.engine import Engine
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.schema import CreateTable
 
-from drep.db.models import Base
+from drep.db.models import Base, FindingCache
 
 logger = logging.getLogger(__name__)
 
@@ -22,43 +23,40 @@ def _migrate_finding_cache_issue_number(engine: Engine) -> None:
     if engine.dialect.name != "sqlite":
         return
 
-    with engine.begin() as conn:
+    # Probe on a read-only connection: engine.begin() opens a write transaction,
+    # and init_database() runs on every scan and check.
+    with engine.connect() as conn:
         cols = conn.exec_driver_sql("PRAGMA table_info(finding_cache)").fetchall()
-        issue_col = next((c for c in cols if c[1] == "issue_number"), None)
-        if issue_col is None or issue_col[3]:
-            # Table absent (create_all just made it current) or already NOT NULL
-            return
 
-        logger.info("Migrating finding_cache.issue_number to NOT NULL")
+    issue_col = next((c for c in cols if c[1] == "issue_number"), None)
+    if issue_col is None or issue_col[3]:
+        # Table absent (create_all just made it current) or already NOT NULL
+        return
+
+    logger.info("Migrating finding_cache.issue_number to NOT NULL")
+
+    # Build the replacement table from the model rather than hand-written DDL,
+    # so a future column change cannot leave this migration silently recreating
+    # a stale schema that disagrees with FindingCache.
+    table = FindingCache.__table__
+    staging = table.to_metadata(MetaData(), name="finding_cache_new")
+    column_list = ", ".join(column.name for column in table.columns)
+
+    with engine.begin() as conn:
+        conn.execute(CreateTable(staging))
         conn.exec_driver_sql(
-            """
-            CREATE TABLE finding_cache_new (
-                id INTEGER PRIMARY KEY,
-                owner VARCHAR NOT NULL,
-                repo VARCHAR NOT NULL,
-                file_path VARCHAR NOT NULL,
-                finding_hash VARCHAR NOT NULL,
-                issue_number INTEGER NOT NULL,
-                created_at DATETIME,
-                CONSTRAINT uq_owner_repo_hash UNIQUE (owner, repo, finding_hash)
-            )
-            """
-        )
-        conn.exec_driver_sql(
-            """
-            INSERT INTO finding_cache_new
-                (id, owner, repo, file_path, finding_hash, issue_number, created_at)
-            SELECT id, owner, repo, file_path, finding_hash, issue_number, created_at
-            FROM finding_cache
-            WHERE issue_number IS NOT NULL
-            """
+            f"INSERT INTO finding_cache_new ({column_list}) "
+            f"SELECT {column_list} FROM finding_cache WHERE issue_number IS NOT NULL"
         )
         conn.exec_driver_sql("DROP TABLE finding_cache")
         conn.exec_driver_sql("ALTER TABLE finding_cache_new RENAME TO finding_cache")
-        conn.exec_driver_sql("CREATE INDEX idx_finding_hash ON finding_cache (finding_hash)")
+        # Indexes are not part of CreateTable; recreate them from the model now
+        # that the table carries its final name.
+        for index in table.indexes:
+            index.create(bind=conn)
 
 
-def init_database(database_url: str):
+def init_database(database_url: str) -> Session:
     """Initialize database and return session.
 
     Args:

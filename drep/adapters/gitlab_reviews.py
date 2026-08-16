@@ -41,13 +41,16 @@ class GitLabReviewMixin(GitLabMixinBase):
     comes from GitLabMixinBase.
     """
 
-    async def get_review_anchor(self, owner: str, repo: str, pr_number: int) -> GitLabReviewAnchor:
-        """Fetch the GitLab review anchor (MR diff_refs) with a single MR fetch.
+    def anchor_from_pr(
+        self, pr_data: dict, owner: str, repo: str, pr_number: int
+    ) -> GitLabReviewAnchor:
+        """Derive the GitLab review anchor (MR diff_refs) from an MR payload.
 
         GitLab positions inline comments with base/head/start SHAs from the
         MR's diff_refs; a bare commit SHA is not sufficient.
 
         Args:
+            pr_data: MR payload as returned by ``get_pr``
             owner: Project namespace
             repo: Project name
             pr_number: Merge request IID
@@ -58,7 +61,7 @@ class GitLabReviewMixin(GitLabMixinBase):
         Raises:
             ValueError: If diff_refs or any required SHA is missing
         """
-        mr_data = await self.get_pr(owner, repo, pr_number)
+        mr_data = pr_data
 
         diff_refs = mr_data.get("diff_refs")
         if not diff_refs:
