@@ -30,8 +30,7 @@ retries, and robust JSON parsing. Rate limiting lives in ``drep.llm.rate_limiter
 
 import asyncio  # For async/await and concurrency primitives (Semaphore, Lock)
 import logging  # For structured logging throughout the module
-import re  # For regex-based JSON extraction and cleaning
-import time  # For rate limiting time calculations
+import time  # For measuring request latency
 from collections.abc import Callable  # For transport guard type hint
 from dataclasses import dataclass  # For simple data classes (LLMResponse)
 from pathlib import Path  # For cross-platform file path handling
@@ -52,10 +51,8 @@ from drep.llm.circuit_breaker import (  # Prevents cascade failures
 from drep.llm.git_utils import get_current_commit_sha
 from drep.llm.json_parsing import extract_json
 from drep.llm.metrics import LLMMetrics  # Tracks usage statistics for cost monitoring
-from drep.llm.rate_limiter import (  # noqa: F401 - re-export for backward compat
-    RateLimitContext,
-    RateLimiter,
-)
+from drep.llm.rate_limiter import RateLimiter
+from drep.logging_utils import sanitize_secrets
 
 if TYPE_CHECKING:
     from drep.llm.cache import IntelligentCache
@@ -285,7 +282,6 @@ class LLMClient:
                 region=bedrock_region,
                 model=bedrock_model,
             )
-            self._using_bedrock = True
 
             # CRITICAL: Preserve Bedrock model in self.model for cache keys and metadata
             # Without this, cache lookups use model=None and different Bedrock models
@@ -296,31 +292,17 @@ class LLMClient:
                 f"LLM backend: AWS Bedrock (region={bedrock_region}, model={bedrock_model})"
             )
 
-            # Initialize rate limiter (use injected or create default)
-            if rate_limiter is not None:
-                self.rate_limiter = rate_limiter
-            else:
-                self.rate_limiter = RateLimiter(
-                    max_concurrent=max_concurrent_global,
-                    requests_per_minute=requests_per_minute,
-                    max_tokens_per_minute=max_tokens_per_minute,
-                    max_concurrent_per_repo=max_concurrent_per_repo,
-                )
-
-            # Metrics tracking
-            self.metrics = LLMMetrics()
-
-            # Circuit breaker (optional, use injected or create default)
-            if circuit_breaker is not _UNSET:
-                self.circuit_breaker = circuit_breaker  # type: ignore
-            elif enable_circuit_breaker:
-                self.circuit_breaker = CircuitBreaker(
-                    failure_threshold=circuit_breaker_threshold,
-                    recovery_timeout=circuit_breaker_timeout,
-                )
-            else:
-                self.circuit_breaker = None
-
+            self._init_runtime(
+                rate_limiter,
+                max_concurrent_global,
+                requests_per_minute,
+                max_tokens_per_minute,
+                max_concurrent_per_repo,
+                circuit_breaker,
+                enable_circuit_breaker,
+                circuit_breaker_threshold,
+                circuit_breaker_timeout,
+            )
             return  # Skip open-agent-sdk/HTTP initialization
 
         # === BACKEND SELECTION: open-agent-sdk vs HTTP ===
@@ -451,12 +433,46 @@ class LLMClient:
         if not self._using_open_agent:
             self.client = _CompatClient(self)
 
-        # Initialize rate limiter (use injected or create default)
+        self._init_runtime(
+            rate_limiter,
+            max_concurrent_global,
+            requests_per_minute,
+            max_tokens_per_minute,
+            max_concurrent_per_repo,
+            circuit_breaker,
+            enable_circuit_breaker,
+            circuit_breaker_threshold,
+            circuit_breaker_timeout,
+        )
+
+    async def _guarded_transport(self, func: Callable, **kwargs: Any) -> Any:
+        """Invoke a provider transport call, guarded by the circuit breaker when enabled."""
+        if self.circuit_breaker is None:
+            return await func(**kwargs)
+        return await self.circuit_breaker.call(func, **kwargs)
+
+    def _init_runtime(
+        self,
+        rate_limiter: "RateLimiter | None",
+        max_concurrent_global: int,
+        requests_per_minute: int,
+        max_tokens_per_minute: int,
+        max_concurrent_per_repo: int | None,
+        circuit_breaker: Any,
+        enable_circuit_breaker: bool,
+        circuit_breaker_threshold: int,
+        circuit_breaker_timeout: int,
+    ) -> None:
+        """Set up the backend-independent runtime: limiter, metrics, breaker.
+
+        Called once from each provider branch of __init__. These three pieces
+        sit in front of whichever transport was selected, so they are identical
+        for Bedrock and for the OpenAI-compatible/HTTP path.
+        """
+        # Rate limiter: injected (dependency injection) or a default
         if rate_limiter is not None:
-            # Use injected RateLimiter (dependency injection)
             self.rate_limiter = rate_limiter
         else:
-            # Create default RateLimiter (backward compatibility)
             self.rate_limiter = RateLimiter(
                 max_concurrent=max_concurrent_global,
                 requests_per_minute=requests_per_minute,
@@ -467,26 +483,17 @@ class LLMClient:
         # Metrics tracking
         self.metrics = LLMMetrics()
 
-        # Circuit breaker (optional, use injected or create default)
+        # Circuit breaker: an explicit value (instance or None) always wins over
+        # the enable_circuit_breaker flag, which is the backward-compatible path.
         if circuit_breaker is not _UNSET:
-            # Explicitly provided (can be an instance or None to disable)
-            # This takes precedence over enable_circuit_breaker flag
-            self.circuit_breaker = circuit_breaker  # type: ignore
+            self.circuit_breaker = circuit_breaker
         elif enable_circuit_breaker:
-            # Not provided, use enable_circuit_breaker flag (backward compatibility)
             self.circuit_breaker = CircuitBreaker(
                 failure_threshold=circuit_breaker_threshold,
                 recovery_timeout=circuit_breaker_timeout,
             )
         else:
-            # Circuit breaker disabled via flag
             self.circuit_breaker = None
-
-    async def _guarded_transport(self, func: Callable, **kwargs: Any) -> Any:
-        """Invoke a provider transport call, guarded by the circuit breaker when enabled."""
-        if self.circuit_breaker is None:
-            return await func(**kwargs)
-        return await self.circuit_breaker.call(func, **kwargs)
 
     async def analyze_code(
         self,
@@ -511,9 +518,12 @@ class LLMClient:
         Raises:
             Exception: If all retries fail
         """
-        # Get commit SHA if not provided
+        # Get commit SHA if not provided. This forks `git rev-parse`, so run it
+        # off the event loop: a synchronous fork/exec here stalls every other
+        # in-flight request, and analyze_code_json can reach this up to
+        # max_retries times.
         if commit_sha is None:
-            commit_sha = get_current_commit_sha(self.repo_path)
+            commit_sha = await asyncio.to_thread(get_current_commit_sha, self.repo_path)
 
         # Check cache if available
         if self.cache:
@@ -665,16 +675,7 @@ class LLMClient:
                     else:
                         delay = self.retry_delay
 
-                    # Sanitize error message to avoid logging tokens in URLs
-                    error_msg = str(e)
-                    # Basic sanitization: remove common token patterns from error messages
-                    error_msg = re.sub(
-                        r"(token|api_?key|password|secret)=[^&\s]+",
-                        r"\1=***",
-                        error_msg,
-                        flags=re.IGNORECASE,
-                    )
-                    error_msg = re.sub(r"://[^:]+:[^@]+@", r"://***:***@", error_msg)
+                    error_msg = sanitize_secrets(str(e))
 
                     logger.warning(
                         f"LLM request failed (attempt {attempt + 1}/"
@@ -682,15 +683,7 @@ class LLMClient:
                     )
                     await asyncio.sleep(delay)
                 else:
-                    # Sanitize error message to avoid logging tokens
-                    error_msg = str(e)
-                    error_msg = re.sub(
-                        r"(token|api_?key|password|secret)=[^&\s]+",
-                        r"\1=***",
-                        error_msg,
-                        flags=re.IGNORECASE,
-                    )
-                    error_msg = re.sub(r"://[^:]+:[^@]+@", r"://***:***@", error_msg)
+                    error_msg = sanitize_secrets(str(e))
                     logger.error(
                         f"LLM request failed after {self.max_retries} attempts: {error_msg}"
                     )

@@ -13,11 +13,16 @@ import contextlib
 import json
 import logging
 import re
+from functools import lru_cache
 from typing import Any
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 logger = logging.getLogger(__name__)
+
+# A strategy failing for either of these reasons simply means the next strategy
+# should be tried; anything else is a real bug and must propagate.
+_RECOVERABLE = (json.JSONDecodeError, ValidationError, TypeError)
 
 
 def extract_json(
@@ -39,6 +44,13 @@ def extract_json(
         if match:
             content = match.group(1).strip()
 
+    # Every strategy below catches the same pair: a parse failure, or a parse
+    # that succeeded but did not satisfy the schema. Both mean "try the next
+    # strategy". Catching only JSONDecodeError here used to let a ValidationError
+    # escape extract_json entirely, past the stricter-prompt retry in
+    # analyze_code_json that exists for exactly that case. A bare `except
+    # Exception` in the later strategies had the opposite fault: it swallowed
+    # genuine bugs.
     # Strategy 2: Direct parse
     try:
         result = json.loads(content)
@@ -47,7 +59,7 @@ def extract_json(
             validated = schema(**result)
             return validated.model_dump()
         return result
-    except json.JSONDecodeError:
+    except _RECOVERABLE:
         pass
 
     # Strategy 3: Fix common errors
@@ -61,7 +73,7 @@ def extract_json(
             validated = schema(**result)
             return validated.model_dump()
         return result
-    except (json.JSONDecodeError, Exception):
+    except _RECOVERABLE:
         pass
 
     # Strategy 4: Recover truncated JSON
@@ -83,7 +95,7 @@ def extract_json(
             validated = schema(**result)
             return validated.model_dump()
         return result
-    except (json.JSONDecodeError, Exception):
+    except _RECOVERABLE:
         pass
 
     # Strategy 5: Fuzzy inference (last resort, caller opts in)
@@ -96,6 +108,29 @@ def extract_json(
             logger.debug(f"Fuzzy inference failed: {e}")
 
     return None
+
+
+# Compiled per (schema, field) and reused. The patterns interpolate the field
+# name, so re's internal cache is defeated across schemas; this is the last-resort
+# path but it built five regexes per field on every call.
+@lru_cache(maxsize=512)
+def _field_patterns(schema: type[BaseModel], field_name: str) -> tuple[re.Pattern[str], ...]:
+    """Compile the candidate extraction patterns for one schema field."""
+    return tuple(
+        re.compile(pattern, re.IGNORECASE)
+        for pattern in (
+            # "field_name": "value"
+            rf'"{field_name}"\s*:\s*"([^"]*)"',
+            # "field_name": value (number/boolean)
+            rf'"{field_name}"\s*:\s*([^,\}}\]]+)',
+            # field_name: "value"
+            rf"{field_name}\s*:\s*\"([^\"]*)\"",
+            # Natural language: "field_name is value"
+            rf'{field_name}\s+is\s+"([^"]*)"',
+            # Natural language: field_name is value (number)
+            rf"{field_name}\s+is\s+(\d+)",
+        )
+    )
 
 
 def fuzzy_inference(content: str, schema: type[BaseModel]) -> dict[str, Any] | None:
@@ -115,22 +150,8 @@ def fuzzy_inference(content: str, schema: type[BaseModel]) -> dict[str, Any] | N
 
     result: dict[str, Any] = {}
     for field_name, field_info in fields.items():
-        # Try to extract field value using various patterns
-        patterns = [
-            # "field_name": "value"
-            rf'"{field_name}"\s*:\s*"([^"]*)"',
-            # "field_name": value (number/boolean)
-            rf'"{field_name}"\s*:\s*([^,\}}\]]+)',
-            # field_name: "value"
-            rf"{field_name}\s*:\s*\"([^\"]*)\"",
-            # Natural language: "field_name is value"
-            rf'{field_name}\s+is\s+"([^"]*)"',
-            # Natural language: field_name is value (number)
-            rf"{field_name}\s+is\s+(\d+)",
-        ]
-
-        for pattern in patterns:
-            match = re.search(pattern, content, re.IGNORECASE)
+        for pattern in _field_patterns(schema, field_name):
+            match = pattern.search(content)
             if match:
                 value = match.group(1).strip()
                 # Try to convert to appropriate type

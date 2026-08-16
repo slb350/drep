@@ -1,5 +1,6 @@
 """LLM usage metrics and cost tracking."""
 
+import asyncio
 import json
 import logging
 from dataclasses import dataclass, field
@@ -8,6 +9,11 @@ from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger(__name__)
+
+# Cap on retained sessions in the metrics history file. Every save reads and
+# rewrites the whole file, so an uncapped history makes each save progressively
+# more expensive and the file unbounded.
+MAX_HISTORY_SESSIONS = 1000
 
 
 @dataclass
@@ -262,25 +268,36 @@ class MetricsCollector:
         self.metrics_file.parent.mkdir(parents=True, exist_ok=True)
 
     async def save(self):
-        """Save current session metrics to file."""
+        """Append the current session's metrics to the history file.
+
+        The history is capped at MAX_HISTORY_SESSIONS: without a cap the file
+        grows without bound and every save re-parses and re-serializes the whole
+        thing — once per scan, and once per push on the webhook server.
+
+        The read-modify-write is synchronous, so it runs in a worker thread to
+        keep it off the event loop.
+        """
         try:
-            # Load existing metrics
-            history = []
-            if self.metrics_file.exists():
-                with self.metrics_file.open() as f:
-                    history = json.load(f)
-
-            # Append current session
-            history.append(self.current_session.to_dict())
-
-            # Write back
-            with self.metrics_file.open("w") as f:
-                json.dump(history, f, indent=2)
-
+            await asyncio.to_thread(self._save_sync)
             logger.info(f"Saved metrics to {self.metrics_file}")
-
         except Exception as e:
             logger.error(f"Failed to save metrics: {e}")
+
+    def _save_sync(self) -> None:
+        """Blocking half of :meth:`save`; runs in a worker thread."""
+        history = []
+        if self.metrics_file.exists():
+            with self.metrics_file.open() as f:
+                history = json.load(f)
+
+        history.append(self.current_session.to_dict())
+
+        # Keep only the most recent sessions
+        if len(history) > MAX_HISTORY_SESSIONS:
+            history = history[-MAX_HISTORY_SESSIONS:]
+
+        with self.metrics_file.open("w") as f:
+            json.dump(history, f, indent=2)
 
     def load_history(self, days: int = 30) -> list[dict[str, Any]]:
         """Load historical metrics.

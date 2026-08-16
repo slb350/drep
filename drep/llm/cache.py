@@ -236,6 +236,10 @@ class IntelligentCache:
         self.cache_dir = Path(cache_dir)
         self.ttl_days = ttl_days
         self.max_size_bytes = max_size_bytes
+        # Running estimate of on-disk cache size, so the full directory sweep
+        # only runs when the budget is actually at risk (see _check_size_limit).
+        # None until the first write establishes the baseline.
+        self._estimated_size: int | None = None
 
         # Cache statistics (legacy, for backward compatibility)
         self.hits = 0
@@ -454,7 +458,8 @@ class IntelligentCache:
             logger.debug(f"Cached response: {cache_key[:8]}...")
 
             # Check size limit and prune if needed
-            self._check_size_limit()
+            written = sum(f.stat().st_size for f in (cache_file, meta_file) if f.exists())
+            self._check_size_limit(added_bytes=written)
 
         except Exception as e:
             logger.warning(f"Cache write error: {e}")
@@ -477,8 +482,28 @@ class IntelligentCache:
         except Exception as e:
             logger.warning(f"Cache invalidation error: {e}")
 
-    def _check_size_limit(self):
-        """Check cache size and prune oldest entries if over limit."""
+    def _check_size_limit(self, added_bytes: int = 0):
+        """Check cache size and prune oldest entries if over limit.
+
+        The full sweep lists the cache directory and stats every entry — at the
+        default 10GB budget that is tens of thousands of files, and it used to
+        run on every single write. A running byte total is kept instead, so the
+        sweep only happens when the budget is actually at risk. The sweep
+        recomputes the real size, so the estimate cannot drift far.
+
+        Args:
+            added_bytes: Bytes just written by the caller
+        """
+        if self._estimated_size is None:
+            # First write of this process: establish an exact baseline once.
+            self._estimated_size = sum(
+                f.stat().st_size for f in self.cache_dir.glob("*.json") if f.exists()
+            )
+        self._estimated_size += added_bytes
+
+        if self._estimated_size <= self.max_size_bytes:
+            return
+
         try:
             # Get all cache files
             cache_files = list(self.cache_dir.glob("*.json"))
@@ -521,6 +546,9 @@ class IntelligentCache:
                 current_size -= size
 
                 logger.debug(f"Pruned cache entry: {cache_file.stem[:8]}...")
+
+            # Re-sync the running estimate with what is actually on disk
+            self._estimated_size = current_size
 
             logger.info(
                 f"Cache pruned to {current_size / 1024 / 1024:.1f}MB "

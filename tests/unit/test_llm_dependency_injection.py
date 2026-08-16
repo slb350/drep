@@ -5,7 +5,8 @@ for RateLimiter and CircuitBreaker, improving testability and flexibility.
 """
 
 from drep.llm.circuit_breaker import CircuitBreaker
-from drep.llm.client import LLMClient, RateLimiter
+from drep.llm.client import LLMClient
+from drep.llm.rate_limiter import RateLimiter
 
 
 class MockRateLimiter(RateLimiter):

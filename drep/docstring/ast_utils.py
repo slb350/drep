@@ -33,23 +33,24 @@ class ClassInfo:
     is_public: bool
 
 
-def _collect_function_nodes(node: ast.AST, inside_function: bool = False) -> list[FuncDefNode]:
+def _collect_function_nodes(node: ast.AST) -> list[FuncDefNode]:
     """Collect function/async function nodes not nested inside another function.
 
     A function defined under control flow (if/try/with) *inside* a function is
     still a nested helper and is excluded; the same construct at module or
     class level is included.
+
+    Function bodies are not descended into at all. Everything inside one is
+    nested by definition, so the walk could only ever discard what it found
+    there — traversing it was pure work.
     """
     function_nodes: list[FuncDefNode] = []
 
     for child in ast.iter_child_nodes(node):
         if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            if not inside_function:
-                function_nodes.append(child)
-            # Descend into the function body: anything defined within is nested
-            function_nodes.extend(_collect_function_nodes(child, inside_function=True))
+            function_nodes.append(child)
         else:
-            function_nodes.extend(_collect_function_nodes(child, inside_function))
+            function_nodes.extend(_collect_function_nodes(child))
 
     return function_nodes
 

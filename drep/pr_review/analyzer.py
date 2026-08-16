@@ -2,12 +2,12 @@
 
 import asyncio
 import logging
-import re
 from dataclasses import dataclass
 from typing import Any
 
 from drep.adapters.base import BaseAdapter, ReviewAnchor
 from drep.llm.client import LLMClient
+from drep.logging_utils import sanitize_secrets
 from drep.models.pr_review_findings import PRReviewResult
 from drep.pr_review.diff_parser import DiffHunk, parse_diff
 
@@ -333,15 +333,7 @@ class PRReviewAnalyzer:
                 )
                 posted_count += 1
             except ValueError as e:
-                # Sanitize error message to avoid logging tokens in URLs
-                error_msg = str(e)
-                error_msg = re.sub(
-                    r"(token|api_?key|password|secret)=[^&\s]+",
-                    r"\1=***",
-                    error_msg,
-                    flags=re.IGNORECASE,
-                )
-                error_msg = re.sub(r"://[^:]+:[^@]+@", r"://***:***@", error_msg)
+                error_msg = sanitize_secrets(str(e))
                 logger.error(
                     f"Failed to post comment for {comment.file_path}:{comment.line}: {error_msg}"
                 )

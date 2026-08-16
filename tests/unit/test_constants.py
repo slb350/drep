@@ -65,7 +65,7 @@ def test_rate_limiter_uses_semaphore_ttl():
     """Test that RateLimiter uses REPO_SEMAPHORE_TTL_SECONDS constant."""
     import inspect
 
-    from drep.llm.client import RateLimiter
+    from drep.llm.rate_limiter import RateLimiter
 
     # Get source code
     source = inspect.getsource(RateLimiter.__init__)

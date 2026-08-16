@@ -11,7 +11,9 @@ from unittest.mock import AsyncMock, Mock, patch
 import pytest
 
 from drep.llm.cache import IntelligentCache
-from drep.llm.client import CircuitBreaker, LLMClient, LLMResponse, RateLimiter
+from drep.llm.circuit_breaker import CircuitBreaker
+from drep.llm.client import LLMClient, LLMResponse
+from drep.llm.rate_limiter import RateLimiter
 
 
 @pytest.fixture

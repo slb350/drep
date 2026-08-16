@@ -17,7 +17,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from drep.llm.cache import IntelligentCache
-from drep.llm.client import LLMClient, get_current_commit_sha
+from drep.llm.client import LLMClient
+from drep.llm.git_utils import get_current_commit_sha
 
 
 async def main():
