@@ -3,6 +3,7 @@
 import os
 import re
 from pathlib import Path
+from typing import Any
 
 import click
 import yaml
@@ -109,40 +110,50 @@ def load_config(config_path: str, strict: bool = False, require_platform: bool =
             f"got {type(raw_config).__name__}: {config_path}"
         )
 
-    # Substitute environment variables
-    config_str = yaml.dump(raw_config)
-    config_str = _substitute_env_vars(config_str)
+    # Substitute environment variables over the parsed tree.
+    # Values are substituted as plain strings — they must never be re-parsed
+    # as YAML (the old dump->substitute->reload round-trip re-typed "true"
+    # to bool, "123" to int, and let values like "a: b" corrupt the structure).
+    unresolved: set[str] = set()
+    raw_config = _substitute_tree(raw_config, unresolved)
 
-    # In strict mode, check for remaining placeholders
-    if strict:
-        remaining = re.findall(r"\$\{([^}]+)\}", config_str)
-        if remaining:
-            raise ValueError(
-                f"Missing required environment variables: {', '.join(sorted(set(remaining)))}"
-            )
-
-    config_dict = yaml.safe_load(config_str)
+    # In strict mode, fail on any placeholders that survived substitution
+    if strict and unresolved:
+        raise ValueError(
+            f"Missing required environment variables: {', '.join(sorted(unresolved))}"
+        )
 
     # Pass require_platform flag to Config model
-    config_dict["require_platform_config"] = require_platform
+    raw_config["require_platform_config"] = require_platform
 
     # Validate with Pydantic
-    return Config(**config_dict)
+    return Config(**raw_config)
 
 
-def _substitute_env_vars(text: str) -> str:
-    """Replace ${VAR_NAME} with environment variable values.
+_PLACEHOLDER_RE = re.compile(r"\$\{([^}]+)\}")
 
-    Args:
-        text: Text containing ${VAR_NAME} patterns
 
-    Returns:
-        Text with variables substituted (or left as-is if not set)
+def _substitute_tree(node: Any, unresolved: set[str]) -> Any:
+    """Recursively substitute ${VAR_NAME} placeholders in string values of a parsed tree.
+
+    Dicts and lists are walked; only strings are examined. Substituted values
+    are inserted as plain strings (never re-parsed as YAML). Placeholders whose
+    variables are unset are left in place and their names collected in
+    ``unresolved``.
     """
-    pattern = r"\$\{([^}]+)\}"
+    if isinstance(node, dict):
+        return {key: _substitute_tree(value, unresolved) for key, value in node.items()}
+    if isinstance(node, list):
+        return [_substitute_tree(item, unresolved) for item in node]
+    if isinstance(node, str):
 
-    def replacer(match):
-        var_name = match.group(1)
-        return os.environ.get(var_name, match.group(0))
+        def replacer(match: re.Match[str]) -> str:
+            var_name = match.group(1)
+            value = os.environ.get(var_name)
+            if value is None:
+                unresolved.add(var_name)
+                return match.group(0)
+            return value
 
-    return re.sub(pattern, replacer, text)
+        return _PLACEHOLDER_RE.sub(replacer, node)
+    return node

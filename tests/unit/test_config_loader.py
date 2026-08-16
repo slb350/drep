@@ -475,3 +475,104 @@ def test_load_config_still_requires_platform_when_explicitly_requested(tmp_path)
 
     error_msg = str(exc_info.value).lower()
     assert "platform" in error_msg or "gitea" in error_msg or "github" in error_msg
+
+
+def test_load_config_env_values_not_retyped(tmp_path):
+    """Env values are substituted as strings, never re-parsed as YAML.
+
+    Regression: the old dump->substitute->reload round-trip re-typed
+    env values ("true" -> bool, "123" -> int) and let "a: b" corrupt
+    structure.
+    """
+    from drep.config import load_config
+
+    config_path = tmp_path / "config.yaml"
+    config_content = """gitea:
+  url: ${GITEA_URL}
+  token: ${GITEA_TOKEN}
+  repositories:
+    - steve/*
+"""
+    config_path.write_text(config_content)
+
+    os.environ["GITEA_URL"] = "true"
+    os.environ["GITEA_TOKEN"] = "123"
+
+    try:
+        config = load_config(str(config_path))
+        # Values must remain strings, not bool/int
+        assert config.gitea.url == "true"
+        assert isinstance(config.gitea.url, str)
+        assert config.gitea.token.get_secret_value() == "123"
+    finally:
+        del os.environ["GITEA_URL"]
+        del os.environ["GITEA_TOKEN"]
+
+
+def test_load_config_env_value_with_yaml_special_chars(tmp_path):
+    """Env values containing YAML syntax ('a: b', '#', quotes) stay inert strings."""
+    from drep.config import load_config
+
+    config_path = tmp_path / "config.yaml"
+    config_content = """gitea:
+  url: http://example.com
+  token: ${TRICKY_TOKEN}
+  repositories:
+    - steve/*
+"""
+    config_path.write_text(config_content)
+
+    os.environ["TRICKY_TOKEN"] = "a: b # not a comment"
+
+    try:
+        config = load_config(str(config_path))
+        assert config.gitea.token.get_secret_value() == "a: b # not a comment"
+    finally:
+        del os.environ["TRICKY_TOKEN"]
+
+
+def test_load_config_partial_placeholder_in_string(tmp_path):
+    """Placeholders embedded in larger strings substitute inline; type preserved."""
+    from drep.config import load_config
+
+    config_path = tmp_path / "config.yaml"
+    config_content = """gitea:
+  url: ${GITEA_HOST}:3000
+  token: tok-${SUFFIX}
+  repositories:
+    - steve/*
+"""
+    config_path.write_text(config_content)
+
+    os.environ["GITEA_HOST"] = "http://example.com"
+    os.environ["SUFFIX"] = "123"
+
+    try:
+        config = load_config(str(config_path))
+        assert config.gitea.url == "http://example.com:3000"
+        assert config.gitea.token.get_secret_value() == "tok-123"
+    finally:
+        del os.environ["GITEA_HOST"]
+        del os.environ["SUFFIX"]
+
+
+def test_load_config_strict_mode_detects_unresolved_in_tree(tmp_path):
+    """Strict mode still reports placeholders that survive tree substitution."""
+    from drep.config import load_config
+
+    config_path = tmp_path / "config.yaml"
+    config_content = """gitea:
+  url: ${MISSING_A}
+  token: present-token
+  repositories:
+    - steve/*
+"""
+    config_path.write_text(config_content)
+
+    os.environ.pop("MISSING_A", None)
+
+    with pytest.raises(ValueError) as exc_info:
+        load_config(str(config_path), strict=True)
+
+    msg = str(exc_info.value)
+    assert "MISSING_A" in msg
