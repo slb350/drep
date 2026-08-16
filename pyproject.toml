@@ -5,9 +5,12 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["drep"]
 
+[tool.hatch.version]
+path = "drep/__init__.py"
+
 [project]
 name = "drep-ai"
-version = "1.1.3"
+dynamic = ["version"]
 description = "AI-powered code review and documentation quality tool for Gitea, GitHub, and GitLab"
 authors = [
     {name = "drep Contributors"},
@@ -78,6 +81,7 @@ ignore = [
 [tool.ruff.lint.per-file-ignores]
 # Lazy imports keep `drep --help` startup fast and optional deps optional.
 "drep/cli.py" = ["PLC0415"]
+"drep/cli_workflows.py" = ["PLC0415"]
 # Tests routinely import inside functions/fixtures for isolation.
 "tests/**" = ["PLC0415"]
 
@@ -98,6 +102,7 @@ python_functions = ["test_*"]
 asyncio_mode = "auto"
 markers = [
   "integration: tests that hit real services or simulate network",
+  "external_service: tests that require a live external service (real LLM endpoint, real GitHub API) — never run in CI",
 ]
 
 [project.optional-dependencies]

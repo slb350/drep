@@ -446,3 +446,19 @@ def test_nested_config_models_are_frozen():
 
     with pytest.raises(ValidationError, match="frozen"):
         config.llm.cache.enabled = False
+
+
+def test_llm_config_rejects_unknown_provider():
+    """C14: provider is a closed set — anthropic/unknown values fail fast at validation.
+
+    The runtime only implements openai-compatible and bedrock transports;
+    anything else previously slipped through and produced a
+    guaranteed-failing client at scan time.
+    """
+    from drep.models.config import LLMConfig
+
+    with pytest.raises(ValidationError):
+        LLMConfig(enabled=True, provider="anthropic", model="claude-sonnet-4-5")
+
+    with pytest.raises(ValidationError):
+        LLMConfig(enabled=True, provider="openai", endpoint="http://x", model="m")

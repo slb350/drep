@@ -11,6 +11,9 @@ from pydantic import BaseModel
 
 from drep.llm.client import LLMClient
 
+# Requires a live external service; excluded from CI via -m 'not external_service'
+pytestmark = pytest.mark.external_service
+
 
 class TestResponse(BaseModel):
     """Test schema for JSON parsing."""

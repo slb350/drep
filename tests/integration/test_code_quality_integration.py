@@ -1,48 +1,16 @@
-"""Integration tests for CodeQualityAnalyzer with real LLM endpoint.
+"""Integration tests for CodeQualityAnalyzer with a real LLM endpoint.
 
-These tests connect to LM Studio at https://lmstudio.localbrandonfamily.com/v1
-and require the Qwen3-30B-A3B model to be running.
+Requires a live OpenAI-compatible endpoint (DREP_TEST_LLM_ENDPOINT,
+default http://localhost:1234/v1) running the Qwen3-30B-A3B model.
+Fixtures come from tests/integration/conftest.py.
 
 Run with: pytest tests/integration/test_code_quality_integration.py -v
 """
 
 import pytest
 
-from drep.code_quality.analyzer import CodeQualityAnalyzer
-from drep.llm.cache import IntelligentCache
-from drep.llm.client import LLMClient
-
-
-@pytest.fixture
-async def llm_client():
-    """Create LLM client connected to real LM Studio endpoint."""
-    # Create cache for faster repeat tests
-    cache = IntelligentCache(
-        cache_dir="/tmp/drep_test_cache",
-        ttl_days=7,
-        max_size_bytes=1024 * 1024 * 100,  # 100MB
-    )
-
-    client = LLMClient(
-        endpoint="https://lmstudio.localbrandonfamily.com/v1",
-        model="qwen/qwen3-30b-a3b-2507",
-        temperature=0.2,
-        max_tokens=4000,
-        max_concurrent_global=3,
-        requests_per_minute=20,
-        max_tokens_per_minute=50000,
-        cache=cache,
-    )
-
-    yield client
-
-    await client.close()
-
-
-@pytest.fixture
-def analyzer(llm_client):
-    """Create CodeQualityAnalyzer with real LLM client."""
-    return CodeQualityAnalyzer(llm_client)
+# Requires a live external service; excluded from CI via -m 'not external_service'
+pytestmark = pytest.mark.external_service
 
 
 @pytest.mark.asyncio

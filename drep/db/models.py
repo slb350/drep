@@ -38,7 +38,9 @@ class FindingCache(Base):
     repo = Column(String, nullable=False)
     file_path = Column(String, nullable=False)
     finding_hash = Column(String, nullable=False)  # Not globally unique
-    issue_number = Column(Integer, nullable=True)
+    # NOT NULL: every cached finding must reference its created issue —
+    # a NULL would suppress the finding forever with nothing filed
+    issue_number = Column(Integer, nullable=False)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     # Deduplication is scoped to repository: same hash can exist across different repos

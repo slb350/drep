@@ -156,10 +156,49 @@ class LLMMetrics:
             "total_tokens": self.total_tokens,
             "estimated_cost_usd": self.estimated_cost_usd,
             "avg_latency_ms": self.avg_latency_ms,
+            "total_latency_ms": self.total_latency_ms,
             "min_latency_ms": (self.min_latency_ms if self.min_latency_ms != float("inf") else 0),
             "max_latency_ms": self.max_latency_ms,
             "by_analyzer": self.by_analyzer,
         }
+
+    def merge_serialized(self, session: dict[str, Any]) -> None:
+        """Merge one serialized session (from to_dict) into this metrics object.
+
+        Owns the full serialized field set — counters, raw latency total,
+        min/max latency, and per-analyzer breakdown — so aggregation can
+        never silently drop a field again.
+
+        Sessions written before ``total_latency_ms`` was persisted get a
+        best-effort backfill from avg_latency_ms * successful_requests.
+        """
+        self.total_requests += session.get("total_requests", 0)
+        self.successful_requests += session.get("successful_requests", 0)
+        self.failed_requests += session.get("failed_requests", 0)
+        self.cached_requests += session.get("cached_requests", 0)
+        self.total_tokens_prompt += session.get("total_tokens_prompt", 0)
+        self.total_tokens_completion += session.get("total_tokens_completion", 0)
+
+        latency_total = session.get("total_latency_ms")
+        if latency_total is None:
+            # Legacy record: estimate total from the persisted average
+            latency_total = session.get("avg_latency_ms", 0.0) * session.get(
+                "successful_requests", 0
+            )
+        self.total_latency_ms += latency_total
+
+        min_lat = session.get("min_latency_ms", float("inf"))
+        if min_lat != float("inf"):
+            self.min_latency_ms = min(self.min_latency_ms, min_lat)
+        self.max_latency_ms = max(self.max_latency_ms, session.get("max_latency_ms", 0))
+
+        for analyzer, stats in session.get("by_analyzer", {}).items():
+            merged = self.by_analyzer.setdefault(
+                analyzer, {"requests": 0, "tokens_prompt": 0, "tokens_completion": 0}
+            )
+            merged["requests"] += stats.get("requests", 0)
+            merged["tokens_prompt"] += stats.get("tokens_prompt", 0)
+            merged["tokens_completion"] += stats.get("tokens_completion", 0)
 
     def report(self, detailed: bool = False) -> str:
         """Generate human-readable metrics report.
@@ -281,22 +320,9 @@ class MetricsCollector:
         if not history:
             return LLMMetrics()
 
-        # Aggregate all metrics
+        # Aggregate all metrics via the model-owned merge
         aggregated = LLMMetrics()
-
         for session in history:
-            aggregated.total_requests += session.get("total_requests", 0)
-            aggregated.successful_requests += session.get("successful_requests", 0)
-            aggregated.failed_requests += session.get("failed_requests", 0)
-            aggregated.cached_requests += session.get("cached_requests", 0)
-            aggregated.total_tokens_prompt += session.get("total_tokens_prompt", 0)
-            aggregated.total_tokens_completion += session.get("total_tokens_completion", 0)
-
-            # Update min/max latency
-            min_lat = session.get("min_latency_ms", float("inf"))
-            max_lat = session.get("max_latency_ms", 0)
-            if min_lat != float("inf"):
-                aggregated.min_latency_ms = min(aggregated.min_latency_ms, min_lat)
-            aggregated.max_latency_ms = max(aggregated.max_latency_ms, max_lat)
+            aggregated.merge_serialized(session)
 
         return aggregated

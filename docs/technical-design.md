@@ -1262,7 +1262,7 @@ MVP is complete when:
 - BaseAdapter abstract class with interface contracts
 - Extract configuration constants from magic numbers
 - Enhanced markdown linting with 10 comprehensive checks
-- **Deliverables:** `drep/security/`, `drep/adapters/base.py`, `drep/constants.py`, `.markdownlint.json`
+- **Deliverables:** `drep/adapters/base.py`, `drep/constants.py`, `.markdownlint.json` (the `drep/security/` utilities package was removed in v1.2.0 — it had no production callers; safe-logging practices live inline in the adapters)
 - **Tests:** 22 new tests added, 390 total tests passing
 
 ### Phase 2: Quality & Testing (Sprint 3-4) ✅ COMPLETE

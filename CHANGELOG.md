@@ -14,7 +14,99 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Metrics dashboard
 - Notification system (Slack, Discord)
 - Multi-repository analysis features
-- Anthropic Direct API provider (Phase 3.4)
+- Removal of deprecated `ParallelAnalyzer` / `timeout_with_partial_results` (1.3.0)
+
+## [1.2.0] - 2026-08-16
+
+Audit-driven correctness and simplification release. All 24 accepted findings from the
+simplification audit resolved; rejected findings (C9, C11) documented with rationale.
+
+### Fixed - Reliability
+- **Rate-limit permit leak on cancelled entry** (C3): cancellation or a rate-check error
+  during `RateLimitContext.__aenter__` leaked the already-acquired global/repo semaphore
+  permits permanently (a leaked repo permit blocked that repo forever). Permits are now
+  rolled back on any `BaseException` mid-entry.
+- **Unobserved background-task failures** (C19): failed webhook scans surfaced only as
+  asyncio warnings; the done-callback now retrieves and logs exceptions with context.
+- **Env substitution re-typed config values** (C16): the yaml.dump → regex → reload
+  round-trip re-parsed env values as YAML (`true` became bool, `123` became int,
+  `a: b` corrupted structure). Substitution now runs over the parsed tree, strings only.
+- **Aggregate metrics lost latency and analyzer data** (C6): `to_dict` persists raw
+  `total_latency_ms`; a model-owned `merge_serialized` owns the full field set (latency
+  total, `by_analyzer`) with legacy backfill. `drep metrics --days` reports real averages.
+- **Nested-function detection missed control-flow nesting** (C12): helpers defined under
+  `if`/`try`/`with` inside a function leaked in as docstring candidates.
+- **Webhook payload shape** (C18): non-object JSON bodies now get a 400 instead of a 500.
+
+### Fixed - Correctness of the review pipeline
+- **Review results bound to their diff** (C13): `review_pr` returns an immutable
+  `PreparedReview` (result, anchor, per-file added lines); `post_review` consumes it.
+  Previously a second review silently re-anchored the first review's line validation.
+- **One anchor fetch per review** (C2): new `BaseAdapter.get_review_anchor()`; GitLab
+  validates and carries MR `diff_refs` (base/head/start SHAs) once per review instead of
+  refetching the MR for every inline comment (n comments = n MR fetches, with mid-loop
+  version drift).
+- **GitHub adapter duplication** (C1): the SHA-explicit inline-comment method is now
+  canonical and owns the 422 invalid-line handling; the one-shot variant resolves the
+  anchor and delegates.
+
+### Changed
+- **File-size discipline**: every Python file is now under the 800-line limit.
+  `drep/llm/client.py` split into `rate_limiter`/`json_parsing`/`git_utils` (public names
+  re-exported), `drep/cli.py` into `cli_wizard`/`cli_workflows`, adapter review/PR methods
+  into mixin modules (`gitlab_prs`, `gitlab_reviews`, `github_reviews`), and the largest
+  test files split by topic. No public names removed.
+- **File-target policy unified** (C7): one case-insensitive suffix policy across full
+  scans, commit diffs, staged files, and per-analyzer filters. `TEST.PY` is no longer
+  silently never analyzed.
+- **Circuit breaker is real** (C5+C23): HALF_OPEN is an exclusive single-probe state
+  (dead `half_open_max_calls` removed); both provider transports run through the
+  breaker, which previously was constructed but never invoked. Open circuits fail fast
+  instead of being retried.
+- **Version single-sourced** (C24): `drep.__version__` is the only version declaration
+  (pyproject reads it dynamically; FastAPI app imports it). Was drifting across four
+  places.
+- **Platform selection single-sourced** (C17): duplicated gitea→github→gitlab chains in
+  the scan and review workflows collapsed into `_resolve_platform`.
+- **CI selects tests by marker** (C21): new `external_service` marker on the truly-live
+  test modules; CI runs `-m "not external_service"` instead of name-based exclusion,
+  restoring ~43 silently-excluded hermetic tests to CI (839 vs 796).
+- **`issue_number` is NOT NULL** (C20): a NULL row suppressed a finding forever; legacy
+  SQLite tables are migrated (NULL rows dropped so findings can be re-reported).
+
+### Security
+- **Webhook HMAC verification** (out-of-audit finding): optional `webhook_secret`
+  config field enables constant-time HMAC-SHA256 verification of `X-Gitea-Signature`
+  over the raw body; requests with missing/invalid signatures are rejected with 403.
+  Unset secret keeps existing deployments working (warning logged).
+
+### Removed
+- **`drep/security/` package** (C10): `detect_secrets_in_logs`/`sanitize_url` had zero
+  production callers; safe-logging practices live inline in the adapters.
+- **Six TODO-stub modules** (S15): `core/llm_agent`, `core/code_analyzer`,
+  `db/repository`, `models/webhook`, `documentation/llm_review`,
+  `documentation/comment_gen`.
+- **Personal endpoint hardcoded in `scripts/test_llm_client.py`** (C25): env-driven
+  (`DREP_TEST_LLM_ENDPOINT`) with a neutral localhost default.
+
+### Deprecated
+- `ParallelAnalyzer` and `timeout_with_partial_results` (C8): zero production callers;
+  emit `DeprecationWarning`, removal planned for 1.3.0.
+
+### Breaking Changes
+- **`llm.provider` is a closed set: `openai-compatible` | `bedrock`** (C14). The wizard
+  no longer offers `anthropic` (it generated configs guaranteed to fail at runtime).
+  Migration: use `provider: openai-compatible` with an OpenAI-compatible Anthropic
+  proxy endpoint, or `provider: bedrock` with Claude model IDs.
+- **Wizard wrappers are typed-only** (C15): `PlatformConfig`/`LLMConfig`/
+  `DocumentationConfig` no longer accept the deprecated raw-dict `config=` field;
+  platform key, display name, and provider derive from the typed data.
+- **`create_pr_review_comment(anchor, file_path, line, body)`** (C2/C13): takes an
+  immutable `ReviewAnchor` from `get_review_anchor()` instead of
+  `(owner, repo, pr_number, commit_sha)`. GitLab requires a `GitLabReviewAnchor`.
+- **`PRReviewAnalyzer.post_review(prepared)`** (C13): takes the `PreparedReview`
+  returned by `review_pr`.
+- **`FindingCache.issue_number` is NOT NULL** (C20).
 
 ## [1.1.3] - 2026-08-16
 

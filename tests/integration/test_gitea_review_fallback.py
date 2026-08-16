@@ -6,6 +6,7 @@ Simulates a 422 error for 'new_position' and success for 'position'.
 import httpx
 import pytest
 
+from drep.adapters.base import ReviewAnchor
 from drep.adapters.gitea import GiteaAdapter
 
 
@@ -30,10 +31,7 @@ async def test_create_pr_review_comment_fallback(monkeypatch):
 
     # Should not raise after fallback succeeds
     await adapter.create_pr_review_comment(
-        owner="o",
-        repo="r",
-        pr_number=1,
-        commit_sha="abc",
+        anchor=ReviewAnchor(owner="o", repo="r", pr_number=1, commit_sha="abc"),
         file_path="file.py",
         line=10,
         body="test",

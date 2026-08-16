@@ -64,8 +64,8 @@ jobs:
           python -m pip install --upgrade pip
           pip install .[dev]
 
-      - name: Run unit tests (exclude integration)
-        run: pytest -q -k "not integration"
+      - name: Run unit tests (exclude external-service tests)
+        run: pytest -q -m "not external_service"
 
       - name: Build Sphinx documentation
         if: matrix.python-version == '3.13'

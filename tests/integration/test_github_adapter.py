@@ -16,6 +16,9 @@ import pytest
 
 from drep.adapters.github import GitHubAdapter
 
+# Requires a live external service; excluded from CI via -m 'not external_service'
+pytestmark = pytest.mark.external_service
+
 # Test repository configuration
 TEST_OWNER = "slb350"
 TEST_REPO = "drep-test"

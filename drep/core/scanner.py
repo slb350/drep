@@ -21,6 +21,23 @@ from drep.pr_review.analyzer import PRReviewAnalyzer
 
 logger = logging.getLogger(__name__)
 
+# Single source of truth for file-target policy. All discovery and filter
+# paths must go through these predicates so every workflow (full scan,
+# commit diff, staged files, per-analyzer filters) makes identical,
+# case-insensitive decisions.
+SCAN_TARGET_SUFFIXES = frozenset({".py", ".md"})
+PYTHON_SOURCE_SUFFIXES = frozenset({".py"})
+
+
+def _is_scan_target(path: str | Path) -> bool:
+    """Return True if the path is a file type drep analyzes (.py/.md, case-insensitive)."""
+    return Path(path).suffix.lower() in SCAN_TARGET_SUFFIXES
+
+
+def _is_python_source(path: str | Path) -> bool:
+    """Return True if the path is a Python source file (case-insensitive)."""
+    return Path(path).suffix.lower() in PYTHON_SOURCE_SUFFIXES
+
 
 class RepositoryScanner:
     """Scans repositories with incremental diff support and optional LLM-powered analysis."""
@@ -188,15 +205,12 @@ class RepositoryScanner:
         Returns:
             List of relative file paths (e.g., ["src/main.py", "README.md"])
         """
-        files = []
         root = Path(repo_path)
-
-        for pattern in ["**/*.py", "**/*.md"]:
-            files.extend(
-                [str(f.relative_to(root)) for f in root.glob(pattern) if not self._should_ignore(f)]
-            )
-
-        return files
+        return [
+            str(f.relative_to(root))
+            for f in root.rglob("*")
+            if f.is_file() and _is_scan_target(f) and not self._should_ignore(f)
+        ]
 
     def _should_ignore(self, file_path: Path) -> bool:
         """Check if file should be ignored.
@@ -253,7 +267,7 @@ class RepositoryScanner:
             # Only use b_path (the file path in the new commit)
             # This excludes deleted files (b_path is None) and old names of renames
             path = diff_item.b_path
-            if path and (path.endswith((".py", ".md"))):
+            if path and _is_scan_target(path):
                 changed_files.append(path)
 
         # Deduplicate
@@ -315,7 +329,7 @@ class RepositoryScanner:
             # Use b_path (current file name) not a_path (old name for renames)
             # b_path is None for deleted files, so we skip those
             path = diff_item.b_path
-            if path and (path.lower().endswith(".py") or path.lower().endswith(".md")):
+            if path and _is_scan_target(path):
                 staged_files.append(path)
 
         return staged_files
@@ -455,7 +469,7 @@ class RepositoryScanner:
         repo_path_obj = Path(repo_path)
 
         # Filter to only Python files
-        python_files = [f for f in files if f.endswith(".py")]
+        python_files = [f for f in files if _is_python_source(f)]
 
         if not python_files:
             logger.debug("No Python files to analyze for docstrings")

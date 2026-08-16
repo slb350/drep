@@ -1,6 +1,7 @@
 """Tests for circuit breaker pattern."""
 
 import asyncio
+from datetime import datetime, timedelta
 
 import pytest
 
@@ -15,7 +16,6 @@ class TestCircuitBreaker:
         breaker = CircuitBreaker(
             failure_threshold=5,
             recovery_timeout=60,
-            half_open_max_calls=3,
         )
 
         assert breaker.state == CircuitState.CLOSED
@@ -106,7 +106,6 @@ class TestCircuitBreaker:
         breaker = CircuitBreaker(
             failure_threshold=2,
             recovery_timeout=1,
-            half_open_max_calls=2,
         )
 
         async def failing_func():
@@ -196,3 +195,69 @@ class TestCircuitBreaker:
         assert "failure_count" in metrics
         assert "success_count" in metrics
         assert metrics["state"] == "closed"
+
+
+class TestHalfOpenExclusiveProbe:
+    """C5: HALF_OPEN is an exclusive single-probe state.
+
+    half_open_max_calls was documented NOT IMPLEMENTED and never enforced;
+    concurrent probes are now rejected instead.
+    """
+
+    def test_half_open_max_calls_removed(self):
+        """The dead config field no longer exists."""
+        with pytest.raises(TypeError):
+            CircuitBreaker(failure_threshold=2, recovery_timeout=1, half_open_max_calls=3)  # type: ignore[call-arg]
+        breaker = CircuitBreaker(failure_threshold=2, recovery_timeout=1)
+        assert not hasattr(breaker, "half_open_max_calls")
+        assert not hasattr(breaker, "half_open_calls")
+
+    @pytest.mark.asyncio
+    async def test_half_open_allows_single_concurrent_probe(self):
+        """While a HALF_OPEN probe is in flight, concurrent calls fail fast."""
+        breaker = CircuitBreaker(failure_threshold=1, recovery_timeout=1)
+        # Force OPEN with an elapsed timeout so the next call transitions to HALF_OPEN
+        breaker.state = CircuitState.OPEN
+        breaker.last_failure_time = datetime.now() - timedelta(seconds=10)
+
+        started = asyncio.Event()
+        release = asyncio.Event()
+
+        async def slow_probe():
+            started.set()
+            await release.wait()
+            return "probe-ok"
+
+        probe = asyncio.create_task(breaker.call(slow_probe))
+        await started.wait()
+
+        # Probe is in flight: a concurrent call must be rejected
+        with pytest.raises(CircuitBreakerOpenError):
+            await breaker.call(self._quick_ok)
+
+        release.set()
+        assert await probe == "probe-ok"
+        # Probe succeeded: circuit closed, calls flow again
+        assert breaker.state == CircuitState.CLOSED
+        assert await breaker.call(self._quick_ok) == "ok"
+
+    @staticmethod
+    async def _quick_ok():
+        return "ok"
+
+    @pytest.mark.asyncio
+    async def test_half_open_probe_failure_reopens(self):
+        """A failing probe reopens the circuit; the next call waits for timeout."""
+        breaker = CircuitBreaker(failure_threshold=1, recovery_timeout=60)
+        breaker.state = CircuitState.OPEN
+        breaker.last_failure_time = datetime.now() - timedelta(seconds=120)
+
+        async def failing():
+            raise RuntimeError("probe failed")
+
+        with pytest.raises(RuntimeError, match="probe failed"):
+            await breaker.call(failing)
+
+        assert breaker.state == CircuitState.OPEN
+        with pytest.raises(CircuitBreakerOpenError):
+            await breaker.call(self._quick_ok)

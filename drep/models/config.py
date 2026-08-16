@@ -1,6 +1,7 @@
 """Configuration models for drep."""
 
 from pathlib import Path
+from typing import Literal
 
 from pydantic import (
     BaseModel,
@@ -130,9 +131,10 @@ class LLMConfig(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     enabled: bool = Field(default=False, description="Enable LLM-powered analysis")
-    provider: str = Field(
+    provider: Literal["openai-compatible", "bedrock"] = Field(
         default="openai-compatible",
-        description="LLM provider: openai-compatible, bedrock, anthropic",
+        description="LLM provider: openai-compatible (any OpenAI-compatible endpoint, "
+        "including Anthropic via a proxy) or bedrock",
     )
     endpoint: HttpUrl | None = Field(
         default=None,
@@ -226,6 +228,11 @@ class Config(BaseModel):
     documentation: DocumentationConfig = Field(default_factory=DocumentationConfig)
     database_url: str = "sqlite:///./drep.db"
     llm: LLMConfig | None = Field(default=None, description="LLM configuration")
+    webhook_secret: SecretStr | None = Field(
+        default=None,
+        description="Shared secret for webhook HMAC-SHA256 signature verification "
+        "(X-Gitea-Signature). Unset = webhooks accepted without authentication.",
+    )
 
     # Internal field to control platform validation (for pre-commit hooks)
     # Excluded from serialization but accessible in validators

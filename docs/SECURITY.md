@@ -51,11 +51,7 @@ logger.debug(f"Config: {config}")  # config might have api_key
 # DO: Log without sensitive data
 logger.info("Using authenticated API client")
 
-# DO: Sanitize URLs before logging
-from drep.security import sanitize_url
-logger.info(f"Calling API: {sanitize_url(url)}")
-
-# DO: Sanitize exception messages
+# DO: Sanitize URLs before logging (inline regex, used throughout the codebase)
 except httpx.HTTPStatusError as e:
     error_msg = str(e)
     error_msg = re.sub(r"(token|api_key)=[^&\s]+", r"\1=***", error_msg, flags=re.IGNORECASE)
@@ -64,32 +60,6 @@ except httpx.HTTPStatusError as e:
 # DO: Log status/type without values
 logger.info(f"HTTP {response.status_code}")
 logger.error(f"Failed to parse response: {type(e).__name__}")
-```
-
-## Security Utilities
-
-### `detect_secrets_in_logs(log_line: str) -> bool`
-
-Detect if a log message contains potential secrets.
-
-```python
-from drep.security import detect_secrets_in_logs
-
-if detect_secrets_in_logs(message):
-    raise SecurityError("Attempted to log sensitive data!")
-```
-
-### `sanitize_url(url: str) -> str`
-
-Sanitize URLs by masking tokens, keys, and passwords.
-
-```python
-from drep.security import sanitize_url
-
-# Before: "http://api.com?token=abc123&page=1"
-# After:  "http://api.com?token=***&page=1"
-safe_url = sanitize_url(dangerous_url)
-logger.info(f"Fetching: {safe_url}")
 ```
 
 ## Audit Checklist

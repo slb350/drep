@@ -5,7 +5,7 @@ import json
 
 import httpx
 
-from drep.adapters.base import BaseAdapter
+from drep.adapters.base import BaseAdapter, ReviewAnchor
 
 # Some Gitea versions reject a review submission with an empty top-level body
 # ("review event requires a body"), even when inline comments are present
@@ -241,10 +241,7 @@ class GiteaAdapter(BaseAdapter):
 
     async def create_pr_review_comment(
         self,
-        owner: str,
-        repo: str,
-        pr_number: int,
-        commit_sha: str,
+        anchor: ReviewAnchor,
         file_path: str,
         line: int,
         body: str,
@@ -252,10 +249,7 @@ class GiteaAdapter(BaseAdapter):
         """Post an inline review comment on specific line.
 
         Args:
-            owner: Repository owner
-            repo: Repository name
-            pr_number: Pull request number
-            commit_sha: Commit SHA to comment on (usually PR head)
+            anchor: Immutable review anchor (from get_review_anchor)
             file_path: File path relative to repo root
             line: Line number in new version (after changes)
             body: Comment body (markdown supported)
@@ -263,7 +257,9 @@ class GiteaAdapter(BaseAdapter):
         Raises:
             ValueError: If review comment creation fails
         """
-        url = f"{self.url}/api/v1/repos/{owner}/{repo}/pulls/{pr_number}/reviews"
+        url = (
+            f"{self.url}/api/v1/repos/{anchor.owner}/{anchor.repo}/pulls/{anchor.pr_number}/reviews"
+        )
 
         # Gitea review API format: create a review with inline comments.
         # The top-level body uses a generic placeholder rather than being left
@@ -273,7 +269,7 @@ class GiteaAdapter(BaseAdapter):
         # duplicated as a review summary.
         # First attempt: use new_position (works on newer Gitea versions)
         payload_new = {
-            "commit_id": commit_sha,
+            "commit_id": anchor.commit_sha,
             "body": REVIEW_BODY_PLACEHOLDER,
             "comments": [{"path": file_path, "new_position": line, "body": body}],
         }
@@ -285,7 +281,7 @@ class GiteaAdapter(BaseAdapter):
         except httpx.HTTPStatusError as e1:
             # Fallback: try "position" for compatibility with other versions
             payload_pos = {
-                "commit_id": commit_sha,
+                "commit_id": anchor.commit_sha,
                 "body": REVIEW_BODY_PLACEHOLDER,
                 "comments": [{"path": file_path, "position": line, "body": body}],
             }
@@ -326,16 +322,10 @@ class GiteaAdapter(BaseAdapter):
             ValueError: If line number is invalid (not in PR diff)
             httpx.HTTPStatusError: For HTTP errors
         """
-        # Get PR details to extract commit SHA
-        pr = await self.get_pr(owner, repo, pr_number)
-        commit_sha = pr["head"]["sha"]
-
-        # Delegate to existing implementation
+        # Resolve the review anchor (head commit SHA), then delegate
+        anchor = await self.get_review_anchor(owner, repo, pr_number)
         await self.create_pr_review_comment(
-            owner=owner,
-            repo=repo,
-            pr_number=pr_number,
-            commit_sha=commit_sha,
+            anchor=anchor,
             file_path=file_path,
             line=line,
             body=body,

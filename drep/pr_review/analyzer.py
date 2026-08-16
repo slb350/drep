@@ -2,14 +2,35 @@
 
 import logging
 import re
+from dataclasses import dataclass
 from typing import Any
 
-from drep.adapters.base import BaseAdapter
+from drep.adapters.base import BaseAdapter, ReviewAnchor
 from drep.llm.client import LLMClient
 from drep.models.pr_review_findings import PRReviewResult
 from drep.pr_review.diff_parser import DiffHunk, parse_diff
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class PreparedReview:
+    """Immutable, self-contained result of a PR review.
+
+    Bundles everything ``post_review`` needs, so a prepared review can be
+    posted later (or a different review started) without hidden analyzer
+    state going stale: the LLM result, the platform anchor the diff was
+    taken from, and the per-file set of added line numbers for validation.
+
+    Attributes:
+        result: Structured review result from the LLM
+        anchor: Review anchor (head SHA / positioning data) for the reviewed diff
+        added_lines: Mapping of file path -> added line numbers in the diff
+    """
+
+    result: PRReviewResult
+    anchor: ReviewAnchor
+    added_lines: dict[str, frozenset[int]]
 
 
 # Prompt template for PR reviews
@@ -99,23 +120,22 @@ class PRReviewAnalyzer:
         """
         self.llm = llm_client
         self.gitea = gitea_adapter
-        self._current_hunks: list[DiffHunk] = []  # Store hunks for validation
 
     async def review_pr(
         self,
         owner: str,
         repo: str,
         pr_number: int,
-    ) -> PRReviewResult:
+    ) -> PreparedReview:
         """Review a pull request end-to-end.
 
         Workflow:
-        1. Fetch PR details
+        1. Fetch review anchor (head SHA / platform positioning data) once
         2. Fetch PR diff
         3. Parse diff into hunks
         4. Truncate if too large (> 20k chars)
         5. Analyze with LLM
-        6. Return structured result
+        6. Return immutable PreparedReview binding result, anchor, and added lines
 
         Args:
             owner: Repository owner
@@ -123,13 +143,17 @@ class PRReviewAnalyzer:
             pr_number: PR number
 
         Returns:
-            PRReviewResult with comments and summary
+            PreparedReview (pass to post_review to publish)
 
         Raises:
-            ValueError: If PR not found or other Gitea errors
+            ValueError: If PR not found or other platform errors
             Exception: If LLM analysis fails
         """
-        # Fetch PR details
+        # Fetch the review anchor once; every inline comment of this review
+        # will be posted against this single consistent snapshot
+        anchor = await self.gitea.get_review_anchor(owner, repo, pr_number)
+
+        # Fetch PR details for the LLM prompt
         logger.info(f"Fetching PR #{pr_number} from {owner}/{repo}")
         pr_data = await self.gitea.get_pr(owner, repo, pr_number)
 
@@ -141,34 +165,24 @@ class PRReviewAnalyzer:
         hunks = parse_diff(diff_text)
         logger.info(f"Parsed {len(hunks)} diff hunks")
 
-        # Store hunks for line number validation during posting
-        self._current_hunks = hunks
-
         # Analyze with LLM
         repo_id = f"{owner}/{repo}"
         result = await self._analyze_diff_with_llm(pr_data, hunks, repo_id)
 
+        # Index added line numbers per file for validation during posting
+        added_lines: dict[str, frozenset[int]] = {}
+        for hunk in hunks:
+            hunk_lines = {line_num for line_num, _ in hunk.get_added_lines()}
+            added_lines[hunk.file_path] = added_lines.get(hunk.file_path, frozenset()) | hunk_lines
+
         logger.info(f"Review complete: {len(result.comments)} comments, approve={result.approve}")
 
-        return result
+        return PreparedReview(result=result, anchor=anchor, added_lines=added_lines)
 
-    def _is_valid_comment_line(self, file_path: str, line: int) -> bool:
-        """Validate that a line number corresponds to an added line in the diff.
-
-        Args:
-            file_path: File path from comment
-            line: Line number from comment
-
-        Returns:
-            True if line is valid (exists in diff as added line), False otherwise
-        """
-        for hunk in self._current_hunks:
-            if hunk.file_path == file_path:
-                added_lines = hunk.get_added_lines()
-                valid_lines = {line_num for line_num, _ in added_lines}
-                if line in valid_lines:
-                    return True
-        return False
+    @staticmethod
+    def _is_valid_comment_line(prepared: PreparedReview, file_path: str, line: int) -> bool:
+        """Validate that a line number corresponds to an added line in the reviewed diff."""
+        return line in prepared.added_lines.get(file_path, frozenset())
 
     async def _analyze_diff_with_llm(
         self,
@@ -240,23 +254,15 @@ class PRReviewAnalyzer:
         # Convert to Pydantic model
         return PRReviewResult(**result_json)
 
-    async def post_review(
-        self,
-        owner: str,
-        repo: str,
-        pr_number: int,
-        commit_sha: str,
-        result: PRReviewResult,
-    ) -> None:
-        """Post review comments to PR.
+    async def post_review(self, prepared: PreparedReview) -> None:
+        """Post a prepared review to its PR.
 
         Args:
-            owner: Repository owner
-            repo: Repository name
-            pr_number: PR number
-            commit_sha: HEAD commit SHA
-            result: Review result to post
+            prepared: The PreparedReview to post (from review_pr)
         """
+        anchor = prepared.anchor
+        owner, repo, pr_number = anchor.owner, anchor.repo, anchor.pr_number
+        result = prepared.result
         # Post summary comment
         summary_body = f"""## 🤖 drep AI Code Review
 
@@ -285,8 +291,8 @@ class PRReviewAnalyzer:
         skipped_count = 0
 
         for comment in result.comments:
-            # Validate that the line number exists in the diff
-            if not self._is_valid_comment_line(comment.file_path, comment.line):
+            # Validate that the line number exists in the reviewed diff
+            if not self._is_valid_comment_line(prepared, comment.file_path, comment.line):
                 logger.warning(
                     f"Skipping comment for {comment.file_path}:{comment.line} - "
                     f"line not found in diff (LLM may have miscounted or diff was truncated)"
@@ -310,10 +316,7 @@ class PRReviewAnalyzer:
 
             try:
                 await self.gitea.create_pr_review_comment(
-                    owner=owner,
-                    repo=repo,
-                    pr_number=pr_number,
-                    commit_sha=commit_sha,
+                    anchor=anchor,
                     file_path=comment.file_path,
                     line=comment.line,
                     body=comment_body,

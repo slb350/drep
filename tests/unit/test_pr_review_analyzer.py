@@ -4,16 +4,18 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from drep.adapters.base import ReviewAnchor
 
-@pytest.mark.asyncio
-async def test_review_pr_success():
-    """Test review_pr() successfully reviews a PR end-to-end."""
-    from drep.models.pr_review_findings import PRReviewResult
-    from drep.pr_review.analyzer import PRReviewAnalyzer
 
-    # Mock Gitea adapter
+def _anchor(owner: str = "steve", repo: str = "drep", pr_number: int = 42, sha: str = "abc123"):
+    return ReviewAnchor(owner=owner, repo=repo, pr_number=pr_number, commit_sha=sha)
+
+
+def _mock_adapter(pr_data: dict | None = None, diff_text: str = "") -> AsyncMock:
+    """Build a mocked adapter with a working get_review_anchor."""
     gitea = AsyncMock()
-    gitea.get_pr.return_value = {
+    gitea.get_review_anchor.return_value = _anchor()
+    gitea.get_pr.return_value = pr_data or {
         "number": 42,
         "title": "Add feature X",
         "body": "Description",
@@ -21,11 +23,23 @@ async def test_review_pr_success():
         "user": {"login": "steve"},
         "base": {"ref": "main"},
     }
-    gitea.get_pr_diff.return_value = """diff --git a/test.py b/test.py
+    gitea.get_pr_diff.return_value = diff_text
+    return gitea
+
+
+@pytest.mark.asyncio
+async def test_review_pr_success():
+    """Test review_pr() returns a PreparedReview bound to anchor and added lines."""
+    from drep.models.pr_review_findings import PRReviewResult
+    from drep.pr_review.analyzer import PreparedReview, PRReviewAnalyzer
+
+    gitea = _mock_adapter(
+        diff_text="""diff --git a/test.py b/test.py
 @@ -1,2 +1,3 @@
  def test():
 +    print("new line")
      pass"""
+    )
 
     # Mock LLM client
     llm = AsyncMock()
@@ -45,15 +59,21 @@ async def test_review_pr_success():
     }
 
     analyzer = PRReviewAnalyzer(llm, gitea)
-    result = await analyzer.review_pr("steve", "drep", 42)
+    prepared = await analyzer.review_pr("steve", "drep", 42)
 
-    assert isinstance(result, PRReviewResult)
-    assert result.summary == "Looks good"
-    assert result.approve is True
-    assert len(result.comments) == 1
-    assert result.comments[0].file_path == "test.py"
+    assert isinstance(prepared, PreparedReview)
+    assert isinstance(prepared.result, PRReviewResult)
+    assert prepared.result.summary == "Looks good"
+    assert prepared.result.approve is True
+    assert len(prepared.result.comments) == 1
+    assert prepared.result.comments[0].file_path == "test.py"
 
-    # Verify Gitea methods were called
+    # Anchor and added-lines index are bound to the prepared review
+    assert prepared.anchor == _anchor()
+    assert prepared.added_lines == {"test.py": frozenset({2})}
+
+    # Verify adapter methods were called
+    gitea.get_review_anchor.assert_called_once_with("steve", "drep", 42)
     gitea.get_pr.assert_called_once_with("steve", "drep", 42)
     gitea.get_pr_diff.assert_called_once_with("steve", "drep", 42)
 
@@ -66,16 +86,6 @@ async def test_review_pr_truncates_large_diff():
     """Test that large diffs (> 20k chars) are truncated."""
     from drep.pr_review.analyzer import PRReviewAnalyzer
 
-    gitea = AsyncMock()
-    gitea.get_pr.return_value = {
-        "number": 42,
-        "title": "Big PR",
-        "body": "Large changes",
-        "head": {"sha": "abc123"},
-        "user": {"login": "steve"},
-        "base": {"ref": "main"},
-    }
-
     # Create a properly formatted diff > 20k chars
     large_diff = (
         """diff --git a/file.py b/file.py
@@ -86,7 +96,7 @@ async def test_review_pr_truncates_large_diff():
     )
     assert len(large_diff) > 20000
 
-    gitea.get_pr_diff.return_value = large_diff
+    gitea = _mock_adapter(diff_text=large_diff)
 
     llm = AsyncMock()
     llm.analyze_code_json.return_value = {
@@ -160,50 +170,16 @@ async def test_analyze_diff_with_llm():
 
 @pytest.mark.asyncio
 async def test_post_review_creates_comments():
-    """Test post_review() posts summary and inline comments."""
+    """Test post_review() posts summary and inline comments via the anchor."""
     from drep.models.pr_review_findings import PRReviewResult, ReviewComment
-    from drep.pr_review.analyzer import PRReviewAnalyzer
-    from drep.pr_review.diff_parser import DiffHunk
+    from drep.pr_review.analyzer import PreparedReview, PRReviewAnalyzer
 
     gitea = AsyncMock()
     llm = AsyncMock()
 
     analyzer = PRReviewAnalyzer(llm, gitea)
 
-    # Set up hunks so the comments are valid
-    # Lines 1-9 are context, line 10 is added, lines 11-19 are context, line 20 is added
-    analyzer._current_hunks = [
-        DiffHunk(
-            file_path="src/file.py",
-            old_start=1,
-            old_count=18,
-            new_start=1,
-            new_count=20,
-            lines=[
-                " line1",
-                " line2",
-                " line3",
-                " line4",
-                " line5",
-                " line6",
-                " line7",
-                " line8",
-                " line9",
-                "+line 10 added",
-                " line11",
-                " line12",
-                " line13",
-                " line14",
-                " line15",
-                " line16",
-                " line17",
-                " line18",
-                " line19",
-                "+line 20 added",
-            ],
-        )
-    ]
-
+    anchor = _anchor()
     result = PRReviewResult(
         comments=[
             ReviewComment(
@@ -224,8 +200,13 @@ async def test_post_review_creates_comments():
         approve=True,
         concerns=[],
     )
+    prepared = PreparedReview(
+        result=result,
+        anchor=anchor,
+        added_lines={"src/file.py": frozenset({10, 20})},
+    )
 
-    await analyzer.post_review("steve", "drep", 42, "abc123", result)
+    await analyzer.post_review(prepared)
 
     # Should create 1 summary comment
     gitea.create_pr_comment.assert_called_once()
@@ -237,8 +218,9 @@ async def test_post_review_creates_comments():
     # Should create 2 inline comments
     assert gitea.create_pr_review_comment.call_count == 2
 
-    # Verify inline comment calls
+    # Verify inline comment calls use the anchor
     calls = gitea.create_pr_review_comment.call_args_list
+    assert calls[0].kwargs["anchor"] is anchor
     assert calls[0].kwargs["line"] == 10
     assert "Fix this" in calls[0].kwargs["body"]
     assert calls[1].kwargs["line"] == 20
@@ -249,7 +231,7 @@ async def test_post_review_creates_comments():
 async def test_post_review_no_approval():
     """Test post_review() shows 'Needs Changes' when not approved."""
     from drep.models.pr_review_findings import PRReviewResult
-    from drep.pr_review.analyzer import PRReviewAnalyzer
+    from drep.pr_review.analyzer import PreparedReview, PRReviewAnalyzer
 
     gitea = AsyncMock()
     llm = AsyncMock()
@@ -262,8 +244,9 @@ async def test_post_review_no_approval():
         approve=False,
         concerns=["Missing tests"],
     )
+    prepared = PreparedReview(result=result, anchor=_anchor(), added_lines={})
 
-    await analyzer.post_review("steve", "drep", 42, "abc123", result)
+    await analyzer.post_review(prepared)
 
     # Summary should indicate changes needed
     summary_call = gitea.create_pr_comment.call_args
@@ -273,17 +256,17 @@ async def test_post_review_no_approval():
 
 @pytest.mark.asyncio
 async def test_review_pr_handles_gitea_error():
-    """Test review_pr() handles Gitea errors gracefully."""
+    """Test review_pr() handles adapter errors gracefully."""
     from drep.pr_review.analyzer import PRReviewAnalyzer
 
     gitea = AsyncMock()
-    gitea.get_pr.side_effect = ValueError("PR not found")
+    gitea.get_review_anchor.side_effect = ValueError("PR not found")
 
     llm = AsyncMock()
 
     analyzer = PRReviewAnalyzer(llm, gitea)
 
-    # Should raise the Gitea error
+    # Should raise the adapter error
     with pytest.raises(ValueError, match="PR not found"):
         await analyzer.review_pr("steve", "drep", 999)
 
@@ -293,16 +276,7 @@ async def test_review_pr_handles_llm_error():
     """Test review_pr() handles LLM errors gracefully."""
     from drep.pr_review.analyzer import PRReviewAnalyzer
 
-    gitea = AsyncMock()
-    gitea.get_pr.return_value = {
-        "number": 42,
-        "title": "Test",
-        "body": "Test",
-        "head": {"sha": "abc"},
-        "user": {"login": "steve"},
-        "base": {"ref": "main"},
-    }
-    gitea.get_pr_diff.return_value = "diff --git a/test.py b/test.py\n"
+    gitea = _mock_adapter(diff_text="diff --git a/test.py b/test.py\n")
 
     llm = AsyncMock()
     llm.analyze_code_json.side_effect = ValueError("LLM connection failed")
@@ -318,7 +292,7 @@ async def test_review_pr_handles_llm_error():
 async def test_post_review_skips_if_no_comments():
     """Test post_review() only posts summary if no inline comments."""
     from drep.models.pr_review_findings import PRReviewResult
-    from drep.pr_review.analyzer import PRReviewAnalyzer
+    from drep.pr_review.analyzer import PreparedReview, PRReviewAnalyzer
 
     gitea = AsyncMock()
     llm = AsyncMock()
@@ -331,8 +305,9 @@ async def test_post_review_skips_if_no_comments():
         approve=True,
         concerns=[],
     )
+    prepared = PreparedReview(result=result, anchor=_anchor(), added_lines={})
 
-    await analyzer.post_review("steve", "drep", 42, "abc123", result)
+    await analyzer.post_review(prepared)
 
     # Should create summary comment
     gitea.create_pr_comment.assert_called_once()
@@ -346,7 +321,6 @@ async def test_truncate_diff_strategy():
     """Test diff truncation keeps first 15k and last 5k chars."""
     from drep.pr_review.analyzer import PRReviewAnalyzer
 
-    gitea = AsyncMock()
     llm = AsyncMock()
     llm.analyze_code_json.return_value = {
         "comments": [],
@@ -362,18 +336,10 @@ async def test_truncate_diff_strategy():
  header
 """ + (hunk_lines * 200)  # 200 lines * 106 chars = ~21k chars
 
-    gitea.get_pr.return_value = {
-        "number": 1,
-        "title": "T",
-        "body": "B",
-        "head": {"sha": "x"},
-        "user": {"login": "u"},
-        "base": {"ref": "m"},
-    }
-    gitea.get_pr_diff.return_value = large_diff
+    gitea = _mock_adapter(diff_text=large_diff)
 
     analyzer = PRReviewAnalyzer(llm, gitea)
-    await analyzer.review_pr("o", "r", 1)
+    await analyzer.review_pr("steve", "drep", 42)
 
     # Extract the diff content sent to LLM
     call_args = llm.analyze_code_json.call_args
@@ -387,27 +353,13 @@ async def test_truncate_diff_strategy():
 async def test_post_review_skips_invalid_line_numbers():
     """Test post_review() skips comments with invalid line numbers."""
     from drep.models.pr_review_findings import PRReviewResult, ReviewComment
-    from drep.pr_review.analyzer import PRReviewAnalyzer
-    from drep.pr_review.diff_parser import DiffHunk
+    from drep.pr_review.analyzer import PreparedReview, PRReviewAnalyzer
 
     gitea = AsyncMock()
     llm = AsyncMock()
 
     analyzer = PRReviewAnalyzer(llm, gitea)
 
-    # Set up hunks to simulate a diff with specific added lines
-    analyzer._current_hunks = [
-        DiffHunk(
-            file_path="src/file.py",
-            old_start=1,
-            old_count=2,
-            new_start=1,
-            new_count=3,
-            lines=[" old line", "+new line at 2", " old line"],
-        )
-    ]
-
-    # Create result with one valid and one invalid line number
     result = PRReviewResult(
         comments=[
             ReviewComment(
@@ -433,8 +385,13 @@ async def test_post_review_skips_invalid_line_numbers():
         approve=True,
         concerns=[],
     )
+    prepared = PreparedReview(
+        result=result,
+        anchor=_anchor(),
+        added_lines={"src/file.py": frozenset({2})},
+    )
 
-    await analyzer.post_review("steve", "drep", 42, "abc123", result)
+    await analyzer.post_review(prepared)
 
     # Should create summary comment
     gitea.create_pr_comment.assert_called_once()
@@ -449,57 +406,72 @@ async def test_post_review_skips_invalid_line_numbers():
 
 
 @pytest.mark.asyncio
-async def test_is_valid_comment_line():
-    """Test _is_valid_comment_line() validates lines correctly."""
-    from drep.pr_review.analyzer import PRReviewAnalyzer
-    from drep.pr_review.diff_parser import DiffHunk
+async def test_posted_review_validates_against_its_own_diff():
+    """C13: posting review A after reviewing B validates against A's diff.
+
+    Previously the analyzer kept one mutable _current_hunks field: reviewing
+    PR B replaced A's hunks, so posting A silently validated against B.
+    """
+    from drep.models.pr_review_findings import PRReviewResult, ReviewComment
+    from drep.pr_review.analyzer import PreparedReview, PRReviewAnalyzer
 
     gitea = AsyncMock()
     llm = AsyncMock()
 
     analyzer = PRReviewAnalyzer(llm, gitea)
 
-    # Set up hunks with specific added lines
-    # test.py: line 1 context, line 2 added, line 3 context, line 4 added,
-    # line 5 removed, line 5 context, line 6 added
-    # After the removed line, the new line number continues:
-    # 1(ctx), 2(add), 3(ctx), 4(add), -(removed), 5(ctx), 6(add)
-    analyzer._current_hunks = [
-        DiffHunk(
-            file_path="test.py",
-            old_start=1,
-            old_count=6,
-            new_start=1,
-            new_count=6,
-            lines=[
-                " line 1",
-                "+line 2 (added)",
-                " line 3",
-                "+line 4 (added)",
-                "-line removed",
-                " line 5",
-                "+line 6 (added)",
-            ],
-        ),
-        DiffHunk(
-            file_path="other.py",
-            old_start=10,
-            old_count=2,
-            new_start=10,
-            new_count=3,
-            lines=[" line 10", "+line 11 (added)", " line 12"],
-        ),
-    ]
+    result_a = PRReviewResult(
+        comments=[ReviewComment(file_path="a.py", line=2, severity="info", comment="on A")],
+        summary="A",
+        approve=True,
+        concerns=[],
+    )
+    prepared_a = PreparedReview(
+        result=result_a, anchor=_anchor(pr_number=1), added_lines={"a.py": frozenset({2})}
+    )
 
-    # Test valid lines (added lines)
-    assert analyzer._is_valid_comment_line("test.py", 2) is True
-    assert analyzer._is_valid_comment_line("test.py", 4) is True
-    assert analyzer._is_valid_comment_line("test.py", 6) is True  # Fixed: line 6, not 7
-    assert analyzer._is_valid_comment_line("other.py", 11) is True
+    # Review B happens between A's review and A's posting
+    result_b = PRReviewResult(
+        comments=[ReviewComment(file_path="b.py", line=9, severity="info", comment="on B")],
+        summary="B",
+        approve=True,
+        concerns=[],
+    )
+    prepared_b = PreparedReview(
+        result=result_b, anchor=_anchor(pr_number=2), added_lines={"b.py": frozenset({9})}
+    )
+    await analyzer.post_review(prepared_b)
 
-    # Test invalid lines (not added, removed, or non-existent)
-    assert analyzer._is_valid_comment_line("test.py", 1) is False  # Context line
-    assert analyzer._is_valid_comment_line("test.py", 3) is False  # Context line
-    assert analyzer._is_valid_comment_line("test.py", 5) is False  # Context line
-    assert analyzer._is_valid_comment_line("test.py", 999) is False  # Doesn't exist
-    assert analyzer._is_valid_comment_line("nonexistent.py", 1) is False  # File not in diff
+    # Posting A must still use A's anchor and A's added lines
+    await analyzer.post_review(prepared_a)
+    call = gitea.create_pr_review_comment.call_args
+    assert call.kwargs["anchor"].pr_number == 1
+    assert call.kwargs["line"] == 2
+
+
+def test_is_valid_comment_line():
+    """Test _is_valid_comment_line() validates against the prepared review."""
+    from drep.models.pr_review_findings import PRReviewResult
+    from drep.pr_review.analyzer import PreparedReview, PRReviewAnalyzer
+
+    prepared = PreparedReview(
+        result=PRReviewResult(comments=[], summary="s", approve=True, concerns=[]),
+        anchor=_anchor(),
+        added_lines={
+            "test.py": frozenset({2, 4, 6}),
+            "other.py": frozenset({11}),
+        },
+    )
+
+    # Valid lines (added lines)
+    assert PRReviewAnalyzer._is_valid_comment_line(prepared, "test.py", 2) is True
+    assert PRReviewAnalyzer._is_valid_comment_line(prepared, "test.py", 4) is True
+    assert PRReviewAnalyzer._is_valid_comment_line(prepared, "test.py", 6) is True
+    assert PRReviewAnalyzer._is_valid_comment_line(prepared, "other.py", 11) is True
+
+    # Invalid lines (not added, removed, or non-existent)
+    assert PRReviewAnalyzer._is_valid_comment_line(prepared, "test.py", 1) is False
+    assert PRReviewAnalyzer._is_valid_comment_line(prepared, "test.py", 3) is False
+    assert PRReviewAnalyzer._is_valid_comment_line(prepared, "test.py", 5) is False
+    assert PRReviewAnalyzer._is_valid_comment_line(prepared, "test.py", 999) is False
+    assert PRReviewAnalyzer._is_valid_comment_line(prepared, "nonexistent.py", 1) is False
