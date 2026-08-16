@@ -1,8 +1,18 @@
 """Shared fixtures for drep tests."""
 
+from unittest.mock import AsyncMock, MagicMock
+
 import pytest
 import yaml
 from click.testing import CliRunner
+
+
+@pytest.fixture
+def mock_llm_client():
+    """Mock LLM client whose analyze_code_json is an AsyncMock."""
+    client = MagicMock()
+    client.analyze_code_json = AsyncMock()
+    return client
 
 
 @pytest.fixture

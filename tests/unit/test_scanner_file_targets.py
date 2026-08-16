@@ -78,3 +78,73 @@ class TestFileTargetPolicyConsistency:
         """analyze_docstrings filters Python files via is_python_source (case-insensitive)."""
         assert scanner_module.is_python_source("SCRIPT.PY") is True
         assert scanner_module.is_python_source("script.js") is False
+
+
+class TestAnalysisConcurrency:
+    """Per-file LLM analysis runs concurrently, not one round trip at a time."""
+
+    @pytest.mark.asyncio
+    async def test_analyze_code_quality_runs_files_concurrently(self, tmp_path):
+        import asyncio
+        from unittest.mock import MagicMock
+
+        from drep.core.scanner import RepositoryScanner
+
+        for name in ("a.py", "b.py", "c.py"):
+            (tmp_path / name).write_text("x = 1\n")
+
+        scanner = RepositoryScanner(MagicMock())
+
+        in_flight = 0
+        peak = 0
+
+        async def slow_analyze(file_path, content, repo_id, commit_sha):
+            nonlocal in_flight, peak
+            in_flight += 1
+            peak = max(peak, in_flight)
+            await asyncio.sleep(0.01)
+            in_flight -= 1
+            return []
+
+        scanner.code_analyzer = MagicMock()
+        scanner.code_analyzer.analyze_file = slow_analyze
+
+        await scanner.analyze_code_quality(
+            repo_path=str(tmp_path),
+            files=["a.py", "b.py", "c.py"],
+            repo_id="o/r",
+            commit_sha="sha",
+        )
+
+        assert peak > 1, "files were analyzed one at a time"
+
+    @pytest.mark.asyncio
+    async def test_one_failing_file_does_not_abort_the_rest(self, tmp_path):
+        from unittest.mock import MagicMock
+
+        from drep.core.scanner import RepositoryScanner
+        from drep.models.findings import Finding
+
+        for name in ("good.py", "bad.py"):
+            (tmp_path / name).write_text("x = 1\n")
+
+        scanner = RepositoryScanner(MagicMock())
+
+        async def analyze(file_path, content, repo_id, commit_sha):
+            if file_path == "bad.py":
+                raise RuntimeError("LLM exploded")
+            return [
+                Finding(type="typo", severity="info", file_path=file_path, line=1, message="found")
+            ]
+
+        scanner.code_analyzer = MagicMock()
+        scanner.code_analyzer.analyze_file = analyze
+
+        findings = await scanner.analyze_code_quality(
+            repo_path=str(tmp_path),
+            files=["good.py", "bad.py"],
+            repo_id="o/r",
+            commit_sha="sha",
+        )
+
+        assert [f.file_path for f in findings] == ["good.py"]

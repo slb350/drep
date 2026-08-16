@@ -27,6 +27,7 @@ Audit all logging statements to ensure API keys and tokens are never logged.
 
 **Deliverables:**
 - `drep/security/detector.py` - Secret detection and URL sanitization
+  (removed in 1.2.0; the surviving redaction lives in `drep/logging_utils.py`)
 - `docs/SECURITY.md` - Comprehensive safe logging guidelines
 - 8 new tests, all passing
 - **Commit:** fec29b2

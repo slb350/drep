@@ -87,7 +87,7 @@ fn analyze_markdown_fast(content: &str) -> PyResult<Vec<PatternIssue>> {
 ---
 
 #### 2. **File Tree Scanning** ⭐⭐⭐⭐
-**Location:** `drep/core/scanner.py:173-194` (`_get_all_python_files`)
+**Location:** `drep/core/scanner.py` (`get_scan_targets`)
 
 **Current Bottleneck:**
 ```python

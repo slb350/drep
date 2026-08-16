@@ -1,8 +1,9 @@
 """Repository scanner for file-by-file analysis."""
 
+import asyncio
 import logging
 import os
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -335,7 +336,6 @@ class RepositoryScanner:
             logger.debug("Code analyzer not initialized, skipping code quality analysis")
             return []
 
-        findings: list[Finding] = []
         repo_path_obj = Path(repo_path)
 
         # Filter to only Python files
@@ -347,66 +347,15 @@ class RepositoryScanner:
 
         logger.info(f"Analyzing {len(python_files)} Python files for code quality")
 
-        # Initialize progress tracker
-        tracker = ProgressTracker(total=len(python_files))
-
-        # Analyze each file
-        for file_path in python_files:
-            full_path = repo_path_obj / file_path
-
-            # Skip if file doesn't exist
-            if not full_path.exists():
-                logger.warning(f"Skipping {file_path}: file not found")
-                tracker.update(skipped=1)
-                if progress_callback:
-                    progress_callback(tracker)
-                continue
-
-            # Read file content with proper encoding handling
-            try:
-                content = full_path.read_text(encoding="utf-8")
-            except UnicodeDecodeError:
-                logger.warning(f"Skipping {file_path}: Not valid UTF-8")
-                tracker.update(skipped=1)
-                if progress_callback:
-                    progress_callback(tracker)
-                continue
-            except PermissionError:
-                logger.error(f"Permission denied: {file_path}")
-                tracker.update(failed=1)
-                if progress_callback:
-                    progress_callback(tracker)
-                continue
-            except FileNotFoundError:
-                logger.warning(f"File disappeared: {file_path}")
-                tracker.update(skipped=1)
-                if progress_callback:
-                    progress_callback(tracker)
-                continue
-            except OSError as e:
-                logger.error(f"Failed to read {file_path}: {e}")
-                tracker.update(failed=1)
-                if progress_callback:
-                    progress_callback(tracker)
-                continue
-
-            # Analyze with code analyzer
-            try:
-                file_findings = await self.code_analyzer.analyze_file(
-                    file_path=file_path, content=content, repo_id=repo_id, commit_sha=commit_sha
-                )
-                findings.extend(file_findings)
-                tracker.update(completed=1)
-            except Exception as e:
-                logger.error(f"Failed to analyze {file_path}: {e}")
-                tracker.update(failed=1)
-
-            # Call progress callback
-            if progress_callback:
-                progress_callback(tracker)
-
-        logger.info(f"Found {len(findings)} code quality issues across {len(python_files)} files")
-        return findings
+        return await self._analyze_files_with(
+            analyze=self.code_analyzer.analyze_file,
+            repo_path_obj=repo_path_obj,
+            files=python_files,
+            repo_id=repo_id,
+            commit_sha=commit_sha,
+            progress_callback=progress_callback,
+            what="code quality issues",
+        )
 
     async def analyze_docstrings(
         self,
@@ -437,7 +386,6 @@ class RepositoryScanner:
             logger.debug("Docstring generator not initialized, skipping docstring analysis")
             return []
 
-        findings: list[Finding] = []
         repo_path_obj = Path(repo_path)
 
         # Filter to only Python files
@@ -449,65 +397,99 @@ class RepositoryScanner:
 
         logger.info(f"Analyzing {len(python_files)} Python files for docstrings")
 
-        # Initialize progress tracker
-        tracker = ProgressTracker(total=len(python_files))
+        return await self._analyze_files_with(
+            analyze=self.docstring_generator.analyze_file,
+            repo_path_obj=repo_path_obj,
+            files=python_files,
+            repo_id=repo_id,
+            commit_sha=commit_sha,
+            progress_callback=progress_callback,
+            what="docstring issues",
+        )
 
-        # Analyze each file
-        for file_path in python_files:
-            full_path = repo_path_obj / file_path
+    async def _analyze_files_with(
+        self,
+        analyze: Callable[..., Awaitable[list[Finding]]],
+        repo_path_obj: Path,
+        files: list[str],
+        repo_id: str,
+        commit_sha: str,
+        progress_callback: Callable[["ProgressTracker"], None] | None,
+        what: str,
+    ) -> list[Finding]:
+        """Read each file and run one LLM analyzer over it, concurrently.
 
-            # Skip if file doesn't exist
-            if not full_path.exists():
-                logger.warning(f"Skipping {file_path}: file not found")
-                tracker.update(skipped=1)
-                if progress_callback:
-                    progress_callback(tracker)
-                continue
+        Shared by analyze_code_quality and analyze_docstrings, which differed
+        only in the analyzer they called and their log wording.
 
-            # Read file content with proper encoding handling
-            try:
-                content = full_path.read_text(encoding="utf-8")
-            except UnicodeDecodeError:
-                logger.warning(f"Skipping {file_path}: Not valid UTF-8")
-                tracker.update(skipped=1)
-                if progress_callback:
-                    progress_callback(tracker)
-                continue
-            except PermissionError:
-                logger.error(f"Permission denied: {file_path}")
-                tracker.update(failed=1)
-                if progress_callback:
-                    progress_callback(tracker)
-                continue
-            except FileNotFoundError:
-                logger.warning(f"File disappeared: {file_path}")
-                tracker.update(skipped=1)
-                if progress_callback:
-                    progress_callback(tracker)
-                continue
-            except OSError as e:
-                logger.error(f"Failed to read {file_path}: {e}")
-                tracker.update(failed=1)
-                if progress_callback:
-                    progress_callback(tracker)
-                continue
+        The per-file analyses are gathered rather than awaited in sequence: they
+        are independent, and the RateLimiter already caps in-flight requests
+        (max_concurrent_global / max_concurrent_per_repo). Awaiting one at a
+        time made the scan take the *sum* of every LLM round trip while the
+        configured concurrency went unused.
 
-            # Analyze with docstring generator
-            try:
-                file_findings = await self.docstring_generator.analyze_file(
-                    file_path=file_path, content=content, repo_id=repo_id, commit_sha=commit_sha
-                )
-                findings.extend(file_findings)
-                tracker.update(completed=1)
-            except Exception as e:
-                logger.error(f"Failed to analyze {file_path}: {e}")
-                tracker.update(failed=1)
+        Args:
+            analyze: Analyzer coroutine taking file_path/content/repo_id/commit_sha
+            repo_path_obj: Repository root
+            files: Repo-relative file paths to analyze
+            repo_id: Repository identifier, for per-repo rate limiting
+            commit_sha: Commit SHA, for cache invalidation
+            progress_callback: Optional progress callback
+            what: Noun phrase for the summary log line
 
-            # Call progress callback
+        Returns:
+            Combined findings from every file that could be read and analyzed
+        """
+        tracker = ProgressTracker(total=len(files))
+
+        def report() -> None:
             if progress_callback:
                 progress_callback(tracker)
 
-        logger.info(f"Found {len(findings)} docstring issues across {len(python_files)} files")
+        # Phase 1: read. Local I/O, and it establishes which files are analyzable
+        # before any LLM request is issued.
+        readable: list[tuple[str, str]] = []
+        for file_path in files:
+            full_path = repo_path_obj / file_path
+            try:
+                readable.append((file_path, full_path.read_text(encoding="utf-8")))
+                continue
+            except FileNotFoundError:
+                logger.warning(f"Skipping {file_path}: file not found")
+                tracker.update(skipped=1)
+            except UnicodeDecodeError:
+                logger.warning(f"Skipping {file_path}: Not valid UTF-8")
+                tracker.update(skipped=1)
+            except PermissionError:
+                logger.error(f"Permission denied: {file_path}")
+                tracker.update(failed=1)
+            except OSError as e:
+                logger.error(f"Failed to read {file_path}: {e}")
+                tracker.update(failed=1)
+            report()
+
+        # Phase 2: analyze concurrently
+        async def analyze_one(file_path: str, content: str) -> list[Finding]:
+            try:
+                result = await analyze(
+                    file_path=file_path,
+                    content=content,
+                    repo_id=repo_id,
+                    commit_sha=commit_sha,
+                )
+                tracker.update(completed=1)
+                return result
+            except Exception as e:
+                logger.error(f"Failed to analyze {file_path}: {e}")
+                tracker.update(failed=1)
+                return []
+            finally:
+                report()
+
+        results = await asyncio.gather(*(analyze_one(path, text) for path, text in readable))
+
+        findings = [finding for result in results for finding in result]
+        logger.info(f"Found {len(findings)} {what} across {len(files)} files")
         return findings
 
     async def close(self):

@@ -1,18 +1,8 @@
 """Unit tests for CodeQualityAnalyzer."""
 
-from unittest.mock import AsyncMock, MagicMock
-
 import pytest
 
 from drep.code_quality.analyzer import MAX_FILE_SIZE, CodeQualityAnalyzer
-
-
-@pytest.fixture
-def mock_llm_client():
-    """Create mock LLM client for testing."""
-    client = MagicMock()
-    client.analyze_code_json = AsyncMock()
-    return client
 
 
 @pytest.fixture

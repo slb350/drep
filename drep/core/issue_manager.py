@@ -70,18 +70,21 @@ class IssueManager:
             repo: Repository name
             findings: List of Finding objects to create issues for
         """
+        # Load this repo's already-filed hashes in one query. Querying per
+        # finding cost a round trip each for information a single SELECT
+        # provides.
+        seen_hashes: set[str] = {
+            row[0]
+            for row in self.db.query(FindingCache.finding_hash)
+            .filter_by(owner=owner, repo=repo)
+            .all()
+        }
+
         for finding in findings:
             # Generate hash for deduplication
             finding_hash = self._generate_hash(finding)
 
-            # Check if we've already created this issue (scoped to this repository)
-            existing = (
-                self.db.query(FindingCache)
-                .filter_by(owner=owner, repo=repo, finding_hash=finding_hash)
-                .first()
-            )
-
-            if existing:
+            if finding_hash in seen_hashes:
                 # Skip duplicate - already created issue for this finding in this repo
                 continue
 
@@ -106,4 +109,8 @@ class IssueManager:
                 issue_number=issue_number,
             )
             self.db.add(cache_entry)
+            # Commit per finding: the issue is already filed on the platform, so
+            # the cache row must be durable before the next one is created —
+            # batching here would re-file every issue in the batch after a crash.
             self.db.commit()
+            seen_hashes.add(finding_hash)

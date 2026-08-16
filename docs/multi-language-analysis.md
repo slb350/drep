@@ -30,7 +30,7 @@ This document validates the current Python-first implementation, captures the ga
 ## 3. Verified Python-Only Coupling
 
 ### 3.1 Repository Scanner
-- `_get_all_python_files` only globs `**/*.py` and `**/*.md` (`drep/core/scanner.py:173-194`).
+- `get_scan_targets` only walks for `.py` and `.md` (`drep/core/scanner.py`, policy in `drep/core/file_targets.py`).
 - `_get_changed_files` and `get_staged_files` repeat `.py`/`.md` suffix checks (`drep/core/scanner.py:230-318`), which duplicates logic and makes new extensions hard to add consistently.
 - `analyze_code_quality` filters to `self.code_analyzer.is_supported_file`, which currently returns True only for `.py` (`drep/core/scanner.py:320-420` + `drep/code_quality/analyzer.py:107-118`).
 
@@ -122,7 +122,7 @@ Implementation details:
 ### 5.3 Pipeline Integration
 
 1. **Scanner (`drep/core/scanner.py`):**
-   - `_get_all_python_files` → `_get_all_supported_files` leveraging registry patterns.
+   - `get_scan_targets` → registry-driven suffix set in `drep/core/file_targets.py`.
    - `_get_changed_files` / `get_staged_files` filter using `registry.supported_extensions`.
    - `scan_repository` records the enabled language list in scan metadata for auditability.
 

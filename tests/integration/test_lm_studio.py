@@ -10,6 +10,7 @@ import pytest
 from pydantic import BaseModel
 
 from drep.llm.client import LLMClient
+from tests.integration.conftest import TEST_MODEL, llm_test_endpoint
 
 # Requires a live external service; excluded from CI via -m 'not external_service'
 pytestmark = pytest.mark.external_service
@@ -27,8 +28,8 @@ class TestResponse(BaseModel):
 async def test_lm_studio_connection():
     """Test basic connection to LM Studio endpoint."""
     client = LLMClient(
-        endpoint="https://lmstudio.localbrandonfamily.com/v1",
-        model="qwen/qwen3-30b-a3b-2507",
+        endpoint=llm_test_endpoint(),
+        model=TEST_MODEL,
         max_tokens=500,  # Small for test
         max_concurrent_global=5,
         requests_per_minute=60,
@@ -66,8 +67,8 @@ async def test_lm_studio_connection():
 async def test_lm_studio_json_parsing():
     """Test JSON parsing with real endpoint."""
     client = LLMClient(
-        endpoint="https://lmstudio.localbrandonfamily.com/v1",
-        model="qwen/qwen3-30b-a3b-2507",
+        endpoint=llm_test_endpoint(),
+        model=TEST_MODEL,
         max_tokens=500,
         max_concurrent_global=5,
     )
@@ -100,8 +101,8 @@ async def test_lm_studio_json_parsing():
 async def test_lm_studio_rate_limiting():
     """Test rate limiting with real endpoint."""
     client = LLMClient(
-        endpoint="https://lmstudio.localbrandonfamily.com/v1",
-        model="qwen/qwen3-30b-a3b-2507",
+        endpoint=llm_test_endpoint(),
+        model=TEST_MODEL,
         max_tokens=200,
         max_concurrent_global=3,  # Limit concurrency
         requests_per_minute=60,
@@ -148,8 +149,8 @@ async def test_lm_studio_rate_limiting():
 async def test_lm_studio_code_analysis():
     """Test actual code analysis with LM Studio."""
     client = LLMClient(
-        endpoint="https://lmstudio.localbrandonfamily.com/v1",
-        model="qwen/qwen3-30b-a3b-2507",
+        endpoint=llm_test_endpoint(),
+        model=TEST_MODEL,
         max_tokens=1000,
         max_concurrent_global=5,
     )

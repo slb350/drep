@@ -305,16 +305,6 @@ async def test_create_issues_for_findings_skips_duplicate(mock_adapter, mock_db)
     """Test skips creating issue when finding hash already exists."""
     from drep.db.models import FindingCache
 
-    # Setup: Finding already exists in cache
-    existing_cache = FindingCache(
-        owner="owner",
-        repo="repo",
-        file_path="test.py",
-        finding_hash="existing_hash",
-        issue_number=42,
-    )
-    mock_db.query.return_value.filter_by.return_value.first.return_value = existing_cache
-
     manager = IssueManager(mock_adapter, mock_db)
 
     finding = Finding(
@@ -324,6 +314,19 @@ async def test_create_issues_for_findings_skips_duplicate(mock_adapter, mock_db)
         line=5,
         message="Typo: 'teh'",
     )
+
+    # Setup: this finding's hash is already in the repo's cache. The manager
+    # loads all known hashes for the repo in one query.
+    existing_cache = FindingCache(
+        owner="owner",
+        repo="repo",
+        file_path="test.py",
+        finding_hash=manager._generate_hash(finding),
+        issue_number=42,
+    )
+    mock_db.query.return_value.filter_by.return_value.all.return_value = [
+        (existing_cache.finding_hash,)
+    ]
 
     await manager.create_issues_for_findings("owner", "repo", [finding])
 
@@ -526,40 +529,7 @@ async def test_create_issues_for_findings_api_error_handling(mock_adapter, mock_
 async def test_create_issues_for_findings_mixed_duplicates(mock_adapter, mock_db):
     """Test handles mix of new and duplicate findings."""
 
-    # Setup: Second finding is duplicate
-    def mock_query_side_effect(finding_hash):
-        # Return existing cache only for specific hash
-        if finding_hash == "duplicate_hash":
-            from drep.db.models import FindingCache
-
-            return FindingCache(
-                owner="owner",
-                repo="repo",
-                file_path="b.py",
-                finding_hash="duplicate_hash",
-                issue_number=99,
-            )
-        return None
-
-    # Mock the query chain
-    query_mock = MagicMock()
-    filter_by_mock = MagicMock()
-    mock_db.query.return_value = query_mock
-    query_mock.filter_by.return_value = filter_by_mock
-
-    # Set up side effect for first() calls
-    first_calls = []
-
-    def first_side_effect():
-        # First call (finding 1): no duplicate
-        # Second call (finding 2): duplicate
-        # Third call (finding 3): no duplicate
-        result = [None, MagicMock(issue_number=99), None]
-        idx = len(first_calls)
-        first_calls.append(None)
-        return result[idx] if idx < len(result) else None
-
-    filter_by_mock.first.side_effect = first_side_effect
+    # Setup: the middle finding's hash is already cached for this repo
     mock_adapter.create_issue.side_effect = [1, 3]  # Issue numbers for non-duplicates
 
     manager = IssueManager(mock_adapter, mock_db)
@@ -568,6 +538,9 @@ async def test_create_issues_for_findings_mixed_duplicates(mock_adapter, mock_db
         Finding(type="typo", severity="info", file_path="a.py", line=1, message="New 1"),
         Finding(type="typo", severity="info", file_path="b.py", line=2, message="Duplicate"),
         Finding(type="typo", severity="info", file_path="c.py", line=3, message="New 2"),
+    ]
+    mock_db.query.return_value.filter_by.return_value.all.return_value = [
+        (manager._generate_hash(findings[1]),)
     ]
 
     await manager.create_issues_for_findings("owner", "repo", findings)

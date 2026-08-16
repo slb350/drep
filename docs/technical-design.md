@@ -800,7 +800,7 @@ class RepositoryScanner:
             )
         else:
             # Full scan - all Python files
-            files = self._get_all_python_files(repo_path)
+            files = self.get_scan_targets(repo_path)
 
         # Return files and SHA - caller updates DB after successful scan
         return (files, current_sha)
@@ -833,7 +833,7 @@ class RepositoryScanner:
 
         return list(set(changed_files))  # Deduplicate
 
-    def _get_all_python_files(self, repo_path: str) -> List[str]:
+    def get_scan_targets(self, repo_path: str) -> List[str]:
         """Get all Python and Markdown files in repository."""
         files = []
         repo_path = Path(repo_path)

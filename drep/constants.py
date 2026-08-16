@@ -61,7 +61,7 @@ Per-repository semaphores are created lazily to limit concurrent requests
 per repo. After this TTL without use, idle semaphores are evicted to prevent
 memory leaks when scanning many repositories.
 
-Used in: drep.llm.client.RateLimiter._get_repo_semaphore()
+Used in: drep.llm.rate_limiter.RateLimiter._get_repo_semaphore()
 Why 600: 10 minutes provides good balance:
          - Long enough: Won't evict during typical repo scans
          - Short enough: Releases memory for repos scanned hours ago
@@ -76,7 +76,7 @@ Rate limiting threshold to prevent cost overruns. Typical model limits:
 - GPT-3.5: 90K-2M TPM
 - Local models: Usually unlimited
 
-Used in: drep.llm.client.LLMClient.__init__(), RateLimiter
+Used in: drep.llm.client.LLMClient.__init__(), drep.llm.rate_limiter.RateLimiter
 Why 100000: Conservative default that works for most use cases:
             - High enough: Won't throttle typical workloads
             - Low enough: Prevents runaway costs with paid APIs

@@ -1,20 +1,10 @@
 """Tests for DocstringGenerator."""
 
-from unittest.mock import AsyncMock, MagicMock
-
 import pytest
 
 from drep.docstring.ast_utils import FunctionInfo
 from drep.docstring.generator import DocstringGenerator
 from drep.models.findings import Finding
-
-
-@pytest.fixture
-def mock_llm_client():
-    """Create a mock LLM client."""
-    client = MagicMock()
-    client.analyze_code_json = AsyncMock()
-    return client
 
 
 @pytest.fixture

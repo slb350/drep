@@ -14,6 +14,12 @@ from drep.llm.cache import IntelligentCache
 from drep.llm.client import LLMClient
 
 DEFAULT_ENDPOINT = "http://localhost:1234/v1"
+TEST_MODEL = "qwen/qwen3-30b-a3b-2507"
+
+
+def llm_test_endpoint() -> str:
+    """Endpoint for live-LLM tests, overridable via DREP_TEST_LLM_ENDPOINT."""
+    return os.environ.get("DREP_TEST_LLM_ENDPOINT", DEFAULT_ENDPOINT)
 
 
 @pytest.fixture
@@ -30,8 +36,8 @@ async def llm_client(tmp_path):
     )
 
     client = LLMClient(
-        endpoint=os.environ.get("DREP_TEST_LLM_ENDPOINT", DEFAULT_ENDPOINT),
-        model="qwen/qwen3-30b-a3b-2507",
+        endpoint=llm_test_endpoint(),
+        model=TEST_MODEL,
         temperature=0.2,
         max_tokens=4000,
         max_concurrent_global=3,

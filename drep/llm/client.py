@@ -2,8 +2,9 @@
 
 Production-ready client with dual-backend support (open-agent-sdk preferred,
 raw httpx fallback), intelligent caching, circuit-breaker-guarded transports,
-retries, and robust JSON parsing. Rate limiting lives in ``drep.llm.rate_limiter``
-(``RateLimiter`` is re-exported here for backward compatibility).
+retries, and robust JSON parsing. Rate limiting lives in ``drep.llm.rate_limiter``,
+JSON recovery in ``drep.llm.json_parsing``, and commit-SHA resolution in
+``drep.llm.git_utils``.
 
 ::
 
@@ -49,6 +50,7 @@ from drep.llm.circuit_breaker import (  # Prevents cascade failures
     CircuitBreakerOpenError,
 )
 from drep.llm.git_utils import get_current_commit_sha
+from drep.llm.http_compat import _CompatClient
 from drep.llm.json_parsing import extract_json
 from drep.llm.metrics import LLMMetrics  # Tracks usage statistics for cost monitoring
 from drep.llm.rate_limiter import RateLimiter
@@ -370,66 +372,6 @@ class LLMClient:
         #
         # The shim wraps raw HTTP responses in OpenAI-like objects:
         #     HTTP response → _CompatResponse → response.choices[0].message.content
-        client_self = self
-
-        class _CompatMessage:
-            def __init__(self, content: str):
-                self.content = content
-
-        class _CompatChoice:
-            def __init__(self, content: str):
-                self.message = _CompatMessage(content)
-
-        class _CompatUsage:
-            def __init__(self, usage: dict[str, Any]):
-                prompt = usage.get("prompt_tokens") or usage.get("input_tokens") or 0
-                completion = usage.get("completion_tokens") or usage.get("output_tokens") or 0
-                self.prompt_tokens = prompt
-                self.completion_tokens = completion
-                self.total_tokens = usage.get("total_tokens") or (prompt + completion)
-
-        class _CompatResponse:
-            def __init__(self, data: dict[str, Any]):
-                self.model = data.get("model", client_self.model)
-                content = (
-                    ((data.get("choices") or [{}])[0].get("message") or {}).get("content")
-                    or data.get("content")
-                    or ""
-                )
-                self.choices = [_CompatChoice(content)]
-                self.usage = _CompatUsage(data.get("usage", {}))
-
-        class _CompatCompletions:
-            def __init__(self, parent: "LLMClient"):
-                self._parent = parent
-
-            async def create(self, model: str, messages: list, temperature: float, max_tokens: int):
-                if not self._parent.http:
-                    raise RuntimeError("HTTP client not initialized")
-                url = f"{self._parent.endpoint}/chat/completions"
-                payload = {
-                    "model": model,
-                    "messages": messages,
-                    "temperature": temperature,
-                    "max_tokens": max_tokens,
-                }
-                resp = await self._parent.http.post(url, json=payload)
-                resp.raise_for_status()
-                return _CompatResponse(resp.json())
-
-        class _CompatChat:
-            def __init__(self, parent: "LLMClient"):
-                self.completions = _CompatCompletions(parent)
-
-        class _CompatClient:
-            def __init__(self, parent: "LLMClient"):
-                self.chat = _CompatChat(parent)
-
-            async def close(self):
-                if parent.http:
-                    await parent.http.aclose()
-
-        parent = self
         if not self._using_open_agent:
             self.client = _CompatClient(self)
 
@@ -568,29 +510,23 @@ class LLMClient:
                     # Bedrock returns a dict; the OpenAI-compatible path returns an
                     # SDK-like object, so the handling below branches on provider.
                     # Both transports run through the circuit breaker when enabled.
-                    response: Any
+                    request_kwargs: dict[str, Any] = {
+                        "messages": [
+                            {"role": "system", "content": system_prompt},
+                            {"role": "user", "content": code},
+                        ],
+                        "temperature": self.temperature,
+                        "max_tokens": self.max_tokens,
+                    }
                     if self._provider == "bedrock":
-                        response = await self._guarded_transport(
-                            self.bedrock_client.chat_completion,
-                            messages=[
-                                {"role": "system", "content": system_prompt},
-                                {"role": "user", "content": code},
-                            ],
-                            temperature=self.temperature,
-                            max_tokens=self.max_tokens,
-                        )
+                        transport = self.bedrock_client.chat_completion
                     else:
-                        # Use OpenAI-compatible provider (open-agent-sdk or HTTP)
-                        response = await self._guarded_transport(
-                            self.client.chat.completions.create,
-                            model=self.model,
-                            messages=[
-                                {"role": "system", "content": system_prompt},
-                                {"role": "user", "content": code},
-                            ],
-                            temperature=self.temperature,
-                            max_tokens=self.max_tokens,
-                        )
+                        # OpenAI-compatible provider (open-agent-sdk or HTTP),
+                        # which additionally needs the model name.
+                        transport = self.client.chat.completions.create
+                        request_kwargs["model"] = self.model
+
+                    response: Any = await self._guarded_transport(transport, **request_kwargs)
 
                     latency_ms = (time.time() - start_time) * 1000
 
