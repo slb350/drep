@@ -6,6 +6,7 @@ MVP scope:
 """
 
 import asyncio
+from collections.abc import Coroutine
 from typing import Any
 
 from fastapi import FastAPI, Header, HTTPException, Request
@@ -20,7 +21,7 @@ app = FastAPI(title="drep", version="0.1.0")
 _BACKGROUND_TASKS: set[asyncio.Task[None]] = set()
 
 
-def _spawn_background(coro: Any) -> None:
+def _spawn_background(coro: Coroutine[Any, Any, None]) -> None:
     """Schedule a background coroutine, keeping a strong reference until it finishes."""
     task: asyncio.Task[None] = asyncio.create_task(coro)
     _BACKGROUND_TASKS.add(task)

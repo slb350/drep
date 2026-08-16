@@ -22,7 +22,7 @@ jobs:
       - name: Install lint/type tooling
         run: |
           python -m pip install --upgrade pip
-          pip install ruff mypy types-PyYAML
+          pip install .[dev]
 
       - name: Lint (ruff)
         run: ruff check drep tests
@@ -31,9 +31,7 @@ jobs:
         run: ruff format --check drep tests
 
       - name: Type check (mypy)
-        run: |
-          pip install . pydantic
-          mypy drep
+        run: mypy drep
 
   test:
     runs-on: ubuntu-latest

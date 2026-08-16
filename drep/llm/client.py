@@ -81,7 +81,6 @@ from pathlib import Path  # For cross-platform file path handling
 from typing import (  # Type hints for better IDE support and clarity
     TYPE_CHECKING,
     Any,
-    Optional,
 )
 
 import httpx  # Modern async HTTP client (fallback when open-agent-sdk unavailable)
@@ -844,7 +843,7 @@ class LLMClient:
         max_concurrent_per_repo: int | None = 3,
         requests_per_minute: int = 60,
         max_tokens_per_minute: int = MAX_TOKENS_PER_MINUTE,
-        cache: Optional["IntelligentCache"] = None,
+        cache: "IntelligentCache | None" = None,
         repo_path: Path | None = None,
         rate_limiter: RateLimiter | None = None,
         enable_circuit_breaker: bool = True,
