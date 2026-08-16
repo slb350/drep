@@ -5,6 +5,8 @@ strongly-typed wizard model; _write_and_validate_config serializes and
 validates the assembled config.
 """
 
+from typing import Any
+
 import click
 import yaml
 from pydantic import ValidationError
@@ -29,6 +31,24 @@ from drep.models.wizard import (
     OpenAILLMData,
     PlatformConfig,
 )
+
+# Single source of truth for the wizard's LLM defaults. Used both as the
+# click.prompt defaults and as the values written when the user declines to
+# configure advanced settings.
+_LLM_DEFAULTS: dict[str, Any] = {
+    "temperature": 0.2,
+    "max_tokens": 8000,
+    "timeout": 60,
+    "max_retries": 3,
+    "retry_delay": 2,
+    "exponential_backoff": True,
+    "max_concurrent_global": 5,
+    "max_concurrent_per_repo": 3,
+    "requests_per_minute": 60,
+    "max_tokens_per_minute": 100000,
+}
+
+_CACHE_DEFAULTS: dict[str, Any] = {"enabled": True, "ttl_days": 30, "max_size_gb": 10.0}
 
 
 def _collect_platform_config() -> PlatformConfig:
@@ -72,7 +92,7 @@ def _collect_platform_config() -> PlatformConfig:
             url=api_url,  # None for github.com, URL for enterprise
         )
 
-        return PlatformConfig(data=github_data, env_var="GITHUB_TOKEN")
+        return PlatformConfig(data=github_data)
 
     if platform.lower() == "gitea":
         click.echo("Gitea Configuration:")
@@ -92,7 +112,7 @@ def _collect_platform_config() -> PlatformConfig:
             repositories=tuple(repos),  # Convert list to tuple
         )
 
-        return PlatformConfig(data=gitea_data, env_var="GITEA_TOKEN")
+        return PlatformConfig(data=gitea_data)
 
     click.echo("GitLab Configuration:")
     use_selfhosted = click.confirm("Are you using self-hosted GitLab?", default=False)
@@ -117,7 +137,7 @@ def _collect_platform_config() -> PlatformConfig:
         url=gitlab_url,  # None for gitlab.com, URL for self-hosted
     )
 
-    return PlatformConfig(data=gitlab_data, env_var="GITLAB_TOKEN")
+    return PlatformConfig(data=gitlab_data)
 
 
 def _collect_llm_config() -> LLMConfig | None:
@@ -171,76 +191,62 @@ def _collect_llm_config() -> LLMConfig | None:
 
     configure_advanced = click.confirm("Configure advanced LLM settings?", default=False)
 
+    # Start from the defaults unconditionally, then overwrite only what the user
+    # was actually asked. Previously the prompted and unprompted branches each
+    # spelled out all ten values, so a changed default had to be edited twice
+    # and the two copies were only coincidentally equal.
+    llm_config.update(_LLM_DEFAULTS)
+
     if configure_advanced:
         click.echo("\nAdvanced LLM Settings:")
-        temperature = click.prompt(
-            "Temperature (0.0-2.0)", default=0.2, type=click.FloatRange(min=0.0, max=2.0)
+        llm_config["temperature"] = click.prompt(
+            "Temperature (0.0-2.0)",
+            default=_LLM_DEFAULTS["temperature"],
+            type=click.FloatRange(min=0.0, max=2.0),
         )
-        max_tokens = click.prompt(
-            "Max tokens per request", default=8000, type=click.IntRange(min=100, max=20000)
+        llm_config["max_tokens"] = click.prompt(
+            "Max tokens per request",
+            default=_LLM_DEFAULTS["max_tokens"],
+            type=click.IntRange(min=100, max=20000),
         )
-        timeout = click.prompt(
-            "Request timeout (seconds)", default=60, type=click.IntRange(min=10, max=300)
+        llm_config["timeout"] = click.prompt(
+            "Request timeout (seconds)",
+            default=_LLM_DEFAULTS["timeout"],
+            type=click.IntRange(min=10, max=300),
         )
-        max_retries = click.prompt(
-            "Max retries on failure", default=3, type=click.IntRange(min=0, max=10)
+        llm_config["max_retries"] = click.prompt(
+            "Max retries on failure",
+            default=_LLM_DEFAULTS["max_retries"],
+            type=click.IntRange(min=0, max=10),
         )
-        max_concurrent = click.prompt(
-            "Max concurrent requests (global)", default=5, type=click.IntRange(min=1, max=50)
+        llm_config["max_concurrent_global"] = click.prompt(
+            "Max concurrent requests (global)",
+            default=_LLM_DEFAULTS["max_concurrent_global"],
+            type=click.IntRange(min=1, max=50),
         )
-        requests_per_min = click.prompt(
-            "Requests per minute limit", default=60, type=click.IntRange(min=1, max=1000)
-        )
-
-        llm_config.update(
-            {
-                "temperature": temperature,
-                "max_tokens": max_tokens,
-                "timeout": timeout,
-                "max_retries": max_retries,
-                "retry_delay": 2,
-                "exponential_backoff": True,
-                "max_concurrent_global": max_concurrent,
-                "max_concurrent_per_repo": 3,
-                "requests_per_minute": requests_per_min,
-                "max_tokens_per_minute": 100000,
-            }
-        )
-    else:
-        llm_config.update(
-            {
-                "temperature": 0.2,
-                "max_tokens": 8000,
-                "timeout": 60,
-                "max_retries": 3,
-                "retry_delay": 2,
-                "exponential_backoff": True,
-                "max_concurrent_global": 5,
-                "max_concurrent_per_repo": 3,
-                "requests_per_minute": 60,
-                "max_tokens_per_minute": 100000,
-            }
+        llm_config["requests_per_minute"] = click.prompt(
+            "Requests per minute limit",
+            default=_LLM_DEFAULTS["requests_per_minute"],
+            type=click.IntRange(min=1, max=1000),
         )
 
     click.echo()
 
     configure_cache = click.confirm("Configure LLM response caching?", default=False)
 
+    cache = dict(_CACHE_DEFAULTS)
     if configure_cache:
         click.echo("\nCache Settings:")
-        cache_enabled = click.confirm("Enable cache?", default=True)
-        ttl_days = click.prompt("Cache TTL (days)", default=30, type=click.IntRange(min=1))
-        max_size_gb = click.prompt(
-            "Max cache size (GB)", default=10.0, type=click.FloatRange(min=0.1)
+        cache["enabled"] = click.confirm("Enable cache?", default=_CACHE_DEFAULTS["enabled"])
+        cache["ttl_days"] = click.prompt(
+            "Cache TTL (days)", default=_CACHE_DEFAULTS["ttl_days"], type=click.IntRange(min=1)
         )
-
-        llm_config["cache"] = {
-            "enabled": cache_enabled,
-            "ttl_days": ttl_days,
-            "max_size_gb": max_size_gb,
-        }
-    else:
-        llm_config["cache"] = {"enabled": True, "ttl_days": 30, "max_size_gb": 10.0}
+        cache["max_size_gb"] = click.prompt(
+            "Max cache size (GB)",
+            default=_CACHE_DEFAULTS["max_size_gb"],
+            type=click.FloatRange(min=0.1),
+        )
+    llm_config["cache"] = cache
 
     # Create strongly-typed data model based on provider
     if provider == "openai-compatible":

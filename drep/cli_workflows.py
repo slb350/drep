@@ -17,11 +17,16 @@ from git.exc import GitCommandError, InvalidGitRepositoryError
 
 from drep.adapters.base import BaseAdapter
 from drep.adapters.gitea import GiteaAdapter
+from drep.adapters.github import GitHubAdapter
+from drep.adapters.gitlab import GitLabAdapter
 from drep.config import Config, load_config
+from drep.constants import default_metrics_file
 from drep.core.issue_manager import IssueManager
 from drep.core.scanner import RepositoryScanner
 from drep.db import init_database
 from drep.documentation.analyzer import DocumentationAnalyzer
+from drep.llm.metrics import LLMMetrics, MetricsCollector
+from drep.models.wizard import PLATFORM_TOKEN_ENV_VARS
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +36,8 @@ def _resolve_platform(config: Config, owner: str, repo: str) -> tuple[str, BaseA
 
     Single source of truth for platform selection (precedence: gitea,
     then github, then gitlab — Gitea first for backward compatibility),
-    shared by the scan and review workflows.
+    shared by the scan and review workflows. The clone URL comes from the
+    adapter, which already holds the platform's base URL.
 
     Args:
         config: Loaded configuration
@@ -46,42 +52,24 @@ def _resolve_platform(config: Config, owner: str, repo: str) -> tuple[str, BaseA
     """
     if config.gitea is not None:
         adapter: BaseAdapter = GiteaAdapter(config.gitea.url, config.gitea.token.get_secret_value())
-        git_url = f"{config.gitea.url.rstrip('/')}/{owner}/{repo}.git"
-        return "gitea", adapter, git_url, config.gitea.token.get_secret_value()
+        token = config.gitea.token.get_secret_value()
+        return "gitea", adapter, adapter.git_clone_url(owner, repo), token
 
     if config.github is not None:
-        from drep.adapters.github import GitHubAdapter
-
         adapter = GitHubAdapter(
             token=config.github.token.get_secret_value(),
             url=str(config.github.url) if config.github.url else "https://api.github.com",
         )
-        # GitHub git URL format: https://github.com/owner/repo.git
-        # Handle default GitHub.com case (config.github.url is None)
-        if config.github.url is None or "github.com" in str(config.github.url):
-            git_url = f"https://github.com/{owner}/{repo}.git"
-        else:
-            # GitHub Enterprise - extract hostname from API URL
-            api_url = str(config.github.url)
-            hostname = api_url.replace("https://", "").replace("http://", "").split("/")[0]
-            git_url = f"https://{hostname}/{owner}/{repo}.git"
-        return "github", adapter, git_url, config.github.token.get_secret_value()
+        token = config.github.token.get_secret_value()
+        return "github", adapter, adapter.git_clone_url(owner, repo), token
 
     if config.gitlab is not None:
-        from drep.adapters.gitlab import GitLabAdapter
-
         adapter = GitLabAdapter(
             token=config.gitlab.token.get_secret_value(),
             url=config.gitlab.url,  # None for GitLab.com, or custom URL
         )
-        # GitLab git URL format: https://gitlab.com/owner/repo.git
-        # Handle default GitLab.com case (config.gitlab.url is None)
-        if config.gitlab.url is None:
-            git_url = f"https://gitlab.com/{owner}/{repo}.git"
-        else:
-            # Self-hosted GitLab
-            git_url = f"{config.gitlab.url.rstrip('/')}/{owner}/{repo}.git"
-        return "gitlab", adapter, git_url, config.gitlab.token.get_secret_value()
+        token = config.gitlab.token.get_secret_value()
+        return "gitlab", adapter, adapter.git_clone_url(owner, repo), token
 
     # No platform configured (shouldn't happen - Config validator requires at least one)
     click.echo(
@@ -90,6 +78,30 @@ def _resolve_platform(config: Config, owner: str, repo: str) -> tuple[str, BaseA
         err=True,
     )
     raise click.Abort()
+
+
+async def _persist_metrics(metrics: LLMMetrics) -> None:
+    """Append a session's LLM metrics to the shared history file.
+
+    Best-effort: metrics are observability, never a reason to fail a scan or a
+    review. Shared by both workflows so the path and the error handling cannot
+    diverge between them.
+    """
+    metrics_file = default_metrics_file()
+    try:
+        metrics_file.parent.mkdir(parents=True, exist_ok=True)
+        collector = MetricsCollector(metrics_file)
+        collector.current_session = metrics
+        await collector.save()
+    except PermissionError:
+        logger.error(f"Permission denied writing metrics to {metrics_file}")
+        click.echo(f"Warning: Cannot save metrics to {metrics_file}", err=True)
+        click.echo(f"  Fix: chmod 755 {metrics_file.parent}", err=True)
+    except OSError as e:
+        logger.error(f"Error writing metrics: {e}")
+        click.echo(f"Warning: Cannot save metrics: {e}", err=True)
+        click.echo("  Check disk space and filesystem permissions.", err=True)
+    # KeyboardInterrupt, MemoryError, and other exceptions propagate naturally
 
 
 async def _run_scan(
@@ -186,14 +198,8 @@ fi
                 except GitCommandError as e:
                     error_msg = str(e).lower()
                     if "authentication failed" in error_msg:
-                        # Determine which token env var to suggest
-                        token_env_var = (
-                            "GITHUB_TOKEN"
-                            if platform == "github"
-                            else "GITEA_TOKEN"
-                            if platform == "gitea"
-                            else "GITLAB_TOKEN"
-                        )
+                        # Suggest the token env var for this platform
+                        token_env_var = PLATFORM_TOKEN_ENV_VARS[platform]
                         click.echo("Error: Authentication failed", err=True)
                         click.echo(f"  Check your {token_env_var} token is valid", err=True)
                     elif "not found" in error_msg:
@@ -310,24 +316,7 @@ fi
         if scanner.llm_client:
             metrics = scanner.llm_client.get_llm_metrics()
 
-            # Save metrics to ~/.drep/metrics.json
-            try:
-                from drep.llm.metrics import MetricsCollector
-
-                metrics_file = Path.home() / ".drep" / "metrics.json"
-                metrics_file.parent.mkdir(parents=True, exist_ok=True)
-                collector = MetricsCollector(metrics_file)
-                collector.current_session = metrics
-                await collector.save()
-            except PermissionError:
-                logger.error(f"Permission denied writing metrics to {metrics_file}")
-                click.echo(f"Warning: Cannot save metrics to {metrics_file}", err=True)
-                click.echo(f"  Fix: chmod 755 {metrics_file.parent}", err=True)
-            except OSError as e:
-                logger.error(f"Error writing metrics: {e}")
-                click.echo(f"Warning: Cannot save metrics: {e}", err=True)
-                click.echo("  Check disk space and filesystem permissions.", err=True)
-            # KeyboardInterrupt, MemoryError, and other exceptions propagate naturally
+            await _persist_metrics(metrics)
 
             if show_metrics:
                 click.echo("\n" + "=" * 60)
@@ -448,16 +437,7 @@ async def _run_review(
         # Cleanup
         # Persist metrics if available
         if scanner.llm_client:
-            try:
-                from drep.llm.metrics import MetricsCollector
-
-                metrics_file = Path.home() / ".drep" / "metrics.json"
-                collector = MetricsCollector(metrics_file)
-                collector.current_session = scanner.llm_client.get_llm_metrics()
-                await collector.save()
-            except Exception as e:
-                logger.warning(f"Failed to persist LLM metrics: {e}")
-                # Metrics are best-effort in cleanup, don't crash
+            await _persist_metrics(scanner.llm_client.get_llm_metrics())
 
         # Close resources (ensure both are attempted even if one fails)
         try:

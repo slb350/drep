@@ -133,6 +133,10 @@ class GitLabAdapter(GitLabPrMixin, GitLabReviewMixin, BaseAdapter):
 
         logger.debug("Initialized GitLab adapter", extra={"api_url": self.api_url, "timeout": 30.0})
 
+    def git_clone_url(self, owner: str, repo: str) -> str:
+        """Return the HTTPS git clone URL for a GitLab project."""
+        return f"{self.base_url.rstrip('/')}/{owner}/{repo}.git"
+
     def _check_rate_limit(self, response: httpx.Response, owner: str = "", repo: str = "") -> None:
         """Check for rate limit and raise informative error.
 

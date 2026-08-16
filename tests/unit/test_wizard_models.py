@@ -14,10 +14,9 @@ class TestPlatformConfig:
 
         config = PlatformConfig(
             data=GitHubPlatformData(token="${GITHUB_TOKEN}", repositories=("owner/*",)),
-            env_var="GITHUB_TOKEN",
         )
         with pytest.raises(AttributeError):
-            config.env_var = "MODIFIED"  # type: ignore[misc]
+            config.data = "MODIFIED"  # type: ignore[misc]
 
 
 class TestLLMConfig:
@@ -144,7 +143,7 @@ class TestPlatformConfigStronglyTyped:
 
         github_data = GitHubPlatformData(token="${GITHUB_TOKEN}", repositories=("owner/*",))
 
-        config = PlatformConfig(data=github_data, env_var="GITHUB_TOKEN")
+        config = PlatformConfig(data=github_data)
 
         assert config.platform_name == "GitHub"
         assert config.env_var == "GITHUB_TOKEN"
@@ -160,7 +159,7 @@ class TestPlatformConfigStronglyTyped:
             repositories=("steve/*",),
         )
 
-        config = PlatformConfig(data=gitea_data, env_var="GITEA_TOKEN")
+        config = PlatformConfig(data=gitea_data)
 
         result = config.to_dict()
 
@@ -359,7 +358,6 @@ class TestWizardCoherence:
             data=GiteaPlatformData(
                 url="http://localhost:3000", token="${GITEA_TOKEN}", repositories=("org/*",)
             ),
-            env_var="GITEA_TOKEN",
         )
         assert config.to_dict() == {
             "gitea": {

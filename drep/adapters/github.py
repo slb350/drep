@@ -119,6 +119,17 @@ class GitHubAdapter(GitHubReviewMixin, BaseAdapter):
 
         logger.debug("Initialized GitHub adapter", extra={"api_url": self.url, "timeout": 30.0})
 
+    def git_clone_url(self, owner: str, repo: str) -> str:
+        """Return the HTTPS git clone URL for a GitHub repository.
+
+        github.com serves git from a different host than its API
+        (api.github.com); GitHub Enterprise serves both from the same host.
+        """
+        if "github.com" in self.url:
+            return f"https://github.com/{owner}/{repo}.git"
+        hostname = self.url.replace("https://", "").replace("http://", "").split("/")[0]
+        return f"https://{hostname}/{owner}/{repo}.git"
+
     def _check_rate_limit(self, response: httpx.Response, owner: str = "", repo: str = "") -> None:
         """Check for rate limit and raise informative error.
 

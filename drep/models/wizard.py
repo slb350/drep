@@ -5,9 +5,14 @@ collected during the init wizard, replacing error-prone tuple returns.
 """
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, ClassVar
 
 # ===== Strongly-Typed Platform Data Models =====
+#
+# Each variant carries its own identity (config_key / display_name /
+# token_env_var) as class constants. Adding a platform means adding one
+# dataclass, not editing a config-key map, a display-name map, a token
+# env-var map, and the wizard call sites that hand-pass them.
 
 
 @dataclass(frozen=True)
@@ -19,6 +24,10 @@ class GitHubPlatformData:
         repositories: Immutable tuple of repository patterns
         url: Optional GitHub Enterprise API URL
     """
+
+    config_key: ClassVar[str] = "github"
+    display_name: ClassVar[str] = "GitHub"
+    token_env_var: ClassVar[str] = "GITHUB_TOKEN"
 
     token: str
     repositories: tuple[str, ...]
@@ -49,6 +58,10 @@ class GiteaPlatformData:
         repositories: Immutable tuple of repository patterns
     """
 
+    config_key: ClassVar[str] = "gitea"
+    display_name: ClassVar[str] = "Gitea"
+    token_env_var: ClassVar[str] = "GITEA_TOKEN"
+
     url: str
     token: str
     repositories: tuple[str, ...]
@@ -75,6 +88,10 @@ class GitLabPlatformData:
         repositories: Immutable tuple of repository patterns
         url: Optional self-hosted GitLab URL
     """
+
+    config_key: ClassVar[str] = "gitlab"
+    display_name: ClassVar[str] = "GitLab"
+    token_env_var: ClassVar[str] = "GITLAB_TOKEN"
 
     token: str
     repositories: tuple[str, ...]
@@ -159,6 +176,15 @@ class OpenAILLMData:
     max_tokens_per_minute: int | None = None
     cache: dict[str, Any] | None = None
 
+    def required_env_vars(self) -> tuple[str, ...]:
+        """Environment variables the user must set for this LLM provider.
+
+        Derived from the typed data rather than searching the serialized YAML
+        for a "${LLM_API_KEY}" substring, so it cannot fall out of step with
+        what the wizard actually wrote.
+        """
+        return ("LLM_API_KEY",) if self.api_key else ()
+
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for YAML serialization.
 
@@ -235,6 +261,10 @@ class BedrockLLMData:
     max_tokens_per_minute: int | None = None
     cache: dict[str, Any] | None = None
 
+    def required_env_vars(self) -> tuple[str, ...]:
+        """Environment variables the user must set for this LLM provider."""
+        return ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY")
+
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for YAML serialization.
 
@@ -302,38 +332,30 @@ class DocumentationConfigData:
 # ===== Wrapper Classes =====
 
 
-def _platform_key(
-    data: GitHubPlatformData | GiteaPlatformData | GitLabPlatformData,
-) -> str:
-    """Derive the YAML config key from the concrete platform data variant."""
-    if isinstance(data, GitHubPlatformData):
-        return "github"
-    if isinstance(data, GiteaPlatformData):
-        return "gitea"
-    return "gitlab"
-
-
 @dataclass(frozen=True)
 class PlatformConfig:
     """Platform configuration collected from init wizard.
 
-    The YAML key, display name, and serialized payload are all derived from
-    the concrete ``data`` variant — there is no parallel string field that
-    can disagree with the data.
+    The YAML key, display name, token environment variable, and serialized
+    payload are all derived from the concrete ``data`` variant — there is no
+    parallel string field that can disagree with the data.
 
     Attributes:
         data: Strongly-typed platform data (GitHubPlatformData, GiteaPlatformData,
               or GitLabPlatformData)
-        env_var: Required environment variable name (e.g., "GITHUB_TOKEN")
     """
 
     data: GitHubPlatformData | GiteaPlatformData | GitLabPlatformData
-    env_var: str
 
     @property
     def platform_name(self) -> str:
         """Human-readable platform name derived from the data variant."""
-        return {"github": "GitHub", "gitea": "Gitea", "gitlab": "GitLab"}[_platform_key(self.data)]
+        return self.data.display_name
+
+    @property
+    def env_var(self) -> str:
+        """Environment variable holding this platform's API token."""
+        return self.data.token_env_var
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for YAML serialization.
@@ -341,7 +363,7 @@ class PlatformConfig:
         Returns:
             Dict in format: {"github": {...}} or {"gitea": {...}} or {"gitlab": {...}}
         """
-        return {_platform_key(self.data): self.data.to_dict()}
+        return {self.data.config_key: self.data.to_dict()}
 
 
 @dataclass(frozen=True)
@@ -385,3 +407,11 @@ class DocumentationConfig:
             Dict in format: {"documentation": {...}}
         """
         return {"documentation": self.data.to_dict()}
+
+
+#: Platform config key -> token environment variable, derived from the data
+#: variants so it cannot disagree with them.
+PLATFORM_TOKEN_ENV_VARS: dict[str, str] = {
+    variant.config_key: variant.token_env_var
+    for variant in (GitHubPlatformData, GiteaPlatformData, GitLabPlatformData)
+}

@@ -5,6 +5,8 @@ scattered throughout the codebase. Each constant includes documentation
 explaining its purpose and impact.
 """
 
+from pathlib import Path
+
 # ===== LLM Client Constants =====
 
 MAX_ESTIMATED_TOKENS: int = 50000
@@ -128,3 +130,13 @@ Why these prefixes: AWS Bedrock models follow a naming convention where the
 model ID starts with the provider name (anthropic, amazon, meta, cohere).
 Global models use "global." prefix for cross-region availability.
 """
+
+
+def default_metrics_file() -> Path:
+    """Path of the cross-session LLM metrics history file.
+
+    A function rather than a constant so tests and alternate HOME values are
+    honoured at call time. Both scan/review persistence and the ``drep metrics``
+    command resolve the path through here.
+    """
+    return Path.home() / ".drep" / "metrics.json"

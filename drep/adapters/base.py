@@ -176,6 +176,21 @@ class BaseAdapter(ABC):
             f"or {self.platform_name} API status."
         )
 
+    @abstractmethod
+    def git_clone_url(self, owner: str, repo: str) -> str:
+        """Return the HTTPS git URL used to clone a repository.
+
+        Each platform derives this from the base URL it was already configured
+        with, so the workflow layer does not need per-platform hostname rules.
+
+        Args:
+            owner: Repository owner / namespace
+            repo: Repository name
+
+        Returns:
+            HTTPS clone URL, e.g. "https://github.com/owner/repo.git"
+        """
+
     async def get_review_anchor(self, owner: str, repo: str, pr_number: int) -> ReviewAnchor:
         """Fetch the immutable review anchor for a PR/MR (single network call).
 

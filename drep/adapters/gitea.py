@@ -39,6 +39,10 @@ class GiteaAdapter(BaseAdapter):
         # Format: {(owner, repo): {label_name: label_id}}
         self._label_cache: dict[tuple, dict[str, int]] = {}
 
+    def git_clone_url(self, owner: str, repo: str) -> str:
+        """Return the HTTPS git clone URL for a Gitea repository."""
+        return f"{self.url.rstrip('/')}/{owner}/{repo}.git"
+
     async def get_default_branch(self, owner: str, repo: str) -> str:
         """Get repository default branch.
 

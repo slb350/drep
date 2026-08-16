@@ -36,6 +36,7 @@ def test_base_adapter_has_required_abstract_methods():
         "create_pr_comment",
         "create_pr_review_comment",
         "get_file_content",
+        "git_clone_url",
     }
 
     # All required methods should be abstract
@@ -120,6 +121,9 @@ def test_complete_subclass_can_be_instantiated():
 
         async def get_default_branch(self, owner: str, repo: str) -> str:
             return "main"
+
+        def git_clone_url(self, owner: str, repo: str) -> str:
+            return f"https://example.test/{owner}/{repo}.git"
 
         async def close(self) -> None:
             pass

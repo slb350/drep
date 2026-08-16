@@ -1,6 +1,7 @@
 """CLI interface for drep."""
 
 import asyncio
+import json
 import os
 import shutil
 from enum import Enum
@@ -19,9 +20,11 @@ from drep.cli_wizard import (
 )
 from drep.cli_workflows import _run_review, _run_scan
 from drep.config import find_config_file, get_user_config_dir, load_config
+from drep.constants import default_metrics_file
 from drep.core.scanner import RepositoryScanner
 from drep.db import init_database
 from drep.documentation.analyzer import DocumentationAnalyzer
+from drep.models.config import Config
 
 
 class OutputFormat(str, Enum):
@@ -29,6 +32,21 @@ class OutputFormat(str, Enum):
 
     TEXT = "text"
     JSON = "json"
+
+
+def _resolve_config_file(config: str | None) -> Path | None:
+    """Discover the config file, reporting the standard error if it is missing.
+
+    Returns:
+        The config path, or None if it does not exist (the message has already
+        been echoed, so the caller should just return).
+    """
+    config_path = find_config_file(config)
+    if not config_path.exists():
+        click.echo(f"Config file not found: {config_path}", err=True)
+        click.echo("Run 'drep init' to create a config file.", err=True)
+        return None
+    return config_path
 
 
 @click.group()
@@ -166,14 +184,11 @@ def init():
     click.echo(f"1. Set the {platform_config.env_var} environment variable:")
     click.echo(f"   export {platform_config.env_var}='your-api-token-here'")
 
-    if (
-        llm_config
-        and llm_config.provider == "openai-compatible"
-        and "${LLM_API_KEY}" in yaml.dump(config_dict)
-    ):
-        click.echo("   export LLM_API_KEY='your-llm-api-key'")
-    elif llm_config and llm_config.provider == "bedrock":
-        click.echo("   Configure AWS credentials (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY)")
+    # The data variants know which variables they need; the command layer does
+    # not re-derive it from provider strings or the serialized YAML.
+    llm_env_vars = llm_config.data.required_env_vars() if llm_config else ()
+    for var in llm_env_vars:
+        click.echo(f"   export {var}='...'")
 
     if click.confirm("\nCheck if required environment variables are set?", default=False):
         # SECURITY: Check environment variables with error handling
@@ -182,21 +197,8 @@ def init():
         # environments like containers/sandboxes may restrict os.environ access) and
         # displays a warning. KeyboardInterrupt propagates naturally to allow wizard abort.
         try:
-            missing = []
-            if platform_config.env_var not in os.environ:
-                missing.append(platform_config.env_var)
-            if (
-                llm_config
-                and llm_config.provider == "openai-compatible"
-                and "${LLM_API_KEY}" in yaml.dump(config_dict)
-                and "LLM_API_KEY" not in os.environ
-            ):
-                missing.append("LLM_API_KEY")
-            if llm_config and llm_config.provider == "bedrock":
-                if "AWS_ACCESS_KEY_ID" not in os.environ:
-                    missing.append("AWS_ACCESS_KEY_ID")
-                if "AWS_SECRET_ACCESS_KEY" not in os.environ:
-                    missing.append("AWS_SECRET_ACCESS_KEY")
+            required = (platform_config.env_var, *llm_env_vars)
+            missing = [var for var in required if var not in os.environ]
 
             if missing:
                 click.echo("WARNING: Missing environment variables:", err=True)
@@ -242,10 +244,8 @@ def scan(repository, config, show_metrics, show_progress):
     owner, repo_name = repository.split("/", 1)
 
     # Discover config file
-    config_path = find_config_file(config)
-    if not config_path.exists():
-        click.echo(f"Config file not found: {config_path}", err=True)
-        click.echo("Run 'drep init' to create a config file.", err=True)
+    config_path = _resolve_config_file(config)
+    if config_path is None:
         return
 
     click.echo(f"Scanning {owner}/{repo_name}...")
@@ -283,10 +283,8 @@ def review(repository, pr_number, config, post):
     owner, repo_name = repository.split("/", 1)
 
     # Discover config file
-    config_path = find_config_file(config)
-    if not config_path.exists():
-        click.echo(f"Config file not found: {config_path}", err=True)
-        click.echo("Run 'drep init' to create a config file.", err=True)
+    config_path = _resolve_config_file(config)
+    if config_path is None:
         return
 
     click.echo(f"Reviewing PR #{pr_number} in {owner}/{repo_name}...")
@@ -392,7 +390,6 @@ async def _run_check(path: str, staged: bool, config_path: str, output_format: s
         # These should propagate to allow proper termination and debugging
     else:
         # Create minimal config for local-only mode
-        from drep.models.config import Config
 
         config = Config(require_platform_config=False)
 
@@ -435,24 +432,25 @@ async def _run_check(path: str, staged: bool, config_path: str, output_format: s
         # Analyze files
         all_findings = []
 
-        # Code quality analysis (if LLM enabled)
         if config.llm and config.llm.enabled:
-            code_findings = await scanner.analyze_code_quality(
-                repo_path=str(path_obj.parent if path_obj.is_file() else path_obj),
-                files=files,
-                repo_id="local",
-                commit_sha="local",
+            analysis_root = str(path_obj.parent if path_obj.is_file() else path_obj)
+            # The two passes are independent; run them concurrently. The rate
+            # limiter provides the back-pressure.
+            code_findings, docstring_findings = await asyncio.gather(
+                scanner.analyze_code_quality(
+                    repo_path=analysis_root,
+                    files=files,
+                    repo_id="local",
+                    commit_sha="local",
+                ),
+                scanner.analyze_docstrings(
+                    repo_path=analysis_root,
+                    files=files,
+                    repo_id="local",
+                    commit_sha="local",
+                ),
             )
             all_findings.extend(code_findings)
-
-        # Docstring analysis (if LLM enabled)
-        if config.llm and config.llm.enabled:
-            docstring_findings = await scanner.analyze_docstrings(
-                repo_path=str(path_obj.parent if path_obj.is_file() else path_obj),
-                files=files,
-                repo_id="local",
-                commit_sha="local",
-            )
             all_findings.extend(docstring_findings)
 
         # Output findings
@@ -474,8 +472,6 @@ def _output_findings(findings, format_type):
         format_type: OutputFormat value ('text' or 'json')
     """
     if format_type == OutputFormat.JSON.value:
-        import json
-
         findings_dict = [f.model_dump() for f in findings]
         click.echo(json.dumps(findings_dict, indent=2))
     else:
@@ -498,10 +494,8 @@ def validate(config):
     Loads the config in strict mode (env var placeholders must be set).
     """
     # Discover config file
-    config_path = find_config_file(config)
-    if not config_path.exists():
-        click.echo(f"Config file not found: {config_path}", err=True)
-        click.echo("Run 'drep init' to create a config file.", err=True)
+    config_path = _resolve_config_file(config)
+    if config_path is None:
         return
 
     try:
@@ -542,7 +536,7 @@ def metrics(days, export, detailed):
     from drep.llm.metrics import MetricsCollector
 
     # Load metrics
-    metrics_file = Path.home() / ".drep" / "metrics.json"
+    metrics_file = default_metrics_file()
 
     if not metrics_file.exists():
         click.echo("No metrics found. Run 'drep scan' first to generate metrics.")
@@ -618,8 +612,6 @@ def lint_docs(path, output):
 
     # Output results
     if output == "json":
-        import json
-
         json_output = [
             {
                 "file": str(md_file),
