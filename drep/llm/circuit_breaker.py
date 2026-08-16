@@ -89,28 +89,22 @@ class CircuitBreaker:
         self,
         failure_threshold: int = 5,
         recovery_timeout: int = 60,
-        half_open_max_calls: int = 3,
     ):
         """Initialize circuit breaker.
 
         Args:
             failure_threshold: Consecutive failures before opening circuit
             recovery_timeout: Seconds to wait before attempting recovery
-
-            half_open_max_calls: ⚠️ NOT IMPLEMENTED - Reserved for future use to allow
-                multiple test calls in HALF_OPEN state. Currently the
-                circuit closes immediately on the first successful call.
         """
         self.failure_threshold = failure_threshold
         self.recovery_timeout = recovery_timeout
-        self.half_open_max_calls = half_open_max_calls
 
         # State tracking
         self.state = CircuitState.CLOSED
         self.failure_count = 0
         self.success_count = 0
         self.last_failure_time: datetime | None = None
-        self.half_open_calls = 0
+        self._probe_in_flight = False
 
     async def call(self, func: Callable, *args, **kwargs) -> Any:
         r"""Execute function with circuit breaker protection.
@@ -124,7 +118,8 @@ class CircuitBreaker:
             Result from func
 
         Raises:
-            CircuitBreakerOpenError: If circuit is OPEN
+            CircuitBreakerOpenError: If circuit is OPEN (or another recovery
+                probe is already in flight in HALF_OPEN)
             Exception: Original exception from func if call fails
         """
         # Check if circuit is OPEN
@@ -138,6 +133,15 @@ class CircuitBreaker:
                     f"Retry after: {self.recovery_timeout}s"
                 )
 
+        # HALF_OPEN allows exactly one probe at a time; concurrent callers
+        # fail fast instead of dogpiling the recovering service.
+        if self.state == CircuitState.HALF_OPEN:
+            if self._probe_in_flight:
+                raise CircuitBreakerOpenError(
+                    "Circuit breaker is HALF_OPEN with a recovery probe in flight"
+                )
+            self._probe_in_flight = True
+
         # Execute the function
         try:
             result = await func(*args, **kwargs)
@@ -146,6 +150,8 @@ class CircuitBreaker:
         except Exception:
             self._on_failure()
             raise
+        finally:
+            self._probe_in_flight = False
 
     def _should_attempt_reset(self) -> bool:
         """Check if enough time has passed to try recovery.
@@ -163,7 +169,6 @@ class CircuitBreaker:
         """Move to HALF_OPEN state for testing recovery."""
         logger.info("Circuit breaker transitioning to HALF_OPEN state")
         self.state = CircuitState.HALF_OPEN
-        self.half_open_calls = 0
 
     def _on_success(self):
         """Handle successful call.
@@ -182,7 +187,6 @@ class CircuitBreaker:
             logger.info("Circuit breaker closing after successful recovery")
             self.state = CircuitState.CLOSED
             self.failure_count = 0
-            self.half_open_calls = 0
 
     def _on_failure(self):
         """Handle failed call.
@@ -202,7 +206,6 @@ class CircuitBreaker:
             # Any failure in HALF_OPEN reopens the circuit
             logger.warning("Circuit breaker reopening after HALF_OPEN failure")
             self.state = CircuitState.OPEN
-            self.half_open_calls = 0
 
     def get_state(self) -> CircuitState:
         """Get current circuit state.

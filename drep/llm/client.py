@@ -76,12 +76,10 @@ import logging  # For structured logging throughout the module
 import re  # For regex-based JSON extraction and cleaning
 import subprocess  # For executing git commands to get commit SHA
 import time  # For rate limiting time calculations
+from collections.abc import Callable  # For transport guard type hint
 from dataclasses import dataclass  # For simple data classes (LLMResponse)
 from pathlib import Path  # For cross-platform file path handling
-from typing import (  # Type hints for better IDE support and clarity
-    TYPE_CHECKING,
-    Any,
-)
+from typing import TYPE_CHECKING, Any  # Type hints for better IDE support and clarity
 
 import httpx  # Modern async HTTP client (fallback when open-agent-sdk unavailable)
 from pydantic import BaseModel  # For JSON schema validation and type safety
@@ -92,7 +90,10 @@ from drep.constants import (
     MAX_TOKENS_PER_MINUTE,
     REPO_SEMAPHORE_TTL_SECONDS,
 )
-from drep.llm.circuit_breaker import CircuitBreaker  # Prevents cascade failures
+from drep.llm.circuit_breaker import (  # Prevents cascade failures
+    CircuitBreaker,
+    CircuitBreakerOpenError,
+)
 from drep.llm.metrics import LLMMetrics  # Tracks usage statistics for cost monitoring
 
 if TYPE_CHECKING:
@@ -1138,6 +1139,12 @@ class LLMClient:
             # Circuit breaker disabled via flag
             self.circuit_breaker = None
 
+    async def _guarded_transport(self, func: Callable, **kwargs: Any) -> Any:
+        """Invoke a provider transport call, guarded by the circuit breaker when enabled."""
+        if self.circuit_breaker is None:
+            return await func(**kwargs)
+        return await self.circuit_breaker.call(func, **kwargs)
+
     async def analyze_code(
         self,
         system_prompt: str,
@@ -1207,9 +1214,11 @@ class LLMClient:
                     # Use Bedrock provider if configured.
                     # Bedrock returns a dict; the OpenAI-compatible path returns an
                     # SDK-like object, so the handling below branches on provider.
+                    # Both transports run through the circuit breaker when enabled.
                     response: Any
                     if self._provider == "bedrock":
-                        response = await self.bedrock_client.chat_completion(
+                        response = await self._guarded_transport(
+                            self.bedrock_client.chat_completion,
                             messages=[
                                 {"role": "system", "content": system_prompt},
                                 {"role": "user", "content": code},
@@ -1219,7 +1228,8 @@ class LLMClient:
                         )
                     else:
                         # Use OpenAI-compatible provider (open-agent-sdk or HTTP)
-                        response = await self.client.chat.completions.create(
+                        response = await self._guarded_transport(
+                            self.client.chat.completions.create,
                             model=self.model,
                             messages=[
                                 {"role": "system", "content": system_prompt},
@@ -1288,7 +1298,11 @@ class LLMClient:
 
                     return llm_response
 
-            except Exception as e:  # noqa: PERF203 - try wraps one retry attempt by design
+            except CircuitBreakerOpenError:  # noqa: PERF203 - fail fast, not a retry candidate
+                # Fail fast: an open circuit must not be retried or counted
+                # as a transport failure
+                raise
+            except Exception as e:
                 last_exception = e
 
                 # Record failed request

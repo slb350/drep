@@ -1043,3 +1043,84 @@ async def test_llm_client_bedrock_allows_none_endpoint():
 
         assert client._provider == "bedrock"
         assert client.bedrock_client.model == "anthropic.claude-haiku-4-5-20251001-v1:0"
+
+
+class TestCircuitBreakerWiring:
+    """C23: LLMClient wraps the provider transport call in its CircuitBreaker."""
+
+    @staticmethod
+    def _failing_transport():
+        calls = {"n": 0}
+
+        async def create(**kwargs):
+            calls["n"] += 1
+            raise RuntimeError("transport down")
+
+        return calls, create
+
+    @staticmethod
+    def _ok_transport():
+        calls = {"n": 0}
+
+        from types import SimpleNamespace
+
+        ok_resp = SimpleNamespace(
+            choices=[SimpleNamespace(message=SimpleNamespace(content="ok"))],
+            usage=SimpleNamespace(total_tokens=10, prompt_tokens=4, completion_tokens=6),
+            model="test-model",
+        )
+
+        async def create(**kwargs):
+            calls["n"] += 1
+            return ok_resp
+
+        return calls, create
+
+    @pytest.mark.asyncio
+    async def test_consecutive_failures_open_circuit(self):
+        """After threshold transport failures the breaker opens and short-circuits."""
+        from drep.llm.circuit_breaker import CircuitBreaker, CircuitBreakerOpenError
+        from drep.llm.client import LLMClient
+
+        calls, create = self._failing_transport()
+        client = LLMClient(
+            endpoint="http://localhost:1234/v1",
+            model="m",
+            max_retries=1,
+            circuit_breaker=CircuitBreaker(failure_threshold=2, recovery_timeout=60),
+        )
+        client.client = _FakeChat(create)
+
+        for _ in range(2):
+            with pytest.raises(RuntimeError, match="transport down"):
+                await client.analyze_code("sys", "code")
+        assert calls["n"] == 2
+
+        # Circuit open: next call fails fast WITHOUT invoking the transport
+        with pytest.raises(CircuitBreakerOpenError):
+            await client.analyze_code("sys", "code")
+        assert calls["n"] == 2
+
+    @pytest.mark.asyncio
+    async def test_disabled_breaker_leaves_transport_unwrapped(self):
+        """enable_circuit_breaker=False keeps direct transport calls."""
+        from drep.llm.client import LLMClient
+
+        calls, create = self._ok_transport()
+        client = LLMClient(
+            endpoint="http://localhost:1234/v1",
+            model="m",
+            enable_circuit_breaker=False,
+        )
+        client.client = _FakeChat(create)
+
+        resp = await client.analyze_code("sys", "code")
+        assert resp.content == "ok"
+        assert calls["n"] == 1
+
+
+class _FakeChat:
+    def __init__(self, create):
+        self.chat = type(
+            "Chat", (), {"completions": type("Completions", (), {"create": staticmethod(create)})()}
+        )()
