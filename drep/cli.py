@@ -21,7 +21,7 @@ from drep.cli_validators import (
     RepositoryListType,
     URLType,
 )
-from drep.config import find_config_file, get_user_config_dir, load_config
+from drep.config import Config, find_config_file, get_user_config_dir, load_config
 from drep.core.issue_manager import IssueManager
 from drep.core.scanner import RepositoryScanner
 from drep.db import init_database
@@ -611,6 +611,72 @@ def scan(repository, config, show_metrics, show_progress):
         click.echo(f"Error during scan: {e}", err=True)
 
 
+def _resolve_platform(config: Config, owner: str, repo: str) -> tuple[str, BaseAdapter, str, str]:
+    """Resolve the platform adapter, git clone URL, and token from config.
+
+    Single source of truth for platform selection (precedence: gitea,
+    then github, then gitlab — Gitea first for backward compatibility),
+    shared by the scan and review workflows.
+
+    Args:
+        config: Loaded configuration
+        owner: Repository owner
+        repo: Repository name
+
+    Returns:
+        Tuple of (platform name, adapter instance, git URL, git token)
+
+    Raises:
+        click.Abort: If no platform is configured
+    """
+    if config.gitea is not None:
+        adapter: BaseAdapter = GiteaAdapter(config.gitea.url, config.gitea.token.get_secret_value())
+        git_url = f"{config.gitea.url.rstrip('/')}/{owner}/{repo}.git"
+        return "gitea", adapter, git_url, config.gitea.token.get_secret_value()
+
+    if config.github is not None:
+        from drep.adapters.github import GitHubAdapter
+
+        adapter = GitHubAdapter(
+            token=config.github.token.get_secret_value(),
+            url=str(config.github.url) if config.github.url else "https://api.github.com",
+        )
+        # GitHub git URL format: https://github.com/owner/repo.git
+        # Handle default GitHub.com case (config.github.url is None)
+        if config.github.url is None or "github.com" in str(config.github.url):
+            git_url = f"https://github.com/{owner}/{repo}.git"
+        else:
+            # GitHub Enterprise - extract hostname from API URL
+            api_url = str(config.github.url)
+            hostname = api_url.replace("https://", "").replace("http://", "").split("/")[0]
+            git_url = f"https://{hostname}/{owner}/{repo}.git"
+        return "github", adapter, git_url, config.github.token.get_secret_value()
+
+    if config.gitlab is not None:
+        from drep.adapters.gitlab import GitLabAdapter
+
+        adapter = GitLabAdapter(
+            token=config.gitlab.token.get_secret_value(),
+            url=config.gitlab.url,  # None for GitLab.com, or custom URL
+        )
+        # GitLab git URL format: https://gitlab.com/owner/repo.git
+        # Handle default GitLab.com case (config.gitlab.url is None)
+        if config.gitlab.url is None:
+            git_url = f"https://gitlab.com/{owner}/{repo}.git"
+        else:
+            # Self-hosted GitLab
+            git_url = f"{config.gitlab.url.rstrip('/')}/{owner}/{repo}.git"
+        return "gitlab", adapter, git_url, config.gitlab.token.get_secret_value()
+
+    # No platform configured (shouldn't happen - Config validator requires at least one)
+    click.echo(
+        "Error: No platform configured. "
+        "Please add [gitea], [github], or [gitlab] to your config.yaml.",
+        err=True,
+    )
+    raise click.Abort()
+
+
 async def _run_scan(
     owner: str,
     repo: str,
@@ -631,61 +697,7 @@ async def _run_scan(
     config = load_config(config_path)
 
     # Determine which adapter to use (prefer Gitea for backward compatibility)
-    platform = None
-    adapter: BaseAdapter | None = None
-    git_url = None
-    git_token = None
-
-    if config.gitea is not None:
-        # Use Gitea adapter
-        platform = "gitea"
-        adapter = GiteaAdapter(config.gitea.url, config.gitea.token.get_secret_value())
-        git_url = f"{config.gitea.url.rstrip('/')}/{owner}/{repo}.git"
-        git_token = config.gitea.token.get_secret_value()
-    elif config.github is not None:
-        # Use GitHub adapter
-        platform = "github"
-        from drep.adapters.github import GitHubAdapter
-
-        adapter = GitHubAdapter(
-            token=config.github.token.get_secret_value(),
-            url=str(config.github.url) if config.github.url else "https://api.github.com",
-        )
-        # GitHub git URL format: https://github.com/owner/repo.git
-        # Handle default GitHub.com case (config.github.url is None)
-        if config.github.url is None or "github.com" in str(config.github.url):
-            git_url = f"https://github.com/{owner}/{repo}.git"
-        else:
-            # GitHub Enterprise - extract hostname from API URL
-            api_url = str(config.github.url)
-            hostname = api_url.replace("https://", "").replace("http://", "").split("/")[0]
-            git_url = f"https://{hostname}/{owner}/{repo}.git"
-        git_token = config.github.token.get_secret_value()
-    elif config.gitlab is not None:
-        # Use GitLab adapter
-        platform = "gitlab"
-        from drep.adapters.gitlab import GitLabAdapter
-
-        adapter = GitLabAdapter(
-            token=config.gitlab.token.get_secret_value(),
-            url=config.gitlab.url,  # None for GitLab.com, or custom URL
-        )
-        # GitLab git URL format: https://gitlab.com/owner/repo.git
-        # Handle default GitLab.com case (config.gitlab.url is None)
-        if config.gitlab.url is None:
-            git_url = f"https://gitlab.com/{owner}/{repo}.git"
-        else:
-            # Self-hosted GitLab
-            git_url = f"{config.gitlab.url.rstrip('/')}/{owner}/{repo}.git"
-        git_token = config.gitlab.token.get_secret_value()
-    else:
-        # No platform configured (shouldn't happen - Config validator requires at least one)
-        click.echo(
-            "Error: No platform configured. "
-            "Please add [gitea], [github], or [gitlab] to your config.yaml.",
-            err=True,
-        )
-        raise click.Abort()
+    platform, adapter, git_url, git_token = _resolve_platform(config, owner, repo)
 
     # Initialize components
     session = init_database(config.database_url)
@@ -1049,39 +1061,7 @@ async def _run_review(
         return
 
     # Determine which adapter to use (prefer Gitea for backward compatibility)
-    platform = None
-    adapter: BaseAdapter | None = None
-
-    if config.gitea is not None:
-        # Use Gitea adapter
-        platform = "gitea"
-        adapter = GiteaAdapter(config.gitea.url, config.gitea.token.get_secret_value())
-    elif config.github is not None:
-        # Use GitHub adapter
-        platform = "github"
-        from drep.adapters.github import GitHubAdapter
-
-        adapter = GitHubAdapter(
-            token=config.github.token.get_secret_value(),
-            url=str(config.github.url) if config.github.url else "https://api.github.com",
-        )
-    elif config.gitlab is not None:
-        # Use GitLab adapter
-        platform = "gitlab"
-        from drep.adapters.gitlab import GitLabAdapter
-
-        adapter = GitLabAdapter(
-            token=config.gitlab.token.get_secret_value(),
-            url=config.gitlab.url,  # None for GitLab.com, or custom URL
-        )
-    else:
-        # No platform configured (shouldn't happen - Config validator requires at least one)
-        click.echo(
-            "Error: No platform configured. "
-            "Please add [gitea], [github], or [gitlab] to your config.yaml.",
-            err=True,
-        )
-        raise click.Abort()
+    platform, adapter, _git_url, _git_token = _resolve_platform(config, owner, repo)
 
     # Initialize components
     scanner = RepositoryScanner(init_database(config.database_url), config, gitea_adapter=adapter)

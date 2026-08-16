@@ -351,3 +351,47 @@ def another_top_level():
         assert "another_top_level" in names
         # Nested function should NOT be in the list
         assert "inner_helper" not in names
+
+
+class TestControlFlowNesting:
+    """C12: helpers under if/try/with inside a function must be excluded.
+
+    The old parent-only check missed control-flow nesting: a function
+    defined under if/try/with *inside another function* leaked in as a
+    top-level candidate.
+    """
+
+    CODE = """
+def outer():
+    if True:
+        def helper_under_if():
+            pass
+    try:
+        def helper_under_try():
+            pass
+    except Exception:
+        pass
+    with open("f") as f:
+        def helper_under_with():
+            pass
+
+
+if CONDITION:
+    def module_level_under_if():
+        pass
+"""
+
+    def test_nested_helpers_under_control_flow_excluded(self):
+        from drep.docstring.ast_utils import extract_functions
+
+        names = [f.name for f in extract_functions(self.CODE)]
+        assert "helper_under_if" not in names
+        assert "helper_under_try" not in names
+        assert "helper_under_with" not in names
+
+    def test_module_level_function_under_if_included(self):
+        from drep.docstring.ast_utils import extract_functions
+
+        names = [f.name for f in extract_functions(self.CODE)]
+        assert "outer" in names
+        assert "module_level_under_if" in names

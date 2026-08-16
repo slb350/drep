@@ -548,3 +548,69 @@ class TestStructuredFormatter:
         assert "exception" in parsed
         assert "ValueError" in parsed["exception"]
         assert "Test error" in parsed["exception"]
+
+
+class TestAggregateCompleteness:
+    """C6: aggregation must preserve latency totals and per-analyzer data.
+
+    aggregate_history manually merged a subset of fields, so serialized
+    latency totals (never persisted) and by_analyzer were lost —
+    'drep metrics --days' reported avg=0.0 with an empty analyzer breakdown.
+    """
+
+    def _session(self, latency_total: float, successful: int) -> dict:
+        return {
+            "session_start": datetime.now().isoformat(),
+            "last_request": None,
+            "total_requests": successful,
+            "successful_requests": successful,
+            "failed_requests": 0,
+            "cached_requests": 0,
+            "total_tokens_prompt": 100,
+            "total_tokens_completion": 50,
+            "total_latency_ms": latency_total,
+            "min_latency_ms": latency_total / successful,
+            "max_latency_ms": latency_total / successful,
+            "by_analyzer": {
+                "code_quality": {
+                    "requests": successful,
+                    "tokens_prompt": 100,
+                    "tokens_completion": 50,
+                }
+            },
+        }
+
+    def test_to_dict_persists_raw_latency_total(self):
+        m = LLMMetrics()
+        m.record_request(
+            "x", success=True, cached=False, tokens_prompt=10, tokens_completion=5, latency_ms=250.0
+        )
+        d = m.to_dict()
+        assert d["total_latency_ms"] == 250.0
+
+    def test_aggregate_preserves_latency_and_analyzers(self, tmp_path):
+        collector = MetricsCollector(tmp_path / "metrics.json")
+        with collector.metrics_file.open("w") as f:
+            json.dump([self._session(1000.0, 2), self._session(500.0, 1)], f)
+
+        agg = collector.aggregate_history(days=30)
+
+        # Latency survives: total 1500ms over 3 successful requests
+        assert agg.total_latency_ms == 1500.0
+        assert agg.avg_latency_ms == pytest.approx(500.0)
+        # Analyzer breakdown survives
+        assert agg.by_analyzer["code_quality"]["requests"] == 3
+        assert agg.by_analyzer["code_quality"]["tokens_prompt"] == 200
+
+    def test_aggregate_backfills_legacy_latency(self, tmp_path):
+        """Sessions written before total_latency_ms existed get a best-effort estimate."""
+        legacy = self._session(0.0, 2)
+        del legacy["total_latency_ms"]
+        legacy["avg_latency_ms"] = 300.0  # 2 * 300 = 600ms estimated total
+
+        collector = MetricsCollector(tmp_path / "metrics.json")
+        with collector.metrics_file.open("w") as f:
+            json.dump([legacy], f)
+
+        agg = collector.aggregate_history(days=30)
+        assert agg.total_latency_ms == pytest.approx(600.0)

@@ -3,6 +3,7 @@
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import click
 import pytest
 import yaml
 from click.testing import CliRunner
@@ -2165,3 +2166,81 @@ class TestEndToEndIntegration:
             assert result.exit_code != 0
             # Error message should be helpful (not a stack trace)
             assert "error" in result.output.lower() or "invalid" in result.output.lower()
+
+
+class TestResolvePlatform:
+    """C17: platform selection is single-sourced in _resolve_platform.
+
+    Both the scan and review workflows duplicated the gitea>github>gitlab
+    chain; precedence bugs could diverge between them.
+    """
+
+    def _config(self, tmp_path, yaml_text):
+        from drep.config import load_config
+
+        cfg = tmp_path / "config.yaml"
+        cfg.write_text(yaml_text)
+        return load_config(str(cfg))
+
+    def test_prefers_gitea_when_all_configured(self, tmp_path):
+        from drep.cli import _resolve_platform
+
+        config = self._config(
+            tmp_path,
+            """
+gitea:
+  url: http://localhost:3000
+  token: t-gitea
+  repositories: ["o/*"]
+github:
+  token: t-github
+  repositories: ["o/*"]
+gitlab:
+  token: t-gitlab
+  repositories: ["o/*"]
+""",
+        )
+        name, _adapter, git_url, token = _resolve_platform(config, "o", "r")
+        assert name == "gitea"
+        assert "localhost:3000" in git_url
+        assert token == "t-gitea"
+
+    def test_github_fallback_and_url(self, tmp_path):
+        from drep.cli import _resolve_platform
+
+        config = self._config(
+            tmp_path,
+            """
+github:
+  token: t-github
+  repositories: ["o/*"]
+""",
+        )
+        name, _adapter, git_url, token = _resolve_platform(config, "o", "r")
+        assert name == "github"
+        assert git_url == "https://github.com/o/r.git"
+        assert token == "t-github"
+
+    def test_gitlab_selfhosted_url(self, tmp_path):
+        from drep.cli import _resolve_platform
+
+        config = self._config(
+            tmp_path,
+            """
+gitlab:
+  token: t-gitlab
+  url: https://gitlab.example.com
+  repositories: ["o/*"]
+""",
+        )
+        name, _adapter, git_url, _token = _resolve_platform(config, "o", "r")
+        assert name == "gitlab"
+        assert git_url == "https://gitlab.example.com/o/r.git"
+
+    def test_no_platform_aborts(self, tmp_path):
+        from drep.cli import _resolve_platform
+        from drep.models.config import Config
+
+        config = Config(gitea=None, github=None, gitlab=None, require_platform_config=False)
+        with pytest.raises(click.Abort):
+            _resolve_platform(config, "o", "r")

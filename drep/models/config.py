@@ -228,6 +228,11 @@ class Config(BaseModel):
     documentation: DocumentationConfig = Field(default_factory=DocumentationConfig)
     database_url: str = "sqlite:///./drep.db"
     llm: LLMConfig | None = Field(default=None, description="LLM configuration")
+    webhook_secret: SecretStr | None = Field(
+        default=None,
+        description="Shared secret for webhook HMAC-SHA256 signature verification "
+        "(X-Gitea-Signature). Unset = webhooks accepted without authentication.",
+    )
 
     # Internal field to control platform validation (for pre-commit hooks)
     # Excluded from serialization but accessible in validators

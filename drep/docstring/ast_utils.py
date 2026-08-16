@@ -33,14 +33,23 @@ class ClassInfo:
     is_public: bool
 
 
-def _collect_function_nodes(node: ast.AST) -> list[tuple[FuncDefNode, ast.AST]]:
-    """Collect all function and async function nodes with their parent node."""
-    function_nodes: list[tuple[FuncDefNode, ast.AST]] = []
+def _collect_function_nodes(node: ast.AST, inside_function: bool = False) -> list[FuncDefNode]:
+    """Collect function/async function nodes not nested inside another function.
+
+    A function defined under control flow (if/try/with) *inside* a function is
+    still a nested helper and is excluded; the same construct at module or
+    class level is included.
+    """
+    function_nodes: list[FuncDefNode] = []
 
     for child in ast.iter_child_nodes(node):
         if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            function_nodes.append((child, node))
-        function_nodes.extend(_collect_function_nodes(child))
+            if not inside_function:
+                function_nodes.append(child)
+            # Descend into the function body: anything defined within is nested
+            function_nodes.extend(_collect_function_nodes(child, inside_function=True))
+        else:
+            function_nodes.extend(_collect_function_nodes(child, inside_function))
 
     return function_nodes
 
@@ -100,12 +109,8 @@ def extract_functions(code: str) -> list[FunctionInfo]:
     """
     tree = ast.parse(code)
 
-    # Collect all functions but skip nested helpers (parent is another function)
-    return [
-        _build_function_info(node)
-        for node, parent in _collect_function_nodes(tree)
-        if not isinstance(parent, (ast.FunctionDef, ast.AsyncFunctionDef))
-    ]
+    # Collect all functions but skip nested helpers (defined inside another function)
+    return [_build_function_info(node) for node in _collect_function_nodes(tree)]
 
 
 def extract_classes(code: str) -> list[ClassInfo]:
