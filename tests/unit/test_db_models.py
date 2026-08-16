@@ -200,8 +200,11 @@ def test_finding_cache_index_exists(engine):
     assert "idx_finding_hash" in index_names
 
 
-def test_finding_cache_nullable_issue_number(session):
-    """Test that issue_number can be null."""
+def test_finding_cache_issue_number_required(session):
+    """C20: issue_number is NOT NULL — a NULL would suppress the finding forever."""
+    import pytest
+    from sqlalchemy.exc import IntegrityError
+
     from drep.db.models import FindingCache
 
     cache = FindingCache(
@@ -209,13 +212,13 @@ def test_finding_cache_nullable_issue_number(session):
         repo="drep",
         file_path="test.py",
         finding_hash="abc123",
-        issue_number=None,  # Explicitly None
+        issue_number=None,
     )
 
     session.add(cache)
-    session.commit()
-
-    assert cache.issue_number is None
+    with pytest.raises(IntegrityError):
+        session.commit()
+    session.rollback()
 
 
 def test_repository_scan_query_by_owner_repo(session):

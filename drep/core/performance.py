@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import warnings
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -95,7 +96,9 @@ class ProgressTracker:
 
 
 class ParallelAnalyzer:
-    """Optimize parallel file analysis with memory management.
+    """DEPRECATED: no production callers — will be removed in drep 1.3.0.
+
+    Optimize parallel file analysis with memory management.
 
     Features:
     - Concurrent execution with semaphore control
@@ -115,6 +118,12 @@ class ParallelAnalyzer:
             max_concurrent: Maximum number of concurrent operations
             max_memory_mb: Maximum memory usage in megabytes (unused for now)
         """
+        warnings.warn(
+            "ParallelAnalyzer is deprecated (no production callers) and will be "
+            "removed in drep 1.3.0",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         self.max_concurrent = max_concurrent
         self.max_memory_mb = max_memory_mb
         self.semaphore = asyncio.Semaphore(max_concurrent)
@@ -193,6 +202,12 @@ async def timeout_with_partial_results(timeout_seconds: float, partial_results: 
     Raises:
         TimeoutError (asyncio.TimeoutError): If timeout is exceeded
     """
+    warnings.warn(
+        "timeout_with_partial_results is deprecated (no production callers) and "
+        "will be removed in drep 1.3.0",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     try:
         async with _asyncio_timeout(timeout_seconds):
             yield

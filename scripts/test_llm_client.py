@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
 """Manual test script for LLM client.
 
-This script tests the LLM client with the real LM Studio endpoint
+This script tests the LLM client with a real LLM endpoint
 to verify end-to-end connectivity and functionality.
 
 Usage:
-    python scripts/test_llm_client.py
+    DREP_TEST_LLM_ENDPOINT=https://your-llm-host/v1 python scripts/test_llm_client.py
 """
 
 import asyncio
+import os
 import sys
 from pathlib import Path
 
@@ -34,7 +35,7 @@ async def main():
     # Test 2: Initialize client
     print("\n2. Initializing LLM client...")
     client = LLMClient(
-        endpoint="https://lmstudio.localbrandonfamily.com/v1",
+        endpoint=os.environ.get("DREP_TEST_LLM_ENDPOINT", "http://localhost:1234/v1"),
         model="qwen/qwen3-30b-a3b-2507",
         temperature=0.2,
         max_tokens=1000,
@@ -48,10 +49,12 @@ async def main():
     print("\n3. Testing basic connection...")
     try:
         response = await client.analyze_code(
-            system_prompt="You are a helpful assistant. Say 'Hello from LM Studio!' in a friendly way.",
+            system_prompt=(
+                "You are a helpful assistant. Say 'Hello from the LLM endpoint!' in a friendly way."
+            ),
             code="",
         )
-        print(f"   ✓ Connected successfully!")
+        print("   ✓ Connected successfully!")
         print(f"   Response: {response.content[:100]}...")
         print(f"   Tokens used: {response.tokens_used}")
         print(f"   Latency: {response.latency_ms:.0f}ms")
@@ -68,7 +71,7 @@ async def main():
             system_prompt='Return this JSON: {"status": "ok", "test_number": 42}',
             code="",
         )
-        print(f"   ✓ JSON parsed successfully!")
+        print("   ✓ JSON parsed successfully!")
         print(f"   Result: {result}")
     except Exception as e:
         print(f"   ✗ JSON parsing failed: {e}")
@@ -82,10 +85,12 @@ def add_numbers(a, b):
 """
     try:
         response = await client.analyze_code(
-            system_prompt="Analyze this Python function. Is it well-written? Respond in 1-2 sentences.",
+            system_prompt=(
+                "Analyze this Python function. Is it well-written? Respond in 1-2 sentences."
+            ),
             code=code,
         )
-        print(f"   ✓ Code analysis complete!")
+        print("   ✓ Code analysis complete!")
         print(f"   Analysis: {response.content[:150]}...")
         print(f"   Tokens: {response.tokens_used}")
     except Exception as e:
@@ -122,7 +127,7 @@ def add_numbers(a, b):
 
         # Create new client with cache
         cached_client = LLMClient(
-            endpoint="https://lmstudio.localbrandonfamily.com/v1",
+            endpoint=os.environ.get("DREP_TEST_LLM_ENDPOINT", "http://localhost:1234/v1"),
             model="qwen/qwen3-30b-a3b-2507",
             max_tokens=500,
             cache=cache,
@@ -130,7 +135,7 @@ def add_numbers(a, b):
 
         # First request (cache miss)
         start_time = asyncio.get_event_loop().time()
-        response1 = await cached_client.analyze_code(
+        await cached_client.analyze_code(
             system_prompt="Say 'Cache test'",
             code="def test(): pass",
             commit_sha="test-commit",
@@ -139,14 +144,14 @@ def add_numbers(a, b):
 
         # Second request (cache hit)
         start_time = asyncio.get_event_loop().time()
-        response2 = await cached_client.analyze_code(
+        await cached_client.analyze_code(
             system_prompt="Say 'Cache test'",
             code="def test(): pass",
             commit_sha="test-commit",
         )
         second_latency = asyncio.get_event_loop().time() - start_time
 
-        print(f"   ✓ Cache working!")
+        print("   ✓ Cache working!")
         print(f"   First request: {first_latency * 1000:.0f}ms")
         print(f"   Second request (cached): {second_latency * 1000:.0f}ms")
         print(f"   Speedup: {first_latency / second_latency:.1f}x faster")

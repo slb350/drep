@@ -234,3 +234,35 @@ class TestTimeoutWithPartialResults:
         # Results should be sequential (no corruption)
         for i, val in enumerate(partial_results):
             assert val == i
+
+
+class TestDeprecations:
+    """C8: ParallelAnalyzer/timeout_with_partial_results are deprecated (removal in 1.3.0).
+
+    Zero production callers; kept one release for external importers.
+    """
+
+    def test_parallel_analyzer_emits_deprecation_warning(self):
+        import warnings
+
+        from drep.core.performance import ParallelAnalyzer
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            ParallelAnalyzer(max_concurrent=2)
+        assert any(issubclass(w.category, DeprecationWarning) for w in caught)
+
+    def test_timeout_with_partial_results_emits_deprecation_warning(self):
+        import asyncio
+        import warnings
+
+        from drep.core.performance import timeout_with_partial_results
+
+        async def scenario():
+            with warnings.catch_warnings(record=True) as caught:
+                warnings.simplefilter("always")
+                async with timeout_with_partial_results(60.0, ["partial"]):
+                    pass
+            assert any(issubclass(w.category, DeprecationWarning) for w in caught)
+
+        asyncio.run(scenario())
