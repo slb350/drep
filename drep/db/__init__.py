@@ -1,8 +1,9 @@
 """Database layer."""
 
 import logging
+from typing import cast
 
-from sqlalchemy import MetaData, create_engine
+from sqlalchemy import MetaData, Table, create_engine
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.schema import CreateTable
@@ -38,7 +39,8 @@ def _migrate_finding_cache_issue_number(engine: Engine) -> None:
     # Build the replacement table from the model rather than hand-written DDL,
     # so a future column change cannot leave this migration silently recreating
     # a stale schema that disagrees with FindingCache.
-    table = FindingCache.__table__
+    # __table__ is typed as FromClause on the declarative base; it is a Table.
+    table = cast(Table, FindingCache.__table__)
     staging = table.to_metadata(MetaData(), name="finding_cache_new")
     column_list = ", ".join(column.name for column in table.columns)
 
