@@ -419,6 +419,17 @@ Configure webhooks to point to:
 - GitLab: `http://your-server:8000/webhooks/gitlab`
 - GitHub: `http://your-server:8000/webhooks/github`
 
+**Webhook authentication (Gitea):** set a shared secret in your config and the same
+secret in Gitea's webhook settings — requests without a valid `X-Gitea-Signature`
+(HMAC-SHA256 of the raw body) are rejected with 403:
+
+```yaml
+webhook_secret: ${DREP_WEBHOOK_SECRET}
+```
+
+Without a configured secret, webhooks are accepted without authentication (a warning
+is logged).
+
 #### Manual Scan
 ```bash
 # Scan a specific repository

@@ -561,7 +561,7 @@ class TestInitCommand:
 
         with (
             runner.isolated_filesystem(temp_dir=tmp_path),
-            patch("drep.cli.load_config") as mock_load,
+            patch("drep.cli_wizard.load_config") as mock_load,
         ):
             # Mock load_config to raise ValueError
             mock_load.side_effect = ValueError(
@@ -582,7 +582,7 @@ class TestInitCommand:
 
         with (
             runner.isolated_filesystem(temp_dir=tmp_path),
-            patch("drep.cli.load_config") as mock_load,
+            patch("drep.cli_wizard.load_config") as mock_load,
         ):
             # Mock load_config to raise ValidationError with multiple fields
             mock_load.side_effect = ValidationError.from_exception_data(
@@ -619,7 +619,7 @@ class TestInitCommand:
 
         with (
             runner.isolated_filesystem(temp_dir=tmp_path),
-            patch("drep.cli.load_config") as mock_load,
+            patch("drep.cli_wizard.load_config") as mock_load,
         ):
             # Mock load_config to raise an unexpected exception
             mock_load.side_effect = RuntimeError("Unexpected error in config parsing")
@@ -1140,7 +1140,7 @@ class TestScanCommand:
             )
 
             with (
-                patch("drep.cli.load_config") as mock_load,
+                patch("drep.cli_wizard.load_config") as mock_load,
                 patch("drep.cli._run_scan", new_callable=AsyncMock) as mock_run,
             ):
                 mock_load.return_value = gitea_config
@@ -1167,7 +1167,7 @@ class TestScanCommand:
             )
 
             with (
-                patch("drep.cli.load_config") as mock_load,
+                patch("drep.cli_wizard.load_config") as mock_load,
                 patch("drep.cli._run_scan", new_callable=AsyncMock) as mock_run,
             ):
                 mock_load.return_value = github_config
@@ -1199,7 +1199,7 @@ class TestScanCommand:
             )
 
             with (
-                patch("drep.cli.load_config") as mock_load,
+                patch("drep.cli_wizard.load_config") as mock_load,
                 patch("drep.cli._run_scan", new_callable=AsyncMock) as mock_run,
             ):
                 mock_load.return_value = both_config
@@ -1219,7 +1219,7 @@ class TestScanCommand:
             # Create config file so find_config_file succeeds
             Path("config.yaml").write_text("database_url: 'sqlite:///./test.db'")
 
-            with patch("drep.cli.load_config") as mock_load:
+            with patch("drep.cli_workflows.load_config") as mock_load:
                 # Return a mock config object with no platforms
                 # (bypasses Pydantic validation since we're mocking load_config)
                 class MockConfig:
@@ -1242,13 +1242,13 @@ class TestScanCommand:
 class TestScanWorkflow:
     """Tests for scan workflow integration."""
 
-    @patch("drep.cli.IssueManager")
-    @patch("drep.cli.DocumentationAnalyzer")
-    @patch("drep.cli.RepositoryScanner")
-    @patch("drep.cli.init_database")
-    @patch("drep.cli.GiteaAdapter")
-    @patch("drep.cli.load_config")
-    @patch("drep.cli.Repo")
+    @patch("drep.cli_workflows.IssueManager")
+    @patch("drep.cli_workflows.DocumentationAnalyzer")
+    @patch("drep.cli_workflows.RepositoryScanner")
+    @patch("drep.cli_workflows.init_database")
+    @patch("drep.cli_workflows.GiteaAdapter")
+    @patch("drep.cli_workflows.load_config")
+    @patch("drep.cli_workflows.Repo")
     def test_successful_scan_workflow(
         self,
         mock_repo_class,
@@ -1333,13 +1333,13 @@ class TestScanWorkflow:
             scanner.close.assert_called_once()
             adapter.close.assert_called_once()
 
-    @patch("drep.cli.IssueManager")
-    @patch("drep.cli.DocumentationAnalyzer")
-    @patch("drep.cli.RepositoryScanner")
-    @patch("drep.cli.init_database")
-    @patch("drep.cli.GiteaAdapter")
-    @patch("drep.cli.load_config")
-    @patch("drep.cli.Repo")
+    @patch("drep.cli_workflows.IssueManager")
+    @patch("drep.cli_workflows.DocumentationAnalyzer")
+    @patch("drep.cli_workflows.RepositoryScanner")
+    @patch("drep.cli_workflows.init_database")
+    @patch("drep.cli_workflows.GiteaAdapter")
+    @patch("drep.cli_workflows.load_config")
+    @patch("drep.cli_workflows.Repo")
     def test_token_file_has_secure_permissions(
         self,
         mock_repo_class,
@@ -1421,13 +1421,13 @@ class TestScanWorkflow:
                 f"Token file permissions were {token_file_permissions}, expected 600"
             )
 
-    @patch("drep.cli.IssueManager")
-    @patch("drep.cli.DocumentationAnalyzer")
-    @patch("drep.cli.RepositoryScanner")
-    @patch("drep.cli.init_database")
-    @patch("drep.cli.GiteaAdapter")
-    @patch("drep.cli.load_config")
-    @patch("drep.cli.Repo")
+    @patch("drep.cli_workflows.IssueManager")
+    @patch("drep.cli_workflows.DocumentationAnalyzer")
+    @patch("drep.cli_workflows.RepositoryScanner")
+    @patch("drep.cli_workflows.init_database")
+    @patch("drep.cli_workflows.GiteaAdapter")
+    @patch("drep.cli_workflows.load_config")
+    @patch("drep.cli_workflows.Repo")
     def test_askpass_script_has_secure_permissions(
         self,
         mock_repo_class,
@@ -1507,13 +1507,13 @@ class TestScanWorkflow:
                 f"Askpass script permissions were {askpass_permissions}, expected 700"
             )
 
-    @patch("drep.cli.IssueManager")
-    @patch("drep.cli.DocumentationAnalyzer")
-    @patch("drep.cli.RepositoryScanner")
-    @patch("drep.cli.init_database")
-    @patch("drep.cli.GiteaAdapter")
-    @patch("drep.cli.load_config")
-    @patch("drep.cli.Repo")
+    @patch("drep.cli_workflows.IssueManager")
+    @patch("drep.cli_workflows.DocumentationAnalyzer")
+    @patch("drep.cli_workflows.RepositoryScanner")
+    @patch("drep.cli_workflows.init_database")
+    @patch("drep.cli_workflows.GiteaAdapter")
+    @patch("drep.cli_workflows.load_config")
+    @patch("drep.cli_workflows.Repo")
     def test_token_not_in_environment_variables(
         self,
         mock_repo_class,
@@ -1600,13 +1600,13 @@ class TestScanWorkflow:
             # Verify GIT_ASKPASS is set (our security mechanism)
             assert "GIT_ASKPASS" in git_env, "GIT_ASKPASS should be set for secure token handling"
 
-    @patch("drep.cli.IssueManager")
-    @patch("drep.cli.DocumentationAnalyzer")
-    @patch("drep.cli.RepositoryScanner")
-    @patch("drep.cli.init_database")
-    @patch("drep.cli.GiteaAdapter")
-    @patch("drep.cli.load_config")
-    @patch("drep.cli.Repo")
+    @patch("drep.cli_workflows.IssueManager")
+    @patch("drep.cli_workflows.DocumentationAnalyzer")
+    @patch("drep.cli_workflows.RepositoryScanner")
+    @patch("drep.cli_workflows.init_database")
+    @patch("drep.cli_workflows.GiteaAdapter")
+    @patch("drep.cli_workflows.load_config")
+    @patch("drep.cli_workflows.Repo")
     @patch("shutil.rmtree")
     def test_cleanup_failure_is_logged_and_reported(
         self,
@@ -1712,19 +1712,18 @@ class TestCheckCommand:
             test_file = Path("test.py")
             test_file.write_text("def foo(): pass  # No docstring")
 
-            # Mock git operations
-            with patch("drep.cli.Repo") as mock_repo:
-                mock_repo.return_value.index.diff.return_value = []
+            # Mock scanner/analyzer to avoid real analysis
+            with patch("drep.cli.RepositoryScanner") as mock_scanner_class:
+                mock_scanner = mock_scanner_class.return_value
+                mock_scanner.get_staged_files.return_value = []
+                mock_scanner.analyze_code_quality = AsyncMock(return_value=[])
+                mock_scanner.analyze_docstrings = AsyncMock(return_value=[])
+                mock_scanner.close = AsyncMock()
 
-                # Mock scanner/analyzer to avoid real analysis
-                with patch("drep.cli.RepositoryScanner") as mock_scanner_class:
-                    mock_scanner = mock_scanner_class.return_value
-                    mock_scanner.get_staged_files.return_value = []
+                result = runner.invoke(cli, ["check", ".", "--config", "config.yaml"])
 
-                    result = runner.invoke(cli, ["check", ".", "--config", "config.yaml"])
-
-                    # Should succeed without requiring platform
-                    assert result.exit_code == 0
+                # Should succeed without requiring platform
+                assert result.exit_code == 0
 
     def test_check_returns_exit_code_one_when_findings_present(self, runner, tmp_path):
         """Test that check returns exit code 1 when issues found."""
@@ -1744,35 +1743,32 @@ class TestCheckCommand:
             test_file.write_text("def foo(): pass")
 
             # Mock finding issues
-            with patch("drep.cli.Repo") as mock_repo:
-                mock_repo.return_value.index.diff.return_value = []
+            with patch("drep.cli.RepositoryScanner") as mock_scanner_class:
+                # Mock scanner to return findings
+                from drep.models.findings import Finding
 
-                with patch("drep.cli.RepositoryScanner") as mock_scanner_class:
-                    # Mock scanner to return findings
-                    from drep.models.findings import Finding
+                mock_scanner = mock_scanner_class.return_value
+                mock_scanner.get_staged_files.return_value = ["test.py"]
 
-                    mock_scanner = mock_scanner_class.return_value
-                    mock_scanner.get_staged_files.return_value = ["test.py"]
+                # Mock analyze methods to return findings
+                async def mock_analyze(*args, **kwargs):
+                    return [
+                        Finding(
+                            type="test",
+                            severity="warning",
+                            file_path="test.py",
+                            line=1,
+                            message="Test finding",
+                        )
+                    ]
 
-                    # Mock analyze methods to return findings
-                    async def mock_analyze(*args, **kwargs):
-                        return [
-                            Finding(
-                                type="test",
-                                severity="warning",
-                                file_path="test.py",
-                                line=1,
-                                message="Test finding",
-                            )
-                        ]
+                mock_scanner.analyze_code_quality = AsyncMock(return_value=[])
+                mock_scanner.analyze_docstrings = AsyncMock(side_effect=mock_analyze)
 
-                    mock_scanner.analyze_code_quality = AsyncMock(return_value=[])
-                    mock_scanner.analyze_docstrings = AsyncMock(side_effect=mock_analyze)
+                result = runner.invoke(cli, ["check", ".", "--config", "config.yaml"])
 
-                    result = runner.invoke(cli, ["check", ".", "--config", "config.yaml"])
-
-                    # Should return exit code 1 when findings present
-                    assert result.exit_code == 1
+                # Should return exit code 1 when findings present
+                assert result.exit_code == 1
 
     def test_check_accepts_staged_flag(self, runner, tmp_path):
         """Test that check accepts --staged flag."""
@@ -2183,7 +2179,7 @@ class TestResolvePlatform:
         return load_config(str(cfg))
 
     def test_prefers_gitea_when_all_configured(self, tmp_path):
-        from drep.cli import _resolve_platform
+        from drep.cli_workflows import _resolve_platform
 
         config = self._config(
             tmp_path,
@@ -2206,7 +2202,7 @@ gitlab:
         assert token == "t-gitea"
 
     def test_github_fallback_and_url(self, tmp_path):
-        from drep.cli import _resolve_platform
+        from drep.cli_workflows import _resolve_platform
 
         config = self._config(
             tmp_path,
@@ -2222,7 +2218,7 @@ github:
         assert token == "t-github"
 
     def test_gitlab_selfhosted_url(self, tmp_path):
-        from drep.cli import _resolve_platform
+        from drep.cli_workflows import _resolve_platform
 
         config = self._config(
             tmp_path,
@@ -2238,7 +2234,7 @@ gitlab:
         assert git_url == "https://gitlab.example.com/o/r.git"
 
     def test_no_platform_aborts(self, tmp_path):
-        from drep.cli import _resolve_platform
+        from drep.cli_workflows import _resolve_platform
         from drep.models.config import Config
 
         config = Config(gitea=None, github=None, gitlab=None, require_platform_config=False)

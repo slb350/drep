@@ -81,6 +81,7 @@ ignore = [
 [tool.ruff.lint.per-file-ignores]
 # Lazy imports keep `drep --help` startup fast and optional deps optional.
 "drep/cli.py" = ["PLC0415"]
+"drep/cli_workflows.py" = ["PLC0415"]
 # Tests routinely import inside functions/fixtures for isolation.
 "tests/**" = ["PLC0415"]
 
