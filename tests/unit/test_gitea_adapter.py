@@ -4,6 +4,8 @@ import httpx
 import pytest
 import respx
 
+from drep.adapters.base import ReviewAnchor
+
 
 def mock_labels_response(labels_list):
     """Helper to create a label mock handler that supports pagination."""
@@ -733,10 +735,9 @@ async def test_create_pr_review_comment_success():
     try:
         # Should not raise
         await adapter.create_pr_review_comment(
-            owner="steve",
-            repo="drep",
-            pr_number=42,
-            commit_sha="abc123def456",
+            anchor=ReviewAnchor(
+                owner="steve", repo="drep", pr_number=42, commit_sha="abc123def456"
+            ),
             file_path="src/module.py",
             line=15,
             body="Consider adding error handling here",
@@ -767,10 +768,9 @@ async def test_create_pr_review_comment_sends_correct_payload():
 
     try:
         await adapter.create_pr_review_comment(
-            owner="steve",
-            repo="drep",
-            pr_number=42,
-            commit_sha="abc123def456",
+            anchor=ReviewAnchor(
+                owner="steve", repo="drep", pr_number=42, commit_sha="abc123def456"
+            ),
             file_path="src/module.py",
             line=15,
             body="Consider adding error handling here",
@@ -817,10 +817,9 @@ async def test_create_pr_review_comment_always_sends_non_empty_body():
 
     try:
         await adapter.create_pr_review_comment(
-            owner="steve",
-            repo="drep",
-            pr_number=42,
-            commit_sha="abc123def456",
+            anchor=ReviewAnchor(
+                owner="steve", repo="drep", pr_number=42, commit_sha="abc123def456"
+            ),
             file_path="src/module.py",
             line=15,
             body="",
@@ -848,10 +847,7 @@ async def test_create_pr_review_comment_error_handling():
     try:
         with pytest.raises(ValueError, match="Failed to create review comment"):
             await adapter.create_pr_review_comment(
-                owner="steve",
-                repo="drep",
-                pr_number=42,
-                commit_sha="abc123",
+                anchor=ReviewAnchor(owner="steve", repo="drep", pr_number=42, commit_sha="abc123"),
                 file_path="test.py",
                 line=10,
                 body="Comment",

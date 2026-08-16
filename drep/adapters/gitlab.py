@@ -23,7 +23,7 @@ from datetime import datetime
 
 import httpx
 
-from drep.adapters.base import BaseAdapter
+from drep.adapters.base import BaseAdapter, GitLabReviewAnchor, ReviewAnchor
 
 logger = logging.getLogger(__name__)
 
@@ -814,38 +814,27 @@ class GitLabAdapter(BaseAdapter):
                 f"Failed to create MR comment on !{pr_number} in {owner}/{repo}: {e.response.text}"
             ) from e
 
-    async def post_review_comment(
-        self,
-        owner: str,
-        repo: str,
-        pr_number: int,
-        file_path: str,
-        line: int,
-        body: str,
-    ) -> None:
-        """Post a line-specific review comment on a merge request.
+    async def get_review_anchor(self, owner: str, repo: str, pr_number: int) -> GitLabReviewAnchor:
+        """Fetch the GitLab review anchor (MR diff_refs) with a single MR fetch.
+
+        GitLab positions inline comments with base/head/start SHAs from the
+        MR's diff_refs; a bare commit SHA is not sufficient.
 
         Args:
             owner: Project namespace
             repo: Project name
             pr_number: Merge request IID
-            file_path: Path to file being commented on (relative to repo root)
-            line: Line number in the file (must be part of MR diff)
-            body: Comment body (markdown supported)
+
+        Returns:
+            GitLabReviewAnchor carrying base/head/start SHAs
 
         Raises:
-            ValueError: If review comment creation fails or network/API error occurs
-
-        Note:
-            GitLab uses "discussions" for inline comments with position objects.
-            Position requires: base_sha, head_sha, start_sha, new_path, new_line.
-            These are extracted from the MR's diff_refs.
+            ValueError: If diff_refs or any required SHA is missing
         """
-        # First, get MR data to extract commit SHAs from diff_refs
         mr_data = await self.get_pr(owner, repo, pr_number)
 
-        # Validate required diff_refs field exists
-        if "diff_refs" not in mr_data:
+        diff_refs = mr_data.get("diff_refs")
+        if not diff_refs:
             logger.error(
                 f"MR !{pr_number} response missing diff_refs in {owner}/{repo}",
                 extra={"repo_id": f"{owner}/{repo}", "mr_iid": pr_number, "mr_data": mr_data},
@@ -855,9 +844,6 @@ class GitLabAdapter(BaseAdapter):
                 "missing required 'diff_refs' field. MR may not have commits yet."
             )
 
-        diff_refs = mr_data["diff_refs"]
-
-        # Validate all required SHAs exist
         required_shas = ["base_sha", "head_sha", "start_sha"]
         for sha_field in required_shas:
             if sha_field not in diff_refs:
@@ -874,18 +860,81 @@ class GitLabAdapter(BaseAdapter):
                     f"missing required '{sha_field}' in diff_refs"
                 )
 
-        base_sha = diff_refs["base_sha"]
-        head_sha = diff_refs["head_sha"]
-        start_sha = diff_refs["start_sha"]
+        return GitLabReviewAnchor(
+            owner=owner,
+            repo=repo,
+            pr_number=pr_number,
+            commit_sha=diff_refs["head_sha"],
+            base_sha=diff_refs["base_sha"],
+            start_sha=diff_refs["start_sha"],
+        )
+
+    async def post_review_comment(
+        self,
+        owner: str,
+        repo: str,
+        pr_number: int,
+        file_path: str,
+        line: int,
+        body: str,
+    ) -> None:
+        """Post a line-specific review comment on a merge request.
+
+        Resolves the GitLab review anchor (MR diff_refs), then delegates to
+        ``create_pr_review_comment``.
+
+        Args:
+            owner: Project namespace
+            repo: Project name
+            pr_number: Merge request IID
+            file_path: Path to file being commented on (relative to repo root)
+            line: Line number in the file (must be part of MR diff)
+            body: Comment body (markdown supported)
+
+        Raises:
+            ValueError: If review comment creation fails or network/API error occurs
+        """
+        anchor = await self.get_review_anchor(owner, repo, pr_number)
+        await self.create_pr_review_comment(anchor, file_path, line, body)
+
+    async def create_pr_review_comment(
+        self,
+        anchor: ReviewAnchor,
+        file_path: str,
+        line: int,
+        body: str,
+    ) -> None:
+        """Post an inline review comment using a pre-fetched review anchor.
+
+        Args:
+            anchor: GitLabReviewAnchor carrying MR diff_refs (base/head/start SHAs)
+            file_path: File path relative to repo root
+            line: Line number in new version (after changes)
+            body: Comment body (markdown supported)
+
+        Raises:
+            ValueError: If the anchor lacks diff_refs, or comment creation fails
+        """
+        if (
+            not isinstance(anchor, GitLabReviewAnchor)
+            or not anchor.base_sha
+            or not anchor.start_sha
+        ):
+            raise ValueError(
+                "GitLab inline comments require a GitLabReviewAnchor with "
+                "base_sha/head_sha/start_sha from get_review_anchor()"
+            )
+
+        owner, repo, pr_number = anchor.owner, anchor.repo, anchor.pr_number
 
         project_id = self._encode_project_path(owner, repo)
         url = f"{self.api_url}/projects/{project_id}/merge_requests/{pr_number}/discussions"
 
         # Build position object (GitLab-specific format for inline comments)
         position = {
-            "base_sha": base_sha,
-            "start_sha": start_sha,
-            "head_sha": head_sha,
+            "base_sha": anchor.base_sha,
+            "start_sha": anchor.start_sha,
+            "head_sha": anchor.commit_sha,
             "position_type": "text",  # Can be 'text' or 'image'
             "new_path": file_path,
             "new_line": line,
@@ -980,42 +1029,6 @@ class GitLabAdapter(BaseAdapter):
                 f"Failed to create review comment on MR !{pr_number} in {owner}/{repo}: "
                 f"{e.response.text}"
             ) from e
-
-    async def create_pr_review_comment(
-        self,
-        owner: str,
-        repo: str,
-        pr_number: int,
-        commit_sha: str,
-        file_path: str,
-        line: int,
-        body: str,
-    ) -> None:
-        """Post an inline review comment on specific line (Gitea-compatible interface).
-
-        This method provides the same interface as Gitea/GitHub adapters for compatibility
-        with PRReviewAnalyzer, which calls adapter.create_pr_review_comment().
-
-        Args:
-            owner: Project namespace
-            repo: Project name
-            pr_number: Merge request IID
-            commit_sha: Commit SHA (ignored for GitLab - uses head_sha from diff_refs)
-            file_path: File path relative to repo root
-            line: Line number in new version
-            body: Comment body (markdown supported)
-
-        Raises:
-            ValueError: If review comment creation fails
-
-        Note:
-            GitLab uses discussions with position objects, not commit-based reviews.
-            The commit_sha parameter is accepted for API compatibility but not used.
-            Instead, GitLab requires base_sha/head_sha/start_sha from MR diff_refs.
-        """
-        # Delegate to post_review_comment which implements GitLab-specific logic
-        # The commit_sha parameter is ignored as GitLab uses diff_refs instead
-        await self.post_review_comment(owner, repo, pr_number, file_path, line, body)
 
     async def get_file_content(self, owner: str, repo: str, file_path: str, ref: str) -> str:
         """Get file content at a specific git reference.

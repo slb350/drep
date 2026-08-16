@@ -1094,7 +1094,8 @@ async def _run_review(
 
         # Review PR
         click.echo(f"Fetching {platform} PR #{pr_number}...")
-        result = await scanner.pr_analyzer.review_pr(owner, repo, pr_number)
+        prepared = await scanner.pr_analyzer.review_pr(owner, repo, pr_number)
+        result = prepared.result
 
         # Display results
         click.echo("\n=== Review Summary ===")
@@ -1119,9 +1120,7 @@ async def _run_review(
         # Post to PR (if enabled)
         if post_comments:
             click.echo("\nPosting review to PR...")
-            pr_data = await adapter.get_pr(owner, repo, pr_number)
-            commit_sha = pr_data["head"]["sha"]
-            await scanner.pr_analyzer.post_review(owner, repo, pr_number, commit_sha, result)
+            await scanner.pr_analyzer.post_review(prepared)
             click.echo("✓ Review posted!")
         else:
             click.echo("\n(Dry run - not posting to PR)")

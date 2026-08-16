@@ -6,6 +6,8 @@ import httpx
 import pytest
 import respx
 
+from drep.adapters.base import ReviewAnchor
+
 
 @pytest.mark.asyncio
 async def test_github_adapter_inherits_from_base_adapter():
@@ -518,12 +520,11 @@ async def test_create_pr_review_comment_success():
     adapter = GitHubAdapter("ghp_token")
 
     try:
-        # Should not raise - commit_sha provided directly
+        # Should not raise - anchor provided directly, no get_pr fetch
         await adapter.create_pr_review_comment(
-            owner="owner",
-            repo="repo",
-            pr_number=42,
-            commit_sha="abc123def456",
+            anchor=ReviewAnchor(
+                owner="owner", repo="repo", pr_number=42, commit_sha="abc123def456"
+            ),
             file_path="src/module.py",
             line=15,
             body="Consider adding error handling here",
@@ -554,16 +555,13 @@ async def test_create_pr_review_comment_sends_correct_payload():
 
     try:
         await adapter.create_pr_review_comment(
-            owner="owner",
-            repo="repo",
-            pr_number=42,
-            commit_sha="xyz789abc",
+            anchor=ReviewAnchor(owner="owner", repo="repo", pr_number=42, commit_sha="xyz789abc"),
             file_path="src/module.py",
             line=15,
             body="Consider adding error handling here",
         )
 
-        # Verify payload uses provided commit_sha (not fetched from PR)
+        # Verify payload uses the anchor's commit_sha (not fetched from PR)
         payload = request_data["payload"]
         assert payload["commit_id"] == "xyz789abc"  # Uses provided SHA
         assert payload["path"] == "src/module.py"
@@ -589,10 +587,7 @@ async def test_create_pr_review_comment_error_handling():
     try:
         with pytest.raises(ValueError, match=r"Failed to create review comment"):
             await adapter.create_pr_review_comment(
-                owner="owner",
-                repo="repo",
-                pr_number=42,
-                commit_sha="abc123",
+                anchor=ReviewAnchor(owner="owner", repo="repo", pr_number=42, commit_sha="abc123"),
                 file_path="test.py",
                 line=10,
                 body="Comment",
@@ -616,12 +611,11 @@ async def test_create_pr_review_comment_handles_422_validation():
     adapter = GitHubAdapter("ghp_token")
 
     try:
-        with pytest.raises(ValueError, match=r"Failed to create review comment"):
+        # C1: the 422 handling from post_review_comment is now in the canonical
+        # method, producing the specific invalid-line error
+        with pytest.raises(ValueError, match=r"Invalid line number 999"):
             await adapter.create_pr_review_comment(
-                owner="owner",
-                repo="repo",
-                pr_number=42,
-                commit_sha="abc123",
+                anchor=ReviewAnchor(owner="owner", repo="repo", pr_number=42, commit_sha="abc123"),
                 file_path="test.py",
                 line=999,
                 body="Comment",

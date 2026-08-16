@@ -9,6 +9,40 @@ By using an abstract base class, we ensure:
 """
 
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True)
+class ReviewAnchor:
+    """Immutable positioning data for inline review comments.
+
+    Fetched once per review via ``get_review_anchor`` and reused for every
+    inline comment, so a review batch is anchored to a single consistent
+    snapshot of the PR/MR (no per-comment refetching, no mid-loop drift).
+
+    Attributes:
+        owner: Repository owner
+        repo: Repository name
+        pr_number: Pull request / merge request number
+        commit_sha: Head commit SHA the comments anchor to
+    """
+
+    owner: str
+    repo: str
+    pr_number: int
+    commit_sha: str
+
+
+@dataclass(frozen=True)
+class GitLabReviewAnchor(ReviewAnchor):
+    """GitLab-specific anchor carrying MR diff_refs SHAs.
+
+    GitLab positions inline comments with base/head/start SHAs from the MR's
+    ``diff_refs``; a bare commit SHA is not sufficient.
+    """
+
+    base_sha: str = ""
+    start_sha: str = ""
 
 
 class BaseAdapter(ABC):
@@ -21,6 +55,35 @@ class BaseAdapter(ABC):
     The adapter pattern allows drep to work with multiple platforms without
     tying the core logic to any specific platform's API.
     """
+
+    async def get_review_anchor(self, owner: str, repo: str, pr_number: int) -> ReviewAnchor:
+        """Fetch the immutable review anchor for a PR/MR (single network call).
+
+        Default implementation resolves the head commit SHA from the PR data.
+        Platforms needing richer positioning data (e.g., GitLab diff_refs)
+        override this to return their anchor subclass.
+
+        Args:
+            owner: Repository owner
+            repo: Repository name
+            pr_number: Pull request / merge request number
+
+        Returns:
+            ReviewAnchor bound to this PR/MR's current head
+        """
+        pr_data = await self.get_pr(owner, repo, pr_number)
+        head_sha = (pr_data.get("head") or {}).get("sha")
+        if not head_sha:
+            raise ValueError(
+                f"API response for PR #{pr_number} in {owner}/{repo} "
+                "missing required 'head.sha' field"
+            )
+        return ReviewAnchor(
+            owner=owner,
+            repo=repo,
+            pr_number=pr_number,
+            commit_sha=head_sha,
+        )
 
     @abstractmethod
     async def create_issue(
@@ -173,25 +236,21 @@ class BaseAdapter(ABC):
     @abstractmethod
     async def create_pr_review_comment(
         self,
-        owner: str,
-        repo: str,
-        pr_number: int,
-        commit_sha: str,
+        anchor: ReviewAnchor,
         file_path: str,
         line: int,
         body: str,
     ) -> None:
-        """Post an inline review comment on a specific line of a known commit.
+        """Post an inline review comment using a pre-fetched review anchor.
 
-        This is the lower-level primitive used by the PR review workflow when the
-        head commit SHA is already known. ``post_review_comment`` is the
-        higher-level variant that resolves the commit SHA first.
+        This is the canonical primitive used by the PR review workflow: the
+        anchor (owner/repo/pr_number plus platform positioning data) is
+        obtained once per review via ``get_review_anchor`` and reused for
+        every inline comment. ``post_review_comment`` is the one-shot variant
+        that resolves the anchor first.
 
         Args:
-            owner: Repository owner
-            repo: Repository name
-            pr_number: Pull request number
-            commit_sha: Commit SHA to comment on (usually the PR head)
+            anchor: Immutable review anchor (from get_review_anchor)
             file_path: File path relative to repo root
             line: Line number in the new version (after changes)
             body: Comment body (markdown supported)
