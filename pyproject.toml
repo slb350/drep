@@ -101,6 +101,7 @@ python_functions = ["test_*"]
 asyncio_mode = "auto"
 markers = [
   "integration: tests that hit real services or simulate network",
+  "external_service: tests that require a live external service (real LLM endpoint, real GitHub API) — never run in CI",
 ]
 
 [project.optional-dependencies]

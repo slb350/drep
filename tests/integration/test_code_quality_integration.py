@@ -12,6 +12,9 @@ from drep.code_quality.analyzer import CodeQualityAnalyzer
 from drep.llm.cache import IntelligentCache
 from drep.llm.client import LLMClient
 
+# Requires a live external service; excluded from CI via -m 'not external_service'
+pytestmark = pytest.mark.external_service
+
 
 @pytest.fixture
 async def llm_client():
