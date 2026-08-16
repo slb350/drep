@@ -100,21 +100,6 @@ class TestLLMConfig:
         )
         assert config.provider == "bedrock"
 
-    def test_valid_anthropic_config(self):
-        """Test valid Anthropic LLM configuration."""
-        config = LLMConfig(
-            config={
-                "llm": {
-                    "enabled": True,
-                    "provider": "anthropic",
-                    "api_key": "${ANTHROPIC_API_KEY}",
-                    "model": "claude-sonnet-4-5-20250929",
-                }
-            },
-            provider="anthropic",
-        )
-        assert config.provider == "anthropic"
-
     def test_missing_enabled_raises_error(self):
         """Test that missing enabled field raises ValueError."""
         with pytest.raises(ValueError, match=r"must include 'enabled' field"):
@@ -134,8 +119,8 @@ class TestLLMConfig:
     def test_frozen_dataclass(self):
         """Test that LLMConfig is immutable."""
         config = LLMConfig(
-            config={"llm": {"enabled": True, "provider": "anthropic"}},
-            provider="anthropic",
+            config={"llm": {"enabled": True, "provider": "openai-compatible"}},
+            provider="openai-compatible",
         )
         with pytest.raises(AttributeError):
             config.provider = "bedrock"  # type: ignore
@@ -351,26 +336,26 @@ class TestLLMConfigModels:
 
     def test_llm_config_to_dict(self):
         """Test LLMConfig.to_dict() creates correct structure."""
-        from drep.models.wizard import AnthropicLLMData, LLMConfig
+        from drep.models.wizard import LLMConfig, OpenAILLMData
 
-        anthropic_data = AnthropicLLMData(
+        openai_data = OpenAILLMData(
             enabled=True,
-            provider="anthropic",
-            api_key="${ANTHROPIC_API_KEY}",
-            model="claude-sonnet-4-5-20250929",
+            provider="openai-compatible",
+            endpoint="http://localhost:1234/v1",
+            model="test-model",
             temperature=0.7,
         )
 
-        config = LLMConfig(data=anthropic_data)
+        config = LLMConfig(data=openai_data)
         result = config.to_dict()
 
         # Should nest under "llm" key
         assert result == {
             "llm": {
                 "enabled": True,
-                "provider": "anthropic",
-                "api_key": "${ANTHROPIC_API_KEY}",
-                "model": "claude-sonnet-4-5-20250929",
+                "provider": "openai-compatible",
+                "endpoint": "http://localhost:1234/v1",
+                "model": "test-model",
                 "temperature": 0.7,
             }
         }

@@ -27,7 +27,6 @@ from drep.core.scanner import RepositoryScanner
 from drep.db import init_database
 from drep.documentation.analyzer import DocumentationAnalyzer
 from drep.models.wizard import (
-    AnthropicLLMData,
     BedrockLLMData,
     BedrockRegionModel,
     DocumentationConfig,
@@ -159,11 +158,10 @@ def _collect_llm_config() -> LLMConfig | None:
     click.echo("LLM Provider Options:")
     click.echo("  1. openai-compatible - Use local LLM (LM Studio, Ollama, etc.)")
     click.echo("  2. bedrock - AWS Bedrock")
-    click.echo("  3. anthropic - Anthropic API (Claude)")
 
     provider = click.prompt(
         "Choose provider",
-        type=click.Choice(["openai-compatible", "bedrock", "anthropic"], case_sensitive=False),
+        type=click.Choice(["openai-compatible", "bedrock"], case_sensitive=False),
         default="openai-compatible",
     )
 
@@ -189,14 +187,6 @@ def _collect_llm_config() -> LLMConfig | None:
             type=BedrockModelType(),
         )
         llm_config["bedrock"] = BedrockRegionModel(region=region, model=model)
-
-    elif provider == "anthropic":
-        click.echo("\nAnthropic Configuration:")
-        llm_config["api_key"] = "${ANTHROPIC_API_KEY}"
-        model = click.prompt(
-            "Model name", default="claude-sonnet-4-5-20250929", type=NonEmptyString()
-        )
-        llm_config["model"] = model
 
     click.echo()
 
@@ -276,10 +266,7 @@ def _collect_llm_config() -> LLMConfig | None:
     # Create strongly-typed data model based on provider
     if provider == "openai-compatible":
         return LLMConfig(data=OpenAILLMData(**llm_config))
-    if provider == "bedrock":
-        return LLMConfig(data=BedrockLLMData(**llm_config))
-    # anthropic
-    return LLMConfig(data=AnthropicLLMData(**llm_config))
+    return LLMConfig(data=BedrockLLMData(**llm_config))
 
 
 def _collect_documentation_config() -> DocumentationConfig:
@@ -403,7 +390,7 @@ def init():
     Guides the user through a multi-step wizard to configure:
     1. Configuration location (current directory or user config directory)
     2. Platform selection (GitHub/Gitea/GitLab) with platform-specific options
-    3. LLM configuration (optional) - supports OpenAI-compatible, Bedrock, Anthropic
+    3. LLM configuration (optional) - supports OpenAI-compatible and Bedrock
     4. Documentation analysis settings (markdown checks, custom dictionary)
     5. Database configuration (SQLite, PostgreSQL, MySQL, etc.)
     6. Environment variable verification (optional)
@@ -532,8 +519,6 @@ def init():
         and "${LLM_API_KEY}" in yaml.dump(config_dict)
     ):
         click.echo("   export LLM_API_KEY='your-llm-api-key'")
-    elif llm_config and llm_config.provider == "anthropic":
-        click.echo("   export ANTHROPIC_API_KEY='your-anthropic-api-key'")
     elif llm_config and llm_config.provider == "bedrock":
         click.echo("   Configure AWS credentials (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY)")
 
@@ -547,12 +532,6 @@ def init():
             missing = []
             if platform_config.env_var not in os.environ:
                 missing.append(platform_config.env_var)
-            if (
-                llm_config
-                and llm_config.provider == "anthropic"
-                and "ANTHROPIC_API_KEY" not in os.environ
-            ):
-                missing.append("ANTHROPIC_API_KEY")
             if (
                 llm_config
                 and llm_config.provider == "openai-compatible"

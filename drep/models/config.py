@@ -1,6 +1,7 @@
 """Configuration models for drep."""
 
 from pathlib import Path
+from typing import Literal
 
 from pydantic import (
     BaseModel,
@@ -130,9 +131,10 @@ class LLMConfig(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     enabled: bool = Field(default=False, description="Enable LLM-powered analysis")
-    provider: str = Field(
+    provider: Literal["openai-compatible", "bedrock"] = Field(
         default="openai-compatible",
-        description="LLM provider: openai-compatible, bedrock, anthropic",
+        description="LLM provider: openai-compatible (any OpenAI-compatible endpoint, "
+        "including Anthropic via a proxy) or bedrock",
     )
     endpoint: HttpUrl | None = Field(
         default=None,

@@ -924,7 +924,7 @@ class LLMClient:
         self.exponential_backoff = exponential_backoff  # Whether to use exponential backoff
         self.cache = cache  # Optional IntelligentCache instance for response caching
         self.repo_path = repo_path  # Optional repo path for commit SHA retrieval
-        self._provider = provider  # LLM provider: openai-compatible, bedrock, anthropic
+        self._provider = provider  # LLM provider: openai-compatible or bedrock
 
         # === PROVIDER SELECTION: Bedrock, open-agent-sdk, or HTTP ===
         # Check if Bedrock provider is requested

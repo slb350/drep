@@ -202,31 +202,17 @@ class TestInitCommand:
             assert "region: us-east-1" in config_content
             assert "anthropic.claude-sonnet-4-5-20250929-v1:0" in config_content
 
-    def test_init_with_llm_anthropic(self, runner, tmp_path):
-        """Test init with Anthropic provider."""
+    def test_init_rejects_removed_anthropic_provider(self, runner, tmp_path):
+        """C14: anthropic is no longer a wizard option; entering it re-prompts."""
         with runner.isolated_filesystem(temp_dir=tmp_path):
-            # Wizard inputs:
-            # 1. Platform: gitea
-            # 2. Gitea URL: (default)
-            # 3. Repositories: (default)
-            # 4. Enable LLM: y
-            # 5. Provider: anthropic
-            # 6. Model: (default)
-            # 7. Advanced settings: n
-            # 8. Configure cache: n
-            # 9. Enable docs: y
-            # 10. Markdown checks: n
-            # 11. Custom dictionary: n
-            # 12. Custom DB: n
-            # 13. Check env vars: n
-            inputs = "1\ngitea\n\n\ny\nanthropic\n\nn\nn\ny\nn\nn\nn\nn\n"
+            # Wizard inputs: provider "anthropic" (rejected) then "openai-compatible"
+            inputs = "1\ngitea\n\n\ny\nanthropic\nopenai-compatible\n\n\nn\nn\nn\ny\nn\nn\nn\nn\n"
             result = runner.invoke(cli, ["init"], input=inputs)
 
             assert result.exit_code == 0
             config_content = Path("config.yaml").read_text()
-            assert "provider: anthropic" in config_content
-            assert "api_key: ${ANTHROPIC_API_KEY}" in config_content
-            assert "model: claude-sonnet-4-5-20250929" in config_content
+            assert "provider: openai-compatible" in config_content
+            assert "provider: anthropic" not in config_content
 
     def test_init_prompts_on_existing_file(self, runner, tmp_path):
         """Test that init prompts before overwriting existing file."""
@@ -665,19 +651,19 @@ class TestInitCommand:
         with runner.isolated_filesystem(temp_dir=tmp_path):
             # Clear environment variables
             monkeypatch.delenv("GITHUB_TOKEN", raising=False)
-            monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+            monkeypatch.delenv("LLM_API_KEY", raising=False)
 
-            # Wizard: location + GitHub + Anthropic + docs + db + env check
+            # Wizard: location + GitHub + OpenAI-compatible (with API key) + docs + db + env check
             inputs = (
-                "1\ngithub\nn\nowner/*\ny\nanthropic\n"
-                "claude-sonnet-4-5-20250929\nn\nn\ny\nn\nn\nn\ny\n"
+                "1\ngithub\nn\nowner/*\ny\nopenai-compatible\nhttp://localhost:1234/v1\n"
+                "test-model\ny\nn\nn\ny\nn\nn\nn\ny\n"
             )
             result = runner.invoke(cli, ["init"], input=inputs)
 
             assert result.exit_code == 0
             assert "WARNING: Missing environment variables:" in result.output
             assert "GITHUB_TOKEN" in result.output
-            assert "ANTHROPIC_API_KEY" in result.output
+            assert "LLM_API_KEY" in result.output
 
     def test_init_env_check_all_set(self, runner, tmp_path, monkeypatch):
         """Test env check shows success when all vars are set."""
@@ -1944,16 +1930,16 @@ class TestTokenLeakagePrevention:
             assert "${GITEA_TOKEN}" in config_content
             assert "actual_secret_gitea_token_xyz" not in config_content
 
-    def test_init_anthropic_api_key_never_logged(self, runner, tmp_path, monkeypatch, caplog):
-        """Test Anthropic API key never appears in logs or output."""
+    def test_init_llm_api_key_never_logged(self, runner, tmp_path, monkeypatch, caplog):
+        """Test LLM API key never appears in logs or output."""
         monkeypatch.setenv("GITHUB_TOKEN", "test_github")
-        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-secret-key-12345")
+        monkeypatch.setenv("LLM_API_KEY", "sk-llm-secret-key-12345")
 
         with runner.isolated_filesystem(temp_dir=tmp_path):
-            # Run wizard with GitHub + Anthropic LLM
+            # Run wizard with GitHub + OpenAI-compatible LLM requiring an API key
             inputs = (
                 "1\ngithub\nn\nowner/*\n"  # GitHub platform
-                "y\nanthropic\nclaude-sonnet-4-5-20250929\n"  # Anthropic LLM
+                "y\nopenai-compatible\nhttp://localhost:1234/v1\ntest-model\ny\n"  # LLM + api key
                 "n\nn\nn\nn\nn\n"  # Skip advanced settings
             )
             result = runner.invoke(cli, ["init"], input=inputs)
@@ -1961,15 +1947,15 @@ class TestTokenLeakagePrevention:
             assert result.exit_code == 0
 
             # CRITICAL: API key must NEVER appear in output
-            assert "sk-ant-secret-key-12345" not in result.output
+            assert "sk-llm-secret-key-12345" not in result.output
 
             # CRITICAL: API key must NEVER appear in logs
-            assert "sk-ant-secret-key-12345" not in caplog.text
+            assert "sk-llm-secret-key-12345" not in caplog.text
 
             # Check config file has placeholder
             config_content = Path("config.yaml").read_text()
-            assert "${ANTHROPIC_API_KEY}" in config_content
-            assert "sk-ant-secret-key-12345" not in config_content
+            assert "${LLM_API_KEY}" in config_content
+            assert "sk-llm-secret-key-12345" not in config_content
 
     def test_init_env_check_masks_token_values_in_output(self, runner, tmp_path, monkeypatch):
         """Test environment variable verification doesn't leak values."""
@@ -1992,12 +1978,14 @@ class TestTokenLeakagePrevention:
         """Test wizard with multiple tokens never leaks any of them."""
         # Set multiple environment variables
         monkeypatch.setenv("GITHUB_TOKEN", "secret_github_xyz")
-        monkeypatch.setenv("ANTHROPIC_API_KEY", "secret_anthropic_abc")
+        monkeypatch.setenv("LLM_API_KEY", "secret_llm_abc")
 
         with runner.isolated_filesystem(temp_dir=tmp_path):
-            # Run wizard with GitHub + Anthropic
+            # Run wizard with GitHub + OpenAI-compatible LLM requiring an API key
             inputs = (
-                "1\ngithub\nn\nowner/*\ny\nanthropic\nclaude-sonnet-4-5-20250929\nn\nn\nn\nn\nn\n"
+                "1\ngithub\nn\nowner/*\n"
+                "y\nopenai-compatible\nhttp://localhost:1234/v1\ntest-model\ny\n"
+                "n\nn\nn\nn\nn\n"
             )
             result = runner.invoke(cli, ["init"], input=inputs)
 
@@ -2005,18 +1993,18 @@ class TestTokenLeakagePrevention:
 
             # Neither token should appear in output
             assert "secret_github_xyz" not in result.output
-            assert "secret_anthropic_abc" not in result.output
+            assert "secret_llm_abc" not in result.output
 
             # Neither token should appear in logs
             assert "secret_github_xyz" not in caplog.text
-            assert "secret_anthropic_abc" not in caplog.text
+            assert "secret_llm_abc" not in caplog.text
 
             # Config should only have placeholders
             config_content = Path("config.yaml").read_text()
             assert "secret_github_xyz" not in config_content
-            assert "secret_anthropic_abc" not in config_content
+            assert "secret_llm_abc" not in config_content
             assert "${GITHUB_TOKEN}" in config_content
-            assert "${ANTHROPIC_API_KEY}" in config_content
+            assert "${LLM_API_KEY}" in config_content
 
 
 class TestEndToEndIntegration:
@@ -2103,15 +2091,15 @@ class TestEndToEndIntegration:
             )
             assert adapter is not None
 
-    def test_gitlab_with_anthropic_end_to_end(self, runner, tmp_path, monkeypatch):
-        """Test GitLab + Anthropic config workflow."""
+    def test_gitlab_with_openai_compatible_end_to_end(self, runner, tmp_path, monkeypatch):
+        """Test GitLab + OpenAI-compatible LLM config workflow."""
         monkeypatch.setenv("GITLAB_TOKEN", "test_gitlab_token")
-        monkeypatch.setenv("ANTHROPIC_API_KEY", "test_anthropic_key")
+        monkeypatch.setenv("LLM_API_KEY", "test_llm_key")
 
         with runner.isolated_filesystem(temp_dir=tmp_path):
             inputs = (
                 "1\ngitlab\nn\ngroup/*\n"  # GitLab
-                "y\nanthropic\nclaude-sonnet-4-5-20250929\n"  # Anthropic
+                "y\nopenai-compatible\nhttp://localhost:1234/v1\ntest-model\ny\n"  # LLM + api key
                 "n\nn\nn\nn\nn\n"  # Skip advanced
             )
             result = runner.invoke(cli, ["init"], input=inputs)
@@ -2126,12 +2114,11 @@ class TestEndToEndIntegration:
             assert config.gitlab.token.get_secret_value() == "test_gitlab_token"
             assert config.gitlab.repositories == ["group/*"]
 
-            # Verify Anthropic LLM config
+            # Verify LLM config
             assert config.llm is not None
-            assert config.llm.provider == "anthropic"
-            # Note: api_key is a plain string in LLMConfig, not SecretStr
-            assert config.llm.api_key == "test_anthropic_key"
-            assert config.llm.model == "claude-sonnet-4-5-20250929"
+            assert config.llm.provider == "openai-compatible"
+            assert config.llm.api_key == "test_llm_key"
+            assert config.llm.model == "test-model"
 
             # Verify adapter can be created
             from drep.adapters.gitlab import GitLabAdapter

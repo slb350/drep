@@ -273,85 +273,6 @@ class BedrockLLMData:
 
 
 @dataclass(frozen=True)
-class AnthropicLLMData:
-    """Strongly-typed Anthropic LLM configuration data.
-
-    Attributes:
-        enabled: Whether LLM integration is enabled
-        provider: Provider name (always "anthropic")
-        api_key: Anthropic API key (as environment variable reference)
-        model: Model name
-        temperature: Optional temperature setting
-        max_tokens: Optional max tokens per request
-        timeout: Optional request timeout
-        max_retries: Optional max retry attempts
-        retry_delay: Optional retry delay in seconds
-        exponential_backoff: Optional exponential backoff flag
-        max_concurrent_global: Optional max concurrent requests globally
-        max_concurrent_per_repo: Optional max concurrent requests per repo
-        requests_per_minute: Optional requests per minute limit
-        max_tokens_per_minute: Optional tokens per minute limit
-        cache: Optional cache configuration dict
-    """
-
-    enabled: bool
-    provider: str
-    api_key: str
-    model: str
-    temperature: float | None = None
-    max_tokens: int | None = None
-    timeout: int | None = None
-    max_retries: int | None = None
-    retry_delay: int | None = None
-    exponential_backoff: bool | None = None
-    max_concurrent_global: int | None = None
-    max_concurrent_per_repo: int | None = None
-    requests_per_minute: int | None = None
-    max_tokens_per_minute: int | None = None
-    cache: dict[str, Any] | None = None
-
-    def to_dict(self) -> dict[str, Any]:
-        """Convert to dictionary for YAML serialization.
-
-        Returns:
-            Dict with all non-None fields
-        """
-        result = {
-            "enabled": self.enabled,
-            "provider": self.provider,
-            "api_key": self.api_key,
-            "model": self.model,
-        }
-        # Add optional fields only if set
-        if self.temperature is not None:
-            result["temperature"] = self.temperature
-        if self.max_tokens is not None:
-            result["max_tokens"] = self.max_tokens
-        if self.timeout is not None:
-            result["timeout"] = self.timeout
-        if self.max_retries is not None:
-            result["max_retries"] = self.max_retries
-        if self.retry_delay is not None:
-            result["retry_delay"] = self.retry_delay
-        if self.exponential_backoff is not None:
-            result["exponential_backoff"] = self.exponential_backoff
-        if self.max_concurrent_global is not None:
-            result["max_concurrent_global"] = self.max_concurrent_global
-        if self.max_concurrent_per_repo is not None:
-            result["max_concurrent_per_repo"] = self.max_concurrent_per_repo
-        if self.requests_per_minute is not None:
-            result["requests_per_minute"] = self.requests_per_minute
-        if self.max_tokens_per_minute is not None:
-            result["max_tokens_per_minute"] = self.max_tokens_per_minute
-        if self.cache is not None:
-            result["cache"] = self.cache
-        return result
-
-
-# ===== Strongly-Typed Documentation Data Model =====
-
-
-@dataclass(frozen=True)
 class DocumentationConfigData:
     """Strongly-typed documentation configuration data.
 
@@ -445,13 +366,13 @@ class LLMConfig:
 
     Attributes:
         config: DEPRECATED - LLM configuration dict (for backward compatibility)
-        data: Strongly-typed LLM data (OpenAILLMData, BedrockLLMData, or AnthropicLLMData)
+        data: Strongly-typed LLM data (OpenAILLMData or BedrockLLMData)
         provider: LLM provider name (deprecated, derived from data if using new format)
     """
 
     provider: str = ""  # Deprecated, will be derived from data if using new format
     config: dict[str, Any] | None = None  # Deprecated, for backward compatibility
-    data: OpenAILLMData | BedrockLLMData | AnthropicLLMData | None = None
+    data: OpenAILLMData | BedrockLLMData | None = None
 
     def __post_init__(self) -> None:
         """Validate that exactly one of config or data is provided.
