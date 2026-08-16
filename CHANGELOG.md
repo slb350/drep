@@ -51,6 +51,11 @@ simplification audit resolved; rejected findings (C9, C11) documented with ratio
   anchor and delegates.
 
 ### Changed
+- **File-size discipline**: every Python file is now under the 800-line limit.
+  `drep/llm/client.py` split into `rate_limiter`/`json_parsing`/`git_utils` (public names
+  re-exported), `drep/cli.py` into `cli_wizard`/`cli_workflows`, adapter review/PR methods
+  into mixin modules (`gitlab_prs`, `gitlab_reviews`, `github_reviews`), and the largest
+  test files split by topic. No public names removed.
 - **File-target policy unified** (C7): one case-insensitive suffix policy across full
   scans, commit diffs, staged files, and per-analyzer filters. `TEST.PY` is no longer
   silently never analyzed.
