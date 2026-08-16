@@ -93,7 +93,7 @@ def _collect_platform_config() -> PlatformConfig:
             url=api_url,  # None for github.com, URL for enterprise
         )
 
-        return PlatformConfig(data=github_data, env_var="GITHUB_TOKEN", platform_name="GitHub")
+        return PlatformConfig(data=github_data, env_var="GITHUB_TOKEN")
 
     if platform.lower() == "gitea":
         click.echo("Gitea Configuration:")
@@ -113,7 +113,7 @@ def _collect_platform_config() -> PlatformConfig:
             repositories=tuple(repos),  # Convert list to tuple
         )
 
-        return PlatformConfig(data=gitea_data, env_var="GITEA_TOKEN", platform_name="Gitea")
+        return PlatformConfig(data=gitea_data, env_var="GITEA_TOKEN")
 
     click.echo("GitLab Configuration:")
     use_selfhosted = click.confirm("Are you using self-hosted GitLab?", default=False)
@@ -138,7 +138,7 @@ def _collect_platform_config() -> PlatformConfig:
         url=gitlab_url,  # None for gitlab.com, URL for self-hosted
     )
 
-    return PlatformConfig(data=gitlab_data, env_var="GITLAB_TOKEN", platform_name="GitLab")
+    return PlatformConfig(data=gitlab_data, env_var="GITLAB_TOKEN")
 
 
 def _collect_llm_config() -> LLMConfig | None:

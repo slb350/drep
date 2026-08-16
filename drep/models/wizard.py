@@ -299,49 +299,41 @@ class DocumentationConfigData:
         }
 
 
-# ===== Wrapper Classes (Updated for Strongly-Typed Data) =====
+# ===== Wrapper Classes =====
+
+
+def _platform_key(
+    data: GitHubPlatformData | GiteaPlatformData | GitLabPlatformData,
+) -> str:
+    """Derive the YAML config key from the concrete platform data variant."""
+    if isinstance(data, GitHubPlatformData):
+        return "github"
+    if isinstance(data, GiteaPlatformData):
+        return "gitea"
+    return "gitlab"
 
 
 @dataclass(frozen=True)
 class PlatformConfig:
     """Platform configuration collected from init wizard.
 
-    Supports both old Dict[str, Any] format (for backward compatibility)
-    and new strongly-typed format using platform-specific data models.
+    The YAML key, display name, and serialized payload are all derived from
+    the concrete ``data`` variant — there is no parallel string field that
+    can disagree with the data.
 
     Attributes:
-        config: DEPRECATED - Platform configuration dict (for backward compatibility)
         data: Strongly-typed platform data (GitHubPlatformData, GiteaPlatformData,
               or GitLabPlatformData)
         env_var: Required environment variable name (e.g., "GITHUB_TOKEN")
-        platform_name: Human-readable platform name (e.g., "GitHub")
     """
 
+    data: GitHubPlatformData | GiteaPlatformData | GitLabPlatformData
     env_var: str
-    platform_name: str
-    config: dict[str, Any] | None = None  # Deprecated, for backward compatibility
-    data: GitHubPlatformData | GiteaPlatformData | GitLabPlatformData | None = None
 
-    def __post_init__(self) -> None:
-        """Validate that exactly one of config or data is provided.
-
-        Raises:
-            ValueError: If both or neither config and data are provided
-        """
-        # Must have exactly one of config or data
-        if self.config is None and self.data is None:
-            raise ValueError("Must provide either 'config' or 'data'")
-        if self.config is not None and self.data is not None:
-            raise ValueError("Cannot provide both 'config' and 'data'")
-
-        # If using old config format, validate token field
-        if self.config is not None:
-            platform_key = self.platform_name.lower()
-            platform_dict = self.config.get(platform_key, {})
-            if "token" not in platform_dict:
-                raise ValueError(
-                    f"Platform config for {self.platform_name} must include 'token' field"
-                )
+    @property
+    def platform_name(self) -> str:
+        """Human-readable platform name derived from the data variant."""
+        return {"github": "GitHub", "gitea": "Gitea", "gitlab": "GitLab"}[_platform_key(self.data)]
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for YAML serialization.
@@ -349,55 +341,23 @@ class PlatformConfig:
         Returns:
             Dict in format: {"github": {...}} or {"gitea": {...}} or {"gitlab": {...}}
         """
-        if self.data is not None:
-            # New strongly-typed format
-            platform_key = self.platform_name.lower()
-            return {platform_key: self.data.to_dict()}
-        # Old dict format - return as-is
-        return self.config  # type: ignore
+        return {_platform_key(self.data): self.data.to_dict()}
 
 
 @dataclass(frozen=True)
 class LLMConfig:
     """LLM configuration collected from init wizard.
 
-    Supports both old Dict[str, Any] format (for backward compatibility)
-    and new strongly-typed format using provider-specific data models.
-
     Attributes:
-        config: DEPRECATED - LLM configuration dict (for backward compatibility)
         data: Strongly-typed LLM data (OpenAILLMData or BedrockLLMData)
-        provider: LLM provider name (deprecated, derived from data if using new format)
     """
 
-    provider: str = ""  # Deprecated, will be derived from data if using new format
-    config: dict[str, Any] | None = None  # Deprecated, for backward compatibility
-    data: OpenAILLMData | BedrockLLMData | None = None
+    data: OpenAILLMData | BedrockLLMData
 
-    def __post_init__(self) -> None:
-        """Validate that exactly one of config or data is provided.
-
-        Raises:
-            ValueError: If both or neither config and data are provided
-        """
-        # Must have exactly one of config or data
-        if self.config is None and self.data is None:
-            raise ValueError("Must provide either 'config' or 'data'")
-        if self.config is not None and self.data is not None:
-            raise ValueError("Cannot provide both 'config' and 'data'")
-
-        # If using old config format, validate required fields
-        if self.config is not None:
-            llm_dict = self.config.get("llm", {})
-            if "enabled" not in llm_dict:
-                raise ValueError("LLM config must include 'enabled' field")
-            if "provider" not in llm_dict:
-                raise ValueError("LLM config must include 'provider' field")
-
-        # If using new format, override provider with data's provider
-        if self.data is not None:
-            # This works via object.__setattr__ since frozen=True
-            object.__setattr__(self, "provider", self.data.provider)
+    @property
+    def provider(self) -> str:
+        """Provider name, derived from the data variant."""
+        return self.data.provider
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for YAML serialization.
@@ -405,45 +365,18 @@ class LLMConfig:
         Returns:
             Dict in format: {"llm": {...}}
         """
-        if self.data is not None:
-            # New strongly-typed format
-            return {"llm": self.data.to_dict()}
-        # Old dict format - return as-is
-        return self.config  # type: ignore
+        return {"llm": self.data.to_dict()}
 
 
 @dataclass(frozen=True)
 class DocumentationConfig:
     """Documentation analysis configuration.
 
-    Supports both old Dict[str, Any] format (for backward compatibility)
-    and new strongly-typed format using DocumentationConfigData.
-
     Attributes:
-        config: DEPRECATED - Documentation configuration dict (for backward compatibility)
         data: Strongly-typed documentation data
     """
 
-    config: dict[str, Any] | None = None  # Deprecated, for backward compatibility
-    data: DocumentationConfigData | None = None
-
-    def __post_init__(self) -> None:
-        """Validate that exactly one of config or data is provided.
-
-        Raises:
-            ValueError: If both or neither config and data are provided
-        """
-        # Must have exactly one of config or data
-        if self.config is None and self.data is None:
-            raise ValueError("Must provide either 'config' or 'data'")
-        if self.config is not None and self.data is not None:
-            raise ValueError("Cannot provide both 'config' and 'data'")
-
-        # If using old config format, validate required fields
-        if self.config is not None:
-            doc_dict = self.config.get("documentation", {})
-            if "enabled" not in doc_dict:
-                raise ValueError("Documentation config must include 'enabled' field")
+    data: DocumentationConfigData
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for YAML serialization.
@@ -451,8 +384,4 @@ class DocumentationConfig:
         Returns:
             Dict in format: {"documentation": {...}}
         """
-        if self.data is not None:
-            # New strongly-typed format
-            return {"documentation": self.data.to_dict()}
-        # Old dict format - return as-is
-        return self.config  # type: ignore
+        return {"documentation": self.data.to_dict()}
