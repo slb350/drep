@@ -13,8 +13,7 @@ def mock_labels_response(labels_list):
         # Return all labels on page 1, empty on subsequent pages
         if page == 1:
             return httpx.Response(200, json=labels_list)
-        else:
-            return httpx.Response(200, json=[])
+        return httpx.Response(200, json=[])
 
     return handler
 
@@ -208,7 +207,8 @@ async def test_get_default_branch_missing_field():
     # Mock response missing 'default_branch' field
     respx.get("http://192.168.1.14:3000/api/v1/repos/steve/drep").mock(
         return_value=httpx.Response(
-            200, json={"name": "drep", "owner": {"login": "steve"}}  # Missing default_branch
+            200,
+            json={"name": "drep", "owner": {"login": "steve"}},  # Missing default_branch
         )
     )
 
@@ -531,7 +531,7 @@ async def test_get_label_ids_handles_pagination():
                     {"id": 2, "name": "enhancement"},
                 ],
             )
-        elif page == 2:
+        if page == 2:
             return httpx.Response(
                 200,
                 json=[
@@ -539,9 +539,8 @@ async def test_get_label_ids_handles_pagination():
                     {"id": 4, "name": "help wanted"},
                 ],
             )
-        else:
-            # Page 3 and beyond - empty (end of pagination)
-            return httpx.Response(200, json=[])
+        # Page 3 and beyond - empty (end of pagination)
+        return httpx.Response(200, json=[])
 
     respx.get("http://192.168.1.14:3000/api/v1/repos/steve/drep/labels").mock(
         side_effect=label_handler

@@ -229,7 +229,7 @@ async def test_rate_limiter_burst_failures_dont_stall():
         try:
             async with limiter.request(200):  # 5 × 200 = 1000 tokens
                 raise RuntimeError("Simulated failure")
-        except RuntimeError:
+        except RuntimeError:  # noqa: PERF203 - intentionally failing each iteration
             pass
 
     # All tokens should be rolled back, allowing new requests
@@ -756,17 +756,14 @@ async def test_llm_client_bedrock_retry_on_throttling():
                     "Error": {"Code": "ThrottlingException", "Message": "Rate exceeded"}
                 }
                 raise ClientError(error_response, "invoke_model")
-            else:
-                # Second call succeeds
-                mock_body = json.dumps(
-                    {
-                        "content": [{"type": "text", "text": "Success"}],
-                        "usage": {"input_tokens": 10, "output_tokens": 5},
-                    }
-                ).encode("utf-8")
-                return {
-                    "body": MagicMock(read=MagicMock(return_value=mock_body), close=MagicMock())
+            # Second call succeeds
+            mock_body = json.dumps(
+                {
+                    "content": [{"type": "text", "text": "Success"}],
+                    "usage": {"input_tokens": 10, "output_tokens": 5},
                 }
+            ).encode("utf-8")
+            return {"body": MagicMock(read=MagicMock(return_value=mock_body), close=MagicMock())}
 
         mock_bedrock.invoke_model = MagicMock(side_effect=invoke_with_throttle)
 
@@ -797,45 +794,44 @@ async def test_llm_client_bedrock_cache_integration():
 
     from drep.llm.cache import IntelligentCache
 
-    with tempfile.TemporaryDirectory() as temp_dir:
-        with patch("boto3.client") as mock_boto_client:
-            mock_bedrock = MagicMock()
-            mock_boto_client.return_value = mock_bedrock
+    with tempfile.TemporaryDirectory() as temp_dir, patch("boto3.client") as mock_boto_client:
+        mock_bedrock = MagicMock()
+        mock_boto_client.return_value = mock_bedrock
 
-            mock_body = json.dumps(
-                {
-                    "content": [{"type": "text", "text": "Cached response"}],
-                    "usage": {"input_tokens": 100, "output_tokens": 50},
-                }
-            ).encode("utf-8")
-
-            mock_response = {
-                "body": MagicMock(read=MagicMock(return_value=mock_body), close=MagicMock())
+        mock_body = json.dumps(
+            {
+                "content": [{"type": "text", "text": "Cached response"}],
+                "usage": {"input_tokens": 100, "output_tokens": 50},
             }
-            mock_bedrock.invoke_model = MagicMock(return_value=mock_response)
+        ).encode("utf-8")
 
-            # Create cache instance
-            cache = IntelligentCache(cache_dir=Path(temp_dir), ttl_days=30)
+        mock_response = {
+            "body": MagicMock(read=MagicMock(return_value=mock_body), close=MagicMock())
+        }
+        mock_bedrock.invoke_model = MagicMock(return_value=mock_response)
 
-            client = LLMClient(
-                endpoint="http://ignored",
-                model="ignored",
-                provider="bedrock",
-                bedrock_region="us-east-1",
-                bedrock_model="anthropic.claude-sonnet-4-5-20250929-v1:0",
-                cache=cache,
-            )
+        # Create cache instance
+        cache = IntelligentCache(cache_dir=Path(temp_dir), ttl_days=30)
 
-            # First call - cache miss
-            response1 = await client.analyze_code(system_prompt="Test", code="def foo(): pass")
-            assert response1.content == "Cached response"
-            assert mock_bedrock.invoke_model.call_count == 1
+        client = LLMClient(
+            endpoint="http://ignored",
+            model="ignored",
+            provider="bedrock",
+            bedrock_region="us-east-1",
+            bedrock_model="anthropic.claude-sonnet-4-5-20250929-v1:0",
+            cache=cache,
+        )
 
-            # Second call - cache hit (same prompt + code)
-            response2 = await client.analyze_code(system_prompt="Test", code="def foo(): pass")
-            assert response2.content == "Cached response"
-            # Should NOT call Bedrock again
-            assert mock_bedrock.invoke_model.call_count == 1  # Still 1
+        # First call - cache miss
+        response1 = await client.analyze_code(system_prompt="Test", code="def foo(): pass")
+        assert response1.content == "Cached response"
+        assert mock_bedrock.invoke_model.call_count == 1
+
+        # Second call - cache hit (same prompt + code)
+        response2 = await client.analyze_code(system_prompt="Test", code="def foo(): pass")
+        assert response2.content == "Cached response"
+        # Should NOT call Bedrock again
+        assert mock_bedrock.invoke_model.call_count == 1  # Still 1
 
 
 @pytest.mark.asyncio
@@ -953,9 +949,9 @@ async def test_llm_client_bedrock_preserves_model_name():
             )
 
             # CRITICAL: client.model should be set to bedrock_model
-            assert (
-                client.model == "anthropic.claude-sonnet-4-5-20250929-v1:0"
-            ), "client.model should be set to bedrock_model for cache keys and metadata"
+            assert client.model == "anthropic.claude-sonnet-4-5-20250929-v1:0", (
+                "client.model should be set to bedrock_model for cache keys and metadata"
+            )
 
             # Verify cache would use correct model name
             with TemporaryDirectory() as temp_dir:
@@ -965,9 +961,9 @@ async def test_llm_client_bedrock_preserves_model_name():
                 response = await client.analyze_code(system_prompt="Test", code="def foo(): pass")
 
                 # Verify response has correct model name
-                assert (
-                    response.model == "anthropic.claude-sonnet-4-5-20250929-v1:0"
-                ), "LLMResponse.model should contain actual Bedrock model name"
+                assert response.model == "anthropic.claude-sonnet-4-5-20250929-v1:0", (
+                    "LLMResponse.model should contain actual Bedrock model name"
+                )
 
 
 @pytest.mark.asyncio

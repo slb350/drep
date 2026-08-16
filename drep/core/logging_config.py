@@ -5,7 +5,6 @@ import logging
 import sys
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
 
 
 class StructuredFormatter(logging.Formatter):
@@ -64,7 +63,7 @@ class StructuredFormatter(logging.Formatter):
 def setup_logging(
     level: str = "INFO",
     structured: bool = False,
-    log_file: Optional[Path] = None,
+    log_file: Path | None = None,
 ):
     """Configure logging for drep.
 

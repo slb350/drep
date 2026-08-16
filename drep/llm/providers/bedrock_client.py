@@ -14,7 +14,7 @@ Authentication:
 import asyncio
 import json
 import logging
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 import boto3
 from botocore.exceptions import (
@@ -29,17 +29,16 @@ logger = logging.getLogger(__name__)
 # User-friendly error messages for common AWS Bedrock errors
 ERROR_MESSAGES = {
     "ThrottlingException": (
-        "AWS Bedrock rate limit exceeded. " "Reduce requests_per_minute or wait before retrying."
+        "AWS Bedrock rate limit exceeded. Reduce requests_per_minute or wait before retrying."
     ),
     "AccessDeniedException": (
-        "AWS Bedrock access denied. "
-        "Check IAM permissions and enable model access in AWS Console."
+        "AWS Bedrock access denied. Check IAM permissions and enable model access in AWS Console."
     ),
     "ValidationException": (
-        "Invalid request parameters. " "Verify model ID format and region availability."
+        "Invalid request parameters. Verify model ID format and region availability."
     ),
     "ResourceNotFoundException": (
-        "Model not found in this region. " "Check model ID and regional availability."
+        "Model not found in this region. Check model ID and regional availability."
     ),
     "ServiceQuotaExceededException": (
         "AWS service quota exceeded. Request quota increase or reduce usage."
@@ -106,8 +105,8 @@ class BedrockClient:
             ) from e
 
     def _format_messages(
-        self, messages: List[Dict[str, str]]
-    ) -> Tuple[List[Dict[str, Any]], Optional[str]]:
+        self, messages: list[dict[str, str]]
+    ) -> tuple[list[dict[str, Any]], str | None]:
         """Convert OpenAI message format to Bedrock format.
 
         Args:
@@ -143,7 +142,7 @@ class BedrockClient:
 
         return bedrock_messages, system_prompt
 
-    def _parse_response(self, bedrock_response: Dict[str, Any]) -> Dict[str, Any]:
+    def _parse_response(self, bedrock_response: dict[str, Any]) -> dict[str, Any]:
         """Convert Bedrock response to OpenAI-compatible format.
 
         Args:
@@ -205,11 +204,11 @@ class BedrockClient:
 
     async def chat_completion(
         self,
-        messages: List[Dict[str, str]],
+        messages: list[dict[str, str]],
         max_tokens: int = 4000,
         temperature: float = 0.2,
         **kwargs,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Execute chat completion request via Bedrock.
 
         Args:
@@ -260,9 +259,9 @@ class BedrockClient:
                 body_stream = response["body"]
                 raw_body = body_stream.read()
                 logger.debug(f"Bedrock raw response size: {len(raw_body)} bytes")
-            except KeyError:
+            except KeyError as exc:
                 logger.error("Bedrock response missing 'body' field")
-                raise ValueError("Invalid Bedrock response: missing 'body' field")
+                raise ValueError("Invalid Bedrock response: missing 'body' field") from exc
             finally:
                 # Only close if body_stream was successfully assigned.
                 # KeyError on response["body"] means it never enters locals(),
@@ -315,4 +314,3 @@ class BedrockClient:
     async def close(self):
         """Close Bedrock client (no-op for boto3)."""
         # boto3 clients don't require explicit cleanup
-        pass

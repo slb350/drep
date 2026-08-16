@@ -111,7 +111,7 @@ async def test_gitlab_adapter_empty_token_raises_error():
     """Test that empty token raises ValueError."""
     from drep.adapters.gitlab import GitLabAdapter
 
-    with pytest.raises(ValueError, match="GitLab token cannot be empty"):
+    with pytest.raises(ValueError, match=r"GitLab token cannot be empty"):
         GitLabAdapter("")
 
 
@@ -120,7 +120,7 @@ async def test_gitlab_adapter_whitespace_token_raises_error():
     """Test that whitespace-only token raises ValueError."""
     from drep.adapters.gitlab import GitLabAdapter
 
-    with pytest.raises(ValueError, match="GitLab token cannot be empty"):
+    with pytest.raises(ValueError, match=r"GitLab token cannot be empty"):
         GitLabAdapter("   ")
 
 
@@ -129,7 +129,7 @@ async def test_gitlab_adapter_invalid_url_raises_error():
     """Test that invalid URL raises ValueError."""
     from drep.adapters.gitlab import GitLabAdapter
 
-    with pytest.raises(ValueError, match="GitLab URL must start with"):
+    with pytest.raises(ValueError, match=r"GitLab URL must start with"):
         GitLabAdapter("glpat_token", "ftp://invalid.com")
 
 
@@ -221,7 +221,7 @@ async def test_get_default_branch_404_error():
     adapter = GitLabAdapter("glpat_token")
 
     try:
-        with pytest.raises(ValueError, match="GitLab project owner/repo not found"):
+        with pytest.raises(ValueError, match=r"GitLab project owner/repo not found"):
             await adapter.get_default_branch("owner", "repo")
     finally:
         await adapter.close()
@@ -331,7 +331,7 @@ async def test_create_issue_error_handling():
     adapter = GitLabAdapter("glpat_token")
 
     try:
-        with pytest.raises(ValueError, match="Failed to create issue"):
+        with pytest.raises(ValueError, match=r"Failed to create issue"):
             await adapter.create_issue(owner="owner", repo="repo", title="Test", body="Test")
     finally:
         await adapter.close()
@@ -392,7 +392,7 @@ async def test_get_pr_404_error():
     adapter = GitLabAdapter("glpat_token")
 
     try:
-        with pytest.raises(ValueError, match="Merge request !99 not found"):
+        with pytest.raises(ValueError, match=r"Merge request !99 not found"):
             await adapter.get_pr("owner", "repo", 99)
     finally:
         await adapter.close()
@@ -474,7 +474,7 @@ async def test_get_pr_diff_missing_old_path():
     adapter = GitLabAdapter("glpat_token")
 
     try:
-        with pytest.raises(ValueError, match="missing required 'old_path' field"):
+        with pytest.raises(ValueError, match=r"missing required 'old_path' field"):
             await adapter.get_pr_diff("owner", "repo", 42)
     finally:
         await adapter.close()
@@ -496,7 +496,7 @@ async def test_get_pr_diff_missing_new_path():
     adapter = GitLabAdapter("glpat_token")
 
     try:
-        with pytest.raises(ValueError, match="missing required 'new_path' field"):
+        with pytest.raises(ValueError, match=r"missing required 'new_path' field"):
             await adapter.get_pr_diff("owner", "repo", 42)
     finally:
         await adapter.close()
@@ -518,7 +518,7 @@ async def test_get_pr_diff_invalid_object_type():
     adapter = GitLabAdapter("glpat_token")
 
     try:
-        with pytest.raises(ValueError, match="diff object at index 0 is not a dict"):
+        with pytest.raises(ValueError, match=r"diff object at index 0 is not a dict"):
             await adapter.get_pr_diff("owner", "repo", 42)
     finally:
         await adapter.close()
@@ -561,7 +561,7 @@ async def test_create_pr_comment_error():
     adapter = GitLabAdapter("glpat_token")
 
     try:
-        with pytest.raises(ValueError, match="Failed to create MR comment"):
+        with pytest.raises(ValueError, match=r"Failed to create MR comment"):
             await adapter.create_pr_comment("owner", "repo", 42, "Test")
     finally:
         await adapter.close()
@@ -677,7 +677,7 @@ async def test_post_review_comment_missing_diff_refs():
     adapter = GitLabAdapter("glpat_token")
 
     try:
-        with pytest.raises(ValueError, match="missing 'diff_refs' field"):
+        with pytest.raises(ValueError, match=r"missing 'diff_refs' field"):
             await adapter.post_review_comment("owner", "repo", 42, "src/main.py", 15, "Comment")
     finally:
         await adapter.close()
@@ -711,7 +711,7 @@ async def test_post_review_comment_400_error():
     adapter = GitLabAdapter("glpat_token")
 
     try:
-        with pytest.raises(ValueError, match="Invalid position for review comment"):
+        with pytest.raises(ValueError, match=r"Invalid position for review comment"):
             await adapter.post_review_comment("owner", "repo", 42, "src/main.py", 99, "Comment")
     finally:
         await adapter.close()
@@ -812,7 +812,7 @@ async def test_get_file_content_404_error():
     adapter = GitLabAdapter("glpat_token")
 
     try:
-        with pytest.raises(ValueError, match="File missing.py not found"):
+        with pytest.raises(ValueError, match=r"File missing.py not found"):
             await adapter.get_file_content("owner", "repo", "missing.py", "main")
     finally:
         await adapter.close()
@@ -838,7 +838,7 @@ async def test_get_file_content_binary_error():
     adapter = GitLabAdapter("glpat_token")
 
     try:
-        with pytest.raises(ValueError, match="binary or non-UTF8"):
+        with pytest.raises(ValueError, match=r"binary or non-UTF8"):
             await adapter.get_file_content("owner", "repo", "image.png", "main")
     finally:
         await adapter.close()
@@ -868,7 +868,7 @@ async def test_rate_limit_detection():
     adapter = GitLabAdapter("glpat_token")
 
     try:
-        with pytest.raises(ValueError, match="GitLab API rate limit exceeded"):
+        with pytest.raises(ValueError, match=r"GitLab API rate limit exceeded"):
             await adapter.get_default_branch("owner", "repo")
     finally:
         await adapter.close()
@@ -900,7 +900,7 @@ async def test_rate_limit_always_raises_on_429_even_with_invalid_headers():
 
     try:
         # Should raise even though RateLimit-Remaining is not 0
-        with pytest.raises(ValueError, match="GitLab API rate limit exceeded"):
+        with pytest.raises(ValueError, match=r"GitLab API rate limit exceeded"):
             await adapter.get_default_branch("owner", "repo")
     finally:
         await adapter.close()
@@ -941,7 +941,7 @@ async def test_rate_limit_header_edge_cases(remaining_header, reset_header, expe
     adapter = GitLabAdapter("glpat_token")
 
     try:
-        with pytest.raises(ValueError, match="GitLab API rate limit exceeded"):
+        with pytest.raises(ValueError, match=r"GitLab API rate limit exceeded"):
             await adapter.get_default_branch("owner", "repo")
     finally:
         await adapter.close()
@@ -964,7 +964,7 @@ async def test_get_default_branch_invalid_json():
     adapter = GitLabAdapter("glpat_token")
 
     try:
-        with pytest.raises(ValueError, match="GitLab API returned invalid JSON"):
+        with pytest.raises(ValueError, match=r"GitLab API returned invalid JSON"):
             await adapter.get_default_branch("owner", "repo")
     finally:
         await adapter.close()
@@ -984,7 +984,7 @@ async def test_get_default_branch_missing_field():
     adapter = GitLabAdapter("glpat_token")
 
     try:
-        with pytest.raises(ValueError, match="missing 'default_branch' field"):
+        with pytest.raises(ValueError, match=r"missing 'default_branch' field"):
             await adapter.get_default_branch("owner", "repo")
     finally:
         await adapter.close()
@@ -1004,7 +1004,7 @@ async def test_create_issue_invalid_json():
     adapter = GitLabAdapter("glpat_token")
 
     try:
-        with pytest.raises(ValueError, match="GitLab API returned invalid JSON"):
+        with pytest.raises(ValueError, match=r"GitLab API returned invalid JSON"):
             await adapter.create_issue("owner", "repo", "Test", "Test body")
     finally:
         await adapter.close()
@@ -1024,7 +1024,7 @@ async def test_create_issue_missing_iid():
     adapter = GitLabAdapter("glpat_token")
 
     try:
-        with pytest.raises(ValueError, match="missing 'iid' field"):
+        with pytest.raises(ValueError, match=r"missing 'iid' field"):
             await adapter.create_issue("owner", "repo", "Test", "Test body")
     finally:
         await adapter.close()
@@ -1045,7 +1045,7 @@ async def test_get_file_content_invalid_json():
     adapter = GitLabAdapter("glpat_token")
 
     try:
-        with pytest.raises(ValueError, match="GitLab API returned invalid JSON"):
+        with pytest.raises(ValueError, match=r"GitLab API returned invalid JSON"):
             await adapter.get_file_content("owner", "repo", "test.py", "main")
     finally:
         await adapter.close()
@@ -1066,7 +1066,7 @@ async def test_get_file_content_missing_content_field():
     adapter = GitLabAdapter("glpat_token")
 
     try:
-        with pytest.raises(ValueError, match="missing 'content' field"):
+        with pytest.raises(ValueError, match=r"missing 'content' field"):
             await adapter.get_file_content("owner", "repo", "test.py", "main")
     finally:
         await adapter.close()
@@ -1086,7 +1086,7 @@ async def test_get_pr_invalid_json():
     adapter = GitLabAdapter("glpat_token")
 
     try:
-        with pytest.raises(ValueError, match="GitLab API returned invalid JSON"):
+        with pytest.raises(ValueError, match=r"GitLab API returned invalid JSON"):
             await adapter.get_pr("owner", "repo", 42)
     finally:
         await adapter.close()
@@ -1106,7 +1106,7 @@ async def test_get_pr_missing_diff_refs():
     adapter = GitLabAdapter("glpat_token")
 
     try:
-        with pytest.raises(ValueError, match="missing 'diff_refs' field"):
+        with pytest.raises(ValueError, match=r"missing 'diff_refs' field"):
             await adapter.get_pr("owner", "repo", 42)
     finally:
         await adapter.close()
@@ -1128,7 +1128,7 @@ async def test_get_pr_missing_base_sha():
     adapter = GitLabAdapter("glpat_token")
 
     try:
-        with pytest.raises(ValueError, match="missing 'base_sha'"):
+        with pytest.raises(ValueError, match=r"missing 'base_sha'"):
             await adapter.get_pr("owner", "repo", 42)
     finally:
         await adapter.close()
@@ -1150,7 +1150,7 @@ async def test_get_pr_missing_head_sha():
     adapter = GitLabAdapter("glpat_token")
 
     try:
-        with pytest.raises(ValueError, match="missing 'head_sha'"):
+        with pytest.raises(ValueError, match=r"missing 'head_sha'"):
             await adapter.get_pr("owner", "repo", 42)
     finally:
         await adapter.close()
@@ -1170,7 +1170,7 @@ async def test_get_pr_diff_invalid_json():
     adapter = GitLabAdapter("glpat_token")
 
     try:
-        with pytest.raises(ValueError, match="GitLab API returned invalid JSON"):
+        with pytest.raises(ValueError, match=r"GitLab API returned invalid JSON"):
             await adapter.get_pr_diff("owner", "repo", 42)
     finally:
         await adapter.close()
@@ -1190,7 +1190,7 @@ async def test_get_pr_diff_not_an_array():
     adapter = GitLabAdapter("glpat_token")
 
     try:
-        with pytest.raises(ValueError, match="expected array"):
+        with pytest.raises(ValueError, match=r"expected array"):
             await adapter.get_pr_diff("owner", "repo", 42)
     finally:
         await adapter.close()
@@ -1222,7 +1222,7 @@ async def test_post_review_comment_invalid_json():
     adapter = GitLabAdapter("glpat_token")
 
     try:
-        with pytest.raises(ValueError, match="GitLab API returned invalid JSON"):
+        with pytest.raises(ValueError, match=r"GitLab API returned invalid JSON"):
             await adapter.post_review_comment("owner", "repo", 42, "test.py", 10, "Test comment")
     finally:
         await adapter.close()
@@ -1242,7 +1242,7 @@ async def test_create_pr_comment_invalid_json():
     adapter = GitLabAdapter("glpat_token")
 
     try:
-        with pytest.raises(ValueError, match="GitLab API returned invalid JSON"):
+        with pytest.raises(ValueError, match=r"GitLab API returned invalid JSON"):
             await adapter.create_pr_comment("owner", "repo", 42, "Test comment")
     finally:
         await adapter.close()
@@ -1265,7 +1265,7 @@ async def test_post_review_comment_get_pr_fails_validation():
     adapter = GitLabAdapter("glpat_token")
 
     try:
-        with pytest.raises(ValueError, match="missing 'diff_refs' field"):
+        with pytest.raises(ValueError, match=r"missing 'diff_refs' field"):
             await adapter.post_review_comment("owner", "repo", 42, "test.py", 10, "Test comment")
     finally:
         await adapter.close()
@@ -1289,7 +1289,7 @@ async def test_timeout_error_handling():
     adapter = GitLabAdapter("glpat_token")
 
     try:
-        with pytest.raises(ValueError, match="GitLab API request timed out"):
+        with pytest.raises(ValueError, match=r"GitLab API request timed out"):
             await adapter.get_default_branch("owner", "repo")
     finally:
         await adapter.close()
@@ -1315,7 +1315,7 @@ async def test_connection_error_handling():
     adapter = GitLabAdapter("glpat_token")
 
     try:
-        with pytest.raises(ValueError, match="Cannot connect to GitLab API"):
+        with pytest.raises(ValueError, match=r"Cannot connect to GitLab API"):
             await adapter.get_default_branch("owner", "repo")
     finally:
         await adapter.close()
@@ -1337,7 +1337,7 @@ async def test_create_issue_timeout():
     adapter = GitLabAdapter("glpat_token")
 
     try:
-        with pytest.raises(ValueError, match="GitLab API request timed out"):
+        with pytest.raises(ValueError, match=r"GitLab API request timed out"):
             await adapter.create_issue("owner", "repo", "Title", "Body")
     finally:
         await adapter.close()
@@ -1359,7 +1359,7 @@ async def test_create_issue_connection_error():
     adapter = GitLabAdapter("glpat_token")
 
     try:
-        with pytest.raises(ValueError, match="Cannot connect to GitLab API"):
+        with pytest.raises(ValueError, match=r"Cannot connect to GitLab API"):
             await adapter.create_issue("owner", "repo", "Title", "Body")
     finally:
         await adapter.close()
@@ -1381,7 +1381,7 @@ async def test_get_pr_timeout():
     adapter = GitLabAdapter("glpat_token")
 
     try:
-        with pytest.raises(ValueError, match="GitLab API request timed out"):
+        with pytest.raises(ValueError, match=r"GitLab API request timed out"):
             await adapter.get_pr("owner", "repo", 42)
     finally:
         await adapter.close()
@@ -1403,7 +1403,7 @@ async def test_get_pr_connection_error():
     adapter = GitLabAdapter("glpat_token")
 
     try:
-        with pytest.raises(ValueError, match="Cannot connect to GitLab API"):
+        with pytest.raises(ValueError, match=r"Cannot connect to GitLab API"):
             await adapter.get_pr("owner", "repo", 42)
     finally:
         await adapter.close()
@@ -1425,7 +1425,7 @@ async def test_get_pr_diff_timeout():
     adapter = GitLabAdapter("glpat_token")
 
     try:
-        with pytest.raises(ValueError, match="GitLab API request timed out"):
+        with pytest.raises(ValueError, match=r"GitLab API request timed out"):
             await adapter.get_pr_diff("owner", "repo", 42)
     finally:
         await adapter.close()
@@ -1447,7 +1447,7 @@ async def test_get_pr_diff_connection_error():
     adapter = GitLabAdapter("glpat_token")
 
     try:
-        with pytest.raises(ValueError, match="Cannot connect to GitLab API"):
+        with pytest.raises(ValueError, match=r"Cannot connect to GitLab API"):
             await adapter.get_pr_diff("owner", "repo", 42)
     finally:
         await adapter.close()
@@ -1469,7 +1469,7 @@ async def test_create_pr_comment_timeout():
     adapter = GitLabAdapter("glpat_token")
 
     try:
-        with pytest.raises(ValueError, match="GitLab API request timed out"):
+        with pytest.raises(ValueError, match=r"GitLab API request timed out"):
             await adapter.create_pr_comment("owner", "repo", 42, "Comment")
     finally:
         await adapter.close()
@@ -1491,7 +1491,7 @@ async def test_create_pr_comment_connection_error():
     adapter = GitLabAdapter("glpat_token")
 
     try:
-        with pytest.raises(ValueError, match="Cannot connect to GitLab API"):
+        with pytest.raises(ValueError, match=r"Cannot connect to GitLab API"):
             await adapter.create_pr_comment("owner", "repo", 42, "Comment")
     finally:
         await adapter.close()
@@ -1525,7 +1525,7 @@ async def test_post_review_comment_timeout():
     adapter = GitLabAdapter("glpat_token")
 
     try:
-        with pytest.raises(ValueError, match="GitLab API request timed out"):
+        with pytest.raises(ValueError, match=r"GitLab API request timed out"):
             await adapter.post_review_comment("owner", "repo", 42, "test.py", 10, "Comment")
     finally:
         await adapter.close()
@@ -1559,7 +1559,7 @@ async def test_post_review_comment_connection_error():
     adapter = GitLabAdapter("glpat_token")
 
     try:
-        with pytest.raises(ValueError, match="Cannot connect to GitLab API"):
+        with pytest.raises(ValueError, match=r"Cannot connect to GitLab API"):
             await adapter.post_review_comment("owner", "repo", 42, "test.py", 10, "Comment")
     finally:
         await adapter.close()
@@ -1582,7 +1582,7 @@ async def test_get_file_content_timeout():
     adapter = GitLabAdapter("glpat_token")
 
     try:
-        with pytest.raises(ValueError, match="GitLab API request timed out"):
+        with pytest.raises(ValueError, match=r"GitLab API request timed out"):
             await adapter.get_file_content("owner", "repo", "test.py", "main")
     finally:
         await adapter.close()
@@ -1605,7 +1605,7 @@ async def test_get_file_content_connection_error():
     adapter = GitLabAdapter("glpat_token")
 
     try:
-        with pytest.raises(ValueError, match="Cannot connect to GitLab API"):
+        with pytest.raises(ValueError, match=r"Cannot connect to GitLab API"):
             await adapter.get_file_content("owner", "repo", "test.py", "main")
     finally:
         await adapter.close()

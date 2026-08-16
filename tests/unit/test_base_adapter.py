@@ -1,7 +1,6 @@
 """Tests for drep.adapters.base.BaseAdapter abstract class."""
 
 from abc import ABC
-from typing import Dict, List, Optional
 
 
 def test_base_adapter_is_abstract_base_class():
@@ -14,7 +13,7 @@ def test_base_adapter_is_abstract_base_class():
     # Should raise TypeError when trying to instantiate
     try:
         BaseAdapter()
-        assert False, "Should not be able to instantiate BaseAdapter directly"
+        raise AssertionError("Should not be able to instantiate BaseAdapter directly")
     except TypeError as e:
         # Expected - can't instantiate abstract class
         assert "abstract" in str(e).lower()
@@ -40,9 +39,9 @@ def test_base_adapter_has_required_abstract_methods():
     }
 
     # All required methods should be abstract
-    assert required_methods.issubset(
-        abstract_methods
-    ), f"Missing abstract methods: {required_methods - abstract_methods}"
+    assert required_methods.issubset(abstract_methods), (
+        f"Missing abstract methods: {required_methods - abstract_methods}"
+    )
 
 
 def test_subclass_without_implementation_raises_error():
@@ -61,7 +60,7 @@ def test_subclass_without_implementation_raises_error():
     # Should not be able to instantiate
     try:
         IncompleteAdapter()
-        assert False, "Should not allow instantiation of incomplete subclass"
+        raise AssertionError("Should not allow instantiation of incomplete subclass")
     except TypeError as e:
         assert "abstract" in str(e).lower()
 
@@ -75,11 +74,11 @@ def test_complete_subclass_can_be_instantiated():
         """Complete adapter with all required methods."""
 
         async def create_issue(
-            self, owner: str, repo: str, title: str, body: str, labels: Optional[List[str]] = None
+            self, owner: str, repo: str, title: str, body: str, labels: list[str] | None = None
         ) -> int:
             return 1
 
-        async def get_pr(self, owner: str, repo: str, pr_number: int) -> Dict:
+        async def get_pr(self, owner: str, repo: str, pr_number: int) -> dict:
             return {}
 
         async def get_pr_diff(self, owner: str, repo: str, pr_number: int) -> str:
@@ -133,7 +132,7 @@ def test_base_adapter_method_signatures():
     from drep.adapters.base import BaseAdapter
 
     # Check create_issue signature
-    create_issue = getattr(BaseAdapter, "create_issue")
+    create_issue = BaseAdapter.create_issue
     sig = inspect.signature(create_issue)
     params = list(sig.parameters.keys())
     assert "owner" in params
@@ -143,7 +142,7 @@ def test_base_adapter_method_signatures():
     assert "labels" in params
 
     # Check get_pr signature
-    get_pr = getattr(BaseAdapter, "get_pr")
+    get_pr = BaseAdapter.get_pr
     sig = inspect.signature(get_pr)
     params = list(sig.parameters.keys())
     assert "owner" in params
@@ -151,7 +150,7 @@ def test_base_adapter_method_signatures():
     assert "pr_number" in params
 
     # Check post_review_comment signature
-    post_review_comment = getattr(BaseAdapter, "post_review_comment")
+    post_review_comment = BaseAdapter.post_review_comment
     sig = inspect.signature(post_review_comment)
     params = list(sig.parameters.keys())
     assert "owner" in params

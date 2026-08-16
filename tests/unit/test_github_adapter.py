@@ -188,7 +188,7 @@ async def test_create_issue_error_handling():
     adapter = GitHubAdapter("ghp_token")
 
     try:
-        with pytest.raises(ValueError, match="Failed to create issue"):
+        with pytest.raises(ValueError, match=r"Failed to create issue"):
             await adapter.create_issue(owner="owner", repo="repo", title="Test", body="Test")
     finally:
         await adapter.close()
@@ -266,7 +266,7 @@ async def test_get_pr_not_found():
     adapter = GitHubAdapter("ghp_token")
 
     try:
-        with pytest.raises(ValueError, match="Pull request #999 not found"):
+        with pytest.raises(ValueError, match=r"Pull request #999 not found"):
             await adapter.get_pr("owner", "repo", 999)
     finally:
         await adapter.close()
@@ -488,7 +488,7 @@ async def test_post_review_comment_error_handling():
     adapter = GitHubAdapter("ghp_token")
 
     try:
-        with pytest.raises(ValueError, match="Failed to create review comment"):
+        with pytest.raises(ValueError, match=r"Failed to create review comment"):
             await adapter.post_review_comment(
                 owner="owner",
                 repo="repo",
@@ -587,7 +587,7 @@ async def test_create_pr_review_comment_error_handling():
     adapter = GitHubAdapter("ghp_token")
 
     try:
-        with pytest.raises(ValueError, match="Failed to create review comment"):
+        with pytest.raises(ValueError, match=r"Failed to create review comment"):
             await adapter.create_pr_review_comment(
                 owner="owner",
                 repo="repo",
@@ -616,7 +616,7 @@ async def test_create_pr_review_comment_handles_422_validation():
     adapter = GitHubAdapter("ghp_token")
 
     try:
-        with pytest.raises(ValueError, match="Failed to create review comment"):
+        with pytest.raises(ValueError, match=r"Failed to create review comment"):
             await adapter.create_pr_review_comment(
                 owner="owner",
                 repo="repo",
@@ -720,7 +720,7 @@ async def test_get_file_content_not_found():
     adapter = GitHubAdapter("ghp_token")
 
     try:
-        with pytest.raises(ValueError, match="File nonexistent.py not found"):
+        with pytest.raises(ValueError, match=r"File nonexistent.py not found"):
             await adapter.get_file_content("owner", "repo", "nonexistent.py", "main")
     finally:
         await adapter.close()
@@ -798,7 +798,7 @@ async def test_create_issue_unauthorized_401():
     adapter = GitHubAdapter("ghp_token")
 
     try:
-        with pytest.raises(ValueError, match="Failed to create issue"):
+        with pytest.raises(ValueError, match=r"Failed to create issue"):
             await adapter.create_issue("owner", "repo", "Test", "Test")
     finally:
         await adapter.close()
@@ -826,7 +826,7 @@ async def test_post_review_comment_validation_failed_422():
     adapter = GitHubAdapter("ghp_token")
 
     try:
-        with pytest.raises(ValueError, match="Invalid line number.*Line must be part of PR diff"):
+        with pytest.raises(ValueError, match=r"Invalid line number.*Line must be part of PR diff"):
             await adapter.post_review_comment("owner", "repo", 42, "test.py", 999, "Comment")
     finally:
         await adapter.close()
@@ -845,7 +845,7 @@ async def test_create_issue_server_error_500():
     adapter = GitHubAdapter("ghp_token")
 
     try:
-        with pytest.raises(ValueError, match="Failed to create issue"):
+        with pytest.raises(ValueError, match=r"Failed to create issue"):
             await adapter.create_issue("owner", "repo", "Test", "Test")
     finally:
         await adapter.close()
@@ -868,7 +868,7 @@ async def test_get_pr_rate_limit_403():
     adapter = GitHubAdapter("ghp_token")
 
     try:
-        with pytest.raises(ValueError, match="GitHub API rate limit exceeded.*Resets at"):
+        with pytest.raises(ValueError, match=r"GitHub API rate limit exceeded.*Resets at"):
             await adapter.get_pr("owner", "repo", 42)
     finally:
         await adapter.close()
@@ -881,7 +881,7 @@ def test_github_adapter_empty_token_raises_error():
     """Test that GitHubAdapter raises ValueError for empty token."""
     from drep.adapters.github import GitHubAdapter
 
-    with pytest.raises(ValueError, match="GitHub token cannot be empty"):
+    with pytest.raises(ValueError, match=r"GitHub token cannot be empty"):
         GitHubAdapter("")
 
 
@@ -889,7 +889,7 @@ def test_github_adapter_whitespace_token_raises_error():
     """Test that GitHubAdapter raises ValueError for whitespace-only token."""
     from drep.adapters.github import GitHubAdapter
 
-    with pytest.raises(ValueError, match="GitHub token cannot be empty"):
+    with pytest.raises(ValueError, match=r"GitHub token cannot be empty"):
         GitHubAdapter("   ")
 
 
@@ -897,7 +897,7 @@ def test_github_adapter_invalid_url_raises_error():
     """Test that GitHubAdapter raises ValueError for invalid URL."""
     from drep.adapters.github import GitHubAdapter
 
-    with pytest.raises(ValueError, match="GitHub URL must start with http"):
+    with pytest.raises(ValueError, match=r"GitHub URL must start with http"):
         GitHubAdapter("ghp_token", url="ftp://invalid.com")
 
 
@@ -918,7 +918,7 @@ async def test_create_issue_timeout_error():
     adapter = GitHubAdapter("ghp_token")
 
     try:
-        with pytest.raises(ValueError, match="GitHub API request timed out"):
+        with pytest.raises(ValueError, match=r"GitHub API request timed out"):
             await adapter.create_issue("owner", "repo", "Test", "Test")
     finally:
         await adapter.close()
@@ -940,7 +940,7 @@ async def test_get_pr_connection_error():
     adapter = GitHubAdapter("ghp_token")
 
     try:
-        with pytest.raises(ValueError, match="Cannot connect to GitHub API"):
+        with pytest.raises(ValueError, match=r"Cannot connect to GitHub API"):
             await adapter.get_pr("owner", "repo", 42)
     finally:
         await adapter.close()
@@ -963,7 +963,7 @@ async def test_get_file_content_invalid_base64():
     adapter = GitHubAdapter("ghp_token")
 
     try:
-        with pytest.raises(ValueError, match="Failed to decode file content.*invalid base64"):
+        with pytest.raises(ValueError, match=r"Failed to decode file content.*invalid base64"):
             await adapter.get_file_content("owner", "repo", "corrupted.py", "main")
     finally:
         await adapter.close()
@@ -986,7 +986,7 @@ async def test_get_file_content_binary_file():
     adapter = GitHubAdapter("ghp_token")
 
     try:
-        with pytest.raises(ValueError, match="binary or non-UTF8.*only supports text files"):
+        with pytest.raises(ValueError, match=r"binary or non-UTF8.*only supports text files"):
             await adapter.get_file_content("owner", "repo", "image.png", "main")
     finally:
         await adapter.close()
@@ -1009,7 +1009,7 @@ async def test_create_issue_invalid_json_response():
     adapter = GitHubAdapter("ghp_token")
 
     try:
-        with pytest.raises(ValueError, match="GitHub API returned invalid JSON"):
+        with pytest.raises(ValueError, match=r"GitHub API returned invalid JSON"):
             await adapter.create_issue("owner", "repo", "Test", "Test")
     finally:
         await adapter.close()
@@ -1029,7 +1029,7 @@ async def test_create_issue_missing_number_field():
     adapter = GitHubAdapter("ghp_token")
 
     try:
-        with pytest.raises(ValueError, match="missing 'number' field"):
+        with pytest.raises(ValueError, match=r"missing 'number' field"):
             await adapter.create_issue("owner", "repo", "Test", "Test")
     finally:
         await adapter.close()
@@ -1050,7 +1050,7 @@ async def test_post_review_comment_missing_head_sha():
     adapter = GitHubAdapter("ghp_token")
 
     try:
-        with pytest.raises(ValueError, match="missing required 'head.sha' field"):
+        with pytest.raises(ValueError, match=r"missing required 'head.sha' field"):
             await adapter.post_review_comment("owner", "repo", 42, "test.py", 10, "Comment")
     finally:
         await adapter.close()
@@ -1134,7 +1134,7 @@ async def test_check_rate_limit_with_zero():
         403, headers={"X-RateLimit-Remaining": "0", "X-RateLimit-Reset": "1640000000"}
     )
 
-    with pytest.raises(ValueError, match="rate limit exceeded.*Resets at"):
+    with pytest.raises(ValueError, match=r"rate limit exceeded.*Resets at"):
         adapter._check_rate_limit(response, "owner", "repo")
 
     await adapter.close()
@@ -1150,7 +1150,7 @@ async def test_check_rate_limit_with_whitespace():
         403, headers={"X-RateLimit-Remaining": " 0 ", "X-RateLimit-Reset": "1640000000"}
     )
 
-    with pytest.raises(ValueError, match="rate limit exceeded"):
+    with pytest.raises(ValueError, match=r"rate limit exceeded"):
         adapter._check_rate_limit(response, "owner", "repo")
 
     await adapter.close()
@@ -1166,7 +1166,7 @@ async def test_check_rate_limit_with_float():
         403, headers={"X-RateLimit-Remaining": "0.0", "X-RateLimit-Reset": "1640000000"}
     )
 
-    with pytest.raises(ValueError, match="rate limit exceeded"):
+    with pytest.raises(ValueError, match=r"rate limit exceeded"):
         adapter._check_rate_limit(response, "owner", "repo")
 
     await adapter.close()
@@ -1243,14 +1243,15 @@ async def test_get_file_content_missing_content_field():
     # API response missing 'content' field (malformed response)
     respx.get("https://api.github.com/repos/owner/repo/contents/test.py").mock(
         return_value=httpx.Response(
-            200, json={"name": "test.py", "path": "test.py", "type": "file"}  # Missing 'content'
+            200,
+            json={"name": "test.py", "path": "test.py", "type": "file"},  # Missing 'content'
         )
     )
 
     adapter = GitHubAdapter("ghp_token")
 
     try:
-        with pytest.raises(ValueError, match="missing 'content' field"):
+        with pytest.raises(ValueError, match=r"missing 'content' field"):
             await adapter.get_file_content("owner", "repo", "test.py", "main")
     finally:
         await adapter.close()
@@ -1355,7 +1356,7 @@ async def test_get_default_branch_not_found():
     adapter = GitHubAdapter("ghp_token")
 
     try:
-        with pytest.raises(ValueError, match="Repository owner/nonexistent not found"):
+        with pytest.raises(ValueError, match=r"Repository owner/nonexistent not found"):
             await adapter.get_default_branch("owner", "nonexistent")
     finally:
         await adapter.close()
@@ -1370,14 +1371,15 @@ async def test_get_default_branch_missing_field():
     # Mock malformed API response missing 'default_branch' field
     respx.get("https://api.github.com/repos/owner/repo").mock(
         return_value=httpx.Response(
-            200, json={"name": "repo", "owner": {"login": "owner"}}  # Missing default_branch
+            200,
+            json={"name": "repo", "owner": {"login": "owner"}},  # Missing default_branch
         )
     )
 
     adapter = GitHubAdapter("ghp_token")
 
     try:
-        with pytest.raises(ValueError, match="missing 'default_branch' field"):
+        with pytest.raises(ValueError, match=r"missing 'default_branch' field"):
             await adapter.get_default_branch("owner", "repo")
     finally:
         await adapter.close()
@@ -1397,7 +1399,7 @@ async def test_get_default_branch_timeout():
     adapter = GitHubAdapter("ghp_token")
 
     try:
-        with pytest.raises(ValueError, match="timed out"):
+        with pytest.raises(ValueError, match=r"timed out"):
             await adapter.get_default_branch("owner", "repo")
     finally:
         await adapter.close()
@@ -1417,7 +1419,7 @@ async def test_get_default_branch_invalid_json():
     adapter = GitHubAdapter("ghp_token")
 
     try:
-        with pytest.raises(ValueError, match="invalid JSON"):
+        with pytest.raises(ValueError, match=r"invalid JSON"):
             await adapter.get_default_branch("owner", "repo")
     finally:
         await adapter.close()
@@ -1437,7 +1439,7 @@ async def test_get_default_branch_connect_error():
     adapter = GitHubAdapter("ghp_token")
 
     try:
-        with pytest.raises(ValueError, match="Cannot connect to GitHub API"):
+        with pytest.raises(ValueError, match=r"Cannot connect to GitHub API"):
             await adapter.get_default_branch("owner", "repo")
     finally:
         await adapter.close()
@@ -1461,7 +1463,7 @@ async def test_get_default_branch_rate_limit_exceeded():
     adapter = GitHubAdapter("ghp_token")
 
     try:
-        with pytest.raises(ValueError, match="rate limit exceeded.*Resets at"):
+        with pytest.raises(ValueError, match=r"rate limit exceeded.*Resets at"):
             await adapter.get_default_branch("owner", "repo")
     finally:
         await adapter.close()

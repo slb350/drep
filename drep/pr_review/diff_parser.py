@@ -2,7 +2,6 @@
 
 import re
 from dataclasses import dataclass
-from typing import List
 
 
 @dataclass
@@ -14,9 +13,9 @@ class DiffHunk:
     old_count: int
     new_start: int
     new_count: int
-    lines: List[str]  # Including +, -, and context lines (with prefixes)
+    lines: list[str]  # Including +, -, and context lines (with prefixes)
 
-    def get_added_lines(self) -> List[tuple[int, str]]:
+    def get_added_lines(self) -> list[tuple[int, str]]:
         """Get only added lines with their line numbers in the new file.
 
         Returns:
@@ -38,7 +37,7 @@ class DiffHunk:
 
         return added
 
-    def get_removed_lines(self) -> List[tuple[int, str]]:
+    def get_removed_lines(self) -> list[tuple[int, str]]:
         """Get only removed lines with their line numbers in the old file.
 
         Returns:
@@ -72,7 +71,7 @@ class DiffHunk:
         return "\n".join(self.lines)
 
 
-def parse_diff(diff_text: str) -> List[DiffHunk]:
+def parse_diff(diff_text: str) -> list[DiffHunk]:
     """Parse unified diff into structured hunks.
 
     Args:
@@ -128,17 +127,17 @@ def parse_diff(diff_text: str) -> List[DiffHunk]:
                     next_line = lines[i]
 
                     # Stop if we hit another hunk or file
-                    if next_line.startswith("@@") or next_line.startswith("diff --git"):
+                    if next_line.startswith(("@@", "diff --git")):
                         break
 
                     # Skip file metadata lines (---, +++, index, etc.)
-                    if next_line.startswith("---") or next_line.startswith("+++"):
+                    if next_line.startswith(("---", "+++")):
                         i += 1
                         continue
-                    if next_line.startswith("index ") or next_line.startswith("similarity "):
+                    if next_line.startswith(("index ", "similarity ")):
                         i += 1
                         continue
-                    if next_line.startswith("rename ") or next_line.startswith("Binary files"):
+                    if next_line.startswith(("rename ", "Binary files")):
                         i += 1
                         continue
 

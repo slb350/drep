@@ -70,6 +70,7 @@ Usage Example:
 """
 
 import asyncio  # For async/await and concurrency primitives (Semaphore, Lock)
+import contextlib
 import json  # For parsing LLM JSON responses
 import logging  # For structured logging throughout the module
 import re  # For regex-based JSON extraction and cleaning
@@ -80,9 +81,6 @@ from pathlib import Path  # For cross-platform file path handling
 from typing import (  # Type hints for better IDE support and clarity
     TYPE_CHECKING,
     Any,
-    Dict,
-    Optional,
-    Type,
 )
 
 import httpx  # Modern async HTTP client (fallback when open-agent-sdk unavailable)
@@ -106,7 +104,7 @@ logger = logging.getLogger(__name__)
 _UNSET = object()
 
 
-def get_current_commit_sha(repo_path: Optional[Path] = None) -> str:
+def get_current_commit_sha(repo_path: Path | None = None) -> str:
     """Get current git commit SHA for cache invalidation.
 
     This function is used to tie cached LLM responses to specific commits. When code
@@ -133,7 +131,7 @@ def get_current_commit_sha(repo_path: Optional[Path] = None) -> str:
     """
     try:
         # Determine which directory to run git command in
-        cwd = repo_path if repo_path else Path.cwd()
+        cwd = repo_path or Path.cwd()
 
         # Execute git rev-parse HEAD to get current commit SHA
         # - capture_output=True: Capture stdout/stderr for logging
@@ -150,11 +148,10 @@ def get_current_commit_sha(repo_path: Optional[Path] = None) -> str:
         if result.returncode == 0:
             # Success - return the SHA (strip any trailing newline)
             return result.stdout.strip()
-        else:
-            # Not a git repository or git not available
-            # This is expected when running outside a repo, so only warn-level logging
-            logger.warning(f"Could not get commit SHA: {result.stderr}")
-            return "unknown"
+        # Not a git repository or git not available
+        # This is expected when running outside a repo, so only warn-level logging
+        logger.warning(f"Could not get commit SHA: {result.stderr}")
+        return "unknown"
 
     except subprocess.TimeoutExpired:
         # Git command took >5 seconds (very rare, possibly network-mounted repo)
@@ -238,7 +235,7 @@ class RateLimitContext:
     - All semaphores are released even if request fails
     """
 
-    def __init__(self, rate_limiter: "RateLimiter", estimated_tokens: int, repo_id: Optional[str]):
+    def __init__(self, rate_limiter: "RateLimiter", estimated_tokens: int, repo_id: str | None):
         """Initialize rate limit context for a single request.
 
         Args:
@@ -255,8 +252,8 @@ class RateLimitContext:
         self.rate_limiter = rate_limiter
         self.estimated_tokens = estimated_tokens
         self.repo_id = repo_id
-        self.actual_tokens: Optional[int] = None  # Set by caller after request completes
-        self.repo_semaphore: Optional[asyncio.Semaphore] = None  # Set in __aenter__
+        self.actual_tokens: int | None = None  # Set by caller after request completes
+        self.repo_semaphore: asyncio.Semaphore | None = None  # Set in __aenter__
 
     async def __aenter__(self):
         """Acquire semaphores and enforce rate limits before allowing request to proceed.
@@ -443,7 +440,7 @@ class RateLimiter:
         max_concurrent: int,
         requests_per_minute: int,
         max_tokens_per_minute: int,
-        max_concurrent_per_repo: Optional[int] = None,
+        max_concurrent_per_repo: int | None = None,
     ):
         """Initialize rate limiter with specified limits.
 
@@ -481,11 +478,11 @@ class RateLimiter:
         # Per-repository concurrency control
         # Maps repo_id -> Semaphore to limit concurrent requests per repository
         # This prevents one busy repo from using all global concurrent slots
-        self.repo_semaphores: Dict[str, asyncio.Semaphore] = {}
+        self.repo_semaphores: dict[str, asyncio.Semaphore] = {}
 
         # Track last access time for each repo's semaphore (for cleanup)
         # Maps repo_id -> timestamp (seconds since epoch)
-        self.repo_last_used: Dict[str, float] = {}
+        self.repo_last_used: dict[str, float] = {}
 
         # Time-to-live for idle repo semaphores: 10 minutes
         # After 10 minutes of inactivity, a repo's semaphore is eligible for eviction
@@ -710,7 +707,7 @@ class RateLimiter:
                 f"(total: {self.tokens_used}/{self.max_tokens_per_minute})"
             )
 
-    def request(self, estimated_tokens: int, repo_id: Optional[str] = None):
+    def request(self, estimated_tokens: int, repo_id: str | None = None):
         """Create a rate-limited context manager for an LLM request.
 
         This is the main entry point for rate limiting. Call this method to get
@@ -835,7 +832,7 @@ class LLMClient:
         self,
         endpoint: str,
         model: str,
-        api_key: Optional[str] = None,
+        api_key: str | None = None,
         temperature: float = 0.2,
         max_tokens: int = DEFAULT_MAX_TOKENS_PER_REQUEST,
         timeout: int = 60,
@@ -843,19 +840,19 @@ class LLMClient:
         retry_delay: int = 2,
         exponential_backoff: bool = True,
         max_concurrent_global: int = 5,
-        max_concurrent_per_repo: Optional[int] = 3,
+        max_concurrent_per_repo: int | None = 3,
         requests_per_minute: int = 60,
         max_tokens_per_minute: int = MAX_TOKENS_PER_MINUTE,
-        cache: Optional["IntelligentCache"] = None,  # noqa: F821
-        repo_path: Optional[Path] = None,
-        rate_limiter: Optional[RateLimiter] = None,
+        cache: "IntelligentCache | None" = None,
+        repo_path: Path | None = None,
+        rate_limiter: RateLimiter | None = None,
         enable_circuit_breaker: bool = True,
-        circuit_breaker: Optional[CircuitBreaker] = _UNSET,  # type: ignore
+        circuit_breaker: CircuitBreaker | None = _UNSET,  # type: ignore
         circuit_breaker_threshold: int = 5,
         circuit_breaker_timeout: int = 60,
         provider: str = "openai-compatible",
-        bedrock_region: Optional[str] = None,
-        bedrock_model: Optional[str] = None,
+        bedrock_region: str | None = None,
+        bedrock_model: str | None = None,
     ):
         """Initialize LLM client.
 
@@ -915,7 +912,8 @@ class LLMClient:
         # === PROVIDER SELECTION: Bedrock, open-agent-sdk, or HTTP ===
         # Check if Bedrock provider is requested
         if provider == "bedrock":
-            from drep.llm.providers.bedrock_client import BedrockClient
+            # Lazy: boto3 is heavy and only needed for the Bedrock provider
+            from drep.llm.providers.bedrock_client import BedrockClient  # noqa: PLC0415
 
             if not bedrock_region or not bedrock_model:
                 raise ValueError(
@@ -975,8 +973,9 @@ class LLMClient:
 
         # Try to initialize open-agent-sdk (preferred backend)
         try:
-            from open_agent.types import AgentOptions  # type: ignore
-            from open_agent.utils import create_client  # type: ignore
+            # Lazy: keep import cost off the plain-HTTP fallback path
+            from open_agent.types import AgentOptions  # type: ignore  # noqa: PLC0415
+            from open_agent.utils import create_client  # type: ignore  # noqa: PLC0415
 
             # Configure open-agent-sdk with our settings
             options = AgentOptions(
@@ -1039,7 +1038,7 @@ class LLMClient:
                 self.message = _CompatMessage(content)
 
         class _CompatUsage:
-            def __init__(self, usage: Dict[str, Any]):
+            def __init__(self, usage: dict[str, Any]):
                 prompt = usage.get("prompt_tokens") or usage.get("input_tokens") or 0
                 completion = usage.get("completion_tokens") or usage.get("output_tokens") or 0
                 self.prompt_tokens = prompt
@@ -1047,7 +1046,7 @@ class LLMClient:
                 self.total_tokens = usage.get("total_tokens") or (prompt + completion)
 
         class _CompatResponse:
-            def __init__(self, data: Dict[str, Any]):
+            def __init__(self, data: dict[str, Any]):
                 self.model = data.get("model", client_self.model)
                 content = (
                     ((data.get("choices") or [{}])[0].get("message") or {}).get("content")
@@ -1126,8 +1125,8 @@ class LLMClient:
         self,
         system_prompt: str,
         code: str,
-        repo_id: Optional[str] = None,
-        commit_sha: Optional[str] = None,
+        repo_id: str | None = None,
+        commit_sha: str | None = None,
         analyzer: str = "unknown",
     ) -> LLMResponse:
         """Analyze code with LLM.
@@ -1272,7 +1271,7 @@ class LLMClient:
 
                     return llm_response
 
-            except Exception as e:
+            except Exception as e:  # noqa: PERF203 - try wraps one retry attempt by design
                 last_exception = e
 
                 # Record failed request
@@ -1295,8 +1294,6 @@ class LLMClient:
                     # Sanitize error message to avoid logging tokens in URLs
                     error_msg = str(e)
                     # Basic sanitization: remove common token patterns from error messages
-                    import re
-
                     error_msg = re.sub(
                         r"(token|api_?key|password|secret)=[^&\s]+",
                         r"\1=***",
@@ -1333,11 +1330,11 @@ class LLMClient:
         self,
         system_prompt: str,
         code: str,
-        schema: Optional[Type[BaseModel]] = None,
-        repo_id: Optional[str] = None,
-        commit_sha: Optional[str] = None,
+        schema: type[BaseModel] | None = None,
+        repo_id: str | None = None,
+        commit_sha: str | None = None,
         analyzer: str = "unknown",
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Analyze code and parse JSON response with fallback strategies.
 
         Implements 5 fallback strategies:
@@ -1442,7 +1439,7 @@ class LLMClient:
 
         raise ValueError(f"Failed to parse JSON after 3 attempts. Last content: {content[:200]}...")
 
-    def _fuzzy_inference(self, content: str, schema: Type[BaseModel]) -> Optional[Dict[str, Any]]:
+    def _fuzzy_inference(self, content: str, schema: type[BaseModel]) -> dict[str, Any] | None:
         """Attempt to extract data from malformed response using schema.
 
         Uses regex to extract values for expected fields.
@@ -1457,7 +1454,7 @@ class LLMClient:
         # Get schema fields
         fields = schema.model_fields
 
-        result: Dict[str, Any] = {}
+        result: dict[str, Any] = {}
         for field_name, field_info in fields.items():
             # Try to extract field value using various patterns
             patterns = [
@@ -1479,15 +1476,11 @@ class LLMClient:
                     value = match.group(1).strip()
                     # Try to convert to appropriate type
                     if field_info.annotation is int:
-                        try:
+                        with contextlib.suppress(ValueError):
                             result[field_name] = int(value)
-                        except ValueError:
-                            pass
                     elif field_info.annotation is float:
-                        try:
+                        with contextlib.suppress(ValueError):
                             result[field_name] = float(value)
-                        except ValueError:
-                            pass
                     elif field_info.annotation is bool:
                         result[field_name] = value.lower() in ("true", "1", "yes")
                     else:
@@ -1504,7 +1497,7 @@ class LLMClient:
 
         return None
 
-    def get_metrics(self) -> Dict[str, Any]:
+    def get_metrics(self) -> dict[str, Any]:
         """Get current metrics as dictionary.
 
         Returns:

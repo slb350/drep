@@ -379,9 +379,9 @@ class TestFinallyBlockErrorHandling:
         except ValueError as e:
             scan_error_raised = True
             scan_error_message = str(e)
-        except OSError:
+        except OSError as exc:
             # This should NEVER happen - cleanup errors must not mask scan errors
-            assert False, "OSError from cleanup masked the ValueError from scan!"
+            raise AssertionError("OSError from cleanup masked the ValueError from scan!") from exc
 
         # Verify the scan error (ValueError) propagated correctly
         assert scan_error_raised, "Scan error should propagate from finally block"

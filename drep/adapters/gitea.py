@@ -2,7 +2,6 @@
 
 import base64
 import json
-from typing import Dict, List, Optional
 
 import httpx
 
@@ -31,7 +30,7 @@ class GiteaAdapter(BaseAdapter):
         self.client = httpx.AsyncClient(headers={"Authorization": f"token {token}"}, timeout=30.0)
         # Cache label maps per repository to avoid redundant API calls
         # Format: {(owner, repo): {label_name: label_id}}
-        self._label_cache: Dict[tuple, Dict[str, int]] = {}
+        self._label_cache: dict[tuple, dict[str, int]] = {}
 
     async def close(self):
         """Close HTTP client connection."""
@@ -60,10 +59,10 @@ class GiteaAdapter(BaseAdapter):
             # Validate JSON parsing
             try:
                 data = response.json()
-            except json.JSONDecodeError:
+            except json.JSONDecodeError as exc:
                 raise ValueError(
-                    f"Gitea API returned invalid JSON for {owner}/{repo}: " f"{response.text[:200]}"
-                )
+                    f"Gitea API returned invalid JSON for {owner}/{repo}: {response.text[:200]}"
+                ) from exc
 
             # Validate required field exists
             if "default_branch" not in data:
@@ -73,24 +72,24 @@ class GiteaAdapter(BaseAdapter):
 
             return data["default_branch"]
 
-        except httpx.TimeoutException:
+        except httpx.TimeoutException as exc:
             raise ValueError(
                 f"Gitea API request timed out fetching default branch for {owner}/{repo}"
-            )
-        except (httpx.ConnectError, httpx.ConnectTimeout):
-            raise ValueError(f"Cannot connect to Gitea API at {self.url} for {owner}/{repo}")
+            ) from exc
+        except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
+            raise ValueError(
+                f"Cannot connect to Gitea API at {self.url} for {owner}/{repo}"
+            ) from exc
         except httpx.HTTPStatusError as e:
             if e.response.status_code == 404:
-                raise ValueError(f"Repository {owner}/{repo} not found")
-            elif e.response.status_code == 401:
-                raise ValueError("Unauthorized - check your Gitea token")
-            else:
-                raise ValueError(
-                    f"Gitea API error fetching default branch for {owner}/{repo}: "
-                    f"{e.response.text}"
-                )
+                raise ValueError(f"Repository {owner}/{repo} not found") from e
+            if e.response.status_code == 401:
+                raise ValueError("Unauthorized - check your Gitea token") from e
+            raise ValueError(
+                f"Gitea API error fetching default branch for {owner}/{repo}: {e.response.text}"
+            ) from e
 
-    async def _get_label_ids(self, owner: str, repo: str, label_names: List[str]) -> List[int]:
+    async def _get_label_ids(self, owner: str, repo: str, label_names: list[str]) -> list[int]:
         """Get label IDs from label names (with caching).
 
         Args:
@@ -136,16 +135,11 @@ class GiteaAdapter(BaseAdapter):
         label_map = self._label_cache[cache_key]
 
         # Translate names to IDs (skip missing labels)
-        label_ids = []
-        for name in label_names:
-            if name in label_map:
-                label_ids.append(label_map[name])
-            # Silently skip missing labels - this is by design for flexibility
-
-        return label_ids
+        # Silently skip missing labels - this is by design for flexibility
+        return [label_map[name] for name in label_names if name in label_map]
 
     async def create_issue(
-        self, owner: str, repo: str, title: str, body: str, labels: Optional[List[str]] = None
+        self, owner: str, repo: str, title: str, body: str, labels: list[str] | None = None
     ) -> int:
         """Create an issue and return issue number.
 
@@ -174,11 +168,11 @@ class GiteaAdapter(BaseAdapter):
             data = response.json()
             return data["number"]
         except httpx.HTTPStatusError as e:
-            raise ValueError(f"Failed to create issue: {e.response.text}")
+            raise ValueError(f"Failed to create issue: {e.response.text}") from e
 
     # ===== PR Review Methods =====
 
-    async def get_pr(self, owner: str, repo: str, pr_number: int) -> Dict:
+    async def get_pr(self, owner: str, repo: str, pr_number: int) -> dict:
         """Get pull request details.
 
         Args:
@@ -201,9 +195,8 @@ class GiteaAdapter(BaseAdapter):
             return response.json()
         except httpx.HTTPStatusError as e:
             if e.response.status_code == 404:
-                raise ValueError(f"Pull request #{pr_number} not found")
-            else:
-                raise
+                raise ValueError(f"Pull request #{pr_number} not found") from e
+            raise
 
     async def get_pr_diff(self, owner: str, repo: str, pr_number: int) -> str:
         """Get pull request diff in unified diff format.
@@ -244,7 +237,7 @@ class GiteaAdapter(BaseAdapter):
             response = await self.client.post(url, json=payload)
             response.raise_for_status()
         except httpx.HTTPStatusError as e:
-            raise ValueError(f"Failed to create PR comment: {e.response.text}")
+            raise ValueError(f"Failed to create PR comment: {e.response.text}") from e
 
     async def create_pr_review_comment(
         self,
@@ -305,7 +298,7 @@ class GiteaAdapter(BaseAdapter):
                 raise ValueError(
                     f"Failed to create review comment. new_position error: {e1.response.text}; "
                     f"position error: {e2.response.text}"
-                )
+                ) from e2
 
     async def post_review_comment(
         self,
@@ -377,11 +370,9 @@ class GiteaAdapter(BaseAdapter):
             if content:
                 # Decode base64 and return as string
                 return base64.b64decode(content).decode("utf-8")
-            else:
-                # Empty file
-                return ""
+            # Empty file
+            return ""
         except httpx.HTTPStatusError as e:
             if e.response.status_code == 404:
-                raise ValueError(f"File {file_path} not found at ref {ref}")
-            else:
-                raise
+                raise ValueError(f"File {file_path} not found at ref {ref}") from e
+            raise

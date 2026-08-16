@@ -315,9 +315,9 @@ async def test_bedrock_client_system_prompt_extraction():
 
     # Multiple system prompts should be combined with newlines
     expected_system = "Be concise.\n\nThis should also be extracted"
-    assert (
-        system_prompt == expected_system
-    ), f"Expected: {expected_system!r}, Got: {system_prompt!r}"
+    assert system_prompt == expected_system, (
+        f"Expected: {expected_system!r}, Got: {system_prompt!r}"
+    )
     assert len([m for m in bedrock_messages if m["role"] == "user"]) == 1
 
 

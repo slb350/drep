@@ -6,11 +6,10 @@ and other credentials.
 """
 
 import re
-from typing import List, Optional
 from urllib.parse import urlparse, urlunparse
 
 
-def get_secret_patterns() -> List[str]:
+def get_secret_patterns() -> list[str]:
     """Get regex patterns for detecting secrets in log messages.
 
     Returns:
@@ -43,7 +42,7 @@ def get_secret_patterns() -> List[str]:
     ]
 
 
-def detect_secrets_in_logs(log_line: Optional[str]) -> bool:
+def detect_secrets_in_logs(log_line: str | None) -> bool:
     """Detect if a log line contains secrets or sensitive information.
 
     Args:
@@ -63,14 +62,10 @@ def detect_secrets_in_logs(log_line: Optional[str]) -> bool:
 
     patterns = get_secret_patterns()
 
-    for pattern in patterns:
-        if re.search(pattern, log_line, re.IGNORECASE):
-            return True
-
-    return False
+    return any(re.search(pattern, log_line, re.IGNORECASE) for pattern in patterns)
 
 
-def sanitize_url(url: Optional[str]) -> str:
+def sanitize_url(url: str | None) -> str:
     """Sanitize URL by masking sensitive query parameters and auth credentials.
 
     Args:
@@ -126,7 +121,7 @@ def sanitize_url(url: Optional[str]) -> str:
             query_parts = []
             for param in parsed.query.split("&"):
                 if "=" in param:
-                    key, value = param.split("=", 1)
+                    key, _value = param.split("=", 1)
                     if key.lower().replace("_", "") in {
                         p.replace("_", "") for p in sensitive_params
                     }:

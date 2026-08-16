@@ -19,7 +19,7 @@ import binascii
 import json
 import logging
 import urllib.parse
-from typing import Dict, List, Optional
+from datetime import datetime
 
 import httpx
 
@@ -53,7 +53,7 @@ class GitLabAdapter(BaseAdapter):
         - GitHub uses review comments with line + side fields
     """
 
-    def __init__(self, token: str, url: Optional[str] = None):
+    def __init__(self, token: str, url: str | None = None):
         """Initialize GitLabAdapter with token.
 
         Args:
@@ -115,8 +115,7 @@ class GitLabAdapter(BaseAdapter):
             # Strip trailing slashes and /api/v4 suffix if present
             # This prevents URL duplication like https://gitlab.com/api/v4/api/v4/...
             clean_url = url.rstrip("/")
-            if clean_url.endswith("/api/v4"):
-                clean_url = clean_url[:-7]  # Remove "/api/v4"
+            clean_url = clean_url.removesuffix("/api/v4")  # Remove "/api/v4"
             self.base_url = clean_url
 
         self.api_url = f"{self.base_url}/api/v4"
@@ -212,8 +211,6 @@ class GitLabAdapter(BaseAdapter):
         # Convert Unix timestamp to human-readable format
         if reset_time_raw != "unknown":
             try:
-                from datetime import datetime
-
                 reset_dt = datetime.fromtimestamp(int(reset_time_raw))
                 reset_time = reset_dt.strftime("%Y-%m-%d %H:%M:%S UTC")
             except (ValueError, OverflowError, OSError):
@@ -269,15 +266,14 @@ class GitLabAdapter(BaseAdapter):
             # Validate JSON parsing to handle non-JSON error responses
             try:
                 data = response.json()
-            except json.JSONDecodeError:
+            except json.JSONDecodeError as exc:
                 logger.error(
                     f"GitLab API returned non-JSON response for {owner}/{repo}",
                     extra={"response_text": response.text[:200]},
                 )
                 raise ValueError(
-                    f"GitLab API returned invalid JSON for {owner}/{repo}: "
-                    f"{response.text[:200]}"
-                )
+                    f"GitLab API returned invalid JSON for {owner}/{repo}: {response.text[:200]}"
+                ) from exc
 
             # Validate required 'default_branch' field exists in API response
             if "default_branch" not in data:
@@ -299,7 +295,7 @@ class GitLabAdapter(BaseAdapter):
             return default_branch
 
         # Handle network timeout errors
-        except httpx.TimeoutException:
+        except httpx.TimeoutException as exc:
             logger.error(
                 f"Timeout fetching default branch for {owner}/{repo}",
                 extra={"repo_id": f"{owner}/{repo}"},
@@ -308,8 +304,8 @@ class GitLabAdapter(BaseAdapter):
                 f"GitLab API request timed out after {self.client.timeout.read}s "
                 f"fetching default branch for {owner}/{repo}. "
                 "Project may be very large, or GitLab API is slow."
-            )
-        except (httpx.ConnectError, httpx.ConnectTimeout):
+            ) from exc
+        except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
             logger.error(
                 f"Failed to connect to GitLab API for {owner}/{repo}",
                 extra={"repo_id": f"{owner}/{repo}"},
@@ -317,36 +313,33 @@ class GitLabAdapter(BaseAdapter):
             raise ValueError(
                 f"Cannot connect to GitLab API at {self.api_url} for {owner}/{repo}. "
                 "Check your internet connection, firewall, or GitLab API status."
-            )
+            ) from exc
         except httpx.HTTPStatusError as e:
             if e.response.status_code == 404:
                 logger.warning(
                     f"Project {owner}/{repo} not found",
                     extra={"repo_id": f"{owner}/{repo}"},
                 )
-                raise ValueError(f"GitLab project {owner}/{repo} not found")
-            else:
-                # Check for rate limit exceeded
-                self._check_rate_limit(e.response, owner, repo)
+                raise ValueError(f"GitLab project {owner}/{repo} not found") from e
+            # Check for rate limit exceeded
+            self._check_rate_limit(e.response, owner, repo)
 
-                logger.error(
-                    f"HTTP error fetching default branch for {owner}/{repo}: "
-                    f"{e.response.status_code}",
-                    extra={
-                        "repo_id": f"{owner}/{repo}",
-                        "http_status": e.response.status_code,
-                        "response_text": e.response.text,
-                    },
-                )
-                raise ValueError(
-                    f"GitLab API error fetching default branch for {owner}/{repo}: "
-                    f"{e.response.text}"
-                )
+            logger.error(
+                f"HTTP error fetching default branch for {owner}/{repo}: {e.response.status_code}",
+                extra={
+                    "repo_id": f"{owner}/{repo}",
+                    "http_status": e.response.status_code,
+                    "response_text": e.response.text,
+                },
+            )
+            raise ValueError(
+                f"GitLab API error fetching default branch for {owner}/{repo}: {e.response.text}"
+            ) from e
 
     # ===== Issue Methods =====
 
     async def create_issue(
-        self, owner: str, repo: str, title: str, body: str, labels: Optional[List[str]] = None
+        self, owner: str, repo: str, title: str, body: str, labels: list[str] | None = None
     ) -> int:
         """Create an issue and return issue IID (internal ID).
 
@@ -390,15 +383,14 @@ class GitLabAdapter(BaseAdapter):
             # Validate JSON parsing to handle non-JSON error responses
             try:
                 data = response.json()
-            except json.JSONDecodeError:
+            except json.JSONDecodeError as exc:
                 logger.error(
                     f"GitLab API returned non-JSON response for {owner}/{repo}",
                     extra={"response_text": response.text[:200]},
                 )
                 raise ValueError(
-                    f"GitLab API returned invalid JSON for {owner}/{repo}: "
-                    f"{response.text[:200]}"
-                )
+                    f"GitLab API returned invalid JSON for {owner}/{repo}: {response.text[:200]}"
+                ) from exc
 
             # Validate required 'iid' field exists in API response (use IID not global ID)
             if "iid" not in data:
@@ -419,7 +411,7 @@ class GitLabAdapter(BaseAdapter):
             return issue_iid
 
         # Handle network timeout errors
-        except httpx.TimeoutException:
+        except httpx.TimeoutException as exc:
             logger.error(
                 f"Timeout creating issue in {owner}/{repo}",
                 extra={"repo_id": f"{owner}/{repo}", "timeout": self.client.timeout.read},
@@ -427,8 +419,8 @@ class GitLabAdapter(BaseAdapter):
             raise ValueError(
                 f"GitLab API request timed out after {self.client.timeout.read}s "
                 f"for {owner}/{repo}. GitLab API may be slow or project may be large."
-            )
-        except (httpx.ConnectError, httpx.ConnectTimeout):
+            ) from exc
+        except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
             logger.error(
                 f"Failed to connect to GitLab API for {owner}/{repo}",
                 extra={"repo_id": f"{owner}/{repo}", "api_url": self.api_url},
@@ -436,7 +428,7 @@ class GitLabAdapter(BaseAdapter):
             raise ValueError(
                 f"Cannot connect to GitLab API at {self.api_url} for {owner}/{repo}. "
                 "Check your internet connection, firewall, or GitLab API status."
-            )
+            ) from exc
         except httpx.HTTPStatusError as e:
             # Check for rate limit exceeded
             self._check_rate_limit(e.response, owner, repo)
@@ -450,11 +442,11 @@ class GitLabAdapter(BaseAdapter):
                     "response_text": e.response.text,
                 },
             )
-            raise ValueError(f"Failed to create issue in {owner}/{repo}: {e.response.text}")
+            raise ValueError(f"Failed to create issue in {owner}/{repo}: {e.response.text}") from e
 
     # ===== MR Review Methods =====
 
-    async def get_pr(self, owner: str, repo: str, pr_number: int) -> Dict:
+    async def get_pr(self, owner: str, repo: str, pr_number: int) -> dict:
         """Get merge request details.
 
         Args:
@@ -483,7 +475,7 @@ class GitLabAdapter(BaseAdapter):
             # Validate JSON parsing to handle non-JSON error responses
             try:
                 data = response.json()
-            except json.JSONDecodeError:
+            except json.JSONDecodeError as exc:
                 logger.error(
                     f"GitLab API returned non-JSON response for MR !{pr_number} in {owner}/{repo}",
                     extra={"response_text": response.text[:200]},
@@ -491,7 +483,7 @@ class GitLabAdapter(BaseAdapter):
                 raise ValueError(
                     f"GitLab API returned invalid JSON for {owner}/{repo} MR !{pr_number}: "
                     f"{response.text[:200]}"
-                )
+                ) from exc
 
             # Validate required 'diff_refs' field exists
             if "diff_refs" not in data or data["diff_refs"] is None:
@@ -543,7 +535,7 @@ class GitLabAdapter(BaseAdapter):
             return data
 
         # Handle network timeout errors
-        except httpx.TimeoutException:
+        except httpx.TimeoutException as exc:
             logger.error(
                 f"Timeout fetching MR !{pr_number} from {owner}/{repo}",
                 extra={"repo_id": f"{owner}/{repo}", "mr_iid": pr_number},
@@ -552,8 +544,8 @@ class GitLabAdapter(BaseAdapter):
                 f"GitLab API request timed out after {self.client.timeout.read}s "
                 f"fetching MR !{pr_number} from {owner}/{repo}. "
                 "MR may be very large, or GitLab API is slow."
-            )
-        except (httpx.ConnectError, httpx.ConnectTimeout):
+            ) from exc
+        except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
             logger.error(
                 f"Failed to connect to GitLab API for {owner}/{repo}",
                 extra={"repo_id": f"{owner}/{repo}"},
@@ -561,32 +553,30 @@ class GitLabAdapter(BaseAdapter):
             raise ValueError(
                 f"Cannot connect to GitLab API at {self.api_url} for {owner}/{repo}. "
                 "Check your internet connection, firewall, or GitLab API status."
-            )
+            ) from exc
         except httpx.HTTPStatusError as e:
             if e.response.status_code == 404:
                 logger.warning(
                     f"Merge request !{pr_number} not found in {owner}/{repo}",
                     extra={"repo_id": f"{owner}/{repo}", "mr_iid": pr_number},
                 )
-                raise ValueError(f"Merge request !{pr_number} not found in {owner}/{repo}")
-            else:
-                # Check for rate limit exceeded
-                self._check_rate_limit(e.response, owner, repo)
+                raise ValueError(f"Merge request !{pr_number} not found in {owner}/{repo}") from e
+            # Check for rate limit exceeded
+            self._check_rate_limit(e.response, owner, repo)
 
-                logger.error(
-                    f"HTTP error fetching MR !{pr_number} from {owner}/{repo}: "
-                    f"{e.response.status_code}",
-                    extra={
-                        "repo_id": f"{owner}/{repo}",
-                        "mr_iid": pr_number,
-                        "http_status": e.response.status_code,
-                        "response_text": e.response.text,
-                    },
-                )
-                raise ValueError(
-                    f"GitLab API error fetching MR !{pr_number} from {owner}/{repo}: "
-                    f"{e.response.text}"
-                )
+            logger.error(
+                f"HTTP error fetching MR !{pr_number} from {owner}/{repo}: "
+                f"{e.response.status_code}",
+                extra={
+                    "repo_id": f"{owner}/{repo}",
+                    "mr_iid": pr_number,
+                    "http_status": e.response.status_code,
+                    "response_text": e.response.text,
+                },
+            )
+            raise ValueError(
+                f"GitLab API error fetching MR !{pr_number} from {owner}/{repo}: {e.response.text}"
+            ) from e
 
     async def get_pr_diff(self, owner: str, repo: str, pr_number: int) -> str:
         """Get merge request diff in unified diff format.
@@ -616,7 +606,7 @@ class GitLabAdapter(BaseAdapter):
             # Validate JSON parsing
             try:
                 diffs = response.json()
-            except json.JSONDecodeError:
+            except json.JSONDecodeError as exc:
                 logger.error(
                     f"GitLab API returned non-JSON response for MR !{pr_number} diff",
                     extra={"response_text": response.text[:200]},
@@ -624,7 +614,7 @@ class GitLabAdapter(BaseAdapter):
                 raise ValueError(
                     f"GitLab API returned invalid JSON for {owner}/{repo} MR !{pr_number} diff: "
                     f"{response.text[:200]}"
-                )
+                ) from exc
 
             # Validate response is an array (GitLab /diffs endpoint returns array)
             if not isinstance(diffs, list):
@@ -652,7 +642,7 @@ class GitLabAdapter(BaseAdapter):
             return unified_diff
 
         # Handle network timeout errors
-        except httpx.TimeoutException:
+        except httpx.TimeoutException as exc:
             logger.error(
                 f"Timeout fetching MR diff for !{pr_number} from {owner}/{repo}",
                 extra={"repo_id": f"{owner}/{repo}", "mr_iid": pr_number},
@@ -660,8 +650,8 @@ class GitLabAdapter(BaseAdapter):
             raise ValueError(
                 f"GitLab API request timed out after {self.client.timeout.read}s "
                 f"fetching MR !{pr_number} diff from {owner}/{repo}. MR diff may be very large."
-            )
-        except (httpx.ConnectError, httpx.ConnectTimeout):
+            ) from exc
+        except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
             logger.error(
                 f"Failed to connect to GitLab API for {owner}/{repo}",
                 extra={"repo_id": f"{owner}/{repo}"},
@@ -669,7 +659,7 @@ class GitLabAdapter(BaseAdapter):
             raise ValueError(
                 f"Cannot connect to GitLab API at {self.api_url} for {owner}/{repo}. "
                 "Check your internet connection, firewall, or GitLab API status."
-            )
+            ) from exc
         except httpx.HTTPStatusError as e:
             # Check for rate limit exceeded
             self._check_rate_limit(e.response, owner, repo)
@@ -685,9 +675,9 @@ class GitLabAdapter(BaseAdapter):
             )
             raise ValueError(
                 f"Failed to fetch MR !{pr_number} diff from {owner}/{repo}: {e.response.text}"
-            )
+            ) from e
 
-    def _reconstruct_unified_diff(self, diffs: List[Dict]) -> str:
+    def _reconstruct_unified_diff(self, diffs: list[dict]) -> str:
         """Reconstruct unified diff from GitLab diff objects.
 
         GitLab returns diffs as structured JSON, not unified diff format.
@@ -727,11 +717,11 @@ class GitLabAdapter(BaseAdapter):
             # Validate required fields exist (paths can be null for new/deleted files)
             if "old_path" not in diff_obj:
                 raise ValueError(
-                    f"GitLab API diff object at index {i} missing required " f"'old_path' field"
+                    f"GitLab API diff object at index {i} missing required 'old_path' field"
                 )
             if "new_path" not in diff_obj:
                 raise ValueError(
-                    f"GitLab API diff object at index {i} missing required " f"'new_path' field"
+                    f"GitLab API diff object at index {i} missing required 'new_path' field"
                 )
 
             # Add file header
@@ -772,7 +762,7 @@ class GitLabAdapter(BaseAdapter):
             # Validate JSON response (defensive - ensure GitLab returned valid data)
             try:
                 response.json()
-            except json.JSONDecodeError:
+            except json.JSONDecodeError as exc:
                 logger.error(
                     f"GitLab API returned non-JSON response for comment on MR !{pr_number}",
                     extra={"response_text": response.text[:200]},
@@ -780,7 +770,7 @@ class GitLabAdapter(BaseAdapter):
                 raise ValueError(
                     f"GitLab API returned invalid JSON after posting comment on "
                     f"MR !{pr_number} in {owner}/{repo}: {response.text[:200]}"
-                )
+                ) from exc
 
             logger.debug(
                 f"Posted comment on MR !{pr_number} in {owner}/{repo}",
@@ -788,7 +778,7 @@ class GitLabAdapter(BaseAdapter):
             )
 
         # Handle network timeout errors
-        except httpx.TimeoutException:
+        except httpx.TimeoutException as exc:
             logger.error(
                 f"Timeout posting comment on MR !{pr_number} in {owner}/{repo}",
                 extra={"repo_id": f"{owner}/{repo}", "mr_iid": pr_number},
@@ -796,8 +786,8 @@ class GitLabAdapter(BaseAdapter):
             raise ValueError(
                 f"GitLab API request timed out after {self.client.timeout.read}s "
                 f"posting comment on MR !{pr_number} in {owner}/{repo}."
-            )
-        except (httpx.ConnectError, httpx.ConnectTimeout):
+            ) from exc
+        except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
             logger.error(
                 f"Failed to connect to GitLab API for {owner}/{repo}",
                 extra={"repo_id": f"{owner}/{repo}"},
@@ -805,7 +795,7 @@ class GitLabAdapter(BaseAdapter):
             raise ValueError(
                 f"Cannot connect to GitLab API at {self.api_url} for {owner}/{repo}. "
                 "Check your internet connection, firewall, or GitLab API status."
-            )
+            ) from exc
         except httpx.HTTPStatusError as e:
             # Check for rate limit exceeded
             self._check_rate_limit(e.response, owner, repo)
@@ -821,9 +811,8 @@ class GitLabAdapter(BaseAdapter):
                 },
             )
             raise ValueError(
-                f"Failed to create MR comment on !{pr_number} in {owner}/{repo}: "
-                f"{e.response.text}"
-            )
+                f"Failed to create MR comment on !{pr_number} in {owner}/{repo}: {e.response.text}"
+            ) from e
 
     async def post_review_comment(
         self,
@@ -911,7 +900,7 @@ class GitLabAdapter(BaseAdapter):
             # Validate JSON response (defensive - ensure GitLab returned valid data)
             try:
                 response.json()
-            except json.JSONDecodeError:
+            except json.JSONDecodeError as exc:
                 logger.error(
                     f"GitLab API returned non-JSON response for review comment on MR !{pr_number}",
                     extra={"response_text": response.text[:200]},
@@ -919,7 +908,7 @@ class GitLabAdapter(BaseAdapter):
                 raise ValueError(
                     f"GitLab API returned invalid JSON after posting review comment on "
                     f"MR !{pr_number} in {owner}/{repo}: {response.text[:200]}"
-                )
+                ) from exc
 
             logger.debug(
                 f"Posted inline comment on MR !{pr_number} in {owner}/{repo} at {file_path}:{line}",
@@ -932,7 +921,7 @@ class GitLabAdapter(BaseAdapter):
             )
 
         # Handle network timeout errors
-        except httpx.TimeoutException:
+        except httpx.TimeoutException as exc:
             logger.error(
                 f"Timeout posting review comment on MR !{pr_number} in {owner}/{repo}",
                 extra={
@@ -945,8 +934,8 @@ class GitLabAdapter(BaseAdapter):
             raise ValueError(
                 f"GitLab API request timed out after {self.client.timeout.read}s "
                 f"posting review comment on MR !{pr_number} in {owner}/{repo}."
-            )
-        except (httpx.ConnectError, httpx.ConnectTimeout):
+            ) from exc
+        except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
             logger.error(
                 f"Failed to connect to GitLab API for {owner}/{repo}",
                 extra={"repo_id": f"{owner}/{repo}"},
@@ -954,7 +943,7 @@ class GitLabAdapter(BaseAdapter):
             raise ValueError(
                 f"Cannot connect to GitLab API at {self.api_url} for {owner}/{repo}. "
                 "Check your internet connection, firewall, or GitLab API status."
-            )
+            ) from exc
         except httpx.HTTPStatusError as e:
             # Check for rate limit exceeded
             self._check_rate_limit(e.response, owner, repo)
@@ -975,7 +964,7 @@ class GitLabAdapter(BaseAdapter):
                     f"Invalid position for review comment on MR !{pr_number} "
                     f"in {owner}/{repo} at {file_path}:{line}. Line must be part of MR diff. "
                     f"GitLab error: {e.response.text}"
-                )
+                ) from e
 
             logger.error(
                 f"HTTP error posting review comment on MR !{pr_number} in {owner}/{repo}: "
@@ -990,7 +979,7 @@ class GitLabAdapter(BaseAdapter):
             raise ValueError(
                 f"Failed to create review comment on MR !{pr_number} in {owner}/{repo}: "
                 f"{e.response.text}"
-            )
+            ) from e
 
     async def create_pr_review_comment(
         self,
@@ -1062,7 +1051,7 @@ class GitLabAdapter(BaseAdapter):
             # Validate JSON parsing to handle non-JSON error responses
             try:
                 data = response.json()
-            except json.JSONDecodeError:
+            except json.JSONDecodeError as exc:
                 logger.error(
                     f"GitLab API returned non-JSON response for {file_path} in {owner}/{repo}",
                     extra={"response_text": response.text[:200]},
@@ -1070,7 +1059,7 @@ class GitLabAdapter(BaseAdapter):
                 raise ValueError(
                     f"GitLab API returned invalid JSON for {file_path} in {owner}/{repo}: "
                     f"{response.text[:200]}"
-                )
+                ) from exc
 
             # GitLab returns base64-encoded content - validate field exists
             if "content" not in data:
@@ -1117,7 +1106,7 @@ class GitLabAdapter(BaseAdapter):
 
                 return decoded_str
 
-            except UnicodeDecodeError:
+            except UnicodeDecodeError as exc:
                 logger.error(
                     f"File {file_path} in {owner}/{repo}@{ref} contains non-UTF8 content",
                     extra={"repo_id": f"{owner}/{repo}", "file_path": file_path, "ref": ref},
@@ -1125,8 +1114,8 @@ class GitLabAdapter(BaseAdapter):
                 raise ValueError(
                     f"File {file_path} in {owner}/{repo}@{ref} is binary or non-UTF8. "
                     "GitLab adapter only supports text files."
-                )
-            except (binascii.Error, ValueError):
+                ) from exc
+            except (binascii.Error, ValueError) as exc:
                 logger.error(
                     f"Failed to decode base64 for {file_path} in {owner}/{repo}@{ref}",
                     extra={"repo_id": f"{owner}/{repo}", "file_path": file_path, "ref": ref},
@@ -1134,10 +1123,10 @@ class GitLabAdapter(BaseAdapter):
                 raise ValueError(
                     f"Failed to decode file content (invalid base64) for {file_path} "
                     f"in {owner}/{repo}@{ref}. File may be corrupted."
-                )
+                ) from exc
 
         # Handle network timeout errors
-        except httpx.TimeoutException:
+        except httpx.TimeoutException as exc:
             logger.error(
                 f"Timeout fetching {file_path} from {owner}/{repo}@{ref}",
                 extra={"repo_id": f"{owner}/{repo}", "file_path": file_path, "ref": ref},
@@ -1145,8 +1134,8 @@ class GitLabAdapter(BaseAdapter):
             raise ValueError(
                 f"GitLab API request timed out after {self.client.timeout.read}s "
                 f"fetching {file_path} from {owner}/{repo}@{ref}. File may be very large."
-            )
-        except (httpx.ConnectError, httpx.ConnectTimeout):
+            ) from exc
+        except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
             logger.error(
                 f"Failed to connect to GitLab API for {owner}/{repo}",
                 extra={"repo_id": f"{owner}/{repo}"},
@@ -1154,29 +1143,30 @@ class GitLabAdapter(BaseAdapter):
             raise ValueError(
                 f"Cannot connect to GitLab API at {self.api_url} for {owner}/{repo}. "
                 "Check your internet connection, firewall, or GitLab API status."
-            )
+            ) from exc
         except httpx.HTTPStatusError as e:
             if e.response.status_code == 404:
                 logger.warning(
                     f"File {file_path} not found in {owner}/{repo}@{ref}",
                     extra={"repo_id": f"{owner}/{repo}", "file_path": file_path, "ref": ref},
                 )
-                raise ValueError(f"File {file_path} not found at ref {ref} in {owner}/{repo}")
-            else:
-                # Check for rate limit exceeded
-                self._check_rate_limit(e.response, owner, repo)
-
-                logger.error(
-                    f"HTTP error fetching {file_path} from {owner}/{repo}@{ref}: "
-                    f"{e.response.status_code}",
-                    extra={
-                        "repo_id": f"{owner}/{repo}",
-                        "file_path": file_path,
-                        "ref": ref,
-                        "http_status": e.response.status_code,
-                        "response_text": e.response.text,
-                    },
-                )
                 raise ValueError(
-                    f"Failed to fetch {file_path} from {owner}/{repo}@{ref}: {e.response.text}"
-                )
+                    f"File {file_path} not found at ref {ref} in {owner}/{repo}"
+                ) from e
+            # Check for rate limit exceeded
+            self._check_rate_limit(e.response, owner, repo)
+
+            logger.error(
+                f"HTTP error fetching {file_path} from {owner}/{repo}@{ref}: "
+                f"{e.response.status_code}",
+                extra={
+                    "repo_id": f"{owner}/{repo}",
+                    "file_path": file_path,
+                    "ref": ref,
+                    "http_status": e.response.status_code,
+                    "response_text": e.response.text,
+                },
+            )
+            raise ValueError(
+                f"Failed to fetch {file_path} from {owner}/{repo}@{ref}: {e.response.text}"
+            ) from e

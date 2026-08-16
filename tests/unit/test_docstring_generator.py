@@ -414,9 +414,9 @@ def second_function(y: int) -> int:
         assert len(captured_code) == 2
 
         # First function code should NOT contain "def second_function"
-        assert (
-            "def second_function" not in captured_code[0]
-        ), f"First function code contains spillover: {captured_code[0]}"
+        assert "def second_function" not in captured_code[0], (
+            f"First function code contains spillover: {captured_code[0]}"
+        )
 
         # Second function code should only contain second_function
         assert "def second_function" in captured_code[1]
@@ -473,6 +473,6 @@ def second_function(y: int) -> int:
 
         # THIS SHOULD FAIL: First function code WILL contain "def second_function"
         # because we extract one line too many
-        assert (
-            "def second_function" not in captured_code[0]
-        ), f"BUG: First function code contains spillover!\nCaptured:\n{captured_code[0]}"
+        assert "def second_function" not in captured_code[0], (
+            f"BUG: First function code contains spillover!\nCaptured:\n{captured_code[0]}"
+        )

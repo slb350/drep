@@ -6,7 +6,6 @@ import shutil
 import tempfile
 from enum import Enum
 from pathlib import Path
-from typing import Dict, Optional
 
 import click
 import yaml
@@ -52,7 +51,6 @@ class OutputFormat(str, Enum):
 @click.group()
 def cli():
     """drep - Documentation & Review Enhancement Platform"""
-    pass
 
 
 def _collect_platform_config() -> PlatformConfig:
@@ -98,7 +96,7 @@ def _collect_platform_config() -> PlatformConfig:
 
         return PlatformConfig(data=github_data, env_var="GITHUB_TOKEN", platform_name="GitHub")
 
-    elif platform.lower() == "gitea":
+    if platform.lower() == "gitea":
         click.echo("Gitea Configuration:")
 
         gitea_url = click.prompt("Gitea URL", default="http://localhost:3000", type=URLType())
@@ -118,34 +116,33 @@ def _collect_platform_config() -> PlatformConfig:
 
         return PlatformConfig(data=gitea_data, env_var="GITEA_TOKEN", platform_name="Gitea")
 
-    else:
-        click.echo("GitLab Configuration:")
-        use_selfhosted = click.confirm("Are you using self-hosted GitLab?", default=False)
+    click.echo("GitLab Configuration:")
+    use_selfhosted = click.confirm("Are you using self-hosted GitLab?", default=False)
 
-        # Collect URL if self-hosted
-        gitlab_url = None
-        if use_selfhosted:
-            gitlab_url = click.prompt(
-                "GitLab URL", default="https://gitlab.example.com", type=URLType()
-            )
-
-        click.echo("\nRepository Configuration:")
-        click.echo("Examples: 'your-org/*' (all projects), 'owner/project' (single project)")
-        repos = click.prompt(
-            "Enter projects (comma-separated)", default="your-org/*", type=RepositoryListType()
+    # Collect URL if self-hosted
+    gitlab_url = None
+    if use_selfhosted:
+        gitlab_url = click.prompt(
+            "GitLab URL", default="https://gitlab.example.com", type=URLType()
         )
 
-        # Create strongly-typed data
-        gitlab_data = GitLabPlatformData(
-            token="${GITLAB_TOKEN}",
-            repositories=tuple(repos),  # Convert list to tuple
-            url=gitlab_url,  # None for gitlab.com, URL for self-hosted
-        )
+    click.echo("\nRepository Configuration:")
+    click.echo("Examples: 'your-org/*' (all projects), 'owner/project' (single project)")
+    repos = click.prompt(
+        "Enter projects (comma-separated)", default="your-org/*", type=RepositoryListType()
+    )
 
-        return PlatformConfig(data=gitlab_data, env_var="GITLAB_TOKEN", platform_name="GitLab")
+    # Create strongly-typed data
+    gitlab_data = GitLabPlatformData(
+        token="${GITLAB_TOKEN}",
+        repositories=tuple(repos),  # Convert list to tuple
+        url=gitlab_url,  # None for gitlab.com, URL for self-hosted
+    )
+
+    return PlatformConfig(data=gitlab_data, env_var="GITLAB_TOKEN", platform_name="GitLab")
 
 
-def _collect_llm_config() -> Optional[LLMConfig]:
+def _collect_llm_config() -> LLMConfig | None:
     """Collect LLM configuration from user.
 
     Returns:
@@ -279,10 +276,10 @@ def _collect_llm_config() -> Optional[LLMConfig]:
     # Create strongly-typed data model based on provider
     if provider == "openai-compatible":
         return LLMConfig(data=OpenAILLMData(**llm_config))
-    elif provider == "bedrock":
+    if provider == "bedrock":
         return LLMConfig(data=BedrockLLMData(**llm_config))
-    else:  # anthropic
-        return LLMConfig(data=AnthropicLLMData(**llm_config))
+    # anthropic
+    return LLMConfig(data=AnthropicLLMData(**llm_config))
 
 
 def _collect_documentation_config() -> DocumentationConfig:
@@ -353,18 +350,18 @@ def _write_and_validate_config(config_dict, config_path):
     except yaml.YAMLError as e:
         click.echo(f"ERROR: Failed to serialize configuration: {e}", err=True)
         click.echo("This is a bug. Please report this issue.", err=True)
-        raise click.Abort()
+        raise click.Abort() from e
 
     try:
         config_path.write_text(config_yaml)
-    except PermissionError:
+    except PermissionError as exc:
         click.echo(f"ERROR: Permission denied writing to {config_path}", err=True)
         click.echo("Check file permissions.", err=True)
-        raise click.Abort()
+        raise click.Abort() from exc
     except OSError as e:
         click.echo(f"ERROR: Failed to write config: {e}", err=True)
         click.echo("Check disk space and permissions.", err=True)
-        raise click.Abort()
+        raise click.Abort() from e
 
     click.echo("=" * 60)
     click.echo("Validating configuration...")
@@ -380,12 +377,12 @@ def _write_and_validate_config(config_dict, config_path):
             click.echo(f"  - {field}: {error['msg']}", err=True)
         click.echo(f"\nConfig file: {config_path}", err=True)
         click.echo("Please re-run 'drep init' or fix manually.", err=True)
-        raise click.Abort()
+        raise click.Abort() from e
     except ValueError as e:
         click.echo(f"ERROR: Configuration validation failed: {e}", err=True)
         click.echo(f"\nConfig file: {config_path}", err=True)
         click.echo("Please re-run 'drep init' or fix manually.", err=True)
-        raise click.Abort()
+        raise click.Abort() from e
 
     # SECURITY: Catch only specific, recoverable exceptions
     # This code catches ValidationError (Pydantic schema failures) and ValueError
@@ -464,13 +461,13 @@ def init():
         # Create directory if it doesn't exist
         try:
             config_path.parent.mkdir(parents=True, exist_ok=True)
-        except PermissionError:
+        except PermissionError as exc:
             click.echo(f"ERROR: Cannot create directory {config_path.parent}", err=True)
             click.echo("  Permission denied. Try using location 1 (current directory).", err=True)
-            raise click.Abort()
+            raise click.Abort() from exc
         except OSError as e:
             click.echo(f"ERROR: Cannot create directory: {e}", err=True)
-            raise click.Abort()
+            raise click.Abort() from e
 
     # Check if config already exists
     if config_path.exists():
@@ -486,20 +483,20 @@ def init():
             try:
                 shutil.copy(config_path, backup_path)
                 click.echo(f"Backup created: {backup_path}")
-            except PermissionError:
+            except PermissionError as exc:
                 click.echo(
                     f"ERROR: Cannot create backup at {backup_path}\n"
                     f"Permission denied. Cannot safely overwrite config.",
                     err=True,
                 )
-                raise click.Abort()
+                raise click.Abort() from exc
             except OSError as e:
                 click.echo(
                     f"ERROR: Cannot create backup: {e}\n"
                     f"Cannot safely overwrite config without backup.",
                     err=True,
                 )
-                raise click.Abort()
+                raise click.Abort() from e
             click.echo()
         else:
             raise click.Abort()
@@ -656,7 +653,7 @@ async def _run_scan(
 
     # Determine which adapter to use (prefer Gitea for backward compatibility)
     platform = None
-    adapter: Optional[BaseAdapter] = None
+    adapter: BaseAdapter | None = None
     git_url = None
     git_token = None
 
@@ -774,7 +771,7 @@ fi
                     logger.error(f"Failed to get default branch for {owner}/{repo}: {e}")
                     click.echo(f"Error: Cannot access repository {owner}/{repo}", err=True)
                     click.echo("  Check that repository exists and token has access.", err=True)
-                    raise click.Abort()
+                    raise click.Abort() from e
 
                 if not default_branch:
                     click.echo(f"Error: Repository {owner}/{repo} has no branches", err=True)
@@ -790,7 +787,9 @@ fi
                         token_env_var = (
                             "GITHUB_TOKEN"
                             if platform == "github"
-                            else "GITEA_TOKEN" if platform == "gitea" else "GITLAB_TOKEN"
+                            else "GITEA_TOKEN"
+                            if platform == "gitea"
+                            else "GITLAB_TOKEN"
                         )
                         click.echo("Error: Authentication failed", err=True)
                         click.echo(f"  Check your {token_env_var} token is valid", err=True)
@@ -799,7 +798,7 @@ fi
                         click.echo("  Verify repository exists and token has access", err=True)
                     else:
                         click.echo(f"Error: Git clone failed: {e}", err=True)
-                    raise click.Abort()
+                    raise click.Abort() from e
             else:
                 click.echo("Pulling latest changes...")
                 try:
@@ -813,15 +812,15 @@ fi
                     logger.error(f"Git pull failed for {owner}/{repo}: {e}")
                     click.echo(f"Error: Git pull failed: {e}", err=True)
                     click.echo(f"  Try: rm -rf {repo_path} to force re-clone", err=True)
-                    raise click.Abort()
-                except InvalidGitRepositoryError:
+                    raise click.Abort() from e
+                except InvalidGitRepositoryError as exc:
                     import logging
 
                     logger = logging.getLogger(__name__)
                     logger.error(f"Corrupted git repository at {repo_path}")
                     click.echo(f"Error: Corrupted git repository at {repo_path}", err=True)
                     click.echo(f"  Fix: rm -rf {repo_path} and re-run scan", err=True)
-                    raise click.Abort()
+                    raise click.Abort() from exc
         except PermissionError as e:
             import logging
 
@@ -829,7 +828,7 @@ fi
             logger.error(f"Permission denied accessing {repo_path}: {e}")
             click.echo(f"Error: Cannot write to {repo_path}", err=True)
             click.echo("  Check directory permissions", err=True)
-            raise click.Abort()
+            raise click.Abort() from e
 
         # Scan repository
         click.echo("Analyzing files...")
@@ -1072,7 +1071,7 @@ async def _run_review(
 
     # Determine which adapter to use (prefer Gitea for backward compatibility)
     platform = None
-    adapter: Optional[BaseAdapter] = None
+    adapter: BaseAdapter | None = None
 
     if config.gitea is not None:
         # Use Gitea adapter
@@ -1132,7 +1131,7 @@ async def _run_review(
         # Show comments summary
         if result.comments:
             click.echo("\nComment breakdown:")
-            severity_counts: Dict[str, int] = {}
+            severity_counts: dict[str, int] = {}
             for comment in result.comments:
                 severity_counts[comment.severity] = severity_counts.get(comment.severity, 0) + 1
             for severity, count in sorted(severity_counts.items()):
@@ -1266,15 +1265,15 @@ async def _run_check(path: str, staged: bool, config_path: str, output_format: s
     if config_path:
         try:
             config = load_config(config_path, require_platform=False)
-        except FileNotFoundError:
+        except FileNotFoundError as exc:
             click.echo(f"Error: Config file not found: {config_path}", err=True)
-            raise SystemExit(1)
+            raise SystemExit(1) from exc
         except yaml.YAMLError as e:
             click.echo(f"Error: Invalid YAML in {config_path}\n{e}", err=True)
-            raise SystemExit(1)
+            raise SystemExit(1) from e
         except ValidationError as e:
             click.echo(f"Error: Configuration validation failed\n{e}", err=True)
-            raise SystemExit(1)
+            raise SystemExit(1) from e
         # DO NOT CATCH: KeyboardInterrupt, SystemExit, ImportError
         # These should propagate to allow proper termination and debugging
     else:
@@ -1293,9 +1292,9 @@ async def _run_check(path: str, staged: bool, config_path: str, output_format: s
         # Validate and resolve path
         try:
             path_obj = PathLib(path).resolve(strict=True)
-        except FileNotFoundError:
+        except FileNotFoundError as exc:
             click.echo(f"Error: Path not found: {path}", err=True)
-            raise SystemExit(1)
+            raise SystemExit(1) from exc
 
         # Additional validation
         if not path_obj.exists():
@@ -1371,8 +1370,7 @@ def _output_findings(findings, format_type):
         for finding in findings:
             col = f":{finding.column}" if finding.column else ""
             click.echo(
-                f"{finding.file_path}:{finding.line}{col}: "
-                f"{finding.severity}: {finding.message}"
+                f"{finding.file_path}:{finding.line}{col}: {finding.severity}: {finding.message}"
             )
             if finding.suggestion:
                 click.echo(f"  → {finding.suggestion}")
@@ -1447,7 +1445,7 @@ def metrics(days, export, detailed):
     # Export if requested
     if export:
         export_path = Path(export)
-        with open(export_path, "w") as f:
+        with export_path.open("w") as f:
             json.dump(aggregated.to_dict(), f, indent=2)
         click.echo(f"\n✓ Metrics exported to {export_path}")
 
@@ -1494,7 +1492,10 @@ def lint_docs(path, output):
             if findings.pattern_issues:
                 total_issues += len(findings.pattern_issues)
                 results.append((md_file, findings))
-        except (IOError, OSError, UnicodeDecodeError) as e:
+        except (  # noqa: PERF203 - per-file isolation: one bad file must not abort the scan
+            OSError,
+            UnicodeDecodeError,
+        ) as e:
             click.echo(f"Error reading {md_file}: {e}", err=True)
         except Exception as e:
             # Unexpected error - show details and re-raise for debugging
@@ -1505,18 +1506,17 @@ def lint_docs(path, output):
     if output == "json":
         import json
 
-        json_output = []
-        for md_file, findings in results:
-            for issue in findings.pattern_issues:
-                json_output.append(
-                    {
-                        "file": str(md_file),
-                        "line": issue.line,
-                        "column": issue.column,
-                        "type": issue.type,
-                        "message": issue.matched_text[:50],
-                    }
-                )
+        json_output = [
+            {
+                "file": str(md_file),
+                "line": issue.line,
+                "column": issue.column,
+                "type": issue.type,
+                "message": issue.matched_text[:50],
+            }
+            for md_file, findings in results
+            for issue in findings.pattern_issues
+        ]
         click.echo(json.dumps(json_output, indent=2))
     else:
         # Text output

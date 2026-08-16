@@ -6,7 +6,8 @@ MVP scope:
 """
 
 import asyncio
-from typing import Any, Dict, Optional, Tuple
+from collections.abc import Coroutine
+from typing import Any
 
 from fastapi import FastAPI, Header, HTTPException, Request
 
@@ -15,14 +16,25 @@ from drep.config import find_config_file
 
 app = FastAPI(title="drep", version="0.1.0")
 
+# Strong references to fire-and-forget tasks; without these the event loop may
+# garbage-collect a task mid-execution (only a weak reference is held otherwise).
+_BACKGROUND_TASKS: set[asyncio.Task[None]] = set()
+
+
+def _spawn_background(coro: Coroutine[Any, Any, None]) -> None:
+    """Schedule a background coroutine, keeping a strong reference until it finishes."""
+    task: asyncio.Task[None] = asyncio.create_task(coro)
+    _BACKGROUND_TASKS.add(task)
+    task.add_done_callback(_BACKGROUND_TASKS.discard)
+
 
 @app.get("/api/health")
-async def health() -> Dict[str, Any]:
+async def health() -> dict[str, Any]:
     """Simple health check endpoint."""
     return {"status": "ok"}
 
 
-def _extract_owner_repo(payload: Dict[str, Any]) -> Optional[Tuple[str, str]]:
+def _extract_owner_repo(payload: dict[str, Any]) -> tuple[str, str] | None:
     repo = payload.get("repository") or {}
 
     # Try full_name: "owner/repo"
@@ -50,12 +62,12 @@ def _extract_owner_repo(payload: Dict[str, Any]) -> Optional[Tuple[str, str]]:
 @app.post("/webhooks/gitea")
 async def webhook_gitea(
     request: Request, x_gitea_event: str | None = Header(default=None)
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Receive Gitea webhooks and trigger background scan/review."""
     try:
         payload = await request.json()
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Invalid JSON: {e}")
+        raise HTTPException(status_code=400, detail=f"Invalid JSON: {e}") from e
 
     event = (x_gitea_event or "").lower()
 
@@ -64,14 +76,14 @@ async def webhook_gitea(
     config_path = str(config_file)
 
     scheduled = False
-    details: Dict[str, Any] = {}
+    details: dict[str, Any] = {}
 
     owner_repo = _extract_owner_repo(payload)
 
     if event == "push" and owner_repo:
         owner, repo = owner_repo
         # Fire-and-forget scan (no metrics printing/progress)
-        asyncio.create_task(
+        _spawn_background(
             _run_scan(owner, repo, config_path, show_metrics=False, show_progress=False)
         )
         scheduled = True
@@ -82,9 +94,7 @@ async def webhook_gitea(
         pr = payload.get("pull_request") or {}
         pr_number = pr.get("number") or pr.get("index")
         if isinstance(pr_number, int):
-            asyncio.create_task(
-                _run_review(owner, repo, pr_number, config_path, post_comments=True)
-            )
+            _spawn_background(_run_review(owner, repo, pr_number, config_path, post_comments=True))
             scheduled = True
             details = {"action": "review", "owner": owner, "repo": repo, "pr": pr_number}
 

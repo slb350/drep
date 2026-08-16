@@ -1,8 +1,8 @@
 """Issue manager for deduplication and creation."""
 
 import hashlib
-from typing import List
 
+from drep.db.models import FindingCache
 from drep.models.findings import Finding
 
 
@@ -62,7 +62,7 @@ class IssueManager:
 
         return body
 
-    async def create_issues_for_findings(self, owner: str, repo: str, findings: List[Finding]):
+    async def create_issues_for_findings(self, owner: str, repo: str, findings: list[Finding]):
         """Create issues for findings, skipping duplicates.
 
         Args:
@@ -70,8 +70,6 @@ class IssueManager:
             repo: Repository name
             findings: List of Finding objects to create issues for
         """
-        from drep.db.models import FindingCache
-
         for finding in findings:
             # Generate hash for deduplication
             finding_hash = self._generate_hash(finding)

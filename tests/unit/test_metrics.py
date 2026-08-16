@@ -146,7 +146,7 @@ class TestLLMMetrics:
         assert metrics.success_rate == 0.0
 
         # 3 successes out of 5 requests
-        for i in range(3):
+        for _i in range(3):
             metrics.record_request(
                 analyzer="test",
                 success=True,
@@ -156,7 +156,7 @@ class TestLLMMetrics:
                 latency_ms=200.0,
             )
 
-        for i in range(2):
+        for _i in range(2):
             metrics.record_request(
                 analyzer="test",
                 success=False,
@@ -176,7 +176,7 @@ class TestLLMMetrics:
         assert metrics.cache_hit_rate == 0.0
 
         # 2 cached out of 5 requests
-        for i in range(2):
+        for _i in range(2):
             metrics.record_request(
                 analyzer="test",
                 success=True,
@@ -186,7 +186,7 @@ class TestLLMMetrics:
                 latency_ms=5.0,
             )
 
-        for i in range(3):
+        for _i in range(3):
             metrics.record_request(
                 analyzer="test",
                 success=True,
@@ -415,7 +415,7 @@ class TestMetricsCollector:
         await collector2.save()
 
         # Check history
-        with open(metrics_file, "r") as f:
+        with metrics_file.open() as f:
             history = json.load(f)
 
         assert len(history) == 2
@@ -451,7 +451,7 @@ class TestMetricsCollector:
             },
         ]
 
-        with open(metrics_file, "w") as f:
+        with metrics_file.open("w") as f:
             json.dump(history, f)
 
         collector = MetricsCollector(metrics_file)

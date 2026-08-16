@@ -114,13 +114,13 @@ def __dunder_func__():
         functions = extract_functions(code)
 
         assert len(functions) == 3
-        public = [f for f in functions if f.name == "public_func"][0]
+        public = next(f for f in functions if f.name == "public_func")
         assert public.is_public is True
 
-        private = [f for f in functions if f.name == "_private_func"][0]
+        private = next(f for f in functions if f.name == "_private_func")
         assert private.is_public is False
 
-        dunder = [f for f in functions if f.name == "__dunder_func__"][0]
+        dunder = next(f for f in functions if f.name == "__dunder_func__")
         assert dunder.is_public is False
 
     def test_extract_multiple_functions(self):
@@ -165,8 +165,8 @@ def complex_function():
 """
         functions = extract_functions(code)
 
-        simple = [f for f in functions if f.name == "simple"][0]
-        complex_func = [f for f in functions if f.name == "complex_function"][0]
+        simple = next(f for f in functions if f.name == "simple")
+        complex_func = next(f for f in functions if f.name == "complex_function")
 
         # simple() is 2 lines, complex_function() is 5 lines
         assert simple.complexity < complex_func.complexity
@@ -237,10 +237,10 @@ class _PrivateClass:
         classes = extract_classes(code)
 
         assert len(classes) == 2
-        public = [c for c in classes if c.name == "PublicClass"][0]
+        public = next(c for c in classes if c.name == "PublicClass")
         assert public.is_public is True
 
-        private = [c for c in classes if c.name == "_PrivateClass"][0]
+        private = next(c for c in classes if c.name == "_PrivateClass")
         assert private.is_public is False
 
     def test_extract_nested_class(self):

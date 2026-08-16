@@ -31,7 +31,7 @@ async def test_llmclient_uses_open_agent_sdk(monkeypatch):
             self.usage = DummyUsage()
 
     class DummyCompletions:
-        async def create(self, **kwargs):  # noqa: ARG002
+        async def create(self, **kwargs):
             return DummyResponse("hello from open-agent-sdk")
 
     class DummyChat:
@@ -39,7 +39,7 @@ async def test_llmclient_uses_open_agent_sdk(monkeypatch):
             self.completions = DummyCompletions()
 
     class DummyClient:
-        def __init__(self, *args, **kwargs):  # noqa: ARG002
+        def __init__(self, *args, **kwargs):
             self.chat = DummyChat()
 
         async def close(self):

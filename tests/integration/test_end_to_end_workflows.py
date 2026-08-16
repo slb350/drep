@@ -51,46 +51,48 @@ async def test_llm_client_with_injected_dependencies(mock_http_response, temp_ca
     cache = IntelligentCache(cache_dir=temp_cache_dir, ttl_days=1)
 
     # Force HTTP backend by patching open-agent-sdk to fail
-    with patch("open_agent.utils.create_client", side_effect=ImportError("Mocked"), create=True):
+    with (
+        patch("open_agent.utils.create_client", side_effect=ImportError("Mocked"), create=True),
+        patch("httpx.AsyncClient") as mock_client_class,
+    ):
         # Mock HTTP client
-        with patch("httpx.AsyncClient") as mock_client_class:
-            mock_instance = Mock()
-            mock_response = Mock()
-            mock_response.json.return_value = mock_http_response
-            mock_response.raise_for_status = Mock()
-            mock_instance.post = AsyncMock(return_value=mock_response)
-            mock_instance.aclose = AsyncMock()
-            mock_client_class.return_value = mock_instance
+        mock_instance = Mock()
+        mock_response = Mock()
+        mock_response.json.return_value = mock_http_response
+        mock_response.raise_for_status = Mock()
+        mock_instance.post = AsyncMock(return_value=mock_response)
+        mock_instance.aclose = AsyncMock()
+        mock_client_class.return_value = mock_instance
 
-            # Create LLM client with injected dependencies
-            client = LLMClient(
-                endpoint="http://test",
-                model="test-model",
-                rate_limiter=rate_limiter,
-                circuit_breaker=circuit_breaker,
-                cache=cache,
-            )
+        # Create LLM client with injected dependencies
+        client = LLMClient(
+            endpoint="http://test",
+            model="test-model",
+            rate_limiter=rate_limiter,
+            circuit_breaker=circuit_breaker,
+            cache=cache,
+        )
 
-            # Verify dependencies were injected
-            assert client.rate_limiter is rate_limiter
-            assert client.circuit_breaker is circuit_breaker
-            assert client.cache is cache
+        # Verify dependencies were injected
+        assert client.rate_limiter is rate_limiter
+        assert client.circuit_breaker is circuit_breaker
+        assert client.cache is cache
 
-            # Make request
-            result = await client.analyze_code(
-                system_prompt="Test prompt", code="def foo(): pass", repo_id="test/repo"
-            )
+        # Make request
+        result = await client.analyze_code(
+            system_prompt="Test prompt", code="def foo(): pass", repo_id="test/repo"
+        )
 
-            # Verify result
-            assert isinstance(result, LLMResponse)
-            assert result.content == "Analysis result"
-            assert result.tokens_used == 150
+        # Verify result
+        assert isinstance(result, LLMResponse)
+        assert result.content == "Analysis result"
+        assert result.tokens_used == 150
 
-            # Verify metrics tracked
-            assert client.metrics.total_requests > 0
-            assert client.metrics.total_tokens > 0
+        # Verify metrics tracked
+        assert client.metrics.total_requests > 0
+        assert client.metrics.total_tokens > 0
 
-            await client.close()
+        await client.close()
 
 
 @pytest.mark.integration
@@ -107,49 +109,51 @@ async def test_llm_client_caching_workflow(mock_http_response, temp_cache_dir):
     cache = IntelligentCache(cache_dir=temp_cache_dir, ttl_days=1)
 
     # Force HTTP backend
-    with patch("open_agent.utils.create_client", side_effect=ImportError("Mocked"), create=True):
-        with patch("httpx.AsyncClient") as mock_client_class:
-            mock_instance = Mock()
-            mock_response = Mock()
-            mock_response.json.return_value = mock_http_response
-            mock_response.raise_for_status = Mock()
-            mock_instance.post = AsyncMock(return_value=mock_response)
-            mock_instance.aclose = AsyncMock()
-            mock_client_class.return_value = mock_instance
+    with (
+        patch("open_agent.utils.create_client", side_effect=ImportError("Mocked"), create=True),
+        patch("httpx.AsyncClient") as mock_client_class,
+    ):
+        mock_instance = Mock()
+        mock_response = Mock()
+        mock_response.json.return_value = mock_http_response
+        mock_response.raise_for_status = Mock()
+        mock_instance.post = AsyncMock(return_value=mock_response)
+        mock_instance.aclose = AsyncMock()
+        mock_client_class.return_value = mock_instance
 
-            client = LLMClient(
-                endpoint="http://test",
-                model="test-model",
-                cache=cache,
-                enable_circuit_breaker=False,
-            )
+        client = LLMClient(
+            endpoint="http://test",
+            model="test-model",
+            cache=cache,
+            enable_circuit_breaker=False,
+        )
 
-            # First request (cold)
-            result1 = await client.analyze_code(
-                system_prompt="Test", code="def foo(): pass", commit_sha="abc123"
-            )
+        # First request (cold)
+        result1 = await client.analyze_code(
+            system_prompt="Test", code="def foo(): pass", commit_sha="abc123"
+        )
 
-            # Verify LLM was called
-            assert mock_instance.post.call_count == 1
+        # Verify LLM was called
+        assert mock_instance.post.call_count == 1
 
-            # Second request (warm) - same params
-            result2 = await client.analyze_code(
-                system_prompt="Test", code="def foo(): pass", commit_sha="abc123"
-            )
+        # Second request (warm) - same params
+        result2 = await client.analyze_code(
+            system_prompt="Test", code="def foo(): pass", commit_sha="abc123"
+        )
 
-            # Verify LLM not called again (cache hit)
-            assert mock_instance.post.call_count == 1, "Second request should hit cache"
+        # Verify LLM not called again (cache hit)
+        assert mock_instance.post.call_count == 1, "Second request should hit cache"
 
-            # Results should be identical
-            assert result1.content == result2.content
-            assert result1.tokens_used == result2.tokens_used
+        # Results should be identical
+        assert result1.content == result2.content
+        assert result1.tokens_used == result2.tokens_used
 
-            # Verify cache stats
-            stats = cache.get_stats()
-            assert stats["hits"] > 0
-            assert stats["hit_rate"] > 0.0
+        # Verify cache stats
+        stats = cache.get_stats()
+        assert stats["hits"] > 0
+        assert stats["hit_rate"] > 0.0
 
-            await client.close()
+        await client.close()
 
 
 @pytest.mark.integration
@@ -219,53 +223,55 @@ async def test_metrics_tracking_workflow(mock_http_response, temp_cache_dir):
     cache = IntelligentCache(cache_dir=temp_cache_dir, ttl_days=1)
 
     # Force HTTP backend
-    with patch("open_agent.utils.create_client", side_effect=ImportError("Mocked"), create=True):
-        with patch("httpx.AsyncClient") as mock_client_class:
-            mock_instance = Mock()
-            mock_response = Mock()
-            mock_response.json.return_value = mock_http_response
-            mock_response.raise_for_status = Mock()
-            mock_instance.post = AsyncMock(return_value=mock_response)
-            mock_instance.aclose = AsyncMock()
-            mock_client_class.return_value = mock_instance
+    with (
+        patch("open_agent.utils.create_client", side_effect=ImportError("Mocked"), create=True),
+        patch("httpx.AsyncClient") as mock_client_class,
+    ):
+        mock_instance = Mock()
+        mock_response = Mock()
+        mock_response.json.return_value = mock_http_response
+        mock_response.raise_for_status = Mock()
+        mock_instance.post = AsyncMock(return_value=mock_response)
+        mock_instance.aclose = AsyncMock()
+        mock_client_class.return_value = mock_instance
 
-            client = LLMClient(
-                endpoint="http://test",
-                model="test-model",
-                cache=cache,
-                enable_circuit_breaker=False,
-            )
+        client = LLMClient(
+            endpoint="http://test",
+            model="test-model",
+            cache=cache,
+            enable_circuit_breaker=False,
+        )
 
-            # Make successful requests (will be cached)
-            await client.analyze_code(
-                system_prompt="Test",
-                code="def foo(): pass",
-                analyzer="test-analyzer",
-                commit_sha="abc123",
-            )
+        # Make successful requests (will be cached)
+        await client.analyze_code(
+            system_prompt="Test",
+            code="def foo(): pass",
+            analyzer="test-analyzer",
+            commit_sha="abc123",
+        )
 
-            # Second request hits cache
-            await client.analyze_code(
-                system_prompt="Test",
-                code="def foo(): pass",
-                analyzer="test-analyzer",
-                commit_sha="abc123",
-            )
+        # Second request hits cache
+        await client.analyze_code(
+            system_prompt="Test",
+            code="def foo(): pass",
+            analyzer="test-analyzer",
+            commit_sha="abc123",
+        )
 
-            # Get metrics
-            metrics = client.get_llm_metrics()
+        # Get metrics
+        metrics = client.get_llm_metrics()
 
-            # Verify metrics tracked
-            assert metrics.total_requests >= 2
-            assert metrics.total_tokens > 0
-            assert metrics.cached_requests > 0  # Use cached_requests, not cache_hits
+        # Verify metrics tracked
+        assert metrics.total_requests >= 2
+        assert metrics.total_tokens > 0
+        assert metrics.cached_requests > 0  # Use cached_requests, not cache_hits
 
-            # Verify per-analyzer metrics
-            assert "test-analyzer" in metrics.by_analyzer
-            analyzer_stats = metrics.by_analyzer["test-analyzer"]
-            assert analyzer_stats["requests"] >= 1
+        # Verify per-analyzer metrics
+        assert "test-analyzer" in metrics.by_analyzer
+        analyzer_stats = metrics.by_analyzer["test-analyzer"]
+        assert analyzer_stats["requests"] >= 1
 
-            await client.close()
+        await client.close()
 
 
 @pytest.mark.integration
@@ -280,37 +286,39 @@ async def test_default_dependencies_workflow(mock_http_response):
     4. Verify metrics tracked properly
     """
     # Force HTTP backend
-    with patch("open_agent.utils.create_client", side_effect=ImportError("Mocked"), create=True):
-        with patch("httpx.AsyncClient") as mock_client_class:
-            mock_instance = Mock()
-            mock_response = Mock()
-            mock_response.json.return_value = mock_http_response
-            mock_response.raise_for_status = Mock()
-            mock_instance.post = AsyncMock(return_value=mock_response)
-            mock_instance.aclose = AsyncMock()
-            mock_client_class.return_value = mock_instance
+    with (
+        patch("open_agent.utils.create_client", side_effect=ImportError("Mocked"), create=True),
+        patch("httpx.AsyncClient") as mock_client_class,
+    ):
+        mock_instance = Mock()
+        mock_response = Mock()
+        mock_response.json.return_value = mock_http_response
+        mock_response.raise_for_status = Mock()
+        mock_instance.post = AsyncMock(return_value=mock_response)
+        mock_instance.aclose = AsyncMock()
+        mock_client_class.return_value = mock_instance
 
-            # Create client without injected dependencies
-            client = LLMClient(
-                endpoint="http://test",
-                model="test-model",
-                # No rate_limiter, circuit_breaker, or cache - should create defaults
-            )
+        # Create client without injected dependencies
+        client = LLMClient(
+            endpoint="http://test",
+            model="test-model",
+            # No rate_limiter, circuit_breaker, or cache - should create defaults
+        )
 
-            # Verify defaults were created
-            assert client.rate_limiter is not None
-            assert isinstance(client.rate_limiter, RateLimiter)
-            assert client.circuit_breaker is not None
-            assert isinstance(client.circuit_breaker, CircuitBreaker)
+        # Verify defaults were created
+        assert client.rate_limiter is not None
+        assert isinstance(client.rate_limiter, RateLimiter)
+        assert client.circuit_breaker is not None
+        assert isinstance(client.circuit_breaker, CircuitBreaker)
 
-            # Make request
-            result = await client.analyze_code(system_prompt="Test", code="def foo(): pass")
+        # Make request
+        result = await client.analyze_code(system_prompt="Test", code="def foo(): pass")
 
-            # Verify it works
-            assert isinstance(result, LLMResponse)
+        # Verify it works
+        assert isinstance(result, LLMResponse)
 
-            # Verify metrics tracked properly
-            assert client.metrics.total_requests > 0
-            assert client.metrics.total_tokens > 0
+        # Verify metrics tracked properly
+        assert client.metrics.total_requests > 0
+        assert client.metrics.total_tokens > 0
 
-            await client.close()
+        await client.close()

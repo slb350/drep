@@ -1,7 +1,5 @@
 """Finding and analysis result models."""
 
-from typing import List, Optional
-
 from pydantic import BaseModel, Field
 
 
@@ -13,7 +11,7 @@ class Typo(BaseModel):
     line: int
     column: int
     context: str  # Surrounding text
-    suggestions: List[str] = Field(default_factory=list)  # Alternative corrections
+    suggestions: list[str] = Field(default_factory=list)  # Alternative corrections
 
 
 class PatternIssue(BaseModel):
@@ -33,56 +31,54 @@ class Finding(BaseModel):
     severity: str  # 'info', 'warning', 'error'
     file_path: str
     line: int
-    column: Optional[int] = None
+    column: int | None = None
 
     # Explicit fields for safe fixing (Phase 2)
-    original: Optional[str] = None
-    replacement: Optional[str] = None
+    original: str | None = None
+    replacement: str | None = None
 
     # Human-readable
     message: str
-    suggestion: Optional[str] = None
+    suggestion: str | None = None
 
 
 class DocumentationFindings(BaseModel):
     """Results from documentation analysis."""
 
     file_path: str
-    typos: List[Typo] = Field(default_factory=list)
-    pattern_issues: List[PatternIssue] = Field(default_factory=list)
+    typos: list[Typo] = Field(default_factory=list)
+    pattern_issues: list[PatternIssue] = Field(default_factory=list)
 
-    def to_findings(self) -> List[Finding]:
+    def to_findings(self) -> list[Finding]:
         """Convert to generic Finding objects."""
-        findings = []
-
-        for typo in self.typos:
-            findings.append(
-                Finding(
-                    type="typo",
-                    severity="info",
-                    file_path=self.file_path,
-                    line=typo.line,
-                    column=typo.column,
-                    original=typo.word,
-                    replacement=typo.replacement,
-                    message=f"Typo: '{typo.word}'",
-                    suggestion=f"Did you mean '{typo.replacement}'?",
-                )
+        findings = [
+            Finding(
+                type="typo",
+                severity="info",
+                file_path=self.file_path,
+                line=typo.line,
+                column=typo.column,
+                original=typo.word,
+                replacement=typo.replacement,
+                message=f"Typo: '{typo.word}'",
+                suggestion=f"Did you mean '{typo.replacement}'?",
             )
+            for typo in self.typos
+        ]
 
-        for issue in self.pattern_issues:
-            findings.append(
-                Finding(
-                    type="pattern",
-                    severity="info",
-                    file_path=self.file_path,
-                    line=issue.line,
-                    column=issue.column,
-                    original=issue.matched_text,
-                    replacement=issue.replacement,
-                    message=f"Pattern issue: {issue.type}",
-                    suggestion=f"Replace with: {issue.replacement}",
-                )
+        findings.extend(
+            Finding(
+                type="pattern",
+                severity="info",
+                file_path=self.file_path,
+                line=issue.line,
+                column=issue.column,
+                original=issue.matched_text,
+                replacement=issue.replacement,
+                message=f"Pattern issue: {issue.type}",
+                suggestion=f"Replace with: {issue.replacement}",
             )
+            for issue in self.pattern_issues
+        )
 
         return findings

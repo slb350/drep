@@ -16,7 +16,7 @@ async def test_create_pr_review_comment_fallback(monkeypatch):
 
     call_count = {"n": 0}
 
-    async def fake_post(url, json):  # noqa: ARG001
+    async def fake_post(url, json):
         call_count["n"] += 1
         req = httpx.Request("POST", url)
         if call_count["n"] == 1:

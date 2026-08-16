@@ -234,7 +234,7 @@ def test_cache_creates_metadata_file(cache):
     meta_files = list(cache.cache_dir.glob("*.meta.json"))
     assert len(meta_files) == 1
 
-    with open(meta_files[0], "r") as f:
+    with meta_files[0].open() as f:
         metadata = json.load(f)
         assert metadata["model"] == "test-model"
         assert metadata["temperature"] == 0.2
@@ -325,7 +325,7 @@ def test_cache_handles_missing_metadata(cache):
     cache_key = cache._make_key("test", "code", "model", 0.2, "abc123")
     cache_file = cache.cache_dir / f"{cache_key}.json"
 
-    with open(cache_file, "w") as f:
+    with cache_file.open("w") as f:
         json.dump({"result": "success"}, f)
 
     # Should return None (cache miss) since metadata is missing

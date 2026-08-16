@@ -5,7 +5,7 @@ import base64
 import binascii
 import json
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import httpx
 
@@ -207,15 +207,14 @@ class GitHubAdapter(BaseAdapter):
             # Validate JSON parsing to handle non-JSON error responses
             try:
                 data = response.json()
-            except json.JSONDecodeError:
+            except json.JSONDecodeError as exc:
                 logger.error(
                     f"GitHub API returned non-JSON response for {owner}/{repo}",
                     extra={"response_text": response.text[:200]},
                 )
                 raise ValueError(
-                    f"GitHub API returned invalid JSON for {owner}/{repo}: "
-                    f"{response.text[:200]}"
-                )
+                    f"GitHub API returned invalid JSON for {owner}/{repo}: {response.text[:200]}"
+                ) from exc
 
             # Validate required 'default_branch' field exists in API response
             if "default_branch" not in data:
@@ -237,7 +236,7 @@ class GitHubAdapter(BaseAdapter):
             return default_branch
 
         # Handle network timeout errors
-        except httpx.TimeoutException:
+        except httpx.TimeoutException as exc:
             logger.error(
                 f"Timeout fetching default branch for {owner}/{repo}",
                 extra={"repo_id": f"{owner}/{repo}"},
@@ -246,8 +245,8 @@ class GitHubAdapter(BaseAdapter):
                 f"GitHub API request timed out after {self.client.timeout.read}s "
                 f"fetching default branch for {owner}/{repo}. "
                 "Repository may be very large, or GitHub API is slow."
-            )
-        except (httpx.ConnectError, httpx.ConnectTimeout):
+            ) from exc
+        except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
             logger.error(
                 f"Failed to connect to GitHub API for {owner}/{repo}",
                 extra={"repo_id": f"{owner}/{repo}"},
@@ -255,36 +254,33 @@ class GitHubAdapter(BaseAdapter):
             raise ValueError(
                 f"Cannot connect to GitHub API at {self.url} for {owner}/{repo}. "
                 "Check your internet connection, firewall, or GitHub API status."
-            )
+            ) from exc
         except httpx.HTTPStatusError as e:
             if e.response.status_code == 404:
                 logger.warning(
                     f"Repository {owner}/{repo} not found",
                     extra={"repo_id": f"{owner}/{repo}"},
                 )
-                raise ValueError(f"Repository {owner}/{repo} not found")
-            else:
-                # Check for rate limit exceeded
-                self._check_rate_limit(e.response, owner, repo)
+                raise ValueError(f"Repository {owner}/{repo} not found") from e
+            # Check for rate limit exceeded
+            self._check_rate_limit(e.response, owner, repo)
 
-                logger.error(
-                    f"HTTP error fetching default branch for {owner}/{repo}: "
-                    f"{e.response.status_code}",
-                    extra={
-                        "repo_id": f"{owner}/{repo}",
-                        "http_status": e.response.status_code,
-                        "response_text": e.response.text,
-                    },
-                )
-                raise ValueError(
-                    f"GitHub API error fetching default branch for {owner}/{repo}: "
-                    f"{e.response.text}"
-                )
+            logger.error(
+                f"HTTP error fetching default branch for {owner}/{repo}: {e.response.status_code}",
+                extra={
+                    "repo_id": f"{owner}/{repo}",
+                    "http_status": e.response.status_code,
+                    "response_text": e.response.text,
+                },
+            )
+            raise ValueError(
+                f"GitHub API error fetching default branch for {owner}/{repo}: {e.response.text}"
+            ) from e
 
     # ===== Issue Methods =====
 
     async def create_issue(
-        self, owner: str, repo: str, title: str, body: str, labels: Optional[List[str]] = None
+        self, owner: str, repo: str, title: str, body: str, labels: list[str] | None = None
     ) -> int:
         """Create an issue and return issue number.
 
@@ -308,7 +304,7 @@ class GitHubAdapter(BaseAdapter):
                 - HTTP errors (401 Unauthorized, 403 Forbidden, 500 Server Error, etc.)
         """
         url = f"{self.url}/repos/{owner}/{repo}/issues"
-        payload: Dict[str, Any] = {"title": title, "body": body}
+        payload: dict[str, Any] = {"title": title, "body": body}
 
         # GitHub uses label names directly (not IDs like Gitea)
         if labels:
@@ -321,15 +317,14 @@ class GitHubAdapter(BaseAdapter):
             # Validate JSON parsing to handle non-JSON error responses
             try:
                 data = response.json()
-            except json.JSONDecodeError:
+            except json.JSONDecodeError as exc:
                 logger.error(
                     f"GitHub API returned non-JSON response for {owner}/{repo}",
                     extra={"response_text": response.text[:200]},
                 )
                 raise ValueError(
-                    f"GitHub API returned invalid JSON for {owner}/{repo}: "
-                    f"{response.text[:200]}"
-                )
+                    f"GitHub API returned invalid JSON for {owner}/{repo}: {response.text[:200]}"
+                ) from exc
 
             # Validate required 'number' field exists in API response
             if "number" not in data:
@@ -350,7 +345,7 @@ class GitHubAdapter(BaseAdapter):
             return issue_number
 
         # Handle network timeout errors
-        except httpx.TimeoutException:
+        except httpx.TimeoutException as exc:
             logger.error(
                 f"Timeout creating issue in {owner}/{repo}",
                 extra={"repo_id": f"{owner}/{repo}", "timeout": self.client.timeout.read},
@@ -358,8 +353,8 @@ class GitHubAdapter(BaseAdapter):
             raise ValueError(
                 f"GitHub API request timed out after {self.client.timeout.read}s "
                 f"for {owner}/{repo}. GitHub API may be slow or repository may be large."
-            )
-        except (httpx.ConnectError, httpx.ConnectTimeout):
+            ) from exc
+        except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
             logger.error(
                 f"Failed to connect to GitHub API for {owner}/{repo}",
                 extra={"repo_id": f"{owner}/{repo}", "api_url": self.url},
@@ -367,7 +362,7 @@ class GitHubAdapter(BaseAdapter):
             raise ValueError(
                 f"Cannot connect to GitHub API at {self.url} for {owner}/{repo}. "
                 "Check your internet connection, firewall, or GitHub API status."
-            )
+            ) from exc
         except httpx.HTTPStatusError as e:
             # Check for rate limit exceeded
             self._check_rate_limit(e.response, owner, repo)
@@ -381,11 +376,11 @@ class GitHubAdapter(BaseAdapter):
                     "response_text": e.response.text,
                 },
             )
-            raise ValueError(f"Failed to create issue in {owner}/{repo}: {e.response.text}")
+            raise ValueError(f"Failed to create issue in {owner}/{repo}: {e.response.text}") from e
 
     # ===== PR Review Methods =====
 
-    async def get_pr(self, owner: str, repo: str, pr_number: int) -> Dict:
+    async def get_pr(self, owner: str, repo: str, pr_number: int) -> dict:
         """Get pull request details.
 
         Args:
@@ -408,7 +403,7 @@ class GitHubAdapter(BaseAdapter):
             # Validate JSON parsing to handle non-JSON error responses
             try:
                 data = response.json()
-            except json.JSONDecodeError:
+            except json.JSONDecodeError as exc:
                 logger.error(
                     f"GitHub API returned non-JSON response for PR #{pr_number} in {owner}/{repo}",
                     extra={"response_text": response.text[:200]},
@@ -416,7 +411,7 @@ class GitHubAdapter(BaseAdapter):
                 raise ValueError(
                     f"GitHub API returned invalid JSON for {owner}/{repo} PR #{pr_number}: "
                     f"{response.text[:200]}"
-                )
+                ) from exc
 
             logger.debug(
                 f"Retrieved PR #{pr_number} from {owner}/{repo}",
@@ -426,7 +421,7 @@ class GitHubAdapter(BaseAdapter):
             return data
 
         # Handle network timeout errors
-        except httpx.TimeoutException:
+        except httpx.TimeoutException as exc:
             logger.error(
                 f"Timeout fetching PR #{pr_number} from {owner}/{repo}",
                 extra={"repo_id": f"{owner}/{repo}", "pr_number": pr_number},
@@ -435,8 +430,8 @@ class GitHubAdapter(BaseAdapter):
                 f"GitHub API request timed out after {self.client.timeout.read}s "
                 f"fetching PR #{pr_number} from {owner}/{repo}. "
                 "PR may be very large, or GitHub API is slow."
-            )
-        except (httpx.ConnectError, httpx.ConnectTimeout):
+            ) from exc
+        except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
             logger.error(
                 f"Failed to connect to GitHub API for {owner}/{repo}",
                 extra={"repo_id": f"{owner}/{repo}"},
@@ -444,32 +439,30 @@ class GitHubAdapter(BaseAdapter):
             raise ValueError(
                 f"Cannot connect to GitHub API at {self.url} for {owner}/{repo}. "
                 "Check your internet connection, firewall, or GitHub API status."
-            )
+            ) from exc
         except httpx.HTTPStatusError as e:
             if e.response.status_code == 404:
                 logger.warning(
                     f"Pull request #{pr_number} not found in {owner}/{repo}",
                     extra={"repo_id": f"{owner}/{repo}", "pr_number": pr_number},
                 )
-                raise ValueError(f"Pull request #{pr_number} not found in {owner}/{repo}")
-            else:
-                # Check for rate limit exceeded
-                self._check_rate_limit(e.response, owner, repo)
+                raise ValueError(f"Pull request #{pr_number} not found in {owner}/{repo}") from e
+            # Check for rate limit exceeded
+            self._check_rate_limit(e.response, owner, repo)
 
-                logger.error(
-                    f"HTTP error fetching PR #{pr_number} from {owner}/{repo}: "
-                    f"{e.response.status_code}",
-                    extra={
-                        "repo_id": f"{owner}/{repo}",
-                        "pr_number": pr_number,
-                        "http_status": e.response.status_code,
-                        "response_text": e.response.text,
-                    },
-                )
-                raise ValueError(
-                    f"GitHub API error fetching PR #{pr_number} from {owner}/{repo}: "
-                    f"{e.response.text}"
-                )
+            logger.error(
+                f"HTTP error fetching PR #{pr_number} from {owner}/{repo}: "
+                f"{e.response.status_code}",
+                extra={
+                    "repo_id": f"{owner}/{repo}",
+                    "pr_number": pr_number,
+                    "http_status": e.response.status_code,
+                    "response_text": e.response.text,
+                },
+            )
+            raise ValueError(
+                f"GitHub API error fetching PR #{pr_number} from {owner}/{repo}: {e.response.text}"
+            ) from e
 
     async def get_pr_diff(self, owner: str, repo: str, pr_number: int) -> str:
         """Get pull request diff in unified diff format.
@@ -510,7 +503,7 @@ class GitHubAdapter(BaseAdapter):
             return response.text
 
         # Handle network timeout errors
-        except httpx.TimeoutException:
+        except httpx.TimeoutException as exc:
             logger.error(
                 f"Timeout fetching PR diff for #{pr_number} from {owner}/{repo}",
                 extra={"repo_id": f"{owner}/{repo}", "pr_number": pr_number},
@@ -518,8 +511,8 @@ class GitHubAdapter(BaseAdapter):
             raise ValueError(
                 f"GitHub API request timed out after {self.client.timeout.read}s "
                 f"fetching PR #{pr_number} diff from {owner}/{repo}. PR diff may be very large."
-            )
-        except (httpx.ConnectError, httpx.ConnectTimeout):
+            ) from exc
+        except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
             logger.error(
                 f"Failed to connect to GitHub API for {owner}/{repo}",
                 extra={"repo_id": f"{owner}/{repo}"},
@@ -527,7 +520,7 @@ class GitHubAdapter(BaseAdapter):
             raise ValueError(
                 f"Cannot connect to GitHub API at {self.url} for {owner}/{repo}. "
                 "Check your internet connection, firewall, or GitHub API status."
-            )
+            ) from exc
         except httpx.HTTPStatusError as e:
             # Check for rate limit exceeded
             self._check_rate_limit(e.response, owner, repo)
@@ -543,7 +536,7 @@ class GitHubAdapter(BaseAdapter):
             )
             raise ValueError(
                 f"Failed to fetch PR #{pr_number} diff from {owner}/{repo}: {e.response.text}"
-            )
+            ) from e
 
     async def create_pr_comment(self, owner: str, repo: str, pr_number: int, body: str) -> None:
         """Post a general comment on the PR (not line-specific).
@@ -573,7 +566,7 @@ class GitHubAdapter(BaseAdapter):
             )
 
         # Handle network timeout errors
-        except httpx.TimeoutException:
+        except httpx.TimeoutException as exc:
             logger.error(
                 f"Timeout posting comment on PR #{pr_number} in {owner}/{repo}",
                 extra={"repo_id": f"{owner}/{repo}", "pr_number": pr_number},
@@ -581,8 +574,8 @@ class GitHubAdapter(BaseAdapter):
             raise ValueError(
                 f"GitHub API request timed out after {self.client.timeout.read}s "
                 f"posting comment on PR #{pr_number} in {owner}/{repo}."
-            )
-        except (httpx.ConnectError, httpx.ConnectTimeout):
+            ) from exc
+        except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
             logger.error(
                 f"Failed to connect to GitHub API for {owner}/{repo}",
                 extra={"repo_id": f"{owner}/{repo}"},
@@ -590,7 +583,7 @@ class GitHubAdapter(BaseAdapter):
             raise ValueError(
                 f"Cannot connect to GitHub API at {self.url} for {owner}/{repo}. "
                 "Check your internet connection, firewall, or GitHub API status."
-            )
+            ) from exc
         except httpx.HTTPStatusError as e:
             # Check for rate limit exceeded
             self._check_rate_limit(e.response, owner, repo)
@@ -606,9 +599,8 @@ class GitHubAdapter(BaseAdapter):
                 },
             )
             raise ValueError(
-                f"Failed to create PR comment on #{pr_number} in {owner}/{repo}: "
-                f"{e.response.text}"
-            )
+                f"Failed to create PR comment on #{pr_number} in {owner}/{repo}: {e.response.text}"
+            ) from e
 
     async def post_review_comment(
         self,
@@ -689,7 +681,7 @@ class GitHubAdapter(BaseAdapter):
             )
 
         # Handle network timeout errors
-        except httpx.TimeoutException:
+        except httpx.TimeoutException as exc:
             logger.error(
                 f"Timeout posting review comment on PR #{pr_number} in {owner}/{repo}",
                 extra={
@@ -702,8 +694,8 @@ class GitHubAdapter(BaseAdapter):
             raise ValueError(
                 f"GitHub API request timed out after {self.client.timeout.read}s "
                 f"posting review comment on PR #{pr_number} in {owner}/{repo}."
-            )
-        except (httpx.ConnectError, httpx.ConnectTimeout):
+            ) from exc
+        except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
             logger.error(
                 f"Failed to connect to GitHub API for {owner}/{repo}",
                 extra={"repo_id": f"{owner}/{repo}"},
@@ -711,7 +703,7 @@ class GitHubAdapter(BaseAdapter):
             raise ValueError(
                 f"Cannot connect to GitHub API at {self.url} for {owner}/{repo}. "
                 "Check your internet connection, firewall, or GitHub API status."
-            )
+            ) from exc
         except httpx.HTTPStatusError as e:
             # Check for rate limit exceeded
             self._check_rate_limit(e.response, owner, repo)
@@ -733,7 +725,7 @@ class GitHubAdapter(BaseAdapter):
                     f"Invalid line number {line} for review comment on PR #{pr_number} "
                     f"in {owner}/{repo} at {file_path}. Line must be part of PR diff. "
                     f"GitHub error: {e.response.text}"
-                )
+                ) from e
 
             logger.error(
                 f"HTTP error posting review comment on PR #{pr_number} in {owner}/{repo}: "
@@ -748,7 +740,7 @@ class GitHubAdapter(BaseAdapter):
             raise ValueError(
                 f"Failed to create review comment on PR #{pr_number} in {owner}/{repo}: "
                 f"{e.response.text}"
-            )
+            ) from e
 
     async def create_pr_review_comment(
         self,
@@ -814,7 +806,7 @@ class GitHubAdapter(BaseAdapter):
             )
 
         # Handle network timeout errors
-        except httpx.TimeoutException:
+        except httpx.TimeoutException as exc:
             logger.error(
                 f"Timeout posting review comment on PR #{pr_number} in {owner}/{repo}",
                 extra={"repo_id": f"{owner}/{repo}", "pr_number": pr_number},
@@ -822,13 +814,15 @@ class GitHubAdapter(BaseAdapter):
             raise ValueError(
                 f"GitHub API request timed out posting review comment on PR #{pr_number} "
                 f"in {owner}/{repo}"
-            )
-        except (httpx.ConnectError, httpx.ConnectTimeout):
+            ) from exc
+        except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
             logger.error(
                 f"Failed to connect to GitHub API for {owner}/{repo}",
                 extra={"repo_id": f"{owner}/{repo}"},
             )
-            raise ValueError(f"Cannot connect to GitHub API at {self.url} for {owner}/{repo}")
+            raise ValueError(
+                f"Cannot connect to GitHub API at {self.url} for {owner}/{repo}"
+            ) from exc
         except httpx.HTTPStatusError as e:
             # Check for rate limit exceeded
             self._check_rate_limit(e.response, owner, repo)
@@ -845,7 +839,7 @@ class GitHubAdapter(BaseAdapter):
             raise ValueError(
                 f"Failed to create review comment on PR #{pr_number} in {owner}/{repo}: "
                 f"{e.response.text}"
-            )
+            ) from e
 
     async def get_file_content(self, owner: str, repo: str, file_path: str, ref: str) -> str:
         """Get file content at a specific git reference.
@@ -876,7 +870,7 @@ class GitHubAdapter(BaseAdapter):
             # Validate JSON parsing to handle non-JSON error responses
             try:
                 data = response.json()
-            except json.JSONDecodeError:
+            except json.JSONDecodeError as exc:
                 logger.error(
                     f"GitHub API returned non-JSON response for {file_path} in {owner}/{repo}",
                     extra={"response_text": response.text[:200]},
@@ -884,7 +878,7 @@ class GitHubAdapter(BaseAdapter):
                 raise ValueError(
                     f"GitHub API returned invalid JSON for {file_path} in {owner}/{repo}: "
                     f"{response.text[:200]}"
-                )
+                ) from exc
 
             # GitHub returns base64-encoded content - validate field exists
             if "content" not in data:
@@ -931,7 +925,7 @@ class GitHubAdapter(BaseAdapter):
 
                 return decoded_str
 
-            except UnicodeDecodeError:
+            except UnicodeDecodeError as exc:
                 logger.error(
                     f"File {file_path} in {owner}/{repo}@{ref} contains non-UTF8 content",
                     extra={"repo_id": f"{owner}/{repo}", "file_path": file_path, "ref": ref},
@@ -939,8 +933,8 @@ class GitHubAdapter(BaseAdapter):
                 raise ValueError(
                     f"File {file_path} in {owner}/{repo}@{ref} is binary or non-UTF8. "
                     "GitHub adapter only supports text files."
-                )
-            except (binascii.Error, ValueError):
+                ) from exc
+            except (binascii.Error, ValueError) as exc:
                 logger.error(
                     f"Failed to decode base64 for {file_path} in {owner}/{repo}@{ref}",
                     extra={"repo_id": f"{owner}/{repo}", "file_path": file_path, "ref": ref},
@@ -948,10 +942,10 @@ class GitHubAdapter(BaseAdapter):
                 raise ValueError(
                     f"Failed to decode file content (invalid base64) for {file_path} "
                     f"in {owner}/{repo}@{ref}. File may be corrupted."
-                )
+                ) from exc
 
         # Handle network timeout errors
-        except httpx.TimeoutException:
+        except httpx.TimeoutException as exc:
             logger.error(
                 f"Timeout fetching {file_path} from {owner}/{repo}@{ref}",
                 extra={"repo_id": f"{owner}/{repo}", "file_path": file_path, "ref": ref},
@@ -959,8 +953,8 @@ class GitHubAdapter(BaseAdapter):
             raise ValueError(
                 f"GitHub API request timed out after {self.client.timeout.read}s "
                 f"fetching {file_path} from {owner}/{repo}@{ref}. File may be very large."
-            )
-        except (httpx.ConnectError, httpx.ConnectTimeout):
+            ) from exc
+        except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
             logger.error(
                 f"Failed to connect to GitHub API for {owner}/{repo}",
                 extra={"repo_id": f"{owner}/{repo}"},
@@ -968,29 +962,30 @@ class GitHubAdapter(BaseAdapter):
             raise ValueError(
                 f"Cannot connect to GitHub API at {self.url} for {owner}/{repo}. "
                 "Check your internet connection, firewall, or GitHub API status."
-            )
+            ) from exc
         except httpx.HTTPStatusError as e:
             if e.response.status_code == 404:
                 logger.warning(
                     f"File {file_path} not found in {owner}/{repo}@{ref}",
                     extra={"repo_id": f"{owner}/{repo}", "file_path": file_path, "ref": ref},
                 )
-                raise ValueError(f"File {file_path} not found at ref {ref} in {owner}/{repo}")
-            else:
-                # Check for rate limit exceeded
-                self._check_rate_limit(e.response, owner, repo)
-
-                logger.error(
-                    f"HTTP error fetching {file_path} from {owner}/{repo}@{ref}: "
-                    f"{e.response.status_code}",
-                    extra={
-                        "repo_id": f"{owner}/{repo}",
-                        "file_path": file_path,
-                        "ref": ref,
-                        "http_status": e.response.status_code,
-                        "response_text": e.response.text,
-                    },
-                )
                 raise ValueError(
-                    f"Failed to fetch {file_path} from {owner}/{repo}@{ref}: {e.response.text}"
-                )
+                    f"File {file_path} not found at ref {ref} in {owner}/{repo}"
+                ) from e
+            # Check for rate limit exceeded
+            self._check_rate_limit(e.response, owner, repo)
+
+            logger.error(
+                f"HTTP error fetching {file_path} from {owner}/{repo}@{ref}: "
+                f"{e.response.status_code}",
+                extra={
+                    "repo_id": f"{owner}/{repo}",
+                    "file_path": file_path,
+                    "ref": ref,
+                    "http_status": e.response.status_code,
+                    "response_text": e.response.text,
+                },
+            )
+            raise ValueError(
+                f"Failed to fetch {file_path} from {owner}/{repo}@{ref}: {e.response.text}"
+            ) from e

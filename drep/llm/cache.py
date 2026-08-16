@@ -95,7 +95,7 @@ import logging  # For debug logging of cache hits/misses
 import time  # For TTL calculation and timestamps
 from dataclasses import dataclass  # For simple data classes
 from pathlib import Path  # For cross-platform file path handling
-from typing import Any, Dict, List, Optional  # Type hints for clarity
+from typing import Any  # Type hints for clarity
 
 from drep.constants import TEMPERATURE_TOLERANCE
 
@@ -280,9 +280,7 @@ class IntelligentCache:
 
         # Combine all factors
         key_data = f"{prompt_hash}|{code_hash}|{model}|{temperature:.2f}|{commit_sha}"
-        cache_key = hashlib.sha256(key_data.encode()).hexdigest()
-
-        return cache_key
+        return hashlib.sha256(key_data.encode()).hexdigest()
 
     def get(
         self,
@@ -291,7 +289,7 @@ class IntelligentCache:
         model: str,
         temperature: float,
         commit_sha: str,
-    ) -> Optional[Dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         """Get cached response if valid.
 
         Validates:
@@ -325,7 +323,7 @@ class IntelligentCache:
                 return None
 
             # STEP 3: Load and parse metadata (fast check before loading full response)
-            with open(meta_file, "r") as f:
+            with meta_file.open() as f:
                 meta_data = json.load(f)
                 metadata = CacheMetadata(**meta_data)
 
@@ -380,7 +378,7 @@ class IntelligentCache:
                 return None
 
             # STEP 8: All validations passed! Load and return cached response
-            with open(cache_file, "r") as f:
+            with cache_file.open() as f:
                 response = json.load(f)
 
             logger.debug(f"Cache hit: {cache_key[:8]}... (age: {age_days:.1f} days)")
@@ -403,7 +401,7 @@ class IntelligentCache:
         model: str,
         temperature: float,
         commit_sha: str,
-        response: Dict[str, Any],
+        response: dict[str, Any],
         tokens_used: int,
         latency_ms: float,
     ):
@@ -435,11 +433,11 @@ class IntelligentCache:
             )
 
             # Write response
-            with open(cache_file, "w") as f:
+            with cache_file.open("w") as f:
                 json.dump(response, f, indent=2)
 
             # Write metadata
-            with open(meta_file, "w") as f:
+            with meta_file.open("w") as f:
                 json.dump(
                     {
                         "model": metadata.model,
@@ -541,7 +539,7 @@ class IntelligentCache:
         except Exception as e:
             logger.warning(f"Cache clear error: {e}")
 
-    def get_stats(self) -> Dict[str, Any]:
+    def get_stats(self) -> dict[str, Any]:
         """Get cache statistics.
 
         Returns:
@@ -594,7 +592,7 @@ class IntelligentCache:
 
         return self.analytics
 
-    def _calculate_file_priority(self, file_info: Dict[str, Any]) -> float:
+    def _calculate_file_priority(self, file_info: dict[str, Any]) -> float:
         """Calculate priority for cache warming (RESERVED FOR FUTURE USE).
 
         ⚠️ Currently unused by warm_cache() method. The warm_cache() method does not
@@ -627,7 +625,7 @@ class IntelligentCache:
 
     async def warm_cache(
         self,
-        files: List[Dict[str, Any]],
+        files: list[dict[str, Any]],
         analyzer: Any,
         prompt: str,
         model: str,
@@ -707,7 +705,7 @@ class IntelligentCache:
 
                 # Check if expired
                 try:
-                    with open(meta_file, "r") as f:
+                    with meta_file.open() as f:
                         meta_data = json.load(f)
                         metadata = CacheMetadata(**meta_data)
 

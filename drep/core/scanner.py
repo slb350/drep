@@ -1,11 +1,12 @@
 """Repository scanner for file-by-file analysis."""
 
 import logging
+from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Callable, List, Optional, Tuple
 
 from git import Repo
+from git.exc import GitCommandError, InvalidGitRepositoryError
 
 from drep.adapters.base import BaseAdapter
 from drep.code_quality.analyzer import CodeQualityAnalyzer
@@ -13,7 +14,7 @@ from drep.core.performance import ProgressTracker
 from drep.db.models import RepositoryScan
 from drep.docstring.generator import DocstringGenerator
 from drep.llm.cache import IntelligentCache
-from drep.llm.client import LLMClient  # noqa: F401
+from drep.llm.client import LLMClient
 from drep.models.config import Config
 from drep.models.findings import Finding
 from drep.pr_review.analyzer import PRReviewAnalyzer
@@ -25,16 +26,16 @@ class RepositoryScanner:
     """Scans repositories with incremental diff support and optional LLM-powered analysis."""
 
     # Populated only when LLM analysis is enabled; otherwise None.
-    llm_client: Optional[LLMClient]
-    code_analyzer: Optional[CodeQualityAnalyzer]
-    docstring_generator: Optional[DocstringGenerator]
-    pr_analyzer: Optional[PRReviewAnalyzer]
+    llm_client: LLMClient | None
+    code_analyzer: CodeQualityAnalyzer | None
+    docstring_generator: DocstringGenerator | None
+    pr_analyzer: PRReviewAnalyzer | None
 
     def __init__(
         self,
         db_session,
-        config: Optional[Config] = None,
-        gitea_adapter: Optional[BaseAdapter] = None,
+        config: Config | None = None,
+        gitea_adapter: BaseAdapter | None = None,
     ):
         """Initialize scanner with database session and optional config.
 
@@ -110,7 +111,7 @@ class RepositoryScanner:
 
     async def scan_repository(
         self, repo_path: str, owner: str, repo_name: str
-    ) -> Tuple[List[str], Optional[str]]:
+    ) -> tuple[list[str], str | None]:
         """Scan repository and return list of files + commit SHA.
 
         Args:
@@ -178,7 +179,7 @@ class RepositoryScanner:
 
         self.db.commit()
 
-    def _get_all_python_files(self, repo_path: str) -> List[str]:
+    def _get_all_python_files(self, repo_path: str) -> list[str]:
         """Get all Python and Markdown files in repository.
 
         Args:
@@ -231,7 +232,7 @@ class RepositoryScanner:
 
         return False
 
-    def _get_changed_files(self, repo: Repo, old_sha: str, new_sha: str) -> List[str]:
+    def _get_changed_files(self, repo: Repo, old_sha: str, new_sha: str) -> list[str]:
         """Get files changed between two commits.
 
         Only returns files that exist in the new commit (excludes deleted files
@@ -252,13 +253,13 @@ class RepositoryScanner:
             # Only use b_path (the file path in the new commit)
             # This excludes deleted files (b_path is None) and old names of renames
             path = diff_item.b_path
-            if path and (path.endswith(".py") or path.endswith(".md")):
+            if path and (path.endswith((".py", ".md"))):
                 changed_files.append(path)
 
         # Deduplicate
         return list(set(changed_files))
 
-    def get_staged_files(self, repo_path: str) -> List[str]:
+    def get_staged_files(self, repo_path: str) -> list[str]:
         """Get staged files from git index (pre-commit workflow).
 
         Returns only Python (.py) and Markdown (.md) files that are currently
@@ -283,18 +284,16 @@ class RepositoryScanner:
             On initial commit (no HEAD exists yet), automatically falls back
             to checking staged files against empty tree.
         """
-        from git.exc import GitCommandError, InvalidGitRepositoryError
-
         # Validate it's a git repository
         try:
             git_repo = Repo(repo_path)
-        except InvalidGitRepositoryError:
+        except InvalidGitRepositoryError as exc:
             logger.error(f"Not a git repository: {repo_path}")
             raise ValueError(
                 f"Not a git repository: {repo_path}\n"
                 f"drep check --staged requires a git repository.\n"
                 f"Try running 'git init' first or use 'drep check' without --staged."
-            )
+            ) from exc
 
         staged_files = []
 
@@ -310,7 +309,7 @@ class RepositoryScanner:
                 diff_items = git_repo.index.diff(None)
             else:
                 logger.error(f"Git operation failed: {e}")
-                raise RuntimeError(f"Git operation failed: {e}")
+                raise RuntimeError(f"Git operation failed: {e}") from e
 
         for diff_item in diff_items:
             # Use b_path (current file name) not a_path (old name for renames)
@@ -324,11 +323,11 @@ class RepositoryScanner:
     async def analyze_code_quality(
         self,
         repo_path: str,
-        files: List[str],
+        files: list[str],
         repo_id: str,
         commit_sha: str,
-        progress_callback: Optional[Callable[["ProgressTracker"], None]] = None,
-    ) -> List[Finding]:
+        progress_callback: Callable[["ProgressTracker"], None] | None = None,
+    ) -> list[Finding]:
         """Analyze Python files for code quality issues using LLM.
 
         Args:
@@ -350,7 +349,7 @@ class RepositoryScanner:
             logger.debug("Code analyzer not initialized, skipping code quality analysis")
             return []
 
-        findings: List[Finding] = []
+        findings: list[Finding] = []
         repo_path_obj = Path(repo_path)
 
         # Filter to only Python files
@@ -363,8 +362,6 @@ class RepositoryScanner:
         logger.info(f"Analyzing {len(python_files)} Python files for code quality")
 
         # Initialize progress tracker
-        from drep.core.performance import ProgressTracker
-
         tracker = ProgressTracker(total=len(python_files))
 
         # Analyze each file
@@ -428,11 +425,11 @@ class RepositoryScanner:
     async def analyze_docstrings(
         self,
         repo_path: str,
-        files: List[str],
+        files: list[str],
         repo_id: str,
         commit_sha: str,
-        progress_callback: Optional[Callable[["ProgressTracker"], None]] = None,
-    ) -> List[Finding]:
+        progress_callback: Callable[["ProgressTracker"], None] | None = None,
+    ) -> list[Finding]:
         """Analyze Python files for missing/poor docstrings using LLM.
 
         Args:
@@ -454,7 +451,7 @@ class RepositoryScanner:
             logger.debug("Docstring generator not initialized, skipping docstring analysis")
             return []
 
-        findings: List[Finding] = []
+        findings: list[Finding] = []
         repo_path_obj = Path(repo_path)
 
         # Filter to only Python files
@@ -467,8 +464,6 @@ class RepositoryScanner:
         logger.info(f"Analyzing {len(python_files)} Python files for docstrings")
 
         # Initialize progress tracker
-        from drep.core.performance import ProgressTracker
-
         tracker = ProgressTracker(total=len(python_files))
 
         # Analyze each file
