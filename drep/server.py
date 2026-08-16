@@ -6,15 +6,19 @@ MVP scope:
 """
 
 import asyncio
+import logging
 from collections.abc import Coroutine
 from typing import Any
 
 from fastapi import FastAPI, Header, HTTPException, Request
 
+from drep import __version__
 from drep.cli import _run_review, _run_scan
 from drep.config import find_config_file
 
-app = FastAPI(title="drep", version="0.1.0")
+logger = logging.getLogger(__name__)
+
+app = FastAPI(title="drep", version=__version__)
 
 # Strong references to fire-and-forget tasks; without these the event loop may
 # garbage-collect a task mid-execution (only a weak reference is held otherwise).
@@ -23,9 +27,18 @@ _BACKGROUND_TASKS: set[asyncio.Task[None]] = set()
 
 def _spawn_background(coro: Coroutine[Any, Any, None]) -> None:
     """Schedule a background coroutine, keeping a strong reference until it finishes."""
+
+    def _on_done(task: asyncio.Task[None]) -> None:
+        _BACKGROUND_TASKS.discard(task)
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc is not None:
+            logger.error("Background task failed: %s", exc, exc_info=exc)
+
     task: asyncio.Task[None] = asyncio.create_task(coro)
     _BACKGROUND_TASKS.add(task)
-    task.add_done_callback(_BACKGROUND_TASKS.discard)
+    task.add_done_callback(_on_done)
 
 
 @app.get("/api/health")

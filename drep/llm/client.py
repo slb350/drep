@@ -279,26 +279,43 @@ class RateLimitContext:
         # STEP 1: Acquire global semaphore (limits total concurrent requests)
         # This blocks if max_concurrent_global requests are already in flight
         # Semaphore is held until __aexit__ to ensure proper concurrency control
-        await self.rate_limiter.semaphore.acquire()
+        #
+        # If entry is cancelled or a rate check raises, __aexit__ never runs,
+        # so any permits acquired below must be rolled back explicitly —
+        # otherwise they leak permanently (a leaked repo permit blocks that
+        # repo forever).
+        acquired_global = False
+        acquired_repo = False
+        try:
+            await self.rate_limiter.semaphore.acquire()
+            acquired_global = True
 
-        # STEP 2: Acquire per-repo semaphore if repo_id specified
-        # This prevents one repository from monopolizing all concurrent slots
-        # Example: If max_concurrent_global=5 and max_concurrent_per_repo=3,
-        # then repo A can use at most 3 slots, leaving 2+ for other repos
-        if self.repo_id is not None:
-            self.repo_semaphore = await self.rate_limiter._get_repo_semaphore(self.repo_id)
-            await self.repo_semaphore.acquire()
+            # STEP 2: Acquire per-repo semaphore if repo_id specified
+            # This prevents one repository from monopolizing all concurrent slots
+            # Example: If max_concurrent_global=5 and max_concurrent_per_repo=3,
+            # then repo A can use at most 3 slots, leaving 2+ for other repos
+            if self.repo_id is not None:
+                self.repo_semaphore = await self.rate_limiter._get_repo_semaphore(self.repo_id)
+                await self.repo_semaphore.acquire()
+                acquired_repo = True
 
-        # STEP 3: Check request rate limit (requests per minute)
-        # This uses a sliding window algorithm: track timestamps of recent requests
-        # and wait if adding this request would exceed the per-minute limit
-        await self.rate_limiter._check_request_rate_limit()
+            # STEP 3: Check request rate limit (requests per minute)
+            # This uses a sliding window algorithm: track timestamps of recent requests
+            # and wait if adding this request would exceed the per-minute limit
+            await self.rate_limiter._check_request_rate_limit()
 
-        # STEP 4: Check token rate limit (tokens per minute)
-        # This uses a token bucket algorithm: track cumulative tokens in current minute
-        # and wait if adding estimated tokens would exceed the limit
-        # We use estimated tokens here; actual tokens reconciled in __aexit__
-        await self.rate_limiter._check_token_rate_limit(self.estimated_tokens)
+            # STEP 4: Check token rate limit (tokens per minute)
+            # This uses a token bucket algorithm: track cumulative tokens in current minute
+            # and wait if adding estimated tokens would exceed the limit
+            # We use estimated tokens here; actual tokens reconciled in __aexit__
+            await self.rate_limiter._check_token_rate_limit(self.estimated_tokens)
+        except BaseException:
+            if acquired_repo and self.repo_semaphore is not None:
+                self.repo_semaphore.release()
+                self.repo_semaphore = None
+            if acquired_global:
+                self.rate_limiter.semaphore.release()
+            raise
 
         return self
 

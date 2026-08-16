@@ -1,7 +1,7 @@
 # Drep Development Roadmap
 
 **Last Updated:** 2025-11-09
-**Current Version:** v1.1.0
+**Current Version:** v1.1.3
 
 This roadmap outlines planned improvements for drep, organized by priority and effort. Items are sequenced from quick wins (easy, high-impact) to complex long-term projects.
 

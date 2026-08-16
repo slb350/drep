@@ -244,6 +244,61 @@ async def test_rate_limiter_burst_failures_dont_stall():
 
 
 @pytest.mark.asyncio
+async def test_rate_limiter_releases_permits_when_entry_cancelled():
+    """Test that cancellation during __aenter__ (mid rate-limit sleep) releases permits.
+
+    __aexit__ never runs when __aenter__ is cancelled, so any semaphores already
+    acquired must be rolled back explicitly or permits leak permanently.
+    """
+    limiter = RateLimiter(max_concurrent=1, requests_per_minute=1, max_tokens_per_minute=1000)
+
+    # Fill the sliding window so the request-rate check sleeps ~60s
+    limiter.request_times = [time.time()]
+
+    ctx = limiter.request(100, repo_id="repo1")
+    task = asyncio.create_task(ctx.__aenter__())
+    # Let the task acquire both semaphores and enter the rate-limit sleep
+    await asyncio.sleep(0.05)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    # Global semaphore permit must be available again
+    await asyncio.wait_for(limiter.semaphore.acquire(), timeout=0.1)
+    limiter.semaphore.release()
+
+    # Repo semaphore permit must be available again
+    repo_sem = await limiter._get_repo_semaphore("repo1")
+    await asyncio.wait_for(repo_sem.acquire(), timeout=0.1)
+    repo_sem.release()
+
+
+@pytest.mark.asyncio
+async def test_rate_limiter_releases_permits_when_rate_check_raises():
+    """Test that an exception during entry rate checks releases acquired permits."""
+    limiter = RateLimiter(max_concurrent=1, requests_per_minute=100, max_tokens_per_minute=1000)
+
+    original_check = limiter._check_request_rate_limit
+
+    async def failing_check():
+        await original_check()
+        raise RuntimeError("Simulated rate-check failure")
+
+    limiter._check_request_rate_limit = failing_check  # type: ignore[method-assign]
+
+    ctx = limiter.request(100, repo_id="repo1")
+    with pytest.raises(RuntimeError, match="Simulated rate-check failure"):
+        await ctx.__aenter__()
+
+    # Both permits must have been released
+    await asyncio.wait_for(limiter.semaphore.acquire(), timeout=0.1)
+    limiter.semaphore.release()
+    repo_sem = await limiter._get_repo_semaphore("repo1")
+    await asyncio.wait_for(repo_sem.acquire(), timeout=0.1)
+    repo_sem.release()
+
+
+@pytest.mark.asyncio
 async def test_rate_limiter_tokens_never_go_negative():
     """Test that token counter is clamped to 0, preventing negatives."""
     limiter = RateLimiter(max_concurrent=5, requests_per_minute=100, max_tokens_per_minute=1000)

@@ -1,7 +1,9 @@
 """Tests for FastAPI server endpoints."""
 
+import asyncio
 from unittest.mock import AsyncMock
 
+import pytest
 from fastapi.testclient import TestClient
 
 from drep.server import app
@@ -59,3 +61,57 @@ def test_webhook_pr_schedules_review(monkeypatch):
     assert data["details"]["owner"] == "owner"
     assert data["details"]["repo"] == "repo"
     assert data["details"]["pr"] == 42
+
+
+@pytest.mark.asyncio
+async def test_spawn_background_logs_task_exception(caplog):
+    """A failed background task's exception is retrieved and logged, not lost."""
+    from drep.server import _spawn_background
+
+    async def failing():
+        raise RuntimeError("scan exploded")
+
+    with caplog.at_level("ERROR", logger="drep.server"):
+        _spawn_background(failing())
+        await asyncio.sleep(0.05)
+
+    assert any("scan exploded" in r.message for r in caplog.records)
+    for r in caplog.records:
+        assert "Task exception was never retrieved" not in r.message
+
+
+@pytest.mark.asyncio
+async def test_spawn_background_swallows_cancellation(caplog):
+    """A cancelled background task does not produce an error log."""
+    from drep.server import _spawn_background
+
+    async def cancelled():
+        await asyncio.sleep(10)
+
+    with caplog.at_level("ERROR", logger="drep.server"):
+        from drep.server import _BACKGROUND_TASKS
+
+        async def run():
+            _spawn_background(cancelled())
+            await asyncio.sleep(0.02)
+            for t in _BACKGROUND_TASKS:
+                t.cancel()
+            await asyncio.sleep(0.05)
+
+        await run()
+
+    assert not any(r.levelname == "ERROR" for r in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_spawn_background_cleans_up_task_set():
+    """Finished tasks are discarded from the strong-reference set."""
+    from drep.server import _BACKGROUND_TASKS, _spawn_background
+
+    async def ok():
+        return None
+
+    before = len(_BACKGROUND_TASKS)
+    _spawn_background(ok())
+    await asyncio.sleep(0.05)
+    assert len(_BACKGROUND_TASKS) == before
