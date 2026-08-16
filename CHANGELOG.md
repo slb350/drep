@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Planned
+- Vector database integration for cross-file context
+- Custom rule definitions
+- Integration with existing linters (pylint, eslint, etc.)
+- Metrics dashboard
+- Notification system (Slack, Discord)
+- Multi-repository analysis features
+- Anthropic Direct API provider (Phase 3.4)
+
+## [1.1.3] - 2026-08-16
+
 ### Changed - Tooling & Code Modernization 🧹
 
 **Maintenance:** Internal quality improvements only — no user-facing behavior changes.
@@ -29,15 +40,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Fire-and-forget webhook tasks could be garbage-collected mid-run**:
   `drep/server.py` now holds strong references to background scan/review tasks
   until they complete (RUF006).
-
-### Planned
-- Vector database integration for cross-file context
-- Custom rule definitions
-- Integration with existing linters (pylint, eslint, etc.)
-- Metrics dashboard
-- Notification system (Slack, Discord)
-- Multi-repository analysis features
-- Anthropic Direct API provider (Phase 3.4)
 
 ## [1.1.2] - 2026-05-24
 
@@ -437,7 +439,11 @@ behavior changes.
 - Rate limiting considerations
 - Sanitized LLM prompts to prevent injection
 
-[Unreleased]: https://github.com/slb350/drep/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/slb350/drep/compare/v1.1.3...HEAD
+[1.1.3]: https://github.com/slb350/drep/compare/v1.1.2...v1.1.3
+[1.1.2]: https://github.com/slb350/drep/compare/v1.1.1...v1.1.2
+[1.1.1]: https://github.com/slb350/drep/compare/v1.1.0...v1.1.1
+[1.1.0]: https://github.com/slb350/drep/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/slb350/drep/compare/v0.9.0...v1.0.0
 [0.9.0]: https://github.com/slb350/drep/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/slb350/drep/compare/v0.1.0...v0.8.0
