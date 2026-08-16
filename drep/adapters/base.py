@@ -8,8 +8,17 @@ By using an abstract base class, we ensure:
 - Easier to add new platform adapters
 """
 
+import asyncio
+import base64
+import binascii
+import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from typing import ClassVar
+
+import httpx
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -33,18 +42,6 @@ class ReviewAnchor:
     commit_sha: str
 
 
-@dataclass(frozen=True)
-class GitLabReviewAnchor(ReviewAnchor):
-    """GitLab-specific anchor carrying MR diff_refs SHAs.
-
-    GitLab positions inline comments with base/head/start SHAs from the MR's
-    ``diff_refs``; a bare commit SHA is not sufficient.
-    """
-
-    base_sha: str = ""
-    start_sha: str = ""
-
-
 class BaseAdapter(ABC):
     """Abstract base class for git platform adapters.
 
@@ -55,6 +52,129 @@ class BaseAdapter(ABC):
     The adapter pattern allows drep to work with multiple platforms without
     tying the core logic to any specific platform's API.
     """
+
+    #: Human-readable platform name used in user-facing error messages.
+    platform_name: ClassVar[str] = "Platform"
+
+    #: Set by each concrete adapter in __init__.
+    client: httpx.AsyncClient
+
+    @property
+    def api_base_url(self) -> str:
+        """Base URL reported in connection-failure messages."""
+        raise NotImplementedError
+
+    #: Transport failures every endpoint translates identically. Catch this tuple
+    #: and delegate to _network_error(); HTTP status errors stay at the call site,
+    #: since their handling is endpoint-specific.
+    NETWORK_ERRORS: ClassVar[tuple[type[Exception], ...]] = (
+        httpx.TimeoutException,
+        httpx.ConnectError,
+        httpx.ConnectTimeout,
+    )
+
+    def _check_rate_limit(  # noqa: B027 - intentional no-op default, not an abstract hook
+        self, response: httpx.Response, owner: str = "", repo: str = ""
+    ) -> None:
+        """Raise an informative error if the response signals rate limiting.
+
+        No-op by default: platforms that expose rate-limit headers (GitHub,
+        GitLab) override this with their own status/header policy, which differs
+        enough between them that a single parameterized body would obscure more
+        than it shares. Declaring it here keeps the hook visible to every
+        adapter and mixin without per-file typing stubs.
+
+        Args:
+            response: HTTP response to inspect
+            owner: Repository owner (for error context)
+            repo: Repository name (for error context)
+        """
+
+    def _decode_file_content(
+        self, content_b64: str, owner: str, repo: str, file_path: str, ref: str
+    ) -> str:
+        """Decode a base64 file payload returned by a platform's contents API.
+
+        GitHub and GitLab both return base64 with embedded newlines and both
+        need the same binary/corrupt-content diagnostics, so the decode lives
+        here rather than being copied into each adapter.
+
+        Args:
+            content_b64: Base64 payload from the API (may contain newlines)
+            owner: Repository owner (for error context)
+            repo: Repository name (for error context)
+            file_path: File path (for error context)
+            ref: Git ref (for error context)
+
+        Returns:
+            Decoded UTF-8 text
+
+        Raises:
+            ValueError: If the content is not valid base64 or not UTF-8 text
+        """
+        location = f"{file_path} in {owner}/{repo}@{ref}"
+        context = {"repo_id": f"{owner}/{repo}", "file_path": file_path, "ref": ref}
+
+        try:
+            decoded_str = base64.b64decode(content_b64.replace("\n", "")).decode("utf-8")
+        except UnicodeDecodeError as exc:
+            logger.error(f"File {location} contains non-UTF8 content", extra=context)
+            raise ValueError(
+                f"File {location} is binary or non-UTF8. "
+                f"{self.platform_name} adapter only supports text files."
+            ) from exc
+        except (binascii.Error, ValueError) as exc:
+            logger.error(f"Failed to decode base64 for {location}", extra=context)
+            raise ValueError(
+                f"Failed to decode file content (invalid base64) for {location}. "
+                "File may be corrupted."
+            ) from exc
+
+        logger.debug(
+            f"Retrieved file {file_path} from {owner}/{repo}@{ref}",
+            extra={**context, "size": len(decoded_str)},
+        )
+        return decoded_str
+
+    def _network_error(
+        self, exc: Exception, operation: str, target: str, hint: str = ""
+    ) -> ValueError:
+        """Build the ValueError for an httpx transport failure.
+
+        Every endpoint reports timeouts and connection failures with the same
+        wording; only the operation noun differs. Usage:
+
+        ::
+
+            except self.NETWORK_ERRORS as exc:
+                raise self._network_error(exc, f"fetching MR !{pr_number}", repo_id) from exc
+
+        Args:
+            exc: The httpx transport exception
+            operation: Present-participle phrase, e.g. "fetching MR !42"
+            target: What is being operated on, usually "owner/repo"
+            hint: Optional extra sentence appended to the timeout message
+
+        Returns:
+            ValueError with a consistent, user-actionable message
+        """
+        if isinstance(exc, httpx.TimeoutException) and not isinstance(exc, httpx.ConnectTimeout):
+            logger.error(f"Timeout {operation}", extra={"repo_id": target})
+            message = (
+                f"{self.platform_name} API request timed out after "
+                f"{self.client.timeout.read}s {operation}."
+            )
+            return ValueError(f"{message} {hint}".rstrip())
+
+        logger.error(
+            f"Failed to connect to {self.platform_name} API for {target}",
+            extra={"repo_id": target},
+        )
+        return ValueError(
+            f"Cannot connect to {self.platform_name} API at {self.api_base_url} "
+            f"for {target}. Check your internet connection, firewall, "
+            f"or {self.platform_name} API status."
+        )
 
     async def get_review_anchor(self, owner: str, repo: str, pr_number: int) -> ReviewAnchor:
         """Fetch the immutable review anchor for a PR/MR (single network call).
@@ -194,7 +314,6 @@ class BaseAdapter(ABC):
             )
         """
 
-    @abstractmethod
     async def post_review_comment(
         self,
         owner: str,
@@ -204,7 +323,15 @@ class BaseAdapter(ABC):
         line: int,
         body: str,
     ) -> None:
-        """Post a line-specific review comment on a PR.
+        """Post a line-specific review comment on a PR (one-shot convenience).
+
+        Resolves the review anchor and posts a single inline comment through it.
+        Concrete here because the composition never varies by platform — the two
+        primitives it builds on (``get_review_anchor`` and
+        ``create_pr_review_comment``) are where platform differences live.
+
+        Prefer ``get_review_anchor`` + ``create_pr_review_comment`` when posting
+        a batch of comments, so the whole review shares one anchor.
 
         Args:
             owner: Repository owner
@@ -232,6 +359,8 @@ class BaseAdapter(ABC):
                 body="Consider using a with statement here",
             )
         """
+        anchor = await self.get_review_anchor(owner, repo, pr_number)
+        await self.create_pr_review_comment(anchor, file_path, line, body)
 
     @abstractmethod
     async def create_pr_review_comment(
@@ -304,12 +433,16 @@ class BaseAdapter(ABC):
             # Returns: "main"
         """
 
-    @abstractmethod
     async def close(self) -> None:
         """Close the adapter and release resources (HTTP connections, etc.).
 
         Should be called when the adapter is no longer needed to properly
         clean up HTTP clients and other resources.
+
+        Concrete here because every adapter closes the same single
+        ``httpx.AsyncClient``. Non-critical errors are logged rather than
+        re-raised, so a failure here cannot mask the original exception in a
+        ``finally`` block; interrupts and cancellation always propagate.
 
         Example:
             adapter = GiteaAdapter(url="...", token="...")
@@ -319,3 +452,23 @@ class BaseAdapter(ABC):
             finally:
                 await adapter.close()
         """
+        try:
+            await self.client.aclose()
+            logger.debug(f"Closed {self.platform_name} adapter HTTP client")
+        except (KeyboardInterrupt, SystemExit, asyncio.CancelledError):
+            # Always propagate user interrupts, system exit, and async cancellation
+            logger.info("Close interrupted by user or system")
+            raise
+        except (httpx.CloseError, RuntimeError) as e:
+            # Expected during close - suppress to avoid masking original errors
+            logger.warning(
+                f"Non-critical error closing {self.platform_name} client: {e}",
+                extra={"error_type": type(e).__name__},
+            )
+        except Exception as e:
+            # Unexpected - log with traceback, but still do not mask the original error
+            logger.error(
+                f"Unexpected error closing {self.platform_name} adapter: {e}",
+                extra={"error_type": type(e).__name__},
+                exc_info=True,
+            )

@@ -26,22 +26,27 @@ def test_base_adapter_has_required_abstract_methods():
     # Get all abstract methods
     abstract_methods = BaseAdapter.__abstractmethods__
 
-    # Required methods for platform adapters
+    # Required methods for platform adapters. post_review_comment is deliberately
+    # absent: it is a concrete composition of get_review_anchor +
+    # create_pr_review_comment and never varies by platform.
     required_methods = {
         "create_issue",
         "get_pr",
         "get_pr_diff",
         "create_pr_comment",
-        "post_review_comment",
         "create_pr_review_comment",
         "get_file_content",
-        "close",
     }
 
     # All required methods should be abstract
     assert required_methods.issubset(abstract_methods), (
         f"Missing abstract methods: {required_methods - abstract_methods}"
     )
+
+    # Provided concretely by the base class, not reimplemented per adapter
+    assert "post_review_comment" not in abstract_methods
+    assert "get_review_anchor" not in abstract_methods
+    assert "close" not in abstract_methods
 
 
 def test_subclass_without_implementation_raises_error():

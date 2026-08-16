@@ -6,6 +6,7 @@ the LLM-based analysis is added.
 
 import re
 
+from drep.core.file_targets import is_markdown
 from drep.models.config import DocumentationConfig
 from drep.models.findings import DocumentationFindings, PatternIssue
 
@@ -30,10 +31,8 @@ class DocumentationAnalyzer:
         if not self.config.enabled:
             return findings
 
-        is_markdown = file_path.lower().endswith(".md")
-
         # Basic Markdown checks (opt-in)
-        if is_markdown and getattr(self.config, "markdown_checks", False):
+        if is_markdown(file_path) and getattr(self.config, "markdown_checks", False):
             findings.pattern_issues.extend(self._analyze_markdown(content))
 
         return findings
@@ -53,7 +52,7 @@ class DocumentationAnalyzer:
                 in_fence = not in_fence
 
             # Trailing whitespace
-            if re.search(r"[ \t]+$", line):
+            if line != line.rstrip(" \t"):
                 issues.append(
                     PatternIssue(
                         type="trailing_whitespace",

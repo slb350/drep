@@ -135,12 +135,14 @@ class CircuitBreaker:
 
         # HALF_OPEN allows exactly one probe at a time; concurrent callers
         # fail fast instead of dogpiling the recovering service.
+        is_probe = False
         if self.state == CircuitState.HALF_OPEN:
             if self._probe_in_flight:
                 raise CircuitBreakerOpenError(
                     "Circuit breaker is HALF_OPEN with a recovery probe in flight"
                 )
             self._probe_in_flight = True
+            is_probe = True
 
         # Execute the function
         try:
@@ -151,7 +153,11 @@ class CircuitBreaker:
             self._on_failure()
             raise
         finally:
-            self._probe_in_flight = False
+            # Only the call that reserved the probe may clear the flag. A CLOSED
+            # call finishing after the breaker re-entered HALF_OPEN would
+            # otherwise wipe another task's reservation and let probes dogpile.
+            if is_probe:
+                self._probe_in_flight = False
 
     def _should_attempt_reset(self) -> bool:
         """Check if enough time has passed to try recovery.

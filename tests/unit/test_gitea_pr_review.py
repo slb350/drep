@@ -293,3 +293,56 @@ async def test_create_pr_review_comment_error_handling():
             )
     finally:
         await adapter.close()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_create_pr_review_comment_does_not_retry_on_auth_error():
+    """A non-field-name failure (403) must not trigger the new_position fallback.
+
+    The fallback exists solely for older Gitea versions rejecting the
+    "new_position" field (400/422). Retrying on 403 wastes a second POST and
+    hides the real cause behind a compound error message.
+    """
+    route = respx.post("http://192.168.1.14:3000/api/v1/repos/steve/drep/pulls/42/reviews").mock(
+        return_value=httpx.Response(403, text="Forbidden: Permission denied")
+    )
+
+    adapter = GiteaAdapter("http://192.168.1.14:3000", "token")
+
+    try:
+        with pytest.raises(ValueError, match="HTTP 403"):
+            await adapter.create_pr_review_comment(
+                anchor=ReviewAnchor(owner="steve", repo="drep", pr_number=42, commit_sha="abc123"),
+                file_path="test.py",
+                line=10,
+                body="Comment",
+            )
+        assert route.call_count == 1
+    finally:
+        await adapter.close()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_create_pr_review_comment_retries_on_field_name_rejection():
+    """A 422 still falls back to the legacy "position" field name."""
+    route = respx.post("http://192.168.1.14:3000/api/v1/repos/steve/drep/pulls/42/reviews").mock(
+        side_effect=[
+            httpx.Response(422, text="unknown field new_position"),
+            httpx.Response(200, json={"id": 1}),
+        ]
+    )
+
+    adapter = GiteaAdapter("http://192.168.1.14:3000", "token")
+
+    try:
+        await adapter.create_pr_review_comment(
+            anchor=ReviewAnchor(owner="steve", repo="drep", pr_number=42, commit_sha="abc123"),
+            file_path="test.py",
+            line=10,
+            body="Comment",
+        )
+        assert route.call_count == 2
+    finally:
+        await adapter.close()

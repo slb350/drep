@@ -1,8 +1,5 @@
 """GitHub platform adapter implementation."""
 
-import asyncio
-import base64
-import binascii
 import json
 import logging
 from typing import Any
@@ -47,6 +44,13 @@ class GitHubAdapter(GitHubReviewMixin, BaseAdapter):
         - GitHub.com default URL makes token-first more ergonomic for common case
         - Consider standardizing across adapters in future if this causes confusion
     """
+
+    platform_name = "GitHub"
+
+    @property
+    def api_base_url(self) -> str:
+        """Base URL reported in connection-failure messages."""
+        return self.url
 
     def __init__(self, token: str, url: str = "https://api.github.com"):
         """Initialize GitHubAdapter with token.
@@ -114,27 +118,6 @@ class GitHubAdapter(GitHubReviewMixin, BaseAdapter):
         )
 
         logger.debug("Initialized GitHub adapter", extra={"api_url": self.url, "timeout": 30.0})
-
-    async def close(self):
-        """Close HTTP client connection.
-
-        Note:
-            Non-critical errors during close are logged but not re-raised to avoid
-            masking original errors in finally blocks. Critical exceptions
-            (KeyboardInterrupt, SystemExit, asyncio.CancelledError) are always
-            propagated.
-        """
-        try:
-            await self.client.aclose()
-            logger.debug("Closed GitHub adapter HTTP client")
-        except (KeyboardInterrupt, SystemExit, asyncio.CancelledError):
-            # Always propagate user interrupts, system exit signals, and async cancellations
-            logger.info("Close interrupted by user or system")
-            raise
-        except Exception as e:
-            # Suppress cleanup errors to avoid masking original errors in finally blocks
-            # (httpx.CloseError, RuntimeError, etc.)
-            logger.warning(f"Non-critical error closing GitHub client: {e}")
 
     def _check_rate_limit(self, response: httpx.Response, owner: str = "", repo: str = "") -> None:
         """Check for rate limit and raise informative error.
@@ -237,24 +220,12 @@ class GitHubAdapter(GitHubReviewMixin, BaseAdapter):
             return default_branch
 
         # Handle network timeout errors
-        except httpx.TimeoutException as exc:
-            logger.error(
-                f"Timeout fetching default branch for {owner}/{repo}",
-                extra={"repo_id": f"{owner}/{repo}"},
-            )
-            raise ValueError(
-                f"GitHub API request timed out after {self.client.timeout.read}s "
-                f"fetching default branch for {owner}/{repo}. "
-                "Repository may be very large, or GitHub API is slow."
-            ) from exc
-        except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
-            logger.error(
-                f"Failed to connect to GitHub API for {owner}/{repo}",
-                extra={"repo_id": f"{owner}/{repo}"},
-            )
-            raise ValueError(
-                f"Cannot connect to GitHub API at {self.url} for {owner}/{repo}. "
-                "Check your internet connection, firewall, or GitHub API status."
+        except self.NETWORK_ERRORS as exc:
+            raise self._network_error(
+                exc,
+                f"fetching default branch for {owner}/{repo}",
+                f"{owner}/{repo}",
+                "Repository may be very large, or GitHub API is slow.",
             ) from exc
         except httpx.HTTPStatusError as e:
             if e.response.status_code == 404:
@@ -346,23 +317,12 @@ class GitHubAdapter(GitHubReviewMixin, BaseAdapter):
             return issue_number
 
         # Handle network timeout errors
-        except httpx.TimeoutException as exc:
-            logger.error(
-                f"Timeout creating issue in {owner}/{repo}",
-                extra={"repo_id": f"{owner}/{repo}", "timeout": self.client.timeout.read},
-            )
-            raise ValueError(
-                f"GitHub API request timed out after {self.client.timeout.read}s "
-                f"for {owner}/{repo}. GitHub API may be slow or repository may be large."
-            ) from exc
-        except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
-            logger.error(
-                f"Failed to connect to GitHub API for {owner}/{repo}",
-                extra={"repo_id": f"{owner}/{repo}", "api_url": self.url},
-            )
-            raise ValueError(
-                f"Cannot connect to GitHub API at {self.url} for {owner}/{repo}. "
-                "Check your internet connection, firewall, or GitHub API status."
+        except self.NETWORK_ERRORS as exc:
+            raise self._network_error(
+                exc,
+                f"for {owner}/{repo}",
+                f"{owner}/{repo}",
+                "GitHub API may be slow or repository may be large.",
             ) from exc
         except httpx.HTTPStatusError as e:
             # Check for rate limit exceeded
@@ -422,24 +382,12 @@ class GitHubAdapter(GitHubReviewMixin, BaseAdapter):
             return data
 
         # Handle network timeout errors
-        except httpx.TimeoutException as exc:
-            logger.error(
-                f"Timeout fetching PR #{pr_number} from {owner}/{repo}",
-                extra={"repo_id": f"{owner}/{repo}", "pr_number": pr_number},
-            )
-            raise ValueError(
-                f"GitHub API request timed out after {self.client.timeout.read}s "
-                f"fetching PR #{pr_number} from {owner}/{repo}. "
-                "PR may be very large, or GitHub API is slow."
-            ) from exc
-        except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
-            logger.error(
-                f"Failed to connect to GitHub API for {owner}/{repo}",
-                extra={"repo_id": f"{owner}/{repo}"},
-            )
-            raise ValueError(
-                f"Cannot connect to GitHub API at {self.url} for {owner}/{repo}. "
-                "Check your internet connection, firewall, or GitHub API status."
+        except self.NETWORK_ERRORS as exc:
+            raise self._network_error(
+                exc,
+                f"fetching PR #{pr_number} from {owner}/{repo}",
+                f"{owner}/{repo}",
+                "PR may be very large, or GitHub API is slow.",
             ) from exc
         except httpx.HTTPStatusError as e:
             if e.response.status_code == 404:
@@ -504,23 +452,12 @@ class GitHubAdapter(GitHubReviewMixin, BaseAdapter):
             return response.text
 
         # Handle network timeout errors
-        except httpx.TimeoutException as exc:
-            logger.error(
-                f"Timeout fetching PR diff for #{pr_number} from {owner}/{repo}",
-                extra={"repo_id": f"{owner}/{repo}", "pr_number": pr_number},
-            )
-            raise ValueError(
-                f"GitHub API request timed out after {self.client.timeout.read}s "
-                f"fetching PR #{pr_number} diff from {owner}/{repo}. PR diff may be very large."
-            ) from exc
-        except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
-            logger.error(
-                f"Failed to connect to GitHub API for {owner}/{repo}",
-                extra={"repo_id": f"{owner}/{repo}"},
-            )
-            raise ValueError(
-                f"Cannot connect to GitHub API at {self.url} for {owner}/{repo}. "
-                "Check your internet connection, firewall, or GitHub API status."
+        except self.NETWORK_ERRORS as exc:
+            raise self._network_error(
+                exc,
+                f"fetching PR #{pr_number} diff from {owner}/{repo}",
+                f"{owner}/{repo}",
+                "PR diff may be very large.",
             ) from exc
         except httpx.HTTPStatusError as e:
             # Check for rate limit exceeded
@@ -567,23 +504,11 @@ class GitHubAdapter(GitHubReviewMixin, BaseAdapter):
             )
 
         # Handle network timeout errors
-        except httpx.TimeoutException as exc:
-            logger.error(
-                f"Timeout posting comment on PR #{pr_number} in {owner}/{repo}",
-                extra={"repo_id": f"{owner}/{repo}", "pr_number": pr_number},
-            )
-            raise ValueError(
-                f"GitHub API request timed out after {self.client.timeout.read}s "
-                f"posting comment on PR #{pr_number} in {owner}/{repo}."
-            ) from exc
-        except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
-            logger.error(
-                f"Failed to connect to GitHub API for {owner}/{repo}",
-                extra={"repo_id": f"{owner}/{repo}"},
-            )
-            raise ValueError(
-                f"Cannot connect to GitHub API at {self.url} for {owner}/{repo}. "
-                "Check your internet connection, firewall, or GitHub API status."
+        except self.NETWORK_ERRORS as exc:
+            raise self._network_error(
+                exc,
+                f"posting comment on PR #{pr_number} in {owner}/{repo}",
+                f"{owner}/{repo}",
             ) from exc
         except httpx.HTTPStatusError as e:
             # Check for rate limit exceeded
@@ -668,62 +593,15 @@ class GitHubAdapter(GitHubReviewMixin, BaseAdapter):
                 )
                 return ""
 
-            # Handle base64 decode and UTF-8 decode errors
-            try:
-                # GitHub may include newlines in the base64, so remove them first
-                content = content.replace("\n", "")
-                decoded_bytes = base64.b64decode(content)
-                decoded_str = decoded_bytes.decode("utf-8")
-
-                logger.debug(
-                    f"Retrieved file {file_path} from {owner}/{repo}@{ref}",
-                    extra={
-                        "repo_id": f"{owner}/{repo}",
-                        "file_path": file_path,
-                        "ref": ref,
-                        "size": len(decoded_str),
-                    },
-                )
-
-                return decoded_str
-
-            except UnicodeDecodeError as exc:
-                logger.error(
-                    f"File {file_path} in {owner}/{repo}@{ref} contains non-UTF8 content",
-                    extra={"repo_id": f"{owner}/{repo}", "file_path": file_path, "ref": ref},
-                )
-                raise ValueError(
-                    f"File {file_path} in {owner}/{repo}@{ref} is binary or non-UTF8. "
-                    "GitHub adapter only supports text files."
-                ) from exc
-            except (binascii.Error, ValueError) as exc:
-                logger.error(
-                    f"Failed to decode base64 for {file_path} in {owner}/{repo}@{ref}",
-                    extra={"repo_id": f"{owner}/{repo}", "file_path": file_path, "ref": ref},
-                )
-                raise ValueError(
-                    f"Failed to decode file content (invalid base64) for {file_path} "
-                    f"in {owner}/{repo}@{ref}. File may be corrupted."
-                ) from exc
+            return self._decode_file_content(content, owner, repo, file_path, ref)
 
         # Handle network timeout errors
-        except httpx.TimeoutException as exc:
-            logger.error(
-                f"Timeout fetching {file_path} from {owner}/{repo}@{ref}",
-                extra={"repo_id": f"{owner}/{repo}", "file_path": file_path, "ref": ref},
-            )
-            raise ValueError(
-                f"GitHub API request timed out after {self.client.timeout.read}s "
-                f"fetching {file_path} from {owner}/{repo}@{ref}. File may be very large."
-            ) from exc
-        except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
-            logger.error(
-                f"Failed to connect to GitHub API for {owner}/{repo}",
-                extra={"repo_id": f"{owner}/{repo}"},
-            )
-            raise ValueError(
-                f"Cannot connect to GitHub API at {self.url} for {owner}/{repo}. "
-                "Check your internet connection, firewall, or GitHub API status."
+        except self.NETWORK_ERRORS as exc:
+            raise self._network_error(
+                exc,
+                f"fetching {file_path} from {owner}/{repo}@{ref}",
+                f"{owner}/{repo}",
+                "File may be very large.",
             ) from exc
         except httpx.HTTPStatusError as e:
             if e.response.status_code == 404:

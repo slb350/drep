@@ -1,62 +1,24 @@
 """Inline review comment machinery for the GitHub adapter.
 
-Split from drep/adapters/github.py (file-size limit). post_review_comment
-resolves the anchor and delegates; create_pr_review_comment is the canonical
-primitive and owns the 422 invalid-line handling.
+Split from drep/adapters/github.py (file-size limit). create_pr_review_comment
+is the canonical primitive and owns the 422 invalid-line handling; the one-shot
+``post_review_comment`` wrapper is inherited from BaseAdapter.
 """
 
 import logging
-from typing import TYPE_CHECKING, Any
 
 import httpx
 
-from drep.adapters.base import ReviewAnchor
+from drep.adapters.base import BaseAdapter, ReviewAnchor
 
 logger = logging.getLogger(__name__)
 
 
-class GitHubReviewMixin:
+class GitHubReviewMixin(BaseAdapter):
     """Inline review comment methods, mixed into GitHubAdapter.
 
-    Host adapter provides: ``client``, ``url``, ``_check_rate_limit()``.
+    Host surface (client, api_base_url, _check_rate_limit) comes from BaseAdapter.
     """
-
-    if TYPE_CHECKING:
-        client: httpx.AsyncClient
-        url: str
-
-        def _check_rate_limit(
-            self, response: httpx.Response, owner: str = "", repo: str = ""
-        ) -> None: ...
-        def get_review_anchor(self, owner: str, repo: str, pr_number: int) -> Any: ...
-
-    async def post_review_comment(
-        self,
-        owner: str,
-        repo: str,
-        pr_number: int,
-        file_path: str,
-        line: int,
-        body: str,
-    ) -> None:
-        """Post a line-specific review comment on a PR (BaseAdapter interface).
-
-        Resolves the review anchor (head commit SHA), then delegates to
-        ``create_pr_review_comment``.
-
-        Args:
-            owner: Repository owner
-            repo: Repository name
-            pr_number: Pull request number
-            file_path: Path to file being commented on (relative to repo root)
-            line: Line number in the file (must be part of PR diff)
-            body: Comment body (markdown supported)
-
-        Raises:
-            ValueError: If review comment creation fails or network/API error occurs
-        """
-        anchor = await self.get_review_anchor(owner, repo, pr_number)
-        await self.create_pr_review_comment(anchor, file_path, line, body)
 
     async def create_pr_review_comment(
         self,
@@ -85,7 +47,7 @@ class GitHubReviewMixin:
         owner, repo, pr_number = anchor.owner, anchor.repo, anchor.pr_number
 
         # Post review comment using GitHub's review comments API
-        url = f"{self.url}/repos/{owner}/{repo}/pulls/{pr_number}/comments"
+        url = f"{self.api_base_url}/repos/{owner}/{repo}/pulls/{pr_number}/comments"
 
         # GitHub requires these fields:
         # - commit_id: SHA of the commit to comment on
@@ -116,28 +78,11 @@ class GitHubReviewMixin:
             )
 
         # Handle network timeout errors
-        except httpx.TimeoutException as exc:
-            logger.error(
-                f"Timeout posting review comment on PR #{pr_number} in {owner}/{repo}",
-                extra={
-                    "repo_id": f"{owner}/{repo}",
-                    "pr_number": pr_number,
-                    "file_path": file_path,
-                    "line": line,
-                },
-            )
-            raise ValueError(
-                f"GitHub API request timed out after {self.client.timeout.read}s "
-                f"posting review comment on PR #{pr_number} in {owner}/{repo}."
-            ) from exc
-        except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
-            logger.error(
-                f"Failed to connect to GitHub API for {owner}/{repo}",
-                extra={"repo_id": f"{owner}/{repo}"},
-            )
-            raise ValueError(
-                f"Cannot connect to GitHub API at {self.url} for {owner}/{repo}. "
-                "Check your internet connection, firewall, or GitHub API status."
+        except self.NETWORK_ERRORS as exc:
+            raise self._network_error(
+                exc,
+                f"posting review comment on PR #{pr_number} in {owner}/{repo}",
+                f"{owner}/{repo}",
             ) from exc
         except httpx.HTTPStatusError as e:
             # Check for rate limit exceeded

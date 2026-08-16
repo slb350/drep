@@ -7,32 +7,39 @@ anchored inline-comment primitive with position validation and error handling.
 
 import json
 import logging
-from typing import TYPE_CHECKING, Any
+from dataclasses import dataclass
 
 import httpx
 
-from drep.adapters.base import GitLabReviewAnchor, ReviewAnchor
+from drep.adapters.base import ReviewAnchor
+from drep.adapters.gitlab_base import GitLabMixinBase
 
 logger = logging.getLogger(__name__)
 
 
-class GitLabReviewMixin:
-    """Inline review comment methods, mixed into GitLabAdapter.
+@dataclass(frozen=True)
+class GitLabReviewAnchor(ReviewAnchor):
+    """GitLab-specific anchor carrying MR diff_refs SHAs.
 
-    Host adapter provides: ``client``, ``api_url``, ``_encode_project_path()``,
-    ``_check_rate_limit()``.
+    GitLab positions inline comments with base/head/start SHAs from the MR's
+    ``diff_refs``; a bare commit SHA is not sufficient. Both fields are
+    required: defaulting them would manufacture the invalid state that
+    ``create_pr_review_comment`` would then have to guard against.
+
+    Lives here rather than in base.py so the platform-neutral contract stays
+    free of any one platform's positioning model.
     """
 
-    # Host-adapter interface provided by GitLabAdapter (for mypy)
-    if TYPE_CHECKING:
-        client: httpx.AsyncClient
-        api_url: str
+    base_sha: str
+    start_sha: str
 
-        def _encode_project_path(self, owner: str, repo: str) -> str: ...
-        def _check_rate_limit(
-            self, response: httpx.Response, owner: str = "", repo: str = ""
-        ) -> None: ...
-        def get_pr(self, owner: str, repo: str, pr_number: int) -> Any: ...
+
+class GitLabReviewMixin(GitLabMixinBase):
+    """Inline review comment methods, mixed into GitLabAdapter.
+
+    Host surface (client, api_url, _encode_project_path, _check_rate_limit)
+    comes from GitLabMixinBase.
+    """
 
     async def get_review_anchor(self, owner: str, repo: str, pr_number: int) -> GitLabReviewAnchor:
         """Fetch the GitLab review anchor (MR diff_refs) with a single MR fetch.
@@ -89,34 +96,6 @@ class GitLabReviewMixin:
             start_sha=diff_refs["start_sha"],
         )
 
-    async def post_review_comment(
-        self,
-        owner: str,
-        repo: str,
-        pr_number: int,
-        file_path: str,
-        line: int,
-        body: str,
-    ) -> None:
-        """Post a line-specific review comment on a merge request.
-
-        Resolves the GitLab review anchor (MR diff_refs), then delegates to
-        ``create_pr_review_comment``.
-
-        Args:
-            owner: Project namespace
-            repo: Project name
-            pr_number: Merge request IID
-            file_path: Path to file being commented on (relative to repo root)
-            line: Line number in the file (must be part of MR diff)
-            body: Comment body (markdown supported)
-
-        Raises:
-            ValueError: If review comment creation fails or network/API error occurs
-        """
-        anchor = await self.get_review_anchor(owner, repo, pr_number)
-        await self.create_pr_review_comment(anchor, file_path, line, body)
-
     async def create_pr_review_comment(
         self,
         anchor: ReviewAnchor,
@@ -135,11 +114,7 @@ class GitLabReviewMixin:
         Raises:
             ValueError: If the anchor lacks diff_refs, or comment creation fails
         """
-        if (
-            not isinstance(anchor, GitLabReviewAnchor)
-            or not anchor.base_sha
-            or not anchor.start_sha
-        ):
+        if not isinstance(anchor, GitLabReviewAnchor):
             raise ValueError(
                 "GitLab inline comments require a GitLabReviewAnchor with "
                 "base_sha/head_sha/start_sha from get_review_anchor()"
@@ -190,28 +165,11 @@ class GitLabReviewMixin:
             )
 
         # Handle network timeout errors
-        except httpx.TimeoutException as exc:
-            logger.error(
-                f"Timeout posting review comment on MR !{pr_number} in {owner}/{repo}",
-                extra={
-                    "repo_id": f"{owner}/{repo}",
-                    "mr_iid": pr_number,
-                    "file_path": file_path,
-                    "line": line,
-                },
-            )
-            raise ValueError(
-                f"GitLab API request timed out after {self.client.timeout.read}s "
-                f"posting review comment on MR !{pr_number} in {owner}/{repo}."
-            ) from exc
-        except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
-            logger.error(
-                f"Failed to connect to GitLab API for {owner}/{repo}",
-                extra={"repo_id": f"{owner}/{repo}"},
-            )
-            raise ValueError(
-                f"Cannot connect to GitLab API at {self.api_url} for {owner}/{repo}. "
-                "Check your internet connection, firewall, or GitLab API status."
+        except self.NETWORK_ERRORS as exc:
+            raise self._network_error(
+                exc,
+                f"posting review comment on MR !{pr_number} in {owner}/{repo}",
+                f"{owner}/{repo}",
             ) from exc
         except httpx.HTTPStatusError as e:
             # Check for rate limit exceeded

@@ -426,7 +426,7 @@ async def _run_check(path: str, staged: bool, config_path: str, output_format: s
                 files = [str(path_obj.relative_to(path_obj.parent))]
             else:
                 # Directory - get all .py and .md files
-                files = scanner._get_all_python_files(str(path_obj))
+                files = scanner.get_scan_targets(str(path_obj))
             click.echo(f"Checking {len(files)} file(s)...")
 
         if not files:

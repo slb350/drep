@@ -16,6 +16,7 @@ rolled back explicitly (``__aexit__`` never runs in that case).
 import asyncio
 import logging
 import time
+from collections import deque
 
 from drep.constants import REPO_SEMAPHORE_TTL_SECONDS
 
@@ -103,48 +104,55 @@ class RateLimitContext:
             The sleeps are calculated to wait until limits reset (e.g., wait until
             oldest request in the 1-minute window expires).
         """
-        # STEP 1: Acquire global semaphore (limits total concurrent requests)
-        # This blocks if max_concurrent_global requests are already in flight
-        # Semaphore is held until __aexit__ to ensure proper concurrency control
-        #
-        # If entry is cancelled or a rate check raises, __aexit__ never runs,
-        # so any permits acquired below must be rolled back explicitly —
-        # otherwise they leak permanently (a leaked repo permit blocks that
-        # repo forever).
+        # STEP 1: Check request rate limit (requests per minute).
+        # Sliding window: track timestamps of recent requests and wait if adding
+        # this one would exceed the per-minute limit. This runs BEFORE the
+        # concurrency permits are taken so a merely time-throttled request does
+        # not occupy one of the scarce max_concurrent slots while it sleeps.
+        await self.rate_limiter._check_request_rate_limit()
+
+        # If entry is cancelled or a later step raises, __aexit__ never runs, so
+        # any permit acquired below must be rolled back explicitly — otherwise
+        # it leaks permanently (a leaked repo permit blocks that repo forever).
         acquired_global = False
-        acquired_repo = False
         try:
+            # STEP 2: Acquire global semaphore (limits total concurrent requests).
+            # Blocks if max_concurrent_global requests are already in flight;
+            # held until __aexit__ to ensure proper concurrency control.
             await self.rate_limiter.semaphore.acquire()
             acquired_global = True
 
-            # STEP 2: Acquire per-repo semaphore if repo_id specified
-            # This prevents one repository from monopolizing all concurrent slots
+            # STEP 3: Acquire per-repo semaphore if repo_id specified.
+            # This prevents one repository from monopolizing all concurrent slots.
             # Example: If max_concurrent_global=5 and max_concurrent_per_repo=3,
-            # then repo A can use at most 3 slots, leaving 2+ for other repos
+            # then repo A can use at most 3 slots, leaving 2+ for other repos.
             if self.repo_id is not None:
                 self.repo_semaphore = await self.rate_limiter._get_repo_semaphore(self.repo_id)
                 await self.repo_semaphore.acquire()
-                acquired_repo = True
 
-            # STEP 3: Check request rate limit (requests per minute)
-            # This uses a sliding window algorithm: track timestamps of recent requests
-            # and wait if adding this request would exceed the per-minute limit
-            await self.rate_limiter._check_request_rate_limit()
-
-            # STEP 4: Check token rate limit (tokens per minute)
-            # This uses a token bucket algorithm: track cumulative tokens in current minute
-            # and wait if adding estimated tokens would exceed the limit
-            # We use estimated tokens here; actual tokens reconciled in __aexit__
+            # STEP 4: Check token rate limit (tokens per minute).
+            # Token bucket: track cumulative tokens in the current minute and wait
+            # if adding the estimate would exceed the limit. Reserving last means
+            # there is no await between reservation and return, so the reservation
+            # can never be stranded by cancellation.
             await self.rate_limiter._check_token_rate_limit(self.estimated_tokens)
         except BaseException:
-            if acquired_repo and self.repo_semaphore is not None:
-                self.repo_semaphore.release()
-                self.repo_semaphore = None
-            if acquired_global:
-                self.rate_limiter.semaphore.release()
+            self._release_permits(acquired_global)
             raise
 
         return self
+
+    def _release_permits(self, acquired_global: bool = True) -> None:
+        """Release the per-repo and global concurrency permits, in that order.
+
+        Shared by the ``__aenter__`` rollback path and ``__aexit__`` so the
+        release order stays identical in both.
+        """
+        if self.repo_semaphore is not None:
+            self.repo_semaphore.release()
+            self.repo_semaphore = None
+        if acquired_global:
+            self.rate_limiter.semaphore.release()
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         """Release semaphores and reconcile actual token usage.
@@ -174,45 +182,32 @@ class RateLimitContext:
             so any exception that occurred in the 'async with' block will continue
             to propagate after cleanup.
         """
-        # STEP 1: Reconcile token accounting under lock (to prevent race conditions)
+        # STEP 1: Reconcile token accounting under lock (to prevent race conditions).
+        # The estimate is always released; the actual usage is charged on top when
+        # the request got far enough to report it. Clamping to 0 handles the edge
+        # case where the bucket was reset mid-request.
         async with self.rate_limiter.lock:
+            self.rate_limiter.tokens_used = max(
+                0, self.rate_limiter.tokens_used - self.estimated_tokens
+            )
             if self.actual_tokens is not None:
-                # Request completed successfully and actual tokens were set
-                # Adjust token count: remove estimate, add actual
-                # Formula: tokens_used = tokens_used - estimated + actual
-                # Clamp to 0 to handle edge case where bucket was reset during request
-                self.rate_limiter.tokens_used = max(
-                    0, self.rate_limiter.tokens_used - self.estimated_tokens
-                )
                 self.rate_limiter.tokens_used += self.actual_tokens
-                # Log at debug level for token accounting audit trail
                 logger.debug(
                     f"Token reconciliation: estimated={self.estimated_tokens}, "
                     f"actual={self.actual_tokens}, "
                     f"total={self.rate_limiter.tokens_used}"
                 )
             else:
-                # Request failed before set_actual_tokens() was called
-                # Roll back the estimated token reservation to avoid "leaking" capacity
-                # This is critical: without this, failed requests would permanently
-                # reduce available tokens in the bucket
-                self.rate_limiter.tokens_used = max(
-                    0, self.rate_limiter.tokens_used - self.estimated_tokens
-                )
+                # Request failed before set_actual_tokens() was called. Without the
+                # rollback above, failed requests would permanently reduce the
+                # available token budget.
                 logger.debug(
                     f"Rolling back {self.estimated_tokens} token reservation "
                     f"(request failed without completion)"
                 )
 
-        # STEP 2: Release per-repo semaphore if it was acquired
-        # This allows other requests for the same repo to proceed
-        if self.repo_semaphore is not None:
-            self.repo_semaphore.release()
-
-        # STEP 3: Release global semaphore
-        # This allows other requests (any repo) to proceed
-        # Released last to ensure proper cleanup order
-        self.rate_limiter.semaphore.release()
+        # STEP 2: Release the concurrency permits (repo first, then global)
+        self._release_permits()
 
     def set_actual_tokens(self, tokens: int):
         """Set actual token usage after request completes.
@@ -332,6 +327,9 @@ class RateLimiter:
         # After 10 minutes of inactivity, a repo's semaphore is eligible for eviction
         # This prevents memory leaks when scanning many repos over time
         self.repo_semaphore_ttl = REPO_SEMAPHORE_TTL_SECONDS
+        # Timestamp of the last idle-semaphore eviction sweep (see
+        # _get_repo_semaphore); throttles the sweep to once per TTL interval.
+        self._last_sweep = time.time()
 
         # Request rate limiting: Sliding window algorithm
         # Lock protects all shared state from concurrent access
@@ -340,7 +338,9 @@ class RateLimiter:
         # List of request timestamps (seconds since epoch) in the last minute
         # This list is continuously pruned to remove timestamps >60s old
         # Length of list = number of requests in last 60 seconds
-        self.request_times: list[float] = []
+        # deque so pruning the sliding window is O(expired) popleft() calls
+        # instead of rebuilding the whole list on every request.
+        self.request_times: deque[float] = deque()
 
         # Token rate limiting: Token bucket algorithm (fixed window variant)
         # Tracks cumulative tokens used in current minute
@@ -382,13 +382,17 @@ class RateLimiter:
         async with self.lock:  # Ensure thread-safe access to shared dictionaries
             now = time.time()
 
-            # CLEANUP PHASE: Identify and evict idle semaphores
-            # Build list of repos that haven't been used in >10 minutes
-            idle_repos = [
-                rid
-                for rid, last_used in self.repo_last_used.items()
-                if now - last_used > self.repo_semaphore_ttl
-            ]
+            # CLEANUP PHASE: Identify and evict idle semaphores.
+            # The sweep is O(tracked repos), so it runs at most once per TTL
+            # interval rather than on every single request.
+            idle_repos: list[str] = []
+            if now - self._last_sweep >= self.repo_semaphore_ttl:
+                self._last_sweep = now
+                idle_repos = [
+                    rid
+                    for rid, last_used in self.repo_last_used.items()
+                    if now - last_used > self.repo_semaphore_ttl
+                ]
 
             # Evict idle semaphores (only if not currently in use)
             for rid in idle_repos:
@@ -445,34 +449,30 @@ class RateLimiter:
             This method acquires self.lock and may sleep (await), so do not call
             while holding the lock elsewhere.
         """
-        async with self.lock:  # Protect shared request_times list from concurrent access
-            now = time.time()
-
-            # PRUNE PHASE: Remove timestamps older than 60 seconds
-            # List comprehension creates new list with only recent timestamps
-            # This maintains a sliding 60-second window
-            self.request_times = [t for t in self.request_times if now - t < 60]
-
-            # ENFORCEMENT PHASE: Wait if rate limit currently exceeded
-            while len(self.request_times) >= self.requests_per_minute:
-                # Window is full - must wait for oldest request to expire
-                oldest = self.request_times[0]  # Earliest timestamp in window
-
-                # Calculate how long until oldest timestamp is 60s old
-                wait_time = 60 - (now - oldest)
-
-                if wait_time > 0:
-                    # Still need to wait - sleep until oldest expires
-                    logger.debug(f"Request rate limit reached, waiting {wait_time:.1f}s")
-                    await asyncio.sleep(wait_time)
-
-                # Re-check after sleep - refresh 'now' and prune again
-                # (Other coroutines may have modified request_times while we slept)
+        # The lock is released before every sleep: holding it across an await
+        # would block RateLimitContext.__aexit__ (which needs the same lock to
+        # reconcile tokens before releasing its permits), stalling the pipeline
+        # for the whole wait.
+        while True:
+            async with self.lock:  # Protect request_times from concurrent access
                 now = time.time()
-                self.request_times = [t for t in self.request_times if now - t < 60]
 
-            # RECORD PHASE: Add current request to sliding window
-            self.request_times.append(now)
+                # PRUNE PHASE: Drop timestamps older than 60 seconds, maintaining
+                # a sliding 60-second window.
+                while self.request_times and now - self.request_times[0] >= 60:
+                    self.request_times.popleft()
+
+                if len(self.request_times) < self.requests_per_minute:
+                    # RECORD PHASE: Window has room - claim a slot and return.
+                    self.request_times.append(now)
+                    return
+
+                # Window is full - wait for the oldest request to age out.
+                wait_time = 60 - (now - self.request_times[0])
+
+            if wait_time > 0:
+                logger.debug(f"Request rate limit reached, waiting {wait_time:.1f}s")
+                await asyncio.sleep(wait_time)
 
     async def _check_token_rate_limit(self, estimated_tokens: int):
         """Check and enforce token rate limit using token bucket algorithm.
@@ -512,44 +512,39 @@ class RateLimiter:
             Actual tokens are reconciled after request completes (may be less than
             estimated). See RateLimitContext.__aexit__ for reconciliation logic.
         """
-        async with self.lock:  # Protect shared token counters from concurrent access
-            now = time.time()
-
-            # RESET PHASE: Check if current minute has expired
-            if now >= self.token_reset_time:
-                # Minute boundary crossed - reset counter and update reset time
-                self.tokens_used = 0
-                self.token_reset_time = now + 60
-                logger.debug(f"Token bucket reset at {now}")
-
-            # ENFORCEMENT PHASE: Wait if adding this request would exceed limit
-            while self.tokens_used + estimated_tokens > self.max_tokens_per_minute:
-                # Bucket is full - must wait for next minute
-                wait_time = self.token_reset_time - now
-
-                if wait_time > 0:
-                    # Still in current minute - sleep until reset
-                    logger.debug(
-                        f"Token rate limit reached "
-                        f"({self.tokens_used}/{self.max_tokens_per_minute}), "
-                        f"waiting {wait_time:.1f}s"
-                    )
-                    await asyncio.sleep(wait_time)
-
-                # Re-check after sleep - reset counter and update reset time
-                # (We've now entered a new minute)
+        # As in _check_request_rate_limit, the lock is never held across a sleep.
+        while True:
+            async with self.lock:  # Protect shared token counters
                 now = time.time()
-                self.tokens_used = 0
-                self.token_reset_time = now + 60
 
-            # RESERVATION PHASE: Reserve estimated tokens for this request
-            # This prevents token limit bypass when multiple requests are queued
-            # Actual tokens will be reconciled in RateLimitContext.__aexit__
-            self.tokens_used += estimated_tokens
-            logger.debug(
-                f"Reserved {estimated_tokens} tokens "
-                f"(total: {self.tokens_used}/{self.max_tokens_per_minute})"
-            )
+                # RESET PHASE: Check if current minute has expired
+                if now >= self.token_reset_time:
+                    # Minute boundary crossed - reset counter and update reset time
+                    self.tokens_used = 0
+                    self.token_reset_time = now + 60
+                    logger.debug(f"Token bucket reset at {now}")
+
+                if self.tokens_used + estimated_tokens <= self.max_tokens_per_minute:
+                    # RESERVATION PHASE: Reserve estimated tokens for this request.
+                    # This prevents token limit bypass when multiple requests are
+                    # queued. Actual tokens are reconciled in __aexit__.
+                    self.tokens_used += estimated_tokens
+                    logger.debug(
+                        f"Reserved {estimated_tokens} tokens "
+                        f"(total: {self.tokens_used}/{self.max_tokens_per_minute})"
+                    )
+                    return
+
+                # Bucket is full - wait for the next minute boundary.
+                wait_time = self.token_reset_time - now
+                logger.debug(
+                    f"Token rate limit reached "
+                    f"({self.tokens_used}/{self.max_tokens_per_minute}), "
+                    f"waiting {wait_time:.1f}s"
+                )
+
+            if wait_time > 0:
+                await asyncio.sleep(wait_time)
 
     def request(self, estimated_tokens: int, repo_id: str | None = None):
         """Create a rate-limited context manager for an LLM request.
@@ -574,4 +569,16 @@ class RateLimiter:
                 ctx.set_actual_tokens(response.usage.total_tokens)
                 return response
         """
+        # A request larger than the entire per-minute budget can never fit, and
+        # would otherwise spin forever in _check_token_rate_limit. Clamp the
+        # reservation so it proceeds once the bucket is empty. Clamping here (not
+        # inside the check) keeps the reservation and the __aexit__ rollback in
+        # sync, since both use RateLimitContext.estimated_tokens.
+        if estimated_tokens > self.max_tokens_per_minute:
+            logger.warning(
+                f"Estimated tokens ({estimated_tokens}) exceed the per-minute budget "
+                f"({self.max_tokens_per_minute}); clamping the reservation to the budget"
+            )
+            estimated_tokens = self.max_tokens_per_minute
+
         return RateLimitContext(self, estimated_tokens, repo_id)

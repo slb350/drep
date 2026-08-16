@@ -6,29 +6,20 @@ validation, unified-diff reconstruction, and MR summary comments.
 
 import json
 import logging
-from typing import TYPE_CHECKING
 
 import httpx
+
+from drep.adapters.gitlab_base import GitLabMixinBase
 
 logger = logging.getLogger(__name__)
 
 
-class GitLabPrMixin:
+class GitLabPrMixin(GitLabMixinBase):
     """PR/MR data methods, mixed into GitLabAdapter.
 
-    Host adapter provides: ``client``, ``api_url``, ``_encode_project_path()``,
-    ``_check_rate_limit()``.
+    Host surface (client, api_url, _encode_project_path, _check_rate_limit)
+    comes from GitLabMixinBase.
     """
-
-    # Host-adapter interface provided by GitLabAdapter (for mypy)
-    if TYPE_CHECKING:
-        client: httpx.AsyncClient
-        api_url: str
-
-        def _encode_project_path(self, owner: str, repo: str) -> str: ...
-        def _check_rate_limit(
-            self, response: httpx.Response, owner: str = "", repo: str = ""
-        ) -> None: ...
 
     async def get_pr(self, owner: str, repo: str, pr_number: int) -> dict:
         """Get merge request details.
@@ -119,24 +110,12 @@ class GitLabPrMixin:
             return data
 
         # Handle network timeout errors
-        except httpx.TimeoutException as exc:
-            logger.error(
-                f"Timeout fetching MR !{pr_number} from {owner}/{repo}",
-                extra={"repo_id": f"{owner}/{repo}", "mr_iid": pr_number},
-            )
-            raise ValueError(
-                f"GitLab API request timed out after {self.client.timeout.read}s "
-                f"fetching MR !{pr_number} from {owner}/{repo}. "
-                "MR may be very large, or GitLab API is slow."
-            ) from exc
-        except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
-            logger.error(
-                f"Failed to connect to GitLab API for {owner}/{repo}",
-                extra={"repo_id": f"{owner}/{repo}"},
-            )
-            raise ValueError(
-                f"Cannot connect to GitLab API at {self.api_url} for {owner}/{repo}. "
-                "Check your internet connection, firewall, or GitLab API status."
+        except self.NETWORK_ERRORS as exc:
+            raise self._network_error(
+                exc,
+                f"fetching MR !{pr_number} from {owner}/{repo}",
+                f"{owner}/{repo}",
+                "MR may be very large, or GitLab API is slow.",
             ) from exc
         except httpx.HTTPStatusError as e:
             if e.response.status_code == 404:
@@ -226,23 +205,12 @@ class GitLabPrMixin:
             return unified_diff
 
         # Handle network timeout errors
-        except httpx.TimeoutException as exc:
-            logger.error(
-                f"Timeout fetching MR diff for !{pr_number} from {owner}/{repo}",
-                extra={"repo_id": f"{owner}/{repo}", "mr_iid": pr_number},
-            )
-            raise ValueError(
-                f"GitLab API request timed out after {self.client.timeout.read}s "
-                f"fetching MR !{pr_number} diff from {owner}/{repo}. MR diff may be very large."
-            ) from exc
-        except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
-            logger.error(
-                f"Failed to connect to GitLab API for {owner}/{repo}",
-                extra={"repo_id": f"{owner}/{repo}"},
-            )
-            raise ValueError(
-                f"Cannot connect to GitLab API at {self.api_url} for {owner}/{repo}. "
-                "Check your internet connection, firewall, or GitLab API status."
+        except self.NETWORK_ERRORS as exc:
+            raise self._network_error(
+                exc,
+                f"fetching MR !{pr_number} diff from {owner}/{repo}",
+                f"{owner}/{repo}",
+                "MR diff may be very large.",
             ) from exc
         except httpx.HTTPStatusError as e:
             # Check for rate limit exceeded
@@ -362,23 +330,11 @@ class GitLabPrMixin:
             )
 
         # Handle network timeout errors
-        except httpx.TimeoutException as exc:
-            logger.error(
-                f"Timeout posting comment on MR !{pr_number} in {owner}/{repo}",
-                extra={"repo_id": f"{owner}/{repo}", "mr_iid": pr_number},
-            )
-            raise ValueError(
-                f"GitLab API request timed out after {self.client.timeout.read}s "
-                f"posting comment on MR !{pr_number} in {owner}/{repo}."
-            ) from exc
-        except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
-            logger.error(
-                f"Failed to connect to GitLab API for {owner}/{repo}",
-                extra={"repo_id": f"{owner}/{repo}"},
-            )
-            raise ValueError(
-                f"Cannot connect to GitLab API at {self.api_url} for {owner}/{repo}. "
-                "Check your internet connection, firewall, or GitLab API status."
+        except self.NETWORK_ERRORS as exc:
+            raise self._network_error(
+                exc,
+                f"posting comment on MR !{pr_number} in {owner}/{repo}",
+                f"{owner}/{repo}",
             ) from exc
         except httpx.HTTPStatusError as e:
             # Check for rate limit exceeded

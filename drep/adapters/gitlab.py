@@ -13,9 +13,6 @@ Key Differences from GitHub:
 - Uses 'description' for issue body, not 'body'
 """
 
-import asyncio
-import base64
-import binascii
 import json
 import logging
 import urllib.parse
@@ -54,6 +51,8 @@ class GitLabAdapter(GitLabPrMixin, GitLabReviewMixin, BaseAdapter):
         - Requires base_sha, head_sha, start_sha from MR diff_refs
         - GitHub uses review comments with line + side fields
     """
+
+    # platform_name / api_base_url / _encode_project_path come from GitLabMixinBase
 
     def __init__(self, token: str, url: str | None = None):
         """Initialize GitLabAdapter with token.
@@ -133,55 +132,6 @@ class GitLabAdapter(GitLabPrMixin, GitLabReviewMixin, BaseAdapter):
         )
 
         logger.debug("Initialized GitLab adapter", extra={"api_url": self.api_url, "timeout": 30.0})
-
-    async def close(self):
-        """Close HTTP client connection.
-
-        Note:
-            Non-critical errors during close are logged but not re-raised to avoid
-            masking original errors in finally blocks. Critical exceptions
-            (KeyboardInterrupt, SystemExit, asyncio.CancelledError) are always
-            propagated.
-        """
-        try:
-            await self.client.aclose()
-            logger.debug("Closed GitLab adapter HTTP client")
-        except (KeyboardInterrupt, SystemExit, asyncio.CancelledError):
-            # Always propagate user interrupts, system exit signals, and async cancellations
-            logger.info("Close interrupted by user or system")
-            raise
-        except (httpx.CloseError, RuntimeError) as e:
-            # Expected errors during close - suppress to avoid masking original errors
-            logger.warning(
-                f"Non-critical error closing GitLab client: {e}",
-                extra={"error_type": type(e).__name__},
-            )
-        except Exception as e:
-            # Unexpected errors - log at ERROR level with full traceback for debugging
-            logger.error(
-                f"Unexpected error closing GitLab adapter: {e}",
-                extra={"error_type": type(e).__name__},
-                exc_info=True,
-            )
-
-    def _encode_project_path(self, owner: str, repo: str) -> str:
-        """Encode project path for GitLab API.
-
-        GitLab APIs require namespace/project to be URL-encoded.
-        Example: owner/repo → owner%2Frepo
-
-        Args:
-            owner: Project namespace/owner
-            repo: Project name
-
-        Returns:
-            URL-encoded project path
-
-        Example:
-            _encode_project_path("myorg", "myrepo") → "myorg%2Fmyrepo"
-        """
-        project_path = f"{owner}/{repo}"
-        return urllib.parse.quote(project_path, safe="")
 
     def _check_rate_limit(self, response: httpx.Response, owner: str = "", repo: str = "") -> None:
         """Check for rate limit and raise informative error.
@@ -297,24 +247,12 @@ class GitLabAdapter(GitLabPrMixin, GitLabReviewMixin, BaseAdapter):
             return default_branch
 
         # Handle network timeout errors
-        except httpx.TimeoutException as exc:
-            logger.error(
-                f"Timeout fetching default branch for {owner}/{repo}",
-                extra={"repo_id": f"{owner}/{repo}"},
-            )
-            raise ValueError(
-                f"GitLab API request timed out after {self.client.timeout.read}s "
-                f"fetching default branch for {owner}/{repo}. "
-                "Project may be very large, or GitLab API is slow."
-            ) from exc
-        except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
-            logger.error(
-                f"Failed to connect to GitLab API for {owner}/{repo}",
-                extra={"repo_id": f"{owner}/{repo}"},
-            )
-            raise ValueError(
-                f"Cannot connect to GitLab API at {self.api_url} for {owner}/{repo}. "
-                "Check your internet connection, firewall, or GitLab API status."
+        except self.NETWORK_ERRORS as exc:
+            raise self._network_error(
+                exc,
+                f"fetching default branch for {owner}/{repo}",
+                f"{owner}/{repo}",
+                "Project may be very large, or GitLab API is slow.",
             ) from exc
         except httpx.HTTPStatusError as e:
             if e.response.status_code == 404:
@@ -413,23 +351,12 @@ class GitLabAdapter(GitLabPrMixin, GitLabReviewMixin, BaseAdapter):
             return issue_iid
 
         # Handle network timeout errors
-        except httpx.TimeoutException as exc:
-            logger.error(
-                f"Timeout creating issue in {owner}/{repo}",
-                extra={"repo_id": f"{owner}/{repo}", "timeout": self.client.timeout.read},
-            )
-            raise ValueError(
-                f"GitLab API request timed out after {self.client.timeout.read}s "
-                f"for {owner}/{repo}. GitLab API may be slow or project may be large."
-            ) from exc
-        except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
-            logger.error(
-                f"Failed to connect to GitLab API for {owner}/{repo}",
-                extra={"repo_id": f"{owner}/{repo}", "api_url": self.api_url},
-            )
-            raise ValueError(
-                f"Cannot connect to GitLab API at {self.api_url} for {owner}/{repo}. "
-                "Check your internet connection, firewall, or GitLab API status."
+        except self.NETWORK_ERRORS as exc:
+            raise self._network_error(
+                exc,
+                f"for {owner}/{repo}",
+                f"{owner}/{repo}",
+                "GitLab API may be slow or project may be large.",
             ) from exc
         except httpx.HTTPStatusError as e:
             # Check for rate limit exceeded
@@ -518,62 +445,15 @@ class GitLabAdapter(GitLabPrMixin, GitLabReviewMixin, BaseAdapter):
                 )
                 return ""
 
-            # Handle base64 decode and UTF-8 decode errors
-            try:
-                # GitLab may include newlines in the base64, so remove them first
-                content_b64 = content_b64.replace("\n", "")
-                decoded_bytes = base64.b64decode(content_b64)
-                decoded_str = decoded_bytes.decode("utf-8")
-
-                logger.debug(
-                    f"Retrieved file {file_path} from {owner}/{repo}@{ref}",
-                    extra={
-                        "repo_id": f"{owner}/{repo}",
-                        "file_path": file_path,
-                        "ref": ref,
-                        "size": len(decoded_str),
-                    },
-                )
-
-                return decoded_str
-
-            except UnicodeDecodeError as exc:
-                logger.error(
-                    f"File {file_path} in {owner}/{repo}@{ref} contains non-UTF8 content",
-                    extra={"repo_id": f"{owner}/{repo}", "file_path": file_path, "ref": ref},
-                )
-                raise ValueError(
-                    f"File {file_path} in {owner}/{repo}@{ref} is binary or non-UTF8. "
-                    "GitLab adapter only supports text files."
-                ) from exc
-            except (binascii.Error, ValueError) as exc:
-                logger.error(
-                    f"Failed to decode base64 for {file_path} in {owner}/{repo}@{ref}",
-                    extra={"repo_id": f"{owner}/{repo}", "file_path": file_path, "ref": ref},
-                )
-                raise ValueError(
-                    f"Failed to decode file content (invalid base64) for {file_path} "
-                    f"in {owner}/{repo}@{ref}. File may be corrupted."
-                ) from exc
+            return self._decode_file_content(content_b64, owner, repo, file_path, ref)
 
         # Handle network timeout errors
-        except httpx.TimeoutException as exc:
-            logger.error(
-                f"Timeout fetching {file_path} from {owner}/{repo}@{ref}",
-                extra={"repo_id": f"{owner}/{repo}", "file_path": file_path, "ref": ref},
-            )
-            raise ValueError(
-                f"GitLab API request timed out after {self.client.timeout.read}s "
-                f"fetching {file_path} from {owner}/{repo}@{ref}. File may be very large."
-            ) from exc
-        except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
-            logger.error(
-                f"Failed to connect to GitLab API for {owner}/{repo}",
-                extra={"repo_id": f"{owner}/{repo}"},
-            )
-            raise ValueError(
-                f"Cannot connect to GitLab API at {self.api_url} for {owner}/{repo}. "
-                "Check your internet connection, firewall, or GitLab API status."
+        except self.NETWORK_ERRORS as exc:
+            raise self._network_error(
+                exc,
+                f"fetching {file_path} from {owner}/{repo}@{ref}",
+                f"{owner}/{repo}",
+                "File may be very large.",
             ) from exc
         except httpx.HTTPStatusError as e:
             if e.response.status_code == 404:

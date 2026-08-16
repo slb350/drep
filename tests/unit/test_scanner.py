@@ -47,8 +47,8 @@ class TestRepositoryScannerBasicStructure:
             mock_repo.head.commit.hexsha = "abc123"
             mock_repo_class.return_value = mock_repo
 
-            # Mock _get_all_python_files to avoid file system access
-            scanner._get_all_python_files = Mock(return_value=[])
+            # Mock get_scan_targets to avoid file system access
+            scanner.get_scan_targets = Mock(return_value=[])
 
             # Should return tuple (even if stub implementation)
             result = await scanner.scan_repository("/fake/path", "owner", "repo")
@@ -64,19 +64,19 @@ class TestRepositoryScannerBasicStructure:
         assert callable(scanner.record_scan)
 
 
-class TestGetAllPythonFiles:
-    """Tests for _get_all_python_files method."""
+class TestGetScanTargets:
+    """Tests for get_scan_targets method."""
 
-    def test_get_all_python_files_method_exists(self):
-        """Test that _get_all_python_files method exists."""
+    def test_get_scan_targets_method_exists(self):
+        """Test that get_scan_targets method exists."""
         db_session = Mock()
         scanner = RepositoryScanner(db_session)
 
-        assert hasattr(scanner, "_get_all_python_files")
-        assert callable(scanner._get_all_python_files)
+        assert hasattr(scanner, "get_scan_targets")
+        assert callable(scanner.get_scan_targets)
 
-    def test_get_all_python_files_finds_python_files(self, tmp_path):
-        """Test that _get_all_python_files finds .py files."""
+    def test_get_scan_targets_finds_python_files(self, tmp_path):
+        """Test that get_scan_targets finds .py files."""
         db_session = Mock()
         scanner = RepositoryScanner(db_session)
 
@@ -85,15 +85,15 @@ class TestGetAllPythonFiles:
         (tmp_path / "main.py").write_text("# main")
         (tmp_path / "README.md").write_text("# readme")
 
-        files = scanner._get_all_python_files(str(tmp_path))
+        files = scanner.get_scan_targets(str(tmp_path))
 
         # Should find .py and .md files
         assert len(files) >= 2
         assert any("test.py" in f for f in files)
         assert any("main.py" in f for f in files)
 
-    def test_get_all_python_files_finds_markdown_files(self, tmp_path):
-        """Test that _get_all_python_files finds .md files."""
+    def test_get_scan_targets_finds_markdown_files(self, tmp_path):
+        """Test that get_scan_targets finds .md files."""
         db_session = Mock()
         scanner = RepositoryScanner(db_session)
 
@@ -101,15 +101,15 @@ class TestGetAllPythonFiles:
         (tmp_path / "README.md").write_text("# readme")
         (tmp_path / "CHANGELOG.md").write_text("# changelog")
 
-        files = scanner._get_all_python_files(str(tmp_path))
+        files = scanner.get_scan_targets(str(tmp_path))
 
         # Should find .md files
         assert len(files) >= 2
         assert any("README.md" in f for f in files)
         assert any("CHANGELOG.md" in f for f in files)
 
-    def test_get_all_python_files_ignores_venv(self, tmp_path):
-        """Test that _get_all_python_files ignores venv directory."""
+    def test_get_scan_targets_ignores_venv(self, tmp_path):
+        """Test that get_scan_targets ignores venv directory."""
         db_session = Mock()
         scanner = RepositoryScanner(db_session)
 
@@ -121,14 +121,14 @@ class TestGetAllPythonFiles:
         # Create file in root
         (tmp_path / "main.py").write_text("# main")
 
-        files = scanner._get_all_python_files(str(tmp_path))
+        files = scanner.get_scan_targets(str(tmp_path))
 
         # Should not include venv files
         assert not any("venv" in f for f in files)
         assert any("main.py" in f for f in files)
 
-    def test_get_all_python_files_ignores_pycache(self, tmp_path):
-        """Test that _get_all_python_files ignores __pycache__ directory."""
+    def test_get_scan_targets_ignores_pycache(self, tmp_path):
+        """Test that get_scan_targets ignores __pycache__ directory."""
         db_session = Mock()
         scanner = RepositoryScanner(db_session)
 
@@ -140,7 +140,7 @@ class TestGetAllPythonFiles:
         # Create file in root
         (tmp_path / "main.py").write_text("# main")
 
-        files = scanner._get_all_python_files(str(tmp_path))
+        files = scanner.get_scan_targets(str(tmp_path))
 
         # Should not include __pycache__ files
         assert not any("__pycache__" in f for f in files)
@@ -306,13 +306,13 @@ class TestScanRepositoryMainLogic:
             mock_repo.head.commit.hexsha = "abc123"
             mock_repo_class.return_value = mock_repo
 
-            # Mock _get_all_python_files to return files
-            scanner._get_all_python_files = Mock(return_value=["test.py"])
+            # Mock get_scan_targets to return files
+            scanner.get_scan_targets = Mock(return_value=["test.py"])
 
             files, sha = await scanner.scan_repository(str(tmp_path), "owner", "repo")
 
-            # Should call _get_all_python_files (full scan)
-            scanner._get_all_python_files.assert_called_once()
+            # Should call get_scan_targets (full scan)
+            scanner.get_scan_targets.assert_called_once()
             assert len(files) > 0
             assert sha == "abc123"
 

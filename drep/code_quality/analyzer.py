@@ -1,8 +1,8 @@
 """LLM-powered code quality analyzer."""
 
 import logging
-from pathlib import Path
 
+from drep.core.file_targets import is_python_source
 from drep.llm.client import LLMClient
 from drep.models.findings import Finding
 from drep.models.llm_findings import CodeAnalysisResult
@@ -181,5 +181,4 @@ class CodeQualityAnalyzer:
         Returns:
             True if file should be analyzed, False otherwise
         """
-        path = Path(file_path)
-        return path.suffix.lower() == ".py"
+        return is_python_source(file_path)

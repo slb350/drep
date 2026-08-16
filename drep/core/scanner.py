@@ -1,6 +1,7 @@
 """Repository scanner for file-by-file analysis."""
 
 import logging
+import os
 from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
@@ -10,6 +11,7 @@ from git.exc import GitCommandError, InvalidGitRepositoryError
 
 from drep.adapters.base import BaseAdapter
 from drep.code_quality.analyzer import CodeQualityAnalyzer
+from drep.core.file_targets import is_ignored_dir, is_python_source, is_scan_target
 from drep.core.performance import ProgressTracker
 from drep.db.models import RepositoryScan
 from drep.docstring.generator import DocstringGenerator
@@ -20,23 +22,6 @@ from drep.models.findings import Finding
 from drep.pr_review.analyzer import PRReviewAnalyzer
 
 logger = logging.getLogger(__name__)
-
-# Single source of truth for file-target policy. All discovery and filter
-# paths must go through these predicates so every workflow (full scan,
-# commit diff, staged files, per-analyzer filters) makes identical,
-# case-insensitive decisions.
-SCAN_TARGET_SUFFIXES = frozenset({".py", ".md"})
-PYTHON_SOURCE_SUFFIXES = frozenset({".py"})
-
-
-def _is_scan_target(path: str | Path) -> bool:
-    """Return True if the path is a file type drep analyzes (.py/.md, case-insensitive)."""
-    return Path(path).suffix.lower() in SCAN_TARGET_SUFFIXES
-
-
-def _is_python_source(path: str | Path) -> bool:
-    """Return True if the path is a Python source file (case-insensitive)."""
-    return Path(path).suffix.lower() in PYTHON_SOURCE_SUFFIXES
 
 
 class RepositoryScanner:
@@ -162,7 +147,7 @@ class RepositoryScanner:
             files = self._get_changed_files(git_repo, last_scan.commit_sha, current_sha)
         else:
             # Full scan - all Python/Markdown files
-            files = self._get_all_python_files(repo_path)
+            files = self.get_scan_targets(repo_path)
 
         return (files, current_sha)
 
@@ -196,7 +181,7 @@ class RepositoryScanner:
 
         self.db.commit()
 
-    def _get_all_python_files(self, repo_path: str) -> list[str]:
+    def get_scan_targets(self, repo_path: str) -> list[str]:
         """Get all Python and Markdown files in repository.
 
         Args:
@@ -205,12 +190,18 @@ class RepositoryScanner:
         Returns:
             List of relative file paths (e.g., ["src/main.py", "README.md"])
         """
+        # os.walk with in-place pruning so ignored trees (.git, venv, build, …)
+        # are never descended into. rglob("*") would stat every entry in them
+        # first — tens of thousands of wasted syscalls on a cloned repo.
         root = Path(repo_path)
-        return [
-            str(f.relative_to(root))
-            for f in root.rglob("*")
-            if f.is_file() and _is_scan_target(f) and not self._should_ignore(f)
-        ]
+        targets: list[str] = []
+        for dirpath, dirnames, filenames in os.walk(repo_path):
+            dirnames[:] = [d for d in dirnames if not is_ignored_dir(d)]
+            base = Path(dirpath)
+            targets.extend(
+                str((base / name).relative_to(root)) for name in filenames if is_scan_target(name)
+            )
+        return targets
 
     def _should_ignore(self, file_path: Path) -> bool:
         """Check if file should be ignored.
@@ -224,27 +215,8 @@ class RepositoryScanner:
         Returns:
             True if file should be ignored, False otherwise
         """
-        ignore_dirs = {
-            "__pycache__",
-            ".git",
-            "venv",
-            "env",
-            ".venv",
-            ".tox",
-            "build",
-            "dist",
-            ".eggs",
-        }
-
         # Check if any path component is an ignored directory
-        for part in file_path.parts:
-            if part in ignore_dirs:
-                return True
-            # Check for .egg-info directories (e.g., drep.egg-info)
-            if part.endswith(".egg-info"):
-                return True
-
-        return False
+        return any(is_ignored_dir(part) for part in file_path.parts)
 
     def _get_changed_files(self, repo: Repo, old_sha: str, new_sha: str) -> list[str]:
         """Get files changed between two commits.
@@ -267,7 +239,7 @@ class RepositoryScanner:
             # Only use b_path (the file path in the new commit)
             # This excludes deleted files (b_path is None) and old names of renames
             path = diff_item.b_path
-            if path and _is_scan_target(path):
+            if path and is_scan_target(path):
                 changed_files.append(path)
 
         # Deduplicate
@@ -329,7 +301,7 @@ class RepositoryScanner:
             # Use b_path (current file name) not a_path (old name for renames)
             # b_path is None for deleted files, so we skip those
             path = diff_item.b_path
-            if path and _is_scan_target(path):
+            if path and is_scan_target(path):
                 staged_files.append(path)
 
         return staged_files
@@ -469,7 +441,7 @@ class RepositoryScanner:
         repo_path_obj = Path(repo_path)
 
         # Filter to only Python files
-        python_files = [f for f in files if _is_python_source(f)]
+        python_files = [f for f in files if is_python_source(f)]
 
         if not python_files:
             logger.debug("No Python files to analyze for docstrings")
