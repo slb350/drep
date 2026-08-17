@@ -114,12 +114,28 @@ class DocumentationFindings(BaseModel):
 
 
 class AnalysisResult(BaseModel):
-    """What an analyzer pass produced, and what it never got to.
+    """What an analysis produced, and what it never got to.
 
-    `failed_files` is the load-bearing half: a caller that only reads
-    `findings` cannot distinguish "analyzed and clean" from "the LLM was
-    unreachable", which is how a commit gate ends up rubber-stamping.
+    Two fields carry the weight:
+
+    - `failed_files`: a caller that only reads `findings` cannot distinguish
+      "analyzed and clean" from "the LLM was unreachable", which is how a
+      commit gate ends up rubber-stamping.
+    - `blocking`: findings from the project's own deterministic tools. They are
+      kept apart from `findings` by *source*, not severity, because that is
+      what makes a gate calibratable - ruff and eslint are precise enough to
+      block, an LLM is not.
     """
 
     findings: list[Finding] = Field(default_factory=list)
     failed_files: list[str] = Field(default_factory=list)
+    blocking: list[Finding] = Field(default_factory=list)
+    # Tools that should have run and could not. Kept apart from failed_files
+    # because "eslint is missing" and "this file went unanalyzed" need
+    # different words, even though both mean the result is incomplete.
+    unavailable_tools: list[str] = Field(default_factory=list)
+
+    @property
+    def incomplete(self) -> bool:
+        """Whether anything that should have been checked was not."""
+        return bool(self.failed_files or self.unavailable_tools)

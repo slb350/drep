@@ -8,6 +8,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added - 2026-08-16
+- **Multi-language analysis.** drep now analyzes Python, JavaScript, TypeScript, Go and
+  Rust. Discovery, analyzer support and prompts all route through the language registry,
+  so no `if python` branch exists anywhere.
+  - **Deterministic findings gate; LLM findings inform.** `AnalysisResult.blocking` carries
+    tool findings, `findings` carries the LLM's. `--fail-on` now *opts in* to gating on LLM
+    findings rather than setting a threshold that always applied - the model reports style
+    suggestions on nearly every file, so gating on them by default meant nothing passed.
+  - **A configured-but-missing tool exits 2**, distinct from a file the LLM could not
+    analyze: `AnalysisResult.unavailable_tools`. "eslint is missing" and "this file went
+    unanalyzed" both mean the run was incomplete, but they need different words.
+  - The docstring pass keeps its independent `is_python_source` filter, so `ast.parse` can
+    never be handed a Go file. Pinned by test.
+  - Tool paths are normalised to repo-relative: ruff reports absolute, go vet relative.
 - **Language registry** (`drep/languages/`) — the foundation for multi-language support,
   with no `if python` branching anywhere. A `LanguageSupport` carries the extensions it
   owns, the deterministic tools that check it, and the conventions its LLM prompt names.
@@ -69,6 +82,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   1.3.0), matching the existing `ParallelAnalyzer` deprecation.
 
 ### Fixed - 2026-08-16
+- **`llm: {enabled: false}` was rejected by config validation** - the exact config the
+  README documents for disabling LLM features. The provider validators checked the
+  provider but never `enabled`, so switching the LLM off still demanded an endpoint and
+  model for a backend that would never be contacted.
+- **`--format json` summary prose corrupted stdout.** In JSON mode the human summary now
+  goes to stderr, so the payload parses on its own.
+- **Text output dropped the rule code.** `[F401]` is the actionable half of a
+  deterministic finding - without it you cannot look the rule up or suppress it.
 - **An incomplete `drep scan` recorded its SHA as scanned.** The next run diffs against
   that SHA, so every file the LLM never saw was excluded from all future incremental scans
   until it changed again - the same "unanalyzed is not clean" mistake, one layer down.

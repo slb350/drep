@@ -18,8 +18,6 @@ from drep.cli_wizard import (
 )
 from drep.config import find_config_file, get_user_config_dir, load_config
 from drep.constants import default_metrics_file
-from drep.core.file_targets import expand_paths, is_markdown
-from drep.documentation.analyzer import DocumentationAnalyzer
 from drep.models.findings import SEVERITY_RANK
 
 
@@ -317,8 +315,11 @@ def review(repository, pr_number, config, post):
 @click.option(
     "--fail-on",
     type=click.Choice(list(SEVERITY_RANK)),
-    default="info",
-    help="Lowest severity that blocks (default: info, i.e. any finding)",
+    default=None,
+    help=(
+        "Also block on LLM findings at or above this severity. "
+        "Deterministic tool findings always block."
+    ),
 )
 def check(paths, staged, config, exit_zero, format, fail_on):
     """Check local files without platform API (pre-commit friendly).
@@ -357,33 +358,59 @@ def check(paths, staged, config, exit_zero, format, fail_on):
     from drep.cli_workflows import _run_check
 
     outcome = asyncio.run(_run_check(paths or (".",), staged, config_path))
-    findings = outcome.findings
-    # Everything is reported; the threshold only decides what blocks. Indexing
-    # rather than .get(): Finding.severity is a validated Severity, so an
-    # unrankable value is a bug to surface, not a finding to silently pass.
-    threshold = SEVERITY_RANK[fail_on]
-    blocking = [f for f in findings if SEVERITY_RANK[f.severity] >= threshold]
+    findings = outcome.blocking + outcome.findings
+
+    # Deterministic tool findings always block: they come from the rules the
+    # project itself configured, so they are precise enough to gate on.
+    blocking = list(outcome.blocking)
+
+    # LLM findings only block if the user opts in with --fail-on. The model
+    # reports style suggestions on nearly every file, so gating on them by
+    # default means nothing ever passes.
+    if fail_on is not None:
+        # Indexing rather than .get(): Finding.severity is a validated
+        # Severity, so an unrankable value is a bug to surface, not a finding
+        # to silently pass.
+        threshold = SEVERITY_RANK[fail_on]
+        blocking += [f for f in outcome.findings if SEVERITY_RANK[f.severity] >= threshold]
 
     # JSON is a machine channel: always emit, so "no findings" and "nothing ran"
     # are distinguishable without parsing prose.
     if format == OutputFormat.JSON.value or findings:
         _output_findings(outcome, format)
 
+    # In JSON mode stdout carries the payload and nothing else, so the human
+    # summary goes to stderr rather than corrupting it.
+    summary_to_stderr = format == OutputFormat.JSON.value
+
     if findings:
+        advisory = len(findings) - len(blocking)
         if exit_zero:
-            # Warning mode - print to stdout
-            click.echo(f"\n⚠ Found {len(findings)} issue(s) (warning mode)")
+            # Warning mode
+            click.echo(f"\n⚠ Found {len(findings)} issue(s) (warning mode)", err=summary_to_stderr)
         elif blocking:
-            # Error mode - print to stderr
-            click.echo(f"\n✗ Found {len(blocking)} issue(s) at or above '{fail_on}'", err=True)
+            # Error mode - print to stderr. Naming both halves matters: the
+            # blocking count is what the user has to act on, the rest is
+            # information they can weigh.
+            summary = f"\n✗ {len(blocking)} blocking issue(s)"
+            if advisory:
+                summary += f", {advisory} advisory"
+            click.echo(summary, err=True)
         else:
-            click.echo(f"\n⚠ Found {len(findings)} issue(s), all below '{fail_on}'")
-    elif not outcome.failed_files:
-        click.echo("✓ No issues found")
+            click.echo(f"\n⚠ {advisory} advisory issue(s), none blocking", err=summary_to_stderr)
+    elif not outcome.incomplete:
+        click.echo("✓ No issues found", err=summary_to_stderr)
 
     # An unanalyzed file is not a clean file. Reported after the findings so it
     # is the last thing on screen, and with its own exit code so a hook can tell
     # "your code has issues" from "drep could not run".
+    if outcome.unavailable_tools:
+        click.echo(
+            f"\n✗ {len(outcome.unavailable_tools)} tool(s) were configured but could not run, "
+            f"so those checks did not happen: {', '.join(outcome.unavailable_tools)}",
+            err=True,
+        )
+
     if outcome.failed_files:
         click.echo(
             f"\n✗ {len(outcome.failed_files)} file(s) could not be analyzed - results are "
@@ -393,7 +420,7 @@ def check(paths, staged, config, exit_zero, format, fail_on):
 
     if exit_zero:
         return
-    if outcome.failed_files:
+    if outcome.incomplete:
         raise SystemExit(2)
     if blocking:
         raise SystemExit(1)
@@ -410,13 +437,15 @@ def _output_findings(outcome, format_type):
         outcome: AnalysisResult from the run
         format_type: OutputFormat value ('text' or 'json')
     """
-    findings = outcome.findings
+    findings = outcome.blocking + outcome.findings
     if format_type == OutputFormat.JSON.value:
         click.echo(
             json.dumps(
                 {
-                    "findings": [f.model_dump(mode="json") for f in findings],
+                    "blocking": [f.model_dump(mode="json") for f in outcome.blocking],
+                    "findings": [f.model_dump(mode="json") for f in outcome.findings],
                     "unanalyzed": outcome.failed_files,
+                    "unavailable_tools": outcome.unavailable_tools,
                 },
                 indent=2,
             )
@@ -426,8 +455,11 @@ def _output_findings(outcome, format_type):
         click.echo()
         for finding in findings:
             col = f":{finding.column}" if finding.column else ""
+            # The rule code is the actionable half of a deterministic finding:
+            # without it you cannot look the rule up or suppress it.
             click.echo(
-                f"{finding.file_path}:{finding.line}{col}: {finding.severity}: {finding.message}"
+                f"{finding.file_path}:{finding.line}{col}: "
+                f"{finding.severity}: [{finding.type}] {finding.message}"
             )
             if finding.suggestion:
                 click.echo(f"  → {finding.suggestion}")
@@ -505,87 +537,9 @@ def metrics(days, export, detailed):
         click.echo(f"\n✓ Metrics exported to {export_path}")
 
 
-@cli.command()
-@click.argument("paths", nargs=-1, type=click.Path(exists=True))
-@click.option("--output", type=click.Choice(["text", "json"]), default="text", help="Output format")
-@click.option("--strict", is_flag=True, help="Exit non-zero when issues are found (pre-commit)")
-def lint_docs(paths, output, strict):
-    """Lint markdown documentation files for style and formatting issues.
-
-    Accepts any number of files or directories; defaults to the current
-    directory. Rule-based only - no LLM, no config, no platform token.
-
-    Examples:
-        drep lint-docs docs/
-        drep lint-docs README.md CHANGELOG.md
-        drep lint-docs docs/ --output json
-        drep lint-docs --strict          # block a commit on issues
-    """
-    from drep.models.config import DocumentationConfig
-
-    # Create analyzer with markdown checks enabled
-    config = DocumentationConfig(enabled=True, markdown_checks=True)
-    analyzer = DocumentationAnalyzer(config)
-
-    md_files = expand_paths(paths or (".",), is_markdown)
-
-    if not md_files:
-        click.echo("No markdown files found.")
-        return
-
-    async def analyze_all():
-        """One event loop for the whole run, not one per file."""
-        results = []
-        for md_file in md_files:
-            try:
-                content = md_file.read_text(encoding="utf-8")
-                findings = await analyzer.analyze_file(str(md_file), content)
-
-                if findings.pattern_issues:
-                    results.append((md_file, findings))
-            except (  # noqa: PERF203 - per-file isolation: one bad file must not abort the scan
-                OSError,
-                UnicodeDecodeError,
-            ) as e:
-                click.echo(f"Error reading {md_file}: {e}", err=True)
-            except Exception as e:
-                # Unexpected error - show details and re-raise for debugging
-                click.echo(f"Unexpected error analyzing {md_file}: {e}", err=True)
-                raise
-        return results
-
-    results = asyncio.run(analyze_all())
-    total_issues = sum(len(findings.pattern_issues) for _, findings in results)
-
-    # Output results
-    if output == "json":
-        json_output = [
-            {
-                "file": str(md_file),
-                "line": issue.line,
-                "column": issue.column,
-                "type": issue.type,
-                "message": issue.matched_text[:50],
-            }
-            for md_file, findings in results
-            for issue in findings.pattern_issues
-        ]
-        click.echo(json.dumps(json_output, indent=2))
-    else:
-        # Text output
-        if total_issues == 0:
-            click.echo(f"✓ No issues found in {len(md_files)} markdown files.")
-        else:
-            click.echo(f"Found {total_issues} issues in {len(results)} files:\n")
-            for md_file, findings in results:
-                click.echo(f"{md_file}:")
-                for issue in findings.pattern_issues:
-                    click.echo(f"  Line {issue.line}:{issue.column} [{issue.type}]")
-                click.echo()
-
-    if strict and total_issues:
-        raise SystemExit(1)
-
+# Registers the lint-docs command on the group above. Imported last, and for
+# its side effect, because it imports `cli` from here.
+from drep import cli_lint as _cli_lint  # noqa: E402,F401
 
 if __name__ == "__main__":
     cli()

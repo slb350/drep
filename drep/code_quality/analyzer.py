@@ -3,7 +3,7 @@
 import logging
 import warnings
 
-from drep.core.file_targets import is_python_source
+from drep.languages import registry
 from drep.llm.client import LLMClient
 from drep.models.findings import Finding
 from drep.models.llm_findings import CodeAnalysisResult
@@ -14,63 +14,14 @@ logger = logging.getLogger(__name__)
 # Approximately 8k tokens (assuming ~4 chars per token)
 MAX_FILE_SIZE = 32000
 
-PYTHON_ANALYSIS_PROMPT = """You are an expert Python code reviewer.
-Analyze the following code and identify issues in these categories:
-
-1. **Bugs & Logic Errors**: Incorrect logic, unhandled edge cases,
-   potential crashes, undefined variables, type errors
-2. **Security Issues**: SQL injection, command injection, path traversal,
-   unsafe deserialization, hardcoded secrets, weak cryptography
-3. **Best Practices**: PEP 8 violations, missing docstrings,
-   poor naming conventions, code smells, anti-patterns
-4. **Performance**: Inefficient algorithms, unnecessary loops,
-   blocking I/O operations, memory leaks
-
-For each issue found, provide:
-- Line number (approximate if exact line is unclear)
-- Severity: critical (security vulnerabilities, crashes), high (bugs,
-  serious issues), medium (best practices, moderate issues), low (minor
-  improvements), info (suggestions)
-- Category: bug, security, best-practice, performance, style, maintainability
-- Clear message explaining the issue
-- Specific, actionable suggestion for fixing it
-- The problematic code snippet
-
-**Important instructions:**
-- Only report genuine issues, not false positives
-- Be specific about line numbers - estimate if needed
-- Provide actionable suggestions, not vague advice
-- Focus on correctness, security, and maintainability
-- Do not report style issues that are subjective
-
-Return your analysis as valid JSON matching this exact schema:
-{
-  "issues": [
-    {
-      "line": <line_number>,
-      "severity": "<critical|high|medium|low|info>",
-      "category": "<bug|security|best-practice|performance|style|maintainability>",
-      "message": "<clear description of the issue>",
-      "suggestion": "<specific recommendation for fixing>",
-      "code_snippet": "<the problematic code>"
-    }
-  ],
-  "summary": "<overall assessment of code quality>"
-}
-
-If no issues are found, return:
-{
-  "issues": [],
-  "summary": "No significant issues found. Code quality looks good."
-}
-"""
-
 
 class CodeQualityAnalyzer:
-    """LLM-powered code quality analyzer for Python files.
+    """LLM-powered code quality analyzer.
 
-    Uses an LLM client to perform intelligent code analysis, detecting bugs,
-    security issues, best practice violations, and performance problems.
+    Language-agnostic by construction: the model reads any language without a
+    parser, so the only per-language input is the prompt, which comes from the
+    registry. Deterministic style and syntax belong to the project's own tools
+    (see drep.languages.runner), not here.
     """
 
     def __init__(self, llm_client: LLMClient):
@@ -103,8 +54,14 @@ class CodeQualityAnalyzer:
 
         Note:
             - Files larger than MAX_FILE_SIZE (32k chars) are skipped
-            - Returns empty list if the file is too large or empty
+            - Returns empty list if the file is too large, empty, or of a type
+              no registered language claims
         """
+        language = registry.detect(file_path)
+        if language is None:
+            logger.debug(f"Skipping {file_path}: no registered language claims it")
+            return []
+
         # Check file size limit
         if len(content) > MAX_FILE_SIZE:
             logger.warning(
@@ -121,12 +78,14 @@ class CodeQualityAnalyzer:
         logger.debug(f"Analyzing {file_path} ({len(content)} chars)")
 
         result_dict = await self.llm_client.analyze_code_json(
-            system_prompt=PYTHON_ANALYSIS_PROMPT,
+            system_prompt=language.analysis_prompt(),
             code=content,
             schema=CodeAnalysisResult,
             repo_id=repo_id,
             commit_sha=commit_sha,
-            analyzer="code_quality",
+            # Per-language key so cache entries and metrics cannot cross
+            # languages - the prompt differs, so the response would too.
+            analyzer=f"code_quality_{language.name}",
         )
 
         # Convert dict to Pydantic model
@@ -174,9 +133,7 @@ class CodeQualityAnalyzer:
         return all_findings
 
     def is_supported_file(self, file_path: str) -> bool:
-        """Check if file is supported for analysis.
-
-        Currently only Python files (.py) are supported.
+        """Check if any registered language claims this file.
 
         Args:
             file_path: Path to check
@@ -184,4 +141,4 @@ class CodeQualityAnalyzer:
         Returns:
             True if file should be analyzed, False otherwise
         """
-        return is_python_source(file_path)
+        return registry.detect(file_path) is not None

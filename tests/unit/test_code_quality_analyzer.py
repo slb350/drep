@@ -313,9 +313,13 @@ def test_is_supported_file_python(analyzer):
     assert analyzer.is_supported_file("/abs/path/to/file.py") is True
 
 
-def test_is_supported_file_non_python(analyzer):
-    """Test that non-Python files are not supported."""
-    assert analyzer.is_supported_file("test.js") is False
+def test_is_supported_file_unclaimed_types(analyzer):
+    """Types no registered language claims are not analyzed.
+
+    .js moved to the supported side when the language registry landed; these
+    are the ones still outside it. Markdown is deliberately excluded - it goes
+    to the documentation analyzer, not a code analyzer.
+    """
     assert analyzer.is_supported_file("README.md") is False
     assert analyzer.is_supported_file("config.json") is False
     assert analyzer.is_supported_file("test.txt") is False
@@ -404,3 +408,62 @@ async def test_analyze_file_severity_edge_cases(analyzer, mock_llm_client):
     assert findings[2].severity == "warning"  # medium -> warning
     assert findings[3].severity == "info"  # low -> info
     assert findings[4].severity == "info"  # info -> info
+
+
+class TestLanguageAwareAnalysis:
+    """The analyzer reads any registered language, with the right prompt."""
+
+    @pytest.mark.asyncio
+    async def test_supports_every_registered_language(self, analyzer):
+        for path in ("a.py", "a.ts", "a.tsx", "a.js", "a.go", "a.rs"):
+            assert analyzer.is_supported_file(path)
+
+    @pytest.mark.asyncio
+    async def test_rejects_files_no_language_claims(self, analyzer):
+        assert not analyzer.is_supported_file("style.css")
+        assert not analyzer.is_supported_file("README.md")
+
+    @pytest.mark.asyncio
+    async def test_prompt_matches_the_file_language(self, analyzer, mock_llm_client):
+        mock_llm_client.analyze_code_json.return_value = {"issues": [], "summary": "Clean"}
+
+        await analyzer.analyze_file(
+            file_path="cmd/server.go", content="package main\n", repo_id="r", commit_sha="s"
+        )
+
+        prompt = mock_llm_client.analyze_code_json.call_args.kwargs["system_prompt"]
+        assert "Go" in prompt
+        # The Python rubric must not follow a Go file around
+        assert "PEP 8" not in prompt
+
+    @pytest.mark.asyncio
+    async def test_python_still_gets_its_own_conventions(self, analyzer, mock_llm_client):
+        mock_llm_client.analyze_code_json.return_value = {"issues": [], "summary": "Clean"}
+
+        await analyzer.analyze_file(
+            file_path="main.py", content="x = 1\n", repo_id="r", commit_sha="s"
+        )
+
+        prompt = mock_llm_client.analyze_code_json.call_args.kwargs["system_prompt"]
+        assert "PEP 8" in prompt
+
+    @pytest.mark.asyncio
+    async def test_analyzer_key_is_per_language(self, analyzer, mock_llm_client):
+        """Cache and metrics segment by language, so a .go response can never
+        be served from a .py cache entry."""
+        mock_llm_client.analyze_code_json.return_value = {"issues": [], "summary": "Clean"}
+
+        await analyzer.analyze_file(
+            file_path="src/lib.rs", content="fn main() {}\n", repo_id="r", commit_sha="s"
+        )
+
+        assert mock_llm_client.analyze_code_json.call_args.kwargs["analyzer"] == "code_quality_rust"
+
+    @pytest.mark.asyncio
+    async def test_unknown_language_is_not_analyzed(self, analyzer, mock_llm_client):
+        findings = await analyzer.analyze_file(
+            file_path="style.css", content="body {}\n", repo_id="r", commit_sha="s"
+        )
+
+        assert findings == []
+        mock_llm_client.analyze_code_json.assert_not_called()

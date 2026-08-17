@@ -100,3 +100,36 @@ class TestRegistryIsClosed:
     def test_languages_are_LanguageSupport_instances(self):
         for language in registry.languages():
             assert isinstance(language, LanguageSupport)
+
+
+class TestDiffLanguages:
+    """A PR diff can span languages, so its rubric must name all of them."""
+
+    def test_detects_the_distinct_languages_in_a_file_list(self):
+        languages = registry.detect_all(["a.py", "b.py", "app/x.ts", "cmd/y.go", "notes.txt"])
+        assert [lang.name for lang in languages] == ["python", "typescript", "go"]
+
+    def test_ignores_files_no_language_claims(self):
+        assert registry.detect_all(["notes.txt", "style.css"]) == []
+
+    def test_review_rubric_names_a_single_language(self):
+        from drep.languages.prompts import build_review_rubric
+
+        rubric = build_review_rubric(registry.detect_all(["a.py"]))
+        assert "Python" in rubric
+        assert "PEP 8" in rubric
+
+    def test_review_rubric_names_every_language_in_a_mixed_diff(self):
+        from drep.languages.prompts import build_review_rubric
+
+        rubric = build_review_rubric(registry.detect_all(["a.py", "b.go"]))
+        assert "Python" in rubric
+        assert "Go" in rubric
+
+    def test_review_rubric_for_an_unrecognised_diff_is_generic(self):
+        """A docs-only PR still gets reviewed, just without a language rubric."""
+        from drep.languages.prompts import build_review_rubric
+
+        rubric = build_review_rubric([])
+        assert "PEP 8" not in rubric
+        assert rubric.strip()

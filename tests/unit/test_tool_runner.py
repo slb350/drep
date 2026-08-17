@@ -260,3 +260,28 @@ class TestDiagnosticStream:
         python = registry.get("python")
         spec = next(t for t in python.tools if t.name == "ruff")
         assert spec.diagnostics_stream == "stdout"
+
+
+class TestPathNormalisation:
+    """Every tool reports paths its own way; findings must not.
+
+    ruff emits absolute paths and go vet relative ones, so without
+    normalisation one report mixes both and neither groups by file.
+    """
+
+    def test_absolute_tool_paths_become_repo_relative(self, tmp_path):
+        from drep.languages.workflow import relativise
+
+        finding_path = str(tmp_path / "src" / "app.py")
+        assert relativise(finding_path, tmp_path) == "src/app.py"
+
+    def test_relative_paths_are_left_alone(self, tmp_path):
+        from drep.languages.workflow import relativise
+
+        assert relativise("cmd/server.go", tmp_path) == "cmd/server.go"
+
+    def test_a_path_outside_the_root_is_left_alone(self, tmp_path):
+        """Better an absolute path than a misleading ../../ chain."""
+        from drep.languages.workflow import relativise
+
+        assert relativise("/usr/lib/other.py", tmp_path) == "/usr/lib/other.py"

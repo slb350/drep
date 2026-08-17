@@ -117,6 +117,19 @@ class LanguageRegistry:
             return None
         return self._by_extension.get(f".{extension.lower()}")
 
+    def detect_all(self, paths: Iterable[str | Path]) -> list["LanguageSupport"]:
+        """The distinct languages present in a set of paths, in first-seen order.
+
+        A pull request is one review over a diff that may span languages, so
+        its rubric has to name all of them rather than pick one.
+        """
+        seen: dict[str, LanguageSupport] = {}
+        for path in paths:
+            language = self.detect(path)
+            if language is not None:
+                seen.setdefault(language.name, language)
+        return list(seen.values())
+
     def languages(self) -> Iterable[LanguageSupport]:
         """Every registered language, in registration order."""
         return tuple(self._by_name.values())

@@ -188,7 +188,8 @@ class LLMConfig(BaseModel):
         Raises:
             ValueError: If provider is bedrock but bedrock config is missing
         """
-        if self.provider == "bedrock" and self.bedrock is None:
+        # A disabled LLM is never contacted, so it needs no backend config.
+        if self.enabled and self.provider == "bedrock" and self.bedrock is None:
             raise ValueError(
                 "Bedrock provider requires 'bedrock' configuration with region and model. "
                 "Please add 'bedrock:' section to your config."
@@ -202,7 +203,8 @@ class LLMConfig(BaseModel):
         Raises:
             ValueError: If provider is openai-compatible but endpoint or model is missing
         """
-        if self.provider == "openai-compatible":
+        # A disabled LLM is never contacted, so it needs no backend config.
+        if self.enabled and self.provider == "openai-compatible":
             if self.endpoint is None:
                 raise ValueError(
                     "OpenAI-compatible provider requires 'endpoint' field. "

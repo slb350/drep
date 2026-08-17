@@ -29,6 +29,7 @@ from drep.core.issue_manager import IssueManager
 from drep.core.scanner import RepositoryScanner
 from drep.db import init_database
 from drep.documentation.analyzer import DocumentationAnalyzer
+from drep.languages.workflow import run_language_tools
 from drep.llm.metrics import LLMMetrics, MetricsCollector
 from drep.models.findings import AnalysisResult, Finding
 from drep.models.wizard import PLATFORM_TOKEN_ENV_VARS
@@ -551,7 +552,11 @@ async def _run_check(
         if not files:
             return AnalysisResult()
 
-        # Analyze files
+        # Layer 1: the project's own deterministic tools. These are precise,
+        # so their findings gate; the LLM's inform. See drep.languages.runner.
+        tool_findings, unavailable_tools = await run_language_tools(analysis_root, files)
+
+        # Layer 2: the LLM
         all_findings: list[Finding] = []
         unanalyzed: set[str] = set()
 
@@ -579,7 +584,12 @@ async def _run_check(
                 unanalyzed.update(result.failed_files)
 
         # Presentation belongs to the command, not the workflow
-        return AnalysisResult(findings=all_findings, failed_files=sorted(unanalyzed))
+        return AnalysisResult(
+            findings=all_findings,
+            failed_files=sorted(unanalyzed),
+            blocking=tool_findings,
+            unavailable_tools=unavailable_tools,
+        )
 
     finally:
         # Cleanup

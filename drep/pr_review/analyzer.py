@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from typing import Any
 
 from drep.adapters.base import BaseAdapter, ReviewAnchor
+from drep.languages import registry
+from drep.languages.prompts import build_review_rubric, describe_languages
 from drep.llm.client import LLMClient
 from drep.logging_utils import sanitize_secrets
 from drep.models.pr_review_findings import PRReviewResult
@@ -43,7 +45,7 @@ class PreparedReview:
 
 
 # Prompt template for PR reviews
-PR_REVIEW_PROMPT = """You are a senior Python engineer reviewing a pull request.
+PR_REVIEW_PROMPT = """You are a senior {languages} engineer reviewing a pull request.
 
 **PR Details:**
 Title: {pr_title}
@@ -62,10 +64,10 @@ Base: {base_branch} → Head: {head_branch}
    - Edge cases handled?
 
 2. **Best Practices**
-   - Follows Python conventions (PEP 8)?
    - Proper error handling?
-   - Type hints present?
    - Good variable/function names?
+   - Language-specific concerns in this diff:
+{language_rubric}
 
 3. **Testing**
    - Are tests included?
@@ -239,8 +241,14 @@ class PRReviewAnalyzer:
         changed_files = list({hunk.file_path for hunk in hunks})
         diff_summary = "\n".join(f"- {f}" for f in changed_files)
 
+        # The rubric follows the diff's languages, so a Go file in a mostly
+        # Python PR is not reviewed against PEP 8.
+        diff_languages = registry.detect_all(changed_files)
+
         # Prepare prompt
         prompt = PR_REVIEW_PROMPT.format(
+            languages=describe_languages(diff_languages) or "software",
+            language_rubric=build_review_rubric(diff_languages),
             pr_title=pr_data.get("title", ""),
             pr_description=pr_data.get("body") or "(no description)",
             pr_author=pr_data.get("user", {}).get("login", "unknown"),

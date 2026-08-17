@@ -527,3 +527,37 @@ class TestSeverityOrdering:
         from drep.models.findings import SEVERITY_RANK, Severity
 
         assert set(SEVERITY_RANK) == {s.value for s in Severity}
+
+
+class TestDisabledLLMNeedsNoBackend:
+    """`llm: {enabled: false}` is a documented config and must validate.
+
+    The provider validators checked the provider but not `enabled`, so turning
+    the LLM off still demanded an endpoint and model for a backend that would
+    never be contacted.
+    """
+
+    def test_disabled_openai_provider_needs_no_endpoint(self):
+        from drep.models.config import LLMConfig
+
+        config = LLMConfig(enabled=False)
+        assert config.enabled is False
+        assert config.endpoint is None
+
+    def test_disabled_bedrock_provider_needs_no_bedrock_block(self):
+        from drep.models.config import LLMConfig
+
+        config = LLMConfig(enabled=False, provider="bedrock")
+        assert config.bedrock is None
+
+    def test_enabled_openai_provider_still_requires_an_endpoint(self):
+        from drep.models.config import LLMConfig
+
+        with pytest.raises(ValidationError, match="endpoint"):
+            LLMConfig(enabled=True, model="m")
+
+    def test_enabled_bedrock_provider_still_requires_its_block(self):
+        from drep.models.config import LLMConfig
+
+        with pytest.raises(ValidationError, match="bedrock"):
+            LLMConfig(enabled=True, provider="bedrock")

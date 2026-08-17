@@ -4,18 +4,23 @@ All discovery and filter paths go through these predicates so every workflow
 (full scan, commit diff, staged files, per-analyzer filters) makes identical,
 case-insensitive decisions.
 
-This module deliberately has no drep imports: analyzer packages
-(``drep.code_quality``, ``drep.documentation``) need the same policy as
-``drep.core.scanner``, which imports those packages in turn.
+The only drep import is ``drep.languages``, which is itself dependency-free by
+design: analyzer packages (``drep.code_quality``, ``drep.documentation``) need
+this policy, and ``drep.core.scanner`` imports those packages in turn, so
+anything heavier here would close a cycle.
 """
 
 import os
 from collections.abc import Callable, Iterable, Iterator
 from pathlib import Path
 
-SCAN_TARGET_SUFFIXES = frozenset({".py", ".md"})
-PYTHON_SOURCE_SUFFIXES = frozenset({".py"})
+from drep.languages import registry
+
 MARKDOWN_SUFFIXES = frozenset({".md"})
+# Python keeps a dedicated predicate because the docstring pass is genuinely
+# Python-only (it runs `ast.parse`). Every other language question goes to the
+# registry, so adding a language never edits this module.
+PYTHON_SOURCE_SUFFIXES = frozenset({".py"})
 
 # Directory names never descended into during discovery. Module-level so the set
 # is built once rather than per candidate file.
@@ -42,8 +47,14 @@ def _suffix_of(path: str | Path) -> str:
 
 
 def is_scan_target(path: str | Path) -> bool:
-    """Return True if the path is a file type drep analyzes (.py/.md, case-insensitive)."""
-    return _suffix_of(path) in SCAN_TARGET_SUFFIXES
+    """Return True if drep analyzes this file at all (case-insensitive).
+
+    Any registered language's source, plus markdown for the documentation
+    analyzer - markdown is not a code language, so the registry does not
+    claim it.
+    """
+    suffix = _suffix_of(path)
+    return suffix in MARKDOWN_SUFFIXES or suffix in registry.source_extensions()
 
 
 def is_python_source(path: str | Path) -> bool:

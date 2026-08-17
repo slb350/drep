@@ -316,11 +316,14 @@ class TestCheckSeverityThreshold:
 
             return runner.invoke(cli, ["check", ".", "--config", "config.yaml", *extra_args])
 
-    def test_defaults_to_blocking_on_any_finding(self, runner, tmp_path):
-        """Unchanged default: every finding blocks."""
+    def test_llm_findings_do_not_block_without_fail_on(self, runner, tmp_path):
+        """The default changed when the deterministic layer landed.
+
+        Tool findings gate; LLM findings inform unless --fail-on opts in.
+        """
         with runner.isolated_filesystem(temp_dir=tmp_path):
-            result = self._run(runner, ["info"])
-            assert result.exit_code == 1
+            result = self._run(runner, ["info", "error"])
+            assert result.exit_code == 0
 
     def test_below_threshold_findings_are_reported_but_do_not_block(self, runner, tmp_path):
         with runner.isolated_filesystem(temp_dir=tmp_path):
@@ -475,4 +478,122 @@ class TestCheckJsonIsMachineReadable:
                 )
 
             # stdout must be parseable on its own - no "Checking N file(s)..." preamble
-            assert json.loads(result.stdout)["findings"][0]["message"] == "boom"
+            payload = json.loads(result.stdout)
+            assert payload["findings"][0]["message"] == "boom"
+            # Deterministic findings are a separate channel from the LLM's
+            assert payload["blocking"] == []
+
+
+class TestDeterministicLayer:
+    """Tool findings gate; LLM findings inform.
+
+    Splitting by source rather than severity is what makes the gate usable:
+    ruff and eslint are precise enough to block, the LLM is not.
+    """
+
+    @staticmethod
+    def _project(tmp_path):
+        Path("pyproject.toml").write_text("[tool.ruff]\n")
+        Path("config.yaml").write_text(
+            yaml.dump({"llm": {"enabled": False}, "documentation": {"enabled": False}})
+        )
+
+    def test_tool_findings_block(self, runner, tmp_path):
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            self._project(tmp_path)
+            Path("bad.py").write_text("import os\n")
+
+            result = runner.invoke(cli, ["check", "bad.py", "--config", "config.yaml"])
+
+            assert result.exit_code == 1
+            assert "F401" in result.output
+
+    def test_clean_files_pass(self, runner, tmp_path):
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            self._project(tmp_path)
+            Path("good.py").write_text('"""Doc."""\n')
+
+            result = runner.invoke(cli, ["check", "good.py", "--config", "config.yaml"])
+
+            assert result.exit_code == 0
+
+    def test_llm_findings_do_not_block_by_default(self, runner, tmp_path):
+        """The half we could never calibrate now informs instead of gating."""
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            Path("config.yaml").write_text(
+                yaml.dump({"llm": {"enabled": True, "endpoint": "http://x/v1", "model": "m"}})
+            )
+            Path("good.py").write_text('"""Doc."""\n')
+
+            with patch("drep.cli_workflows.RepositoryScanner") as mock_scanner_class:
+                mock_scanner = mock_scanner_class.return_value
+                mock_scanner.close = AsyncMock()
+                mock_scanner.analyze_code_quality = AsyncMock(
+                    return_value=AnalysisResult(
+                        findings=[
+                            Finding(
+                                type="bug",
+                                severity="error",
+                                file_path="good.py",
+                                line=1,
+                                message="the model thinks this is a bug",
+                            )
+                        ]
+                    )
+                )
+                mock_scanner.analyze_docstrings = AsyncMock(return_value=AnalysisResult())
+
+                result = runner.invoke(cli, ["check", "good.py", "--config", "config.yaml"])
+
+            # Reported...
+            assert "the model thinks this is a bug" in result.output
+            # ...but not blocking
+            assert result.exit_code == 0
+
+    def test_fail_on_still_lets_llm_findings_gate(self, runner, tmp_path):
+        """Opt-in for anyone who wants the old behaviour."""
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            Path("config.yaml").write_text(
+                yaml.dump({"llm": {"enabled": True, "endpoint": "http://x/v1", "model": "m"}})
+            )
+            Path("good.py").write_text('"""Doc."""\n')
+
+            with patch("drep.cli_workflows.RepositoryScanner") as mock_scanner_class:
+                mock_scanner = mock_scanner_class.return_value
+                mock_scanner.close = AsyncMock()
+                mock_scanner.analyze_code_quality = AsyncMock(
+                    return_value=AnalysisResult(
+                        findings=[
+                            Finding(
+                                type="bug",
+                                severity="error",
+                                file_path="good.py",
+                                line=1,
+                                message="boom",
+                            )
+                        ]
+                    )
+                )
+                mock_scanner.analyze_docstrings = AsyncMock(return_value=AnalysisResult())
+
+                result = runner.invoke(
+                    cli,
+                    ["check", "good.py", "--config", "config.yaml", "--fail-on", "error"],
+                )
+
+            assert result.exit_code == 1
+
+    def test_an_unavailable_tool_is_not_a_pass(self, runner, tmp_path):
+        """Configured but missing: the same invariant as an unanalyzed file."""
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            Path("go.mod").write_text("module example.com/x\n")
+            Path("config.yaml").write_text(
+                yaml.dump({"llm": {"enabled": False}, "documentation": {"enabled": False}})
+            )
+            Path("main.go").write_text("package main\n")
+
+            with patch("drep.languages.runner.resolve_tool", return_value=None):
+                result = runner.invoke(cli, ["check", "main.go", "--config", "config.yaml"])
+
+            assert result.exit_code == 2
+            assert "could not" in result.output.lower()

@@ -6,6 +6,7 @@ never has to know which language produced a response. Only the language name
 and its conventions vary.
 """
 
+from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -75,3 +76,30 @@ def build_analysis_prompt(language: "LanguageSupport") -> str:
         display_name=language.display_name,
         conventions=conventions,
     )
+
+
+def describe_languages(languages: "Sequence[LanguageSupport]") -> str:
+    """Human phrasing for a set of languages: "Python", "Python and Go"."""
+    names = [language.display_name for language in languages]
+    if not names:
+        return ""
+    if len(names) == 1:
+        return names[0]
+    return f"{', '.join(names[:-1])} and {names[-1]}"
+
+
+def build_review_rubric(languages: "Sequence[LanguageSupport]") -> str:
+    """The language-specific half of a PR review prompt.
+
+    A diff spanning several languages gets each one's concerns, so a Go file in
+    a mostly-Python PR is not reviewed against PEP 8. An unrecognised diff gets
+    the generic rubric rather than no review.
+    """
+    if not languages:
+        return "- Correct, clear, and consistent with the surrounding code\n"
+
+    lines = []
+    for language in languages:
+        lines.append(f"- **{language.display_name}**:")
+        lines.extend(f"  - {concern}" for concern in language.conventions)
+    return "\n".join(lines) + "\n"
