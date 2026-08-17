@@ -99,7 +99,7 @@ Versions verified 2026-08-17.
 
 ```toml
 [dependencies]
-open-agent-sdk = "0.6.9"    # crates.io; docs at https://docs.rs/open-agent-sdk
+open-agent-sdk = "0.7.0"    # crates.io; docs at https://docs.rs/open-agent-sdk
 tokio          = { version = "1.53", features = ["rt-multi-thread", "macros", "process", "fs", "sync", "time"] }
 clap           = { version = "4.6", features = ["derive"] }
 serde          = { version = "1.0", features = ["derive"] }
@@ -164,9 +164,55 @@ content + model + temperature), tolerant JSON parsing, and a simplified
 concurrency limiter. Test against `wiremock`, not a live endpoint.
 
 The SDK published 2026-08-09, so it post-dates the training cutoff of any model
-generating code against it. Run `cargo doc -p open-agent-sdk` into the working
-tree before delegating this phase, so the real API is readable locally rather
-than guessed; [docs.rs](https://docs.rs/open-agent-sdk) has the same content.
+generating code against it, and it is not in the ref-context index either. The
+API surface below was read from the crate source at
+`~/.cargo/registry/src/*/open-agent-sdk-0.6.9/`; paste it into any delegated
+spec, because a sandboxed agent cannot reach that path.
+
+**The crate is `open-agent-sdk` but the library is `open_agent`** — `[lib] name =
+"open_agent"`, so it is `use open_agent::...`, never `open_agent_sdk`.
+
+```rust
+use open_agent::{AgentOptions, ContentBlock, Error, query};
+use open_agent::retry::{RetryConfig, retry_with_backoff_conditional};
+
+let options = AgentOptions::builder()
+    .model("...")            // required
+    .base_url("...")         // required
+    .api_key("...")
+    .system_prompt("...")
+    .temperature(0.2_f32)
+    .timeout(1800_u64)       // seconds
+    // .max_tokens(n)        // OMIT to send no cap - see below
+    .build()?;               // -> Result<AgentOptions>
+
+let mut stream = query(prompt, &options).await?;   // ContentStream
+// ContentStream = Pin<Box<dyn Stream<Item = Result<ContentBlock>> + Send>>
+// ContentBlock = Text(TextBlock) | Image | ToolUse | ToolResult
+```
+
+Two things the SDK already gets right, so **do not reimplement them**:
+
+- **`max_tokens` omission works as of 0.7.0.** `AgentOptions::max_tokens()`
+  returns `Option`, and the builder now leaves the field out of the request when
+  the setter is never called. (0.6.9 substituted 4096, which silently truncated
+  reasoning models; drep carried a large sentinel to compensate. That workaround
+  is deleted.)
+- **The retry taxonomy already exists.** `Error::Api` carries
+  `status: Option<u16>`, and `retry::is_retryable_error` classifies against
+  `RETRYABLE_STATUS_CODES = [408, 429, 500, 502, 503, 504, 529]` plus `Http`,
+  `Timeout` and `Stream`. `retry_with_backoff_conditional(config, op)` applies it
+  with exponential backoff and jitter; `RetryConfig::default()` is 3 attempts, 1s
+  initial, 60s max, 2.0 multiplier, 0.1 jitter.
+
+  Construct HTTP errors with `Error::api_status(code, msg)`, not `Error::api(msg)`
+  - the latter leaves `status: None` on purpose, so it is never retryable.
+
+That leaves drep responsible for only the *other* half of the taxonomy: a
+truncated response is **not** an SDK error. The stream completes successfully and
+the damage surfaces as unparseable JSON in drep's own parsing. So transport
+retries belong to the SDK, and a parse failure must fail the file without a
+retry — which is exactly the split the Python conflated.
 
 **Retry policy must discriminate by failure class.** The Python has one
 `max_retries` governing every failure, which forces a bad trade and is why 7 of
@@ -204,17 +250,24 @@ openrouter` writes `max_tokens: 100000` and does *not* write
 reserves 28,845 tokens and the preset throttles itself to **3 requests per
 minute** out of the box.
 
-In 2.0:
+In 2.0 (**landed in Phase 3a**):
 
 - **No cap is sent unless the user sets one.** Models ship 256k–1M context;
-  inventing a ceiling is drep's bug, not the model's limit. Omit `max_tokens`
-  from the request and let the server decide. Keep it as an option for capping
-  spend or runaway generation, defaulted off.
+  inventing a ceiling is drep's bug, not the model's limit. `LlmClient` forwards
+  `LlmConfig::max_tokens` only when it is `Some`, and open-agent-sdk 0.7.0 omits
+  the field otherwise.
 - **Reserve against an expected completion size, not the cap** — a modest
   constant, or the observed rolling average. This is safe because the limiter
   already does two-phase accounting: it reserves an estimate on entry and
   reconciles actual usage on exit, so the forward guess only has to prevent a
   stampede. Preserve that reconcile step.
+
+  Use `open_agent::estimate_tokens(&[Message])` for the prompt half rather than
+  re-deriving a chars-per-token heuristic. It is the same 4-chars-per-token
+  approximation the Python used, but it also accounts for per-message role
+  overhead, and keeping one implementation means the reservation cannot drift
+  from what the SDK actually sends. `is_approaching_limit` and
+  `truncate_messages` are there too if a prompt ever needs trimming.
 - A user-set `max_tokens` is sent to the API but must **not** inflate the
   reservation.
 

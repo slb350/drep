@@ -47,10 +47,18 @@ tokio = { version = "1.53", features = ["process", "rt-multi-thread", "macros", 
 # Phase 2: file discovery. Prunes ignored trees during the walk rather than
 # stat-ing every entry under them first, and understands .gitignore.
 ignore = "0.4"
+# Phase 3: the LLM layer. The crate is `open-agent-sdk`; the library it exposes
+# is `open_agent`.
+open-agent-sdk = "0.7.0"
+futures = "0.3"
+serde = { version = "1.0", features = ["derive"] }
+thiserror = "2.0"
+toml = "1.1"
 
 [dev-dependencies]
 assert_cmd = "2.2"
 tempfile = "3.27"
+wiremock = "0.6"
 
 [profile.release]
 lto = true

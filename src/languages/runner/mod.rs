@@ -99,17 +99,25 @@ impl std::error::Error for ToolOutputError {}
 /// half-installed shims on `PATH` would otherwise block a tool that
 /// happens to be on PATH under the same name.
 pub fn resolve_tool(spec: &ToolSpec, root: &Path) -> Option<PathBuf> {
-    #[cfg(unix)]
+    // One function with the `cfg` inside its body, not two cfg-gated
+    // definitions. Two definitions means the inactive one is unreachable on
+    // this platform, so every mutation of it survives by construction and
+    // shows up as an untestable finding in `cargo mutants`. This way the
+    // mutation lands in code the tests actually run.
     fn is_executable(path: &Path) -> bool {
-        use std::os::unix::fs::PermissionsExt;
-        match path.metadata() {
-            Ok(meta) => meta.is_file() && meta.permissions().mode() & 0o111 != 0,
-            Err(_) => false,
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            match path.metadata() {
+                Ok(meta) => meta.is_file() && meta.permissions().mode() & 0o111 != 0,
+                Err(_) => false,
+            }
         }
-    }
-    #[cfg(not(unix))]
-    fn is_executable(path: &Path) -> bool {
-        path.is_file()
+        // Windows has no executable bit; existence is the only signal there is.
+        #[cfg(not(unix))]
+        {
+            path.is_file()
+        }
     }
 
     for relative in spec.local_paths {
@@ -291,13 +299,20 @@ pub async fn run_tool(spec: &ToolSpec, root: &Path, files: &[String]) -> ToolOut
 /// The Python reference uses `s.strip()[:200]`, which slices bytes. For
 /// ASCII that is identical; for multibyte UTF-8 we still need to land on
 /// a boundary to keep the result valid.
-fn truncate(s: &str, max: usize) -> String {
+pub(crate) fn truncate(s: &str, max: usize) -> String {
     if s.len() <= max {
         return s.to_owned();
     }
-    let mut end = max;
-    while end > 0 && !s.is_char_boundary(end) {
-        end -= 1;
-    }
+    // Searched rather than walked with a mutable counter. A `while` loop
+    // decrementing `end` is correct, but it admits a mutation - `-=` swapped for
+    // `/=`, which is `end / 1` and therefore a no-op - that spins forever
+    // instead of failing. An infinite loop is a worse failure mode than a wrong
+    // answer, and this formulation cannot express it: the range is finite.
+    //
+    // Byte 0 is always a char boundary, so the search always succeeds.
+    let end = (0..=max)
+        .rev()
+        .find(|&i| s.is_char_boundary(i))
+        .unwrap_or(0);
     s[..end].to_owned()
 }

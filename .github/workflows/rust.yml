@@ -47,6 +47,33 @@ jobs:
 
       - run: cargo test --all-targets --all-features
 
+  # Whether the tests would notice if the code were wrong. A surviving mutant is
+  # a test that asserts correct behaviour without being able to distinguish it
+  # from incorrect behaviour. Exits 2 when any mutant survives, which fails the
+  # job. Full sweep here; the pre-commit hook scopes to the staged diff.
+  mutants:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-mutants
+
+      # Survivors are printed as `MISSED <file>:<line>: <mutation>` lines, so the
+      # job log is already the actionable report - no artifact upload needed.
+      #
+      # --minimum-test-timeout because the derived timeout comes from the
+      # unmutated baseline (~1s here) and a loaded runner can exceed it for a
+      # perfectly healthy mutant. A timeout is not a failure: some mutations
+      # produce an infinite loop, and a suite that hangs has detected the mutant
+      # as surely as one that fails.
+      - run: cargo mutants --no-shuffle -j 4 --minimum-test-timeout 60
+
   msrv:
     name: msrv (1.85)
     runs-on: ubuntu-latest

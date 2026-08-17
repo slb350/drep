@@ -5,7 +5,7 @@
 //! do not blame the user" outcome that is *never* surfaced as a diff query
 //! failure.
 
-use crate::diff::current_commit_sha;
+use crate::diff::{UNKNOWN_SHA, current_commit_sha, normalize_sha};
 
 use super::support::GitRepo;
 
@@ -39,4 +39,19 @@ async fn returns_the_unknown_literal_outside_a_git_repository() {
         sha, "unknown",
         "expected the literal `unknown` outside a git repo, got {sha:?}"
     );
+}
+
+#[test]
+fn empty_git_output_normalizes_to_unknown() {
+    // Real git cannot produce this: `rev-parse HEAD` fails rather than
+    // succeeding with no output. The guard is still load-bearing, because a
+    // caller that treated "" as a SHA would key every cache entry on the empty
+    // string and collide every file with every other.
+    assert_eq!(normalize_sha(String::new()), UNKNOWN_SHA);
+}
+
+#[test]
+fn a_real_sha_passes_through_unchanged() {
+    let sha = "9f2a1c3d4e5f60718293a4b5c6d7e8f901234567".to_owned();
+    assert_eq!(normalize_sha(sha.clone()), sha);
 }

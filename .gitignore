@@ -71,3 +71,7 @@ external/
 
 # Rust
 /target/
+
+# cargo-mutants run output
+/mutants.out/
+/mutants.out.old/

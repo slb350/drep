@@ -9,3 +9,4 @@ mod parsers;
 mod resolve;
 mod run_tool;
 pub(crate) mod support;
+mod truncate;

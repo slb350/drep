@@ -53,6 +53,23 @@ repos:
         pass_filenames: false
         require_serial: true
 
+      # A green suite proves the tests ran, not that they would notice if the
+      # code were wrong. cargo-mutants perturbs the implementation and reports
+      # mutations no test catches; a surviving mutant IS a non-discriminating
+      # test. Added after the first full sweep found 11 of them, including one
+      # on a load-bearing invariant - replacing the executable-bit check in
+      # resolve_tool with a constant `true` failed no test.
+      #
+      # Scoped to the staged diff, so cost is proportional to the change
+      # (~30s for one file). CI runs the full sweep.
+      - id: cargo-mutants
+        name: cargo mutants (staged diff)
+        entry: ./scripts/mutants-staged.sh
+        language: system
+        types: [rust]
+        pass_filenames: false
+        require_serial: true
+
       # Report-only, deliberately: lint-docs' long_line check flags >120 chars,
       # and this repo turns that rule off (MD013: false in .markdownlint.json).
       # Add --strict in a project that wants markdown to gate the commit.

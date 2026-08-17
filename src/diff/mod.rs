@@ -181,9 +181,27 @@ pub async fn changed_since(root: &Path, git_ref: &str) -> Result<Vec<PathBuf>, G
 pub async fn current_commit_sha(root: &Path) -> String {
     let result = tokio::time::timeout(SHA_TIMEOUT, run_git(root, &["rev-parse", "HEAD"])).await;
     match result {
-        Ok(Ok(sha)) if !sha.is_empty() => sha,
-        Ok(Ok(_)) => "unknown".to_owned(),
-        _ => "unknown".to_owned(),
+        Ok(Ok(sha)) => normalize_sha(sha),
+        // Timed out, git failed, or git is absent. All mean the same thing to a
+        // cache key.
+        _ => UNKNOWN_SHA.to_owned(),
+    }
+}
+
+/// The placeholder used whenever the real SHA cannot be determined.
+pub(crate) const UNKNOWN_SHA: &str = "unknown";
+
+/// Empty output is as useless as an error.
+///
+/// Split out from `current_commit_sha` so it is reachable from a test: the
+/// empty-success case cannot be provoked through real git, which fails rather
+/// than succeeding with no output. Previously the guard sat inline and no test
+/// could distinguish it from an unconditional pass-through.
+pub(crate) fn normalize_sha(sha: String) -> String {
+    if sha.is_empty() {
+        UNKNOWN_SHA.to_owned()
+    } else {
+        sha
     }
 }
 
