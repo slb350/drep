@@ -7,9 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Decided - 2026-08-17
+
+**drep 2.0 will be a Rust binary with a much smaller scope.** Plan in
+[docs/rust-migration.md](docs/rust-migration.md); work happens on the `rust-rewrite`
+branch. Python 1.x is frozen — no new features.
+
+The product becomes exactly two things: run the linters and formatters the repository has
+configured, and send the changed code to an LLM for review. Triggers are pre-commit and
+pre-push only.
+
+Dropped (~5,400 LOC): the Gitea/GitHub/GitLab adapters, the webhook server, PR comment
+posting, the SQLite layer, docstring *generation*, the config wizard, the Bedrock
+provider, and the metrics history. Platform integration is a crowded market and was never
+the differentiator; running locally against your own model before the code leaves the
+machine is.
+
+Rust rather than Go because [open-agent-sdk-rust](https://github.com/slb350/open-agent-sdk-rust)
+(v0.6.9, feature-parity with the Python SDK) already exists and is where the LLM transport
+work is happening. Dropping docstring generation removes the last `ast.parse` caller, so
+the rewrite needs no Python interpreter and no tree-sitter.
+
+Distribution via `cargo-dist`: multi-arch binaries, a shell installer, and a Homebrew tap.
+
 ### Planned
 - Doc-comment generation for JavaScript/TypeScript, Go and Rust (needs a parser per
-  language; the LLM review path does not)
+  language; the LLM review path does not) — **dropped in 2.0**, see above
 - Removal of deprecated `CodeQualityAnalyzer.analyze_files` (1.4.0)
 
 ## [1.3.0] - 2026-08-16
