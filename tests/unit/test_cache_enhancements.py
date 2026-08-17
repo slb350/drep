@@ -275,3 +275,64 @@ class TestCacheAnalyticsIntegration:
         assert analytics.hits == 10
         assert analytics.misses == 5
         assert analytics.total_requests == 15
+
+
+class TestEmptyResponsesAreNotCached:
+    """An unusable response must never become a cache entry.
+
+    A `content: null` response was written to the cache before the JSON parser
+    choked on it, so every later run replayed the crash from cache in 0.6s and
+    never called the LLM again to heal itself. Rejecting on write is the fix;
+    rejecting on read only covers entries already on disk.
+    """
+
+    @staticmethod
+    def _cache(tmp_path):
+        from drep.llm.cache import IntelligentCache
+
+        return IntelligentCache(cache_dir=str(tmp_path / "cache"))
+
+    @staticmethod
+    def _args(**overrides):
+        args = {
+            "prompt": "sys",
+            "code": "def f(): pass",
+            "model": "m",
+            "temperature": 0.2,
+            "commit_sha": "abc123",
+        }
+        args.update(overrides)
+        return args
+
+    def test_none_content_is_not_written(self, tmp_path):
+        cache = self._cache(tmp_path)
+        cache.set(
+            **self._args(),
+            response={"content": None, "tokens_used": 5, "latency_ms": 1, "model": "m"},
+            tokens_used=5,
+            latency_ms=1,
+        )
+        assert cache.get(**self._args()) is None
+
+    def test_empty_string_content_is_not_written(self, tmp_path):
+        """Bedrock returns "" rather than null on a refusal."""
+        cache = self._cache(tmp_path)
+        cache.set(
+            **self._args(),
+            response={"content": "", "tokens_used": 5, "latency_ms": 1, "model": "m"},
+            tokens_used=5,
+            latency_ms=1,
+        )
+        assert cache.get(**self._args()) is None
+
+    def test_real_content_still_round_trips(self, tmp_path):
+        cache = self._cache(tmp_path)
+        cache.set(
+            **self._args(),
+            response={"content": "{}", "tokens_used": 5, "latency_ms": 1, "model": "m"},
+            tokens_used=5,
+            latency_ms=1,
+        )
+        cached = cache.get(**self._args())
+        assert cached is not None
+        assert cached["content"] == "{}"

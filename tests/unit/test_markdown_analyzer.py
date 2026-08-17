@@ -238,3 +238,22 @@ async def test_markdown_url_inside_a_link_is_not_a_bare_url():
     findings = await analyzer.analyze_file("README.md", md)
 
     assert [i for i in findings.pattern_issues if i.type == "bare_url"] == []
+
+
+@pytest.mark.asyncio
+async def test_markdown_image_inside_a_link_is_valid_syntax():
+    """`[![alt](img)](href)` is the standard badge construct, not broken syntax.
+
+    A link-text pattern of `[^\\]]*` stops at the image's own `]`, so blanking
+    consumed `[![alt](img)` and left `](href)` looking malformed - eleven false
+    positives on this project's own README badges.
+    """
+    config = DocumentationConfig(enabled=True, custom_dictionary=[], markdown_checks=True)
+    analyzer = DocumentationAnalyzer(config)
+
+    md = "[![PyPI version](https://badge.fury.io/py/drep-ai.svg)](https://badge.fury.io/py/drep-ai)\n"
+    findings = await analyzer.analyze_file("README.md", md)
+
+    assert [i for i in findings.pattern_issues if i.type == "link_syntax_invalid"] == []
+    # Both URLs live inside the construct, so neither is bare
+    assert [i for i in findings.pattern_issues if i.type == "bare_url"] == []

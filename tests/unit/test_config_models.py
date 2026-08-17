@@ -496,3 +496,34 @@ class TestReasoningModelBudgets:
             LLMConfig(enabled=True, endpoint="http://x/v1", model="m", max_tokens=10_000_000)
         with pytest.raises(ValidationError):
             LLMConfig(enabled=True, endpoint="http://x/v1", model="m", timeout=100_000)
+
+
+class TestSeverityOrdering:
+    """The gate must not fail open on a severity it does not recognise.
+
+    `SEVERITY_RANK.get(severity, 0)` ranked anything unknown as info, so a
+    producer emitting `critical` (the PR-review vocabulary) would silently
+    never block under --fail-on error.
+    """
+
+    def test_ordering_is_defined_where_the_vocabulary_is(self):
+        from drep.models.findings import SEVERITY_RANK
+
+        assert SEVERITY_RANK["info"] < SEVERITY_RANK["warning"] < SEVERITY_RANK["error"]
+
+    def test_finding_rejects_a_severity_outside_the_vocabulary(self):
+        from drep.models.findings import Finding
+
+        with pytest.raises(ValidationError):
+            Finding(
+                type="bug",
+                severity="critical",  # PR-review vocabulary, not Finding's
+                file_path="a.py",
+                line=1,
+                message="m",
+            )
+
+    def test_every_severity_is_ranked(self):
+        from drep.models.findings import SEVERITY_RANK, Severity
+
+        assert set(SEVERITY_RANK) == {s.value for s in Severity}

@@ -198,3 +198,41 @@ class TestSuffixExtraction:
         assert is_python_source("src/main.py")
         assert is_python_source("SRC/MAIN.PY")
         assert is_markdown("docs/guide.md")
+
+
+class TestExpandPaths:
+    """One expansion routine for "files and/or directories" -> files.
+
+    `drep check` and `drep lint-docs` each grew their own copy, and they
+    disagreed: `drep check a.py .` handed a.py to the analyzer twice, which at
+    reasoning-model prices is a duplicated LLM round-trip per overlap.
+    """
+
+    def test_a_file_named_twice_is_analyzed_once(self, tmp_path):
+        from drep.core.file_targets import expand_paths, is_scan_target
+
+        (tmp_path / "a.py").write_text("x = 1\n")
+        (tmp_path / "b.py").write_text("x = 2\n")
+
+        found = expand_paths([tmp_path / "a.py", tmp_path], is_scan_target)
+
+        assert found == sorted({tmp_path / "a.py", tmp_path / "b.py"})
+
+    def test_explicit_files_are_filtered_by_the_predicate(self, tmp_path):
+        from drep.core.file_targets import expand_paths, is_scan_target
+
+        (tmp_path / "a.py").write_text("x = 1\n")
+        (tmp_path / "notes.rst").write_text("hi\n")
+
+        found = expand_paths([tmp_path / "a.py", tmp_path / "notes.rst"], is_scan_target)
+
+        assert found == [tmp_path / "a.py"]
+
+    def test_directories_are_pruned(self, tmp_path):
+        from drep.core.file_targets import expand_paths, is_scan_target
+
+        (tmp_path / "a.py").write_text("x = 1\n")
+        (tmp_path / "venv").mkdir()
+        (tmp_path / "venv" / "vendored.py").write_text("x = 3\n")
+
+        assert expand_paths([tmp_path], is_scan_target) == [tmp_path / "a.py"]

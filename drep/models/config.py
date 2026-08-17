@@ -156,7 +156,12 @@ class LLMConfig(BaseModel):
     )
     timeout: int = Field(default=60, ge=10, le=3600, description="Request timeout in seconds")
     max_retries: int = Field(
-        default=3, ge=0, le=10, description="Maximum number of retries on failure"
+        default=3,
+        ge=0,
+        le=10,
+        # Consumed as a total attempt count, not retries-after-the-first: 3 means
+        # three requests. 0 is floored to 1 so the request is still sent.
+        description="Maximum number of attempts per request (floored at 1)",
     )
     retry_delay: int = Field(default=2, ge=1, le=60, description="Initial retry delay in seconds")
     exponential_backoff: bool = Field(

@@ -10,7 +10,6 @@ import logging
 import os
 import shutil
 import tempfile
-from dataclasses import dataclass
 from pathlib import Path
 
 import click
@@ -25,12 +24,13 @@ from drep.adapters.github import GitHubAdapter
 from drep.adapters.gitlab import GitLabAdapter
 from drep.config import Config, load_config
 from drep.constants import default_metrics_file
+from drep.core.file_targets import expand_paths, is_scan_target
 from drep.core.issue_manager import IssueManager
 from drep.core.scanner import RepositoryScanner
 from drep.db import init_database
 from drep.documentation.analyzer import DocumentationAnalyzer
 from drep.llm.metrics import LLMMetrics, MetricsCollector
-from drep.models.findings import Finding
+from drep.models.findings import AnalysisResult, Finding
 from drep.models.wizard import PLATFORM_TOKEN_ENV_VARS
 
 logger = logging.getLogger(__name__)
@@ -326,8 +326,17 @@ fi
         if findings:
             await issue_manager.create_issues_for_findings(owner, repo, findings)
 
-        # Record scan
-        scanner.record_scan(owner, repo, current_sha)
+        # Record the scan only if it was complete. The recorded SHA is what the
+        # next run diffs against, so recording a partial scan would exclude the
+        # files the LLM never saw from every future incremental scan - the same
+        # "unanalyzed is not clean" mistake, one layer down.
+        if unanalyzed:
+            click.echo(
+                "Not recording this scan, so the missed files are retried next run.",
+                err=True,
+            )
+        else:
+            scanner.record_scan(owner, repo, current_sha)
 
         # Persist and/or show metrics at end
         if scanner.llm_client:
@@ -468,29 +477,14 @@ async def _run_review(
             logger.error(f"Error closing adapter: {e}")
 
 
-@dataclass
-class CheckOutcome:
-    """Result of a local check run.
-
-    `unanalyzed` is what separates "analyzed and clean" from "never analyzed" -
-    a commit gate must not treat an unreachable LLM as a passing grade.
-    """
-
-    findings: list[Finding]
-    unanalyzed: list[str]
-
-
 def _common_root(paths: list[Path]) -> Path:
     """Directory that contains every path, for one consistent set of relatives."""
-    if not paths:
-        return Path.cwd()
-    directories = [p if p.is_dir() else p.parent for p in paths]
-    if len(directories) == 1:
-        return directories[0]
-    return Path(os.path.commonpath([str(d) for d in directories]))
+    return Path(os.path.commonpath([p if p.is_dir() else p.parent for p in paths]))
 
 
-async def _run_check(paths: tuple[str, ...], staged: bool, config_path: str | None) -> CheckOutcome:
+async def _run_check(
+    paths: tuple[str, ...], staged: bool, config_path: str | None
+) -> AnalysisResult:
     """Run local file check without platform API.
 
     Args:
@@ -499,7 +493,7 @@ async def _run_check(paths: tuple[str, ...], staged: bool, config_path: str | No
         config_path: Config file path (optional)
 
     Returns:
-        CheckOutcome carrying the findings and the files that could not be
+        AnalysisResult carrying the findings and the files that could not be
         analyzed
     """
     # Load config with platform not required (pre-commit mode)
@@ -547,23 +541,15 @@ async def _run_check(paths: tuple[str, ...], staged: bool, config_path: str | No
             # stderr: stdout is the machine-readable channel for --format json
             click.echo(f"Checking {len(files)} staged file(s)...", err=True)
         else:
-            # Collected absolutely, then re-rooted once: a directory's targets
-            # come back relative to that directory, which is only the same as
-            # analysis_root when it is the sole argument.
-            absolute: list[Path] = []
-            for path_obj in resolved:
-                if path_obj.is_file():
-                    absolute.append(path_obj)
-                else:
-                    # Directory - get all .py and .md files
-                    absolute.extend(
-                        path_obj / rel for rel in scanner.get_scan_targets(str(path_obj))
-                    )
-            files = [str(p.relative_to(analysis_root)) for p in absolute]
+            # Deduped by expand_paths, then re-rooted once: a duplicate here
+            # is a whole extra LLM round-trip, not just a repeated report line.
+            files = [
+                str(p.relative_to(analysis_root)) for p in expand_paths(resolved, is_scan_target)
+            ]
             click.echo(f"Checking {len(files)} file(s)...", err=True)
 
         if not files:
-            return CheckOutcome(findings=[], unanalyzed=[])
+            return AnalysisResult()
 
         # Analyze files
         all_findings: list[Finding] = []
@@ -593,7 +579,7 @@ async def _run_check(paths: tuple[str, ...], staged: bool, config_path: str | No
                 unanalyzed.update(result.failed_files)
 
         # Presentation belongs to the command, not the workflow
-        return CheckOutcome(findings=all_findings, unanalyzed=sorted(unanalyzed))
+        return AnalysisResult(findings=all_findings, failed_files=sorted(unanalyzed))
 
     finally:
         # Cleanup

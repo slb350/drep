@@ -33,7 +33,7 @@ class TestConfigDiscoveryConsistency:
 
             # Verify scan command would find this config
             # (Mock the actual scan to avoid needing a real repository)
-            with patch("drep.cli._run_scan", new_callable=AsyncMock) as mock_scan:
+            with patch("drep.cli_workflows._run_scan", new_callable=AsyncMock) as mock_scan:
                 result = runner.invoke(cli, ["scan", "owner/repo"])
 
                 # Should succeed because config is discovered

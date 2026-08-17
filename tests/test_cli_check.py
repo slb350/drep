@@ -171,13 +171,10 @@ class TestCheckCommand:
         # the exit code is 0 even if findings are present.
         # We mock the async _run_check to return findings directly.
 
-        from drep.cli_workflows import CheckOutcome
-        from drep.models.findings import Finding
-
         with runner.isolated_filesystem(temp_dir=tmp_path):
             # Mock _run_check to return findings
             async def mock_run_check(*args, **kwargs):
-                return CheckOutcome(
+                return AnalysisResult(
                     findings=[
                         Finding(
                             type="test",
@@ -187,10 +184,9 @@ class TestCheckCommand:
                             message="Test finding",
                         )
                     ],
-                    unanalyzed=[],
                 )
 
-            with patch("drep.cli._run_check", side_effect=mock_run_check):
+            with patch("drep.cli_workflows._run_check", side_effect=mock_run_check):
                 result = runner.invoke(cli, ["check", ".", "--exit-zero"])
 
                 # Should return exit code 0 despite findings
@@ -399,11 +395,84 @@ class TestCheckPathArguments:
             with patch("drep.cli_workflows.RepositoryScanner") as mock_scanner_class:
                 mock_scanner = mock_scanner_class.return_value
                 mock_scanner.close = AsyncMock()
-                mock_scanner.get_scan_targets.return_value = ["a.py"]
                 mock_scanner.analyze_code_quality = AsyncMock(return_value=AnalysisResult())
                 mock_scanner.analyze_docstrings = AsyncMock(return_value=AnalysisResult())
 
                 result = runner.invoke(cli, ["check", "--config", "config.yaml"])
 
                 assert result.exit_code == 0
-                mock_scanner.get_scan_targets.assert_called_once()
+                # Discovery is path policy, not scanner state - no scanner round-trip
+                assert mock_scanner.analyze_code_quality.call_args.kwargs["files"] == ["a.py"]
+
+
+class TestJsonOutputCarriesIncompleteness:
+    """A JSON consumer must not read a partial run as a complete one.
+
+    Findings alone look identical whether the LLM analyzed every file or none
+    of them; only the exit code differed, which a library caller may not see.
+    """
+
+    def test_json_reports_unanalyzed_files(self, runner, tmp_path):
+        import json
+
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            Path("config.yaml").write_text(
+                yaml.dump({"llm": {"enabled": True, "endpoint": "http://x/v1", "model": "m"}})
+            )
+            Path("test.py").write_text("def foo(): pass")
+
+            with patch("drep.cli_workflows.RepositoryScanner") as mock_scanner_class:
+                mock_scanner = mock_scanner_class.return_value
+                mock_scanner.close = AsyncMock()
+                mock_scanner.analyze_code_quality = AsyncMock(
+                    return_value=AnalysisResult(failed_files=["test.py"])
+                )
+                mock_scanner.analyze_docstrings = AsyncMock(return_value=AnalysisResult())
+
+                result = runner.invoke(
+                    cli, ["check", ".", "--config", "config.yaml", "--format", "json"]
+                )
+
+            payload = json.loads(result.stdout)
+            assert payload["unanalyzed"] == ["test.py"]
+            assert payload["findings"] == []
+
+
+class TestCheckJsonIsMachineReadable:
+    """`--format json` is documented as "JSON output for tools" - so it must parse."""
+
+    def test_status_line_does_not_pollute_json_stdout(self, runner, tmp_path):
+        import json
+
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            Path("config.yaml").write_text(
+                "llm:\n  enabled: true\n  endpoint: http://x/v1\n  model: m\n"
+            )
+            Path("test.py").write_text("def foo(): pass")
+
+            with patch("drep.cli_workflows.RepositoryScanner") as mock_scanner_class:
+                mock_scanner = mock_scanner_class.return_value
+                mock_scanner.get_scan_targets.return_value = ["test.py"]
+                mock_scanner.close = AsyncMock()
+                mock_scanner.analyze_code_quality = AsyncMock(
+                    return_value=AnalysisResult(
+                        findings=[
+                            Finding(
+                                type="bug",
+                                severity="error",
+                                file_path="test.py",
+                                line=1,
+                                message="boom",
+                            )
+                        ]
+                    )
+                )
+                mock_scanner.analyze_docstrings = AsyncMock(return_value=AnalysisResult())
+
+                result = runner.invoke(
+                    cli,
+                    ["check", ".", "--config", "config.yaml", "--format", "json"],
+                )
+
+            # stdout must be parseable on its own - no "Checking N file(s)..." preamble
+            assert json.loads(result.stdout)["findings"][0]["message"] == "boom"

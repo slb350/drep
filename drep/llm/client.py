@@ -65,6 +65,17 @@ logger = logging.getLogger(__name__)
 _UNSET = object()
 
 
+class EmptyLLMResponseError(ValueError):
+    """The model returned no content.
+
+    Not retryable: the same prompt against the same `max_tokens` exhausts its
+    reasoning budget the same way, so retrying burns a full generation per
+    attempt (observed: ~3.5 min and ~$0.16 each) to re-learn what the first
+    attempt already established. Subclasses ValueError so callers that treat
+    an unusable response as a parse failure keep working.
+    """
+
+
 @dataclass
 class LLMResponse:
     """Structured response from an LLM request with metadata.
@@ -542,7 +553,9 @@ class LLMClient:
                     # Extract response (handle both dict and object formats)
                     if self._provider == "bedrock":
                         # Bedrock returns dict
-                        content = response["choices"][0]["message"]["content"]
+                        choice = response["choices"][0]
+                        content = choice["message"]["content"]
+                        finish_reason = choice.get("finish_reason")
                         tokens_used = response["usage"]["total_tokens"]
                         prompt_tokens = response["usage"]["prompt_tokens"]
                         completion_tokens = response["usage"]["completion_tokens"]
@@ -553,22 +566,22 @@ class LLMClient:
                         # (the HTTP fallback in http_compat already defaults it).
                         choice = response.choices[0]
                         content = choice.message.content
+                        finish_reason = getattr(choice, "finish_reason", None)
                         usage = response.usage
                         tokens_used = usage.total_tokens if usage else 0
                         prompt_tokens = usage.prompt_tokens if usage else 0
                         completion_tokens = usage.completion_tokens if usage else 0
 
-                        # `content` is nullable in the OpenAI schema. A reasoning
-                        # model that spends its whole budget on `reasoning`, or a
-                        # refusal, returns null here - which reached the JSON
-                        # parser as "argument of type 'NoneType' is not a
-                        # container". Name the cause instead; finish_reason
-                        # 'length' means raise max_tokens or change model.
-                        if not content:
-                            raise ValueError(
-                                "LLM returned no content "
-                                f"(finish_reason={getattr(choice, 'finish_reason', None)!r})"
-                            )
+                    # After the transport split, so every provider gets it: a
+                    # reasoning model that spends its whole budget on `reasoning`,
+                    # or a refusal, yields empty content. Unguarded it reached the
+                    # JSON parser as "argument of type 'NoneType' is not a
+                    # container", and on bedrock as three stricter-prompt retries
+                    # ending in a misleading parse error.
+                    if not content:
+                        raise EmptyLLMResponseError(
+                            f"LLM returned no content (finish_reason={finish_reason!r})"
+                        )
 
                     # Update actual tokens
                     ctx.set_actual_tokens(tokens_used)
@@ -613,9 +626,13 @@ class LLMClient:
 
                     return llm_response
 
-            except CircuitBreakerOpenError:  # noqa: PERF203 - fail fast, not a retry candidate
-                # Fail fast: an open circuit must not be retried or counted
-                # as a transport failure
+            except (  # noqa: PERF203 - fail fast, neither is a retry candidate
+                CircuitBreakerOpenError,
+                EmptyLLMResponseError,
+            ):
+                # An open circuit must not be retried or counted as a transport
+                # failure; an empty response is deterministic, so retrying it
+                # only spends another full generation to reach the same answer.
                 raise
             except Exception as e:
                 last_exception = e

@@ -17,7 +17,10 @@ _HEADING_EMPTY = re.compile(r"^#{1,6}\s*$")  # '#   ' or '##'
 # match the second '#' of a well-formed '## Heading'.
 _HEADING_NO_SPACE = re.compile(r"^#{1,6}[^#\s]")
 _BARE_URL = re.compile(r"https?://\S+")
-_MARKDOWN_LINK = re.compile(r"\[[^\]]*\]\([^)]*\)")  # a complete [text](url)
+# A complete [text](url). The link text allows one level of nested brackets so
+# the badge construct `[![alt](img)](href)` is matched whole; `[^\]]*` stopped
+# at the image's own `]` and left `](href)` looking like broken syntax.
+_MARKDOWN_LINK = re.compile(r"\[(?:[^\[\]]|\[[^\]]*\])*\]\([^)]*\)")
 
 
 def _blank(match: re.Match[str]) -> str:
@@ -25,20 +28,30 @@ def _blank(match: re.Match[str]) -> str:
     return " " * len(match.group())
 
 
-def _fence_mask(lines: list[str]) -> list[bool]:
-    """One answer to "is this line code?" - True for fenced lines and delimiters.
+def _is_fence_delimiter(line: str) -> bool:
+    """The one test for a fence delimiter, so refining it is a single edit."""
+    return line.strip().startswith("```")
+
+
+def _fence_mask(lines: list[str]) -> tuple[list[bool], list[int]]:
+    """Fence state per line, plus the 1-based line numbers of the delimiters.
 
     Derived once instead of per check: every check that forgot to consult its
     loop's private `in_fence` toggle became a false positive on code samples.
+    Returning the delimiters too keeps the unclosed-fence check from scanning
+    for them a second time.
     """
     mask: list[bool] = []
+    delimiters: list[int] = []
     in_fence = False
-    for line in lines:
-        is_delimiter = line.strip().startswith("```")
-        if is_delimiter:
+    for idx, line in enumerate(lines, start=1):
+        if _is_fence_delimiter(line):
+            delimiters.append(idx)
             in_fence = not in_fence
-        mask.append(in_fence or is_delimiter)
-    return mask
+            mask.append(True)
+        else:
+            mask.append(in_fence)
+    return mask, delimiters
 
 
 class DocumentationAnalyzer:
@@ -70,13 +83,11 @@ class DocumentationAnalyzer:
     def _analyze_markdown(self, content: str) -> list[PatternIssue]:
         issues: list[PatternIssue] = []
         lines = content.splitlines()
-        fenced = _fence_mask(lines)
+        fenced, fence_delimiters = _fence_mask(lines)
 
         # Per-line checks: trailing whitespace, tabs, empty headings,
         # missing space after heading, long lines
-        for idx, line in enumerate(lines, start=1):
-            in_fence = fenced[idx - 1]
-
+        for idx, (line, in_fence) in enumerate(zip(lines, fenced, strict=True), start=1):
             # Trailing whitespace
             if line != line.rstrip(" \t"):
                 issues.append(
@@ -104,10 +115,10 @@ class DocumentationAnalyzer:
             # Heading checks. Guarded on the cheap prefix test first: most lines
             # cannot be headings, and the regexes are the bulk of this loop.
             if not in_fence and line.startswith("#"):
+                level = len(line) - len(line.lstrip("#"))
+
                 # Empty heading like '#   ' or '##'
                 if _HEADING_EMPTY.match(line):
-                    # The regex only matches a run of '#', so split() is never empty
-                    level = len(line.split()[0])
                     issues.append(
                         PatternIssue(
                             type="empty_heading",
@@ -120,7 +131,6 @@ class DocumentationAnalyzer:
 
                 # Missing space after heading marker, e.g. '#Heading'
                 elif _HEADING_NO_SPACE.match(line):
-                    level = len(line) - len(line.lstrip("#"))
                     issues.append(
                         PatternIssue(
                             type="missing_space_after_heading",
@@ -145,8 +155,8 @@ class DocumentationAnalyzer:
 
         # Multiple blank lines (>=3) outside code fences
         blank_run = 0
-        for idx, line in enumerate(lines, start=1):
-            if fenced[idx - 1]:
+        for idx, (line, in_fence) in enumerate(zip(lines, fenced, strict=True), start=1):
+            if in_fence:
                 blank_run = 0
                 continue
             if line.strip() == "":
@@ -177,8 +187,8 @@ class DocumentationAnalyzer:
             )
 
         # Basic link syntax checks and bare URL detection (outside fences)
-        for idx, line in enumerate(lines, start=1):
-            if fenced[idx - 1]:
+        for idx, (line, in_fence) in enumerate(zip(lines, fenced, strict=True), start=1):
+            if in_fence:
                 continue
 
             # Inline code is a literal to type, not prose: a URL or a stray
@@ -186,10 +196,14 @@ class DocumentationAnalyzer:
             # Blanked rather than removed so columns still match the real line.
             uncoded = _INLINE_CODE.sub(_blank, line) if "`" in line else line
 
-            # Bare URL not wrapped in a markdown link. Blank the well-formed
-            # links and look at what is left, rather than letting one link on
-            # the line excuse every bare URL beside it.
-            m = _BARE_URL.search(_MARKDOWN_LINK.sub(_blank, uncoded))
+            # Well-formed links blanked out once, then reused by both checks
+            # below. Guarded on the cheap substring test: most lines hold no
+            # link at all, and sub() copies the whole string regardless.
+            unlinked = _MARKDOWN_LINK.sub(_blank, uncoded) if "](" in uncoded else uncoded
+
+            # A bare URL is whatever URL survives that blanking - one link on
+            # the line must not excuse every bare URL beside it.
+            m = _BARE_URL.search(unlinked)
             if m:
                 issues.append(
                     PatternIssue(
@@ -201,11 +215,11 @@ class DocumentationAnalyzer:
                     )
                 )
 
-            # Unmatched brackets, or unmatched parens in a line that actually
-            # holds a link. Bare paren counting flags every prose parenthetical
-            # that wraps onto a second line.
-            if uncoded.count("[") != uncoded.count("]") or (
-                "](" in uncoded and uncoded.count("(") != uncoded.count(")")
+            # Brackets or parens left unbalanced *after* the well-formed links
+            # are removed. Counting over the raw line flags every prose
+            # parenthetical that wraps onto a second line.
+            if unlinked.count("[") != unlinked.count("]") or (
+                "](" in unlinked and unlinked.count("(") != unlinked.count(")")
             ):
                 issues.append(
                     PatternIssue(
@@ -217,20 +231,17 @@ class DocumentationAnalyzer:
                     )
                 )
 
-        # Unclosed code fence: odd number of ```
-        fence_count = sum(1 for line in lines if line.strip().startswith("```"))
-        if fence_count % 2 == 1:
-            for idx in range(len(lines), 0, -1):
-                if lines[idx - 1].strip().startswith("```"):
-                    issues.append(
-                        PatternIssue(
-                            type="unclosed_code_fence",
-                            line=idx,
-                            column=1,
-                            matched_text=lines[idx - 1],
-                            replacement="```",
-                        )
-                    )
-                    break
+        # Unclosed code fence: an odd number of delimiters leaves the last one open
+        if len(fence_delimiters) % 2 == 1:
+            idx = fence_delimiters[-1]
+            issues.append(
+                PatternIssue(
+                    type="unclosed_code_fence",
+                    line=idx,
+                    column=1,
+                    matched_text=lines[idx - 1],
+                    replacement="```",
+                )
+            )
 
         return issues

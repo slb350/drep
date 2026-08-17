@@ -420,7 +420,19 @@ class IntelligentCache:
             response: LLM response to cache
             tokens_used: Tokens used by request
             latency_ms: Request latency in milliseconds
+
+        Note:
+            A response carrying an empty ``content`` is dropped rather than
+            stored. Such a response is unusable, and caching one poisons every
+            later run for the whole TTL - the caller replays the same failure
+            without ever calling the LLM again to heal itself. Responses with
+            no ``content`` key at all are stored as-is; this cache is a general
+            store and only ``content`` carries that meaning.
         """
+        if "content" in response and not response["content"]:
+            logger.warning("Refusing to cache a response with empty content")
+            return
+
         try:
             cache_key = self._make_key(prompt, code, model, temperature, commit_sha)
             cache_file = self.cache_dir / f"{cache_key}.json"

@@ -1,6 +1,35 @@
 """Finding and analysis result models."""
 
+from enum import Enum
+
 from pydantic import BaseModel, Field
+
+
+class Severity(str, Enum):
+    """Finding severity, lowest first.
+
+    The single vocabulary for `Finding.severity`. Producers map their own
+    scales onto it (see llm_findings.to_findings); consumers that gate on
+    severity order it with SEVERITY_RANK rather than inventing a ranking.
+    """
+
+    # (str, Enum) rather than StrEnum: this package supports Python 3.10.
+    INFO = "info"
+    WARNING = "warning"
+    ERROR = "error"
+
+    def __str__(self) -> str:
+        """Render as the bare value.
+
+        Without this, f-strings interpolate `Severity.WARNING` - which lands in
+        issue bodies and CLI output. StrEnum gets this for free; (str, Enum) on
+        3.11+ does not.
+        """
+        return self.value
+
+
+# Ordered ranks for threshold comparisons ("block at or above this severity").
+SEVERITY_RANK: dict[str, int] = {s.value: rank for rank, s in enumerate(Severity)}
 
 
 class Typo(BaseModel):
@@ -28,7 +57,7 @@ class Finding(BaseModel):
     """Generic finding for issue creation."""
 
     type: str  # 'typo', 'pattern'
-    severity: str  # 'info', 'warning', 'error'
+    severity: Severity
     file_path: str
     line: int
     column: int | None = None

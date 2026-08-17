@@ -10,7 +10,7 @@ This module deliberately has no drep imports: analyzer packages
 """
 
 import os
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from pathlib import Path
 
 SCAN_TARGET_SUFFIXES = frozenset({".py", ".md"})
@@ -65,6 +65,24 @@ def is_ignored_dir(name: str) -> bool:
     """
     folded = name.casefold()
     return folded in IGNORED_DIRS or folded.endswith(".egg-info")
+
+
+def expand_paths(paths: Iterable[str | Path], predicate: Callable[[str], bool]) -> list[Path]:
+    """Expand a mix of files and directories into the matching files, deduped.
+
+    Deduped because the same file can be named twice - `drep check a.py .` -
+    and a duplicate costs a whole extra LLM round-trip, not just a repeated
+    line of output. Explicit filenames are filtered by the same predicate as
+    walked ones, so naming a file cannot smuggle in a type drep does not read.
+    """
+    found: set[Path] = set()
+    for raw in paths:
+        path_obj = Path(raw)
+        if path_obj.is_dir():
+            found.update(walk_targets(path_obj, predicate))
+        elif predicate(path_obj.name):
+            found.add(path_obj)
+    return sorted(found)
 
 
 def walk_targets(root: str | Path, predicate: Callable[[str], bool]) -> Iterator[Path]:

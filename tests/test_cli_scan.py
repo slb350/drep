@@ -21,7 +21,7 @@ class TestScanCommand:
 
     def test_scan_accepts_valid_repository_format(self, runner, temp_config_file):
         """Test that scan accepts valid owner/repo format."""
-        with patch("drep.cli._run_scan", new_callable=AsyncMock) as mock_scan:
+        with patch("drep.cli_workflows._run_scan", new_callable=AsyncMock) as mock_scan:
             result = runner.invoke(cli, ["scan", "steve/drep", "--config", str(temp_config_file)])
 
             assert result.exit_code == 0
@@ -42,7 +42,7 @@ class TestScanCommand:
                 )
             )
 
-            with patch("drep.cli._run_scan", new_callable=AsyncMock) as mock_scan:
+            with patch("drep.cli_workflows._run_scan", new_callable=AsyncMock) as mock_scan:
                 result = runner.invoke(cli, ["scan", "owner/repo"])
 
                 assert result.exit_code == 0
@@ -50,7 +50,7 @@ class TestScanCommand:
 
     def test_scan_respects_config_option(self, runner, temp_config_file):
         """Test that scan respects --config option."""
-        with patch("drep.cli._run_scan", new_callable=AsyncMock) as mock_scan:
+        with patch("drep.cli_workflows._run_scan", new_callable=AsyncMock) as mock_scan:
             result = runner.invoke(cli, ["scan", "owner/repo", "--config", str(temp_config_file)])
 
             assert result.exit_code == 0
@@ -88,7 +88,7 @@ class TestScanCommand:
 
             with (
                 patch("drep.cli_wizard.load_config") as mock_load,
-                patch("drep.cli._run_scan", new_callable=AsyncMock) as mock_run,
+                patch("drep.cli_workflows._run_scan", new_callable=AsyncMock) as mock_run,
             ):
                 mock_load.return_value = gitea_config
 
@@ -115,7 +115,7 @@ class TestScanCommand:
 
             with (
                 patch("drep.cli_wizard.load_config") as mock_load,
-                patch("drep.cli._run_scan", new_callable=AsyncMock) as mock_run,
+                patch("drep.cli_workflows._run_scan", new_callable=AsyncMock) as mock_run,
             ):
                 mock_load.return_value = github_config
 
@@ -147,7 +147,7 @@ class TestScanCommand:
 
             with (
                 patch("drep.cli_wizard.load_config") as mock_load,
-                patch("drep.cli._run_scan", new_callable=AsyncMock) as mock_run,
+                patch("drep.cli_workflows._run_scan", new_callable=AsyncMock) as mock_run,
             ):
                 mock_load.return_value = both_config
 
@@ -233,7 +233,12 @@ class TestScanWorkflow:
         # Mock the LLM-powered analysis methods. AnalysisResult validates its
         # contents, so this is a real Finding rather than a MagicMock.
         finding = Finding(
-            type="bug", severity="high", file_path="test.py", line=1, message="Test finding"
+            # "high" is the LLM vocabulary; llm_findings maps it to "error"
+            type="bug",
+            severity="error",
+            file_path="test.py",
+            line=1,
+            message="Test finding",
         )
         scanner.analyze_code_quality = AsyncMock(return_value=AnalysisResult(findings=[finding]))
         scanner.analyze_docstrings = AsyncMock(return_value=AnalysisResult())
@@ -632,3 +637,73 @@ class TestScanWorkflow:
 
             # Verify rmtree was called (cleanup attempted)
             mock_rmtree.assert_called_once()
+
+
+class TestIncompleteScansAreNotRecorded:
+    """A scan that skipped files must not claim that SHA was scanned.
+
+    scan_repository derives the next run's changed-file set from the recorded
+    SHA, so recording after a partial scan permanently excludes every file the
+    LLM never saw - until it happens to change again.
+    """
+
+    @patch("drep.cli_workflows.IssueManager")
+    @patch("drep.cli_workflows.DocumentationAnalyzer")
+    @patch("drep.cli_workflows.RepositoryScanner")
+    @patch("drep.cli_workflows.init_database")
+    @patch("drep.cli_workflows.GiteaAdapter")
+    @patch("drep.cli_workflows.load_config")
+    @patch("drep.cli_workflows.Repo")
+    def test_record_scan_is_skipped_when_files_went_unanalyzed(
+        self,
+        mock_repo_class,
+        mock_load_config,
+        mock_adapter_class,
+        mock_init_db,
+        mock_scanner_class,
+        mock_analyzer_class,
+        mock_issue_manager_class,
+        runner,
+        tmp_path,
+    ):
+        from pydantic import SecretStr
+
+        config = MagicMock()
+        config.gitea.url = "http://test"
+        config.gitea.token = SecretStr("test-token")
+        config.documentation = MagicMock()
+        config.database_url = "sqlite:///./test.db"
+        mock_load_config.return_value = config
+
+        adapter = AsyncMock()
+        adapter.get_default_branch = AsyncMock(return_value="main")
+        adapter.close = AsyncMock()
+        mock_adapter_class.return_value = adapter
+        mock_init_db.return_value = MagicMock()
+
+        scanner = MagicMock()
+        scanner.scan_repository = AsyncMock(return_value=(["test.py"], "abc123"))
+        scanner.record_scan = MagicMock()
+        scanner.llm_client = None
+        scanner.close = AsyncMock()
+        # The code-quality pass could not analyze the only file
+        scanner.analyze_code_quality = AsyncMock(
+            return_value=AnalysisResult(failed_files=["test.py"])
+        )
+        scanner.analyze_docstrings = AsyncMock(return_value=AnalysisResult())
+        mock_scanner_class.return_value = scanner
+
+        analyzer = MagicMock()
+        analyzer.analyze_file = AsyncMock(return_value=MagicMock(to_findings=list))
+        mock_analyzer_class.return_value = analyzer
+
+        issue_manager = MagicMock()
+        issue_manager.create_issues_for_findings = AsyncMock()
+        mock_issue_manager_class.return_value = issue_manager
+
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            Path("test.yaml").write_text("gitea:\n  url: http://test\n  token: test-token")
+            result = runner.invoke(cli, ["scan", "owner/repo", "--config", "test.yaml"])
+
+        assert "incomplete" in result.output.lower()
+        scanner.record_scan.assert_not_called()

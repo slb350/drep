@@ -32,6 +32,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`drep-lint-docs` hook id** in `.pre-commit-hooks.yaml` for downstream consumers.
 
 ### Changed - 2026-08-16
+- **`drep check --format json` emits an object**, `{"findings": [...], "unanalyzed": [...]}`,
+  and always emits it. A bare array looked identical whether every file was analyzed or
+  none were. Safe to change: the array was unparseable until the status-line fix in this
+  same release, so no working consumer existed.
+- **`Finding.severity` is a validated `Severity` enum** with `SEVERITY_RANK` beside it.
+  The ordering previously lived in `drep/cli.py` and defaulted unknown values to `info`,
+  so a producer emitting the PR-review vocabulary (`critical`) could never block a gate.
+- **`_run_check` returns `AnalysisResult`**; the near-identical `CheckOutcome` is gone.
 - **Scanner passes return `AnalysisResult(findings, failed_files)`** instead of a bare
   finding list. `analyze_code_quality` / `analyze_docstrings` now name the files they could
   not analyze, rather than leaving the caller to infer it from a progress callback.
@@ -42,6 +50,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   1.3.0), matching the existing `ParallelAnalyzer` deprecation.
 
 ### Fixed - 2026-08-16
+- **An incomplete `drep scan` recorded its SHA as scanned.** The next run diffs against
+  that SHA, so every file the LLM never saw was excluded from all future incremental scans
+  until it changed again - the same "unanalyzed is not clean" mistake, one layer down.
+  A scan with unanalyzed files is no longer recorded.
+- **`drep check a.py .` analyzed `a.py` twice.** Path expansion is now a single deduping
+  `file_targets.expand_paths()` shared with `lint-docs`; a duplicate costs a whole extra
+  LLM round-trip, not just a repeated report line.
+- **An empty response was retried three times.** `finish_reason='length'` is deterministic,
+  so retrying spent a full reasoning generation per attempt to reach the same answer.
+  `EmptyLLMResponseError` now fails fast alongside `CircuitBreakerOpenError`.
+- **The empty-content guard missed Bedrock**, which returns `""` rather than null; the
+  check now sits after the transport split so every provider gets it.
+- **The cache accepted poisoned entries on write**, not just filtered them on read.
+- **Badge syntax `[![alt](img)](href)` was flagged as broken markdown** - the link pattern
+  stopped at the image's own `]`. 11 false positives on this repo's own README.
+- **`drep lint-docs` paid 119ms of unused import** on every commit (190ms → 71ms): `cli.py`
+  imported `cli_workflows` at module scope, pulling in sqlalchemy, GitPython and the LLM
+  client for a command that touches none of them.
+- **Docstring generation awaited one function at a time**, so a file with N undocumented
+  functions cost the sum of N round-trips; they are now gathered under the rate limiter.
 - **`drep check` reported unanalyzed files as clean.** `CodeQualityAnalyzer.analyze_file`
   and `DocstringGenerator._generate_docstring` swallowed every exception and returned
   empty, so an unreachable LLM endpoint printed "✓ No issues found" and exited 0 — a

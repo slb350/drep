@@ -16,11 +16,11 @@ from drep.cli_wizard import (
     _collect_platform_config,
     _write_and_validate_config,
 )
-from drep.cli_workflows import _run_check, _run_review, _run_scan
 from drep.config import find_config_file, get_user_config_dir, load_config
 from drep.constants import default_metrics_file
-from drep.core.file_targets import is_markdown, walk_targets
+from drep.core.file_targets import expand_paths, is_markdown
 from drep.documentation.analyzer import DocumentationAnalyzer
+from drep.models.findings import SEVERITY_RANK
 
 
 class OutputFormat(str, Enum):
@@ -28,10 +28,6 @@ class OutputFormat(str, Enum):
 
     TEXT = "text"
     JSON = "json"
-
-
-# Finding.severity, ordered. Anything at or above the --fail-on rank blocks.
-SEVERITY_RANK = {"info": 0, "warning": 1, "error": 2}
 
 
 def _resolve_config_file(config: str | None) -> Path | None:
@@ -252,6 +248,11 @@ def scan(repository, config, show_metrics, show_progress):
 
     try:
         # Run async scan
+        # Imported here, not at module scope: cli_workflows pulls in sqlalchemy,
+        # GitPython and the LLM client, none of which `lint-docs` touches - and
+        # lint-docs runs on every commit as a pre-commit hook.
+        from drep.cli_workflows import _run_scan
+
         asyncio.run(_run_scan(owner, repo_name, str(config_path), show_metrics, show_progress))
         click.echo("✓ Scan complete")
     except click.Abort:
@@ -291,6 +292,8 @@ def review(repository, pr_number, config, post):
 
     try:
         # Run async review
+        from drep.cli_workflows import _run_review
+
         asyncio.run(_run_review(owner, repo_name, pr_number, str(config_path), post))
         click.echo("✓ Review complete")
     except FileNotFoundError:
@@ -351,14 +354,22 @@ def check(paths, staged, config, exit_zero, format, fail_on):
             config_path = str(config_file)
 
     # Run async check
+    from drep.cli_workflows import _run_check
+
     outcome = asyncio.run(_run_check(paths or (".",), staged, config_path))
     findings = outcome.findings
-    # Everything is reported; the threshold only decides what blocks.
+    # Everything is reported; the threshold only decides what blocks. Indexing
+    # rather than .get(): Finding.severity is a validated Severity, so an
+    # unrankable value is a bug to surface, not a finding to silently pass.
     threshold = SEVERITY_RANK[fail_on]
-    blocking = [f for f in findings if SEVERITY_RANK.get(f.severity, 0) >= threshold]
+    blocking = [f for f in findings if SEVERITY_RANK[f.severity] >= threshold]
+
+    # JSON is a machine channel: always emit, so "no findings" and "nothing ran"
+    # are distinguishable without parsing prose.
+    if format == OutputFormat.JSON.value or findings:
+        _output_findings(outcome, format)
 
     if findings:
-        _output_findings(findings, format)
         if exit_zero:
             # Warning mode - print to stdout
             click.echo(f"\n⚠ Found {len(findings)} issue(s) (warning mode)")
@@ -367,37 +378,49 @@ def check(paths, staged, config, exit_zero, format, fail_on):
             click.echo(f"\n✗ Found {len(blocking)} issue(s) at or above '{fail_on}'", err=True)
         else:
             click.echo(f"\n⚠ Found {len(findings)} issue(s), all below '{fail_on}'")
-    elif not outcome.unanalyzed:
+    elif not outcome.failed_files:
         click.echo("✓ No issues found")
 
     # An unanalyzed file is not a clean file. Reported after the findings so it
     # is the last thing on screen, and with its own exit code so a hook can tell
     # "your code has issues" from "drep could not run".
-    if outcome.unanalyzed:
+    if outcome.failed_files:
         click.echo(
-            f"\n✗ {len(outcome.unanalyzed)} file(s) could not be analyzed - results are "
-            f"incomplete (see errors above): {', '.join(outcome.unanalyzed)}",
+            f"\n✗ {len(outcome.failed_files)} file(s) could not be analyzed - results are "
+            f"incomplete (see errors above): {', '.join(outcome.failed_files)}",
             err=True,
         )
 
     if exit_zero:
         return
-    if outcome.unanalyzed:
+    if outcome.failed_files:
         raise SystemExit(2)
     if blocking:
         raise SystemExit(1)
 
 
-def _output_findings(findings, format_type):
-    """Output findings in specified format.
+def _output_findings(outcome, format_type):
+    """Output an analysis outcome in the specified format.
+
+    Takes the whole outcome, not just its findings: a bare findings array looks
+    identical whether every file was analyzed or none were, leaving a JSON
+    consumer to infer incompleteness from an exit code it may never see.
 
     Args:
-        findings: List of Finding objects
+        outcome: AnalysisResult from the run
         format_type: OutputFormat value ('text' or 'json')
     """
+    findings = outcome.findings
     if format_type == OutputFormat.JSON.value:
-        findings_dict = [f.model_dump() for f in findings]
-        click.echo(json.dumps(findings_dict, indent=2))
+        click.echo(
+            json.dumps(
+                {
+                    "findings": [f.model_dump(mode="json") for f in findings],
+                    "unanalyzed": outcome.failed_files,
+                },
+                indent=2,
+            )
+        )
     else:
         # Text format: file:line:column: severity: message
         click.echo()
@@ -482,24 +505,6 @@ def metrics(days, export, detailed):
         click.echo(f"\n✓ Metrics exported to {export_path}")
 
 
-def _collect_markdown(paths: tuple[str, ...]) -> list[Path]:
-    """Expand files and directories into the markdown files to lint.
-
-    Directories go through the shared pruning walk, so vendored trees (venv/,
-    build/, *.egg-info) are never descended into rather than filtered after.
-    """
-    md_files: list[Path] = []
-    for raw in paths:
-        path_obj = Path(raw)
-        if path_obj.is_file():
-            if is_markdown(path_obj):
-                md_files.append(path_obj)
-        else:
-            md_files.extend(walk_targets(path_obj, is_markdown))
-    # A file named twice (directly and via its directory) is still one file
-    return sorted(set(md_files))
-
-
 @cli.command()
 @click.argument("paths", nargs=-1, type=click.Path(exists=True))
 @click.option("--output", type=click.Choice(["text", "json"]), default="text", help="Output format")
@@ -522,7 +527,7 @@ def lint_docs(paths, output, strict):
     config = DocumentationConfig(enabled=True, markdown_checks=True)
     analyzer = DocumentationAnalyzer(config)
 
-    md_files = _collect_markdown(paths or (".",))
+    md_files = expand_paths(paths or (".",), is_markdown)
 
     if not md_files:
         click.echo("No markdown files found.")

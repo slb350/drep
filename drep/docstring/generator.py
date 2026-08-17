@@ -15,6 +15,7 @@ Current capabilities:
    by the standard LLM settings already present in the main config.
 """
 
+import asyncio
 import logging
 import textwrap
 
@@ -125,8 +126,6 @@ class DocstringGenerator:
         Returns:
             List of Finding objects for missing/poor docstrings
         """
-        findings = []
-
         # Extract functions from file
         try:
             functions = extract_functions(content)
@@ -141,22 +140,31 @@ class DocstringGenerator:
             f"Analyzing {len(functions_to_analyze)}/{len(functions)} functions in {file_path}"
         )
 
-        # Analyze each function. Missing and poor-quality docstrings take the
-        # same LLM round-trip and differ only in how the Finding is labelled,
-        # so the distinction is passed in rather than patched on afterwards.
+        # Missing and poor-quality docstrings take the same LLM round-trip and
+        # differ only in how the Finding is labelled, so the distinction is
+        # passed in rather than patched on afterwards.
+        needs_docstring: list[tuple[FunctionInfo, bool]] = []
         for func_info in functions_to_analyze:
             if func_info.docstring is None:
-                poor = False
+                needs_docstring.append((func_info, False))
             elif self._is_poor_docstring(func_info.docstring):
-                poor = True
-            else:
-                continue
+                needs_docstring.append((func_info, True))
 
-            findings.append(
-                await self._generate_docstring(
-                    file_path, func_info, content, repo_id, commit_sha, poor=poor
+        # Gathered, not awaited one at a time: the calls are independent and the
+        # RateLimiter already caps in-flight requests. Serially, a file with N
+        # undocumented functions cost the *sum* of N round trips - the same
+        # argument RepositoryScanner._analyze_files_with makes one level up.
+        lines = content.split("\n")
+        findings = list(
+            await asyncio.gather(
+                *(
+                    self._generate_docstring(
+                        file_path, func_info, content, repo_id, commit_sha, poor=poor, lines=lines
+                    )
+                    for func_info, poor in needs_docstring
                 )
             )
+        )
 
         logger.info(f"Found {len(findings)} docstring issues in {file_path}")
 
@@ -239,6 +247,7 @@ class DocstringGenerator:
         repo_id: str,
         commit_sha: str,
         poor: bool = False,
+        lines: list[str] | None = None,
     ) -> Finding:
         """Generate a docstring for a function that is missing or has a poor one.
 
@@ -249,6 +258,8 @@ class DocstringGenerator:
             repo_id: Repository ID
             commit_sha: Commit SHA
             poor: The function has a docstring, but a low-quality one
+            lines: full_content pre-split, so a file with N functions splits once
+                rather than N times
 
         Returns:
             Finding with the suggested docstring
@@ -258,7 +269,8 @@ class DocstringGenerator:
                 caller counts the file as unanalyzed instead of clean.
         """
         # Extract function code
-        lines = full_content.split("\n")
+        if lines is None:
+            lines = full_content.split("\n")
         start = max(0, func_info.line_number - 1)
         # Approximate end using complexity as a proxy for function length
         # Note: This may capture slightly more/fewer lines than the actual function body

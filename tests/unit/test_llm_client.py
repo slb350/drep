@@ -788,25 +788,38 @@ class TestEmptyContentResponses:
         return create
 
     @pytest.mark.asyncio
-    async def test_none_content_raises_a_diagnostic_error(self):
-        from drep.llm.client import LLMClient
-
-        client = LLMClient(endpoint="http://localhost:1234/v1", model="m", max_retries=1)
-        client.client = _FakeChat(self._transport(None, finish_reason="length"))
-
-        with pytest.raises(ValueError, match="no content"):
-            await client.analyze_code("sys", "code")
-
-    @pytest.mark.asyncio
-    async def test_error_names_the_finish_reason(self):
+    async def test_none_content_raises_naming_the_finish_reason(self):
         """'length' is the actionable case - raise max_tokens or drop the reasoning model."""
         from drep.llm.client import LLMClient
 
         client = LLMClient(endpoint="http://localhost:1234/v1", model="m", max_retries=1)
         client.client = _FakeChat(self._transport(None, finish_reason="length"))
 
-        with pytest.raises(ValueError, match="length"):
+        with pytest.raises(ValueError, match=r"no content.*length"):
             await client.analyze_code("sys", "code")
+
+    @pytest.mark.asyncio
+    async def test_empty_content_is_not_retried(self):
+        """Deterministic: the same prompt exhausts the same budget every time.
+
+        Retrying spent a full reasoning generation per attempt (~3.5 min and
+        ~$0.16 each) to re-learn what attempt one already established.
+        """
+        from drep.llm.client import LLMClient
+
+        calls = {"n": 0}
+        inner = self._transport(None, finish_reason="length")
+
+        async def counting(**kwargs):
+            calls["n"] += 1
+            return await inner(**kwargs)
+
+        client = LLMClient(endpoint="http://localhost:1234/v1", model="m", max_retries=3)
+        client.client = _FakeChat(counting)
+
+        with pytest.raises(ValueError, match="no content"):
+            await client.analyze_code("sys", "code")
+        assert calls["n"] == 1
 
     @pytest.mark.asyncio
     async def test_normal_content_still_returns(self):
@@ -826,8 +839,6 @@ class TestEmptyContentResponses:
         choked on it, so every later run replayed content=None from cache and
         failed in 0.6s without ever calling the LLM again.
         """
-        from unittest.mock import MagicMock
-
         from drep.llm.client import LLMClient
 
         cache = MagicMock()
