@@ -5,13 +5,21 @@ use std::path::{Path, PathBuf};
 
 use crate::analysis::payload::render;
 use crate::diff::hunks::{Hunk, HunkLine};
+use crate::languages;
+use crate::languages::spec::LanguageSupport;
+
+/// The Rust entry from the registry.
+///
+/// `render` takes a `LanguageSupport` rather than a name, so these tests
+/// cannot pass a string that drifts from what the registry would say. The
+/// payload header therefore reads `Rust` (the `display_name`), never `rust`
+/// (the registry key).
+fn rust() -> &'static LanguageSupport {
+    languages::detect(Path::new("probe.rs")).expect("rust is a registered language")
+}
 
 fn context(text: &str) -> HunkLine {
     HunkLine::Context(text.to_owned())
-}
-
-fn context_owned(text: String) -> HunkLine {
-    HunkLine::Context(text)
 }
 
 fn added(text: &str) -> HunkLine {
@@ -24,8 +32,7 @@ fn removed(text: &str) -> HunkLine {
 
 #[test]
 fn empty_hunk_slice_returns_none() {
-    let path = Path::new("empty.rs");
-    assert!(render(path, "rust", &[]).is_none());
+    assert!(render(rust(), &[]).is_none());
 }
 
 #[test]
@@ -52,12 +59,11 @@ fn a_known_hunk_matches_the_exact_payload_text() {
         ],
     };
 
-    let payload =
-        render(Path::new("src/lib.rs"), "rust", std::slice::from_ref(&hunk)).expect("render");
+    let payload = render(rust(), std::slice::from_ref(&hunk)).expect("render");
 
     let expected = "\
 File: src/lib.rs
-Language: rust
+Language: Rust
 
 Review the lines marked `+`. Lines with no marker are unchanged context. Lines marked `-` were removed and have no line number; do not report findings on them. Report each finding using the line number shown in the gutter.
 
@@ -84,8 +90,7 @@ fn removed_line_renders_with_six_spaces_and_does_not_consume_a_number() {
         lines: vec![context("before"), removed("deleted"), context("after")],
     };
 
-    let payload =
-        render(Path::new("counter.rs"), "rust", std::slice::from_ref(&hunk)).expect("render");
+    let payload = render(rust(), std::slice::from_ref(&hunk)).expect("render");
 
     assert!(
         payload.text.contains("-       | deleted"),
@@ -110,12 +115,7 @@ fn valid_lines_uses_file_line_numbers_not_payload_relative_indices() {
         lines: vec![context("hi")],
     };
 
-    let payload = render(
-        Path::new("anchored.rs"),
-        "rust",
-        std::slice::from_ref(&hunk),
-    )
-    .expect("render");
+    let payload = render(rust(), std::slice::from_ref(&hunk)).expect("render");
 
     assert!(
         payload.valid_lines.contains(&200),
@@ -153,7 +153,7 @@ fn valid_lines_contains_context_and_added_numbers_only() {
         ],
     };
 
-    let payload = render(Path::new("mix.rs"), "rust", std::slice::from_ref(&hunk)).expect("render");
+    let payload = render(rust(), std::slice::from_ref(&hunk)).expect("render");
 
     let expected: BTreeSet<u32> = [10, 11, 12].into_iter().collect();
     assert_eq!(
@@ -173,7 +173,7 @@ fn two_hunks_with_a_gap_emit_a_single_omission_line() {
         new_start: 1,
         new_count: 30,
         lines: (1..=30)
-            .map(|n| context_owned(format!("line {n}")))
+            .map(|n| context(&format!("line {n}")))
             .collect::<Vec<_>>(),
     };
     let hunk_b = Hunk {
@@ -185,7 +185,7 @@ fn two_hunks_with_a_gap_emit_a_single_omission_line() {
         lines: vec![context("line 73")],
     };
 
-    let payload = render(Path::new("wide.rs"), "rust", &[hunk_a, hunk_b.clone()]).expect("render");
+    let payload = render(rust(), &[hunk_a, hunk_b.clone()]).expect("render");
 
     let expected = "... 42 lines omitted ...\n";
     let occurrences = payload.text.matches(expected).count();
@@ -209,7 +209,7 @@ fn adjacent_hunks_produce_no_omission_line() {
         new_start: 1,
         new_count: 5,
         lines: (1..=5)
-            .map(|n| context_owned(format!("line {n}")))
+            .map(|n| context(&format!("line {n}")))
             .collect::<Vec<_>>(),
     };
     let hunk_b = Hunk {
@@ -221,7 +221,7 @@ fn adjacent_hunks_produce_no_omission_line() {
         lines: vec![context("line 6")],
     };
 
-    let payload = render(Path::new("touches.rs"), "rust", &[hunk_a, hunk_b]).expect("render");
+    let payload = render(rust(), &[hunk_a, hunk_b]).expect("render");
 
     assert!(
         !payload.text.contains("lines omitted"),
@@ -244,14 +244,8 @@ fn whole_file_uses_the_whole_file_scope_sentence_diff_uses_marked_lines() {
         lines: vec![added("brand new")],
     };
 
-    let whole_payload =
-        render(Path::new("solo.rs"), "rust", std::slice::from_ref(&whole)).expect("whole render");
-    let diff_payload = render(
-        Path::new("delta.rs"),
-        "rust",
-        std::slice::from_ref(&diff_hunk),
-    )
-    .expect("diff render");
+    let whole_payload = render(rust(), std::slice::from_ref(&whole)).expect("whole render");
+    let diff_payload = render(rust(), std::slice::from_ref(&diff_hunk)).expect("diff render");
 
     assert!(
         whole_payload.text.contains(

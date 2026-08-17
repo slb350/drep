@@ -197,16 +197,19 @@ fn numbered_new_lines_skips_removed_lines_without_advancing() {
         ],
     };
 
-    let numbers: Vec<u32> = hunk
-        .numbered_new_lines()
-        .into_iter()
-        .map(|(n, _)| n)
-        .collect();
+    let numbers: Vec<u32> = hunk.numbered_new_lines().map(|(n, _)| n).collect();
     assert_eq!(numbers, vec![100, 101, 102]);
 }
 
 #[test]
-fn non_target_files_in_the_diff_are_dropped() {
+fn the_parser_is_free_of_scan_target_policy() {
+    // Which files drep reviews is a product decision and lives in `mod.rs`
+    // beside `filter_scan_targets`, not in a mechanical diff parser. The
+    // parser reports every file the diff mentions; `staged_hunks` is what
+    // drops `Cargo.lock`, pinned by
+    // `staged_hunks_returns_no_hunk_for_cargo_lock`. Keeping the policy out
+    // of here is what lets a future caller with a different scope reuse the
+    // parser without threading a predicate through it.
     let diff = "diff --git a/Cargo.lock b/Cargo.lock\n\
                  --- a/Cargo.lock\n\
                  +++ b/Cargo.lock\n\
@@ -221,8 +224,13 @@ fn non_target_files_in_the_diff_are_dropped() {
                  +new\n";
 
     let hunks = parse_unified_diff(diff);
-    assert_eq!(hunks.len(), 1, "Cargo.lock must be filtered, got {hunks:?}");
-    assert_eq!(hunks[0].file_path, PathBuf::from("src/main.rs"));
+    let paths: Vec<&PathBuf> = hunks.iter().map(|h| &h.file_path).collect();
+    assert_eq!(
+        paths,
+        vec![&PathBuf::from("Cargo.lock"), &PathBuf::from("src/main.rs"),],
+        "the parser must report every file the diff mentions, applying no \
+         scan-target policy of its own"
+    );
 }
 
 #[test]
@@ -261,10 +269,6 @@ fn whole_file_yields_only_context_lines_starting_at_one() {
     assert_eq!(hunk.new_count, 3);
     assert_eq!(hunk.lines.len(), 3);
     assert!(hunk.lines.iter().all(|l| matches!(l, HunkLine::Context(_))));
-    let numbers: Vec<u32> = hunk
-        .numbered_new_lines()
-        .into_iter()
-        .map(|(n, _)| n)
-        .collect();
+    let numbers: Vec<u32> = hunk.numbered_new_lines().map(|(n, _)| n).collect();
     assert_eq!(numbers, vec![1, 2, 3]);
 }

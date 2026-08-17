@@ -7,6 +7,61 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Landed - 2026-08-17 — Phase 4a cleanup (`/simplify`)
+
+A four-agent `/simplify` pass over 8ec1ed1. The findings that mattered were
+structural, and the first one is the reason the pass was worth running:
+
+**The line-numbering rule existed twice.** `Hunk::numbered_new_lines` had zero
+production callers — `payload::build_payload` walked `hunk.lines` and
+maintained its own counter with its own copy of "a removed line does not
+advance the number". Hardening one did nothing for the other, and the
+ground-truth check that validated 1,870 real line numbers went through the copy
+production did not use. There is now one `Hunk::numbered_lines` yielding
+`(Option<u32>, &HunkLine)`; `numbered_new_lines` is a projection of it and the
+renderer consumes it directly. `HunkLine::marker()`/`content()` moved to the
+type so the gutter is one `writeln!`.
+
+**`render` bypassed the language registry.** It took `language_name: &str`,
+which let a caller pass the registry key where the prompt wants the
+`display_name` — the tests were passing `"rust"`, so the payload header said
+`rust` rather than `Rust`. It now takes `&LanguageSupport`, restoring the
+invariant that `languages/` is the only place a language is named. It also no
+longer takes a `file_path`: every `Hunk` carries one, and a second copy was
+something the caller had to keep in sync with nothing to check it.
+
+**Scan-target policy left the parser.** `parse_unified_diff` called
+`files::is_scan_target`; which files drep reviews is a product decision and now
+sits in `mod.rs` beside `filter_scan_targets`, at the same layer. The parser is
+policy-free and reusable for a differently-scoped caller.
+
+**The ACMR + empty-tree rules were stated four times.** `staged_diff` and
+`since_diff` now build the argv once, so `staged_files`/`staged_hunks` and
+`changed_since`/`hunks_since` cannot drift into disagreeing about scope — which
+would mean analyzing a file the gate never listed.
+
+Also: `PendingHunk` deleted (a field-for-field clone of `Hunk` with no added
+invariant, ~50 lines); `skip_until_next_hunk` deleted (provably implied by
+`pending.is_none()`); `RangeTail` and its hand-rolled scanner replaced by
+`split_whitespace` + `split_once` (45 lines → 20, two fewer allocations per
+header); duplicated inline test modules removed, keeping only the private-item
+tests the sibling module cannot reach.
+
+Declined, with reasons: dropping the `has_head` probe on the `--cached` paths
+(verified redundant on git 2.50.1, but it trades a compatibility guard for 18 ms
+against a multi-second LLM call, and the git version floor is unpinned);
+replacing `Hunk::whole_file` with a `Scope` enum (the data-driven inference is
+sound — git never emits a hunk with no changed line — and the assumption is now
+documented where it belongs). Concurrency of the git calls and memoizing the
+HEAD probe are Phase 5 wiring; the API is already shaped to allow both.
+
+Testing:
+- 216 passing, unchanged
+- Break-tests re-derived for the new shape: 12/12 caught, including three new
+  ones the refactor made possible (a single mutation to `numbered_lines` now
+  fails both consumers, which is the point)
+- `cargo mutants`: 60 mutants, 14 caught, 46 unviable, 0 missed
+
 ### Landed - 2026-08-17 — Phase 4a: diff hunks and the LLM payload
 
 The first half of Phase 4, and the first part of the rewrite with no Python to

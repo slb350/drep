@@ -158,20 +158,43 @@ fn filter_scan_targets(output: &str) -> Vec<PathBuf> {
 /// rather than an absent one. The empty-tree fallback covers the
 /// initial-commit case (no `HEAD` yet).
 pub async fn staged_files(root: &Path) -> Result<Vec<PathBuf>, GitError> {
-    let args: &[&str] = if has_head(root).await {
-        &["diff", "--cached", "--name-only", "--diff-filter=ACMR"]
-    } else {
-        &[
-            "diff",
-            "--cached",
-            "--name-only",
-            "--diff-filter=ACMR",
-            EMPTY_TREE,
-        ]
-    };
-    let output = run_git(root, args).await?;
-    Ok(filter_scan_targets(&output))
+    Ok(filter_scan_targets(&staged_diff(root, NAMES).await?))
 }
+
+/// `git diff --cached` in whichever output mode the caller wants.
+///
+/// The selection rules — `--diff-filter=ACMR` and the empty-tree fallback —
+/// live here once rather than in each of `staged_files` and `staged_hunks`.
+/// They were stated twice, and a change applied to one and not the other would
+/// make the file list and the hunk set disagree about what is in scope: drep
+/// would analyze a file the gate never listed, which is exactly the class of
+/// failure this module exists to prevent.
+async fn staged_diff(root: &Path, mode: &str) -> Result<String, GitError> {
+    let args: &[&str] = if has_head(root).await {
+        &["diff", "--cached", "--diff-filter=ACMR", mode]
+    } else {
+        &["diff", "--cached", "--diff-filter=ACMR", mode, EMPTY_TREE]
+    };
+    run_git(root, args).await
+}
+
+/// `git diff <ref>...<HEAD|empty-tree>` in whichever output mode is wanted.
+///
+/// The three-dot spec is built once for the same reason as `staged_diff`: the
+/// merge-base semantics are a decision, and `changed_since`/`hunks_since` must
+/// not be able to drift apart on it.
+async fn since_diff(root: &Path, git_ref: &str, mode: &str) -> Result<String, GitError> {
+    let ref_b = if has_head(root).await {
+        "HEAD"
+    } else {
+        EMPTY_TREE
+    };
+    let spec = format!("{git_ref}...{ref_b}");
+    run_git(root, &["diff", "--diff-filter=ACMR", mode, &spec]).await
+}
+
+/// Output mode: just the paths.
+const NAMES: &str = "--name-only";
 
 /// Files changed on this branch relative to `git_ref`, relative to `root`.
 ///
@@ -185,14 +208,9 @@ pub async fn staged_files(root: &Path) -> Result<Vec<PathBuf>, GitError> {
 /// git exit non-zero, and that surfaces here as `Err(GitError::NonZero)`
 /// rather than an empty Vec — see the module docs.
 pub async fn changed_since(root: &Path, git_ref: &str) -> Result<Vec<PathBuf>, GitError> {
-    let ref_b = if has_head(root).await {
-        "HEAD"
-    } else {
-        EMPTY_TREE
-    };
-    let spec = format!("{git_ref}...{ref_b}");
-    let output = run_git(root, &["diff", "--name-only", "--diff-filter=ACMR", &spec]).await?;
-    Ok(filter_scan_targets(&output))
+    Ok(filter_scan_targets(
+        &since_diff(root, git_ref, NAMES).await?,
+    ))
 }
 
 /// How many lines of unchanged context to request around each change.
@@ -210,20 +228,25 @@ pub const CONTEXT_LINES: u32 = 20;
 /// names. `CONTEXT_LINES` of context is requested so the model reading each
 /// hunk has the surrounding function body to compare against.
 pub async fn staged_hunks(root: &Path) -> Result<Vec<Hunk>, GitError> {
-    let unified = format!("--unified={CONTEXT_LINES}");
-    let args: &[&str] = if has_head(root).await {
-        &["diff", "--cached", "--diff-filter=ACMR", &unified]
-    } else {
-        &[
-            "diff",
-            "--cached",
-            "--diff-filter=ACMR",
-            &unified,
-            EMPTY_TREE,
-        ]
-    };
-    let output = run_git(root, args).await?;
-    Ok(parse_unified_diff(&output))
+    Ok(scan_target_hunks(&staged_diff(root, &unified()).await?))
+}
+
+/// The `--unified=N` flag, built from [`CONTEXT_LINES`].
+fn unified() -> String {
+    format!("--unified={CONTEXT_LINES}")
+}
+
+/// Parse a diff and keep only the hunks for files drep analyzes.
+///
+/// The scan-target policy is applied here rather than inside the parser: which
+/// files drep reviews is a product decision, and `hunks.rs` answers only "what
+/// does this diff say". This is the same layer at which `filter_scan_targets`
+/// applies the policy to `--name-only` output, so both queries meet drep's
+/// scope in one place.
+fn scan_target_hunks(diff_text: &str) -> Vec<Hunk> {
+    let mut hunks = parse_unified_diff(diff_text);
+    hunks.retain(|hunk| files::is_scan_target(&hunk.file_path));
+    hunks
 }
 
 /// Hunks for what this branch changed relative to `git_ref`.
@@ -233,15 +256,9 @@ pub async fn staged_hunks(root: &Path) -> Result<Vec<Hunk>, GitError> {
 /// this branch. `CONTEXT_LINES` of context is requested so the model has
 /// enough surrounding code to judge each change.
 pub async fn hunks_since(root: &Path, git_ref: &str) -> Result<Vec<Hunk>, GitError> {
-    let ref_b = if has_head(root).await {
-        "HEAD"
-    } else {
-        EMPTY_TREE
-    };
-    let spec = format!("{git_ref}...{ref_b}");
-    let unified = format!("--unified={CONTEXT_LINES}");
-    let output = run_git(root, &["diff", "--diff-filter=ACMR", &unified, &spec]).await?;
-    Ok(parse_unified_diff(&output))
+    Ok(scan_target_hunks(
+        &since_diff(root, git_ref, &unified()).await?,
+    ))
 }
 
 /// The current commit's SHA, with `"unknown"` on any failure.

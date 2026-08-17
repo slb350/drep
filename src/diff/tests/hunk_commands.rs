@@ -23,9 +23,8 @@ async fn staged_hunks_reports_a_real_line_number_for_a_modified_staged_file() {
     let hunks = staged_hunks(root).await.expect("staged_hunks");
     assert_eq!(hunks.len(), 1, "expected one hunk, got {hunks:?}");
     let h = &hunks[0];
-    let numbered = h.numbered_new_lines();
-    let line_3 = numbered
-        .iter()
+    let line_3 = h
+        .numbered_new_lines()
         .find(|(n, content)| *n == 3 && content.contains("CHANGED"))
         .expect("line 3 should appear with its real file line number");
     assert!(

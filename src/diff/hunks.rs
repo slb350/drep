@@ -4,19 +4,23 @@
 //! A single `git diff --unified=N` output is just text, but everything that
 //! consumes it wants the same shape: a list of hunks, each tagged with its
 //! file and the line ranges it touches, and each line tagged with whether it
-//! was added, removed, or context. Parsing this once, here, means the
-//! callers (`mod.rs` queries, the payload renderer) never re-parse git's
-//! output and never have to ask "what does `+++ /dev/null` mean again".
+//! was added, removed, or context. Parsing this once, here, means the callers
+//! (`mod.rs` queries, the payload renderer) never re-parse git's output and
+//! never have to ask "what does `+++ /dev/null` mean again".
 //!
-//! The parser is deliberately tolerant. A diff that cannot be parsed must
-//! not take the gate down — it is much better to ship a partial answer
-//! than no answer — so anything not recognised is skipped rather than
-//! erroring. The load-bearing rules (where the file path comes from, how
-//! each line is tagged) are documented inline.
+//! The parser is deliberately tolerant. A diff that cannot be parsed must not
+//! take the gate down — it is much better to ship a partial answer than no
+//! answer — so anything not recognised is skipped rather than erroring.
+//!
+//! Deliberately **free of drep policy**: this module answers "what does this
+//! diff say", not "which files does drep review". Whether a path is worth
+//! analyzing is a product decision, and it lives with the other git-semantics
+//! decisions in `mod.rs` beside `filter_scan_targets`. Keeping it out of here
+//! is what lets the parser serve a future caller with a different scope (an
+//! `include`/`exclude` config, `lint-docs`) without threading a predicate
+//! through it.
 
 use std::path::PathBuf;
-
-use crate::files;
 
 /// One line inside a hunk, tagged by what the diff said about it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -27,6 +31,28 @@ pub enum HunkLine {
     Added(String),
     /// Line present only in the old file. Has no new-file line number.
     Removed(String),
+}
+
+impl HunkLine {
+    /// The gutter marker for this line kind, matching unified-diff notation.
+    ///
+    /// Lives on the type rather than in the renderer so that "which character
+    /// means removed" is answered once. The renderer pairs it with
+    /// [`Hunk::numbered_lines`], and the two together are the whole gutter.
+    pub const fn marker(&self) -> char {
+        match self {
+            HunkLine::Context(_) => ' ',
+            HunkLine::Added(_) => '+',
+            HunkLine::Removed(_) => '-',
+        }
+    }
+
+    /// The line's text, with the diff's leading marker already stripped.
+    pub fn content(&self) -> &str {
+        match self {
+            HunkLine::Context(s) | HunkLine::Added(s) | HunkLine::Removed(s) => s,
+        }
+    }
 }
 
 /// One `@@` hunk from a unified diff, with its file.
@@ -41,35 +67,51 @@ pub struct Hunk {
 }
 
 impl Hunk {
-    /// Every line that exists in the new file, paired with its new-file line
-    /// number. Context and Added lines only — Removed lines are skipped
-    /// because they do not exist in the new file and so have no number.
+    /// Every line in the hunk paired with its new-file line number, or `None`
+    /// for a `Removed` line.
     ///
-    /// Numbering starts at `new_start` and increments for each Context or
-    /// Added line, in order. Removed lines do not advance it; that is the
-    /// invariant the payload depends on for `valid_lines`, and the reason
-    /// the renderer can attribute findings to the right code.
-    pub fn numbered_new_lines(&self) -> Vec<(u32, &str)> {
-        let mut out = Vec::with_capacity(self.lines.len());
-        let mut current = self.new_start;
-        for line in &self.lines {
-            match line {
-                HunkLine::Context(s) | HunkLine::Added(s) => {
-                    out.push((current, s.as_str()));
-                    current = current.saturating_add(1);
-                }
-                HunkLine::Removed(_) => {}
+    /// **This is the single implementation of the line-numbering rule**, and
+    /// everything that needs a line number goes through it. Numbering starts
+    /// at `new_start` and advances for each `Context` or `Added` line;
+    /// `Removed` lines do not advance it, because they do not exist in the new
+    /// file at all.
+    ///
+    /// That rule is what `Payload::valid_lines` rests on, and therefore what
+    /// decides whether an LLM finding gets attributed to the right code. It
+    /// previously existed twice — once here and once inline in the renderer —
+    /// which meant hardening one did nothing for the other.
+    pub fn numbered_lines(&self) -> impl Iterator<Item = (Option<u32>, &HunkLine)> {
+        let mut next = self.new_start;
+        self.lines.iter().map(move |line| match line {
+            HunkLine::Removed(_) => (None, line),
+            HunkLine::Context(_) | HunkLine::Added(_) => {
+                let number = next;
+                next = next.saturating_add(1);
+                (Some(number), line)
             }
-        }
-        out
+        })
+    }
+
+    /// Just the lines that exist in the new file, with their line numbers.
+    ///
+    /// A projection of [`Self::numbered_lines`], not a second walk: callers
+    /// that only care about real file lines (checking a parse against the file
+    /// on disk, say) get them without restating how numbering works.
+    pub fn numbered_new_lines(&self) -> impl Iterator<Item = (u32, &str)> {
+        self.numbered_lines()
+            .filter_map(|(number, line)| number.map(|n| (n, line.content())))
     }
 
     /// Build a synthetic hunk covering an entire file's content, for
-    /// `drep check PATHS` where there is no diff to consult. Every line is
-    /// `Context`, numbering starts at 1, so the payload renderer can use
-    /// the same `numbered_new_lines` walk and the same gap logic — it
-    /// switches to the whole-file scope sentence because no line is added
-    /// or removed.
+    /// `drep check PATHS` where there is no diff to consult.
+    ///
+    /// Every line is `Context` and numbering starts at 1, so the renderer
+    /// walks it with the same `numbered_lines` iterator it uses for a real
+    /// hunk. It also selects the whole-file scope sentence, because no line is
+    /// added or removed — an inference that holds because **git never emits a
+    /// hunk with no changed line**: hunks exist only around changes. That
+    /// property is load-bearing and is stated here because it belongs to an
+    /// external tool rather than to this type.
     pub fn whole_file(file_path: PathBuf, content: &str) -> Hunk {
         let lines: Vec<HunkLine> = content
             .lines()
@@ -91,83 +133,70 @@ impl Hunk {
 ///
 /// Tolerant by design: anything it does not recognise is skipped rather than
 /// erroring, because a diff that cannot be parsed must not take the gate down.
-/// The list of intentionally accepted quirks follows the rules in the spec:
-/// the file path comes from `+++ b/...`, never from `diff --git a/... b/...`
-/// (a `b/` substring in the repo path would make any rule that finds it on
-/// the git header capture the wrong span); a `+++ /dev/null` line means a
-/// deletion and the whole file is skipped; `\ No newline at end of file` is
-/// not a `HunkLine`; and a malformed `@@` line terminates the current hunk
-/// without attributing its body to the previous one.
+/// The intentional quirks:
+///
+/// - **The file path comes from `+++ b/…`, never from `diff --git a/… b/…`.**
+///   The git header carries two paths on one line with no unambiguous
+///   separator, so any "find `b/`" rule captures the wrong span for a
+///   repository path that itself contains `b/` (`src/b/mod.rs`). The Python
+///   `diff_parser.py` this replaces had exactly that bug.
+/// - `+++ /dev/null` marks a deletion; there is nothing to analyze, so the
+///   file's hunks are dropped.
+/// - **Inside a hunk body the first byte alone decides the line kind.** Lines
+///   starting `---` or `+++` are *not* additionally skipped: those headers
+///   appear only before the first `@@` of a file, and a removed source line
+///   whose own text begins with `--` arrives as `---…`. Skipping it silently
+///   drops real removed code — the second bug in the Python.
+/// - `\ No newline at end of file` refers to the preceding line and never
+///   becomes a `HunkLine`.
+/// - A malformed `@@` terminates the current hunk without its body being
+///   attributed to the previous one.
 pub fn parse_unified_diff(diff_text: &str) -> Vec<Hunk> {
     if diff_text.trim().is_empty() {
         return Vec::new();
     }
 
     let mut hunks: Vec<Hunk> = Vec::new();
+    // `None` means "no file to attribute a hunk to" — either we have not
+    // reached this file's `+++` line yet, or it was a deletion. A `@@` seen
+    // while it is `None` produces no hunk, which is what drops a deleted
+    // file's body without a separate flag to track.
     let mut current_file: Option<PathBuf> = None;
-    let mut skipping_file = false;
-    let mut pending: Option<PendingHunk> = None;
-    let mut skip_until_next_hunk = false;
+    let mut pending: Option<Hunk> = None;
 
     for line in diff_text.lines() {
         if line.starts_with("diff --git ") {
-            finish_hunk(&mut pending, &mut hunks);
+            hunks.extend(pending.take());
             current_file = None;
-            skipping_file = false;
-            skip_until_next_hunk = false;
             continue;
         }
 
-        if skipping_file {
-            continue;
-        }
-
-        if let Some(after_marker) = line.strip_prefix("+++ b/") {
-            let path = PathBuf::from(after_marker);
-            if files::is_scan_target(&path) {
-                current_file = Some(path);
-                skip_until_next_hunk = false;
-            } else {
-                finish_hunk(&mut pending, &mut hunks);
-                current_file = None;
-                skipping_file = true;
-            }
+        if let Some(path) = line.strip_prefix("+++ b/") {
+            current_file = Some(PathBuf::from(path));
             continue;
         }
 
         if line.starts_with("+++ /dev/null") {
-            finish_hunk(&mut pending, &mut hunks);
+            hunks.extend(pending.take());
             current_file = None;
-            skipping_file = true;
             continue;
         }
 
         if let Some(after_marker) = line.strip_prefix("@@") {
-            // Hunk-body terminator per rule 7, regardless of whether the
-            // header shape is valid — that is the whole point of the
-            // malformed-`@@` rule (rule 11): a non-header `@@` must not
-            // have its body attributed to the previous hunk.
-            finish_hunk(&mut pending, &mut hunks);
-
-            if let Some((old_start, old_count, new_start, new_count)) =
-                parse_hunk_header(after_marker)
-            {
-                if let Some(file_path) = current_file.clone() {
-                    pending = Some(PendingHunk::new(
-                        file_path, old_start, old_count, new_start, new_count,
-                    ));
-                    skip_until_next_hunk = false;
-                }
-                // No `+++` line for this file: nothing to attribute the
-                // hunk to, so it is dropped silently rather than left
-                // dangling. Same outcome as a non-target file.
-            } else {
-                skip_until_next_hunk = true;
-            }
-            continue;
-        }
-
-        if skip_until_next_hunk {
+            // Terminates the body regardless of whether the header parses:
+            // that is what stops a malformed `@@`'s lines being appended to
+            // the hunk before it.
+            hunks.extend(pending.take());
+            pending = parse_hunk_header(after_marker).and_then(|(os, oc, ns, nc)| {
+                current_file.clone().map(|file_path| Hunk {
+                    file_path,
+                    old_start: os,
+                    old_count: oc,
+                    new_start: ns,
+                    new_count: nc,
+                    lines: Vec::new(),
+                })
+            });
             continue;
         }
 
@@ -175,187 +204,109 @@ pub fn parse_unified_diff(diff_text: &str) -> Vec<Hunk> {
             continue;
         };
 
-        // Inside a hunk body the first character alone decides the kind;
-        // this is the one place the parser looks at content beyond the
-        // initial marker. Everything else (line continuations, embedded
-        // `---` / `+++` characters) is preserved verbatim in the source.
         match line.as_bytes().first() {
-            Some(b'\\') => {
-                // `\ No newline at end of file` — refers to the previous
-                // line, not a content line itself.
-            }
-            Some(b'+') => hunk.push_added(&line[1..]),
-            Some(b'-') => hunk.push_removed(&line[1..]),
-            Some(b' ') => hunk.push_context(&line[1..]),
-            Some(_) => {
-                // A line that does not match any marker is impossible in
-                // a well-formed hunk body. Treat it the same way git
-                // would treat a `\` line and continue — never error.
-            }
-            None => {
-                // Empty line: same handling as a non-matching line.
-            }
+            Some(b'+') => hunk.lines.push(HunkLine::Added(line[1..].to_owned())),
+            Some(b'-') => hunk.lines.push(HunkLine::Removed(line[1..].to_owned())),
+            Some(b' ') => hunk.lines.push(HunkLine::Context(line[1..].to_owned())),
+            // `\ No newline at end of file`, a blank line, or anything else a
+            // well-formed body cannot contain. Never an error.
+            _ => {}
         }
     }
 
-    finish_hunk(&mut pending, &mut hunks);
+    hunks.extend(pending.take());
     hunks
 }
 
-/// A hunk being accumulated before it is emitted.
+/// Parse the middle of a `@@` line: `-old[,oc] +new[,nc]`, followed by the
+/// closing `@@` and optionally git's guessed function signature.
 ///
-/// The lifetimes are tied to the parser loop, so there is no need for arena
-/// allocation here — the parser owns the single in-flight hunk at a time.
-struct PendingHunk {
-    file_path: PathBuf,
-    old_start: u32,
-    old_count: u32,
-    new_start: u32,
-    new_count: u32,
-    lines: Vec<HunkLine>,
-}
-
-impl PendingHunk {
-    fn new(
-        file_path: PathBuf,
-        old_start: u32,
-        old_count: u32,
-        new_start: u32,
-        new_count: u32,
-    ) -> Self {
-        Self {
-            file_path,
-            old_start,
-            old_count,
-            new_start,
-            new_count,
-            lines: Vec::new(),
-        }
-    }
-
-    fn push_context(&mut self, content: &str) {
-        self.lines.push(HunkLine::Context(content.to_owned()));
-    }
-
-    fn push_added(&mut self, content: &str) {
-        self.lines.push(HunkLine::Added(content.to_owned()));
-    }
-
-    fn push_removed(&mut self, content: &str) {
-        self.lines.push(HunkLine::Removed(content.to_owned()));
-    }
-
-    fn finalize(self) -> Hunk {
-        Hunk {
-            file_path: self.file_path,
-            old_start: self.old_start,
-            old_count: self.old_count,
-            new_start: self.new_start,
-            new_count: self.new_count,
-            lines: self.lines,
-        }
-    }
-}
-
-fn finish_hunk(pending: &mut Option<PendingHunk>, hunks: &mut Vec<Hunk>) {
-    if let Some(hunk) = pending.take() {
-        hunks.push(hunk.finalize());
-    }
-}
-
-/// Parse the middle of a `@@` line: `-old[,oc] +new[,nc]`, possibly followed
-/// by anything up to the closing `@@` (git's function-name guess).
-///
-/// Returns `None` for anything that does not match the header shape, which
-/// the parser treats as a malformed `@@` — the body that follows is
-/// skipped, not appended to the previous hunk. The closing `@@` is required:
-/// a line that looks like `-1,3 +1,4` with no trailing `@@` is not a hunk
-/// header, and accepting it would let junk lines pass as start-of-hunk.
+/// The closing `@@` is required: `-1,3 +1,4` with nothing after it is not a
+/// hunk header, and accepting it would let junk pass as a start-of-hunk.
+/// `split_once` takes the *first* `@@`, so a function signature that itself
+/// contains `@@` cannot extend the range span.
 fn parse_hunk_header(after_marker: &str) -> Option<(u32, u32, u32, u32)> {
-    let after_marker = after_marker.trim_start();
-    let old_part = after_marker.strip_prefix('-')?;
-    let old = parse_range_with_tail(old_part)?;
-
-    let tail = old.tail.trim_start();
-    let new_part = tail.strip_prefix('+')?;
-    let new = parse_range_with_tail(new_part)?;
-
-    let after_new = new.tail.trim_start();
-    after_new.strip_prefix("@@")?;
-
-    Some((old.start, old.count, new.start, new.count))
+    let (ranges, _signature) = after_marker.trim_start().split_once("@@")?;
+    let mut parts = ranges.split_whitespace();
+    let (old_start, old_count) = parse_range(parts.next()?.strip_prefix('-')?)?;
+    let (new_start, new_count) = parse_range(parts.next()?.strip_prefix('+')?)?;
+    // A third range is not a hunk header; refusing it keeps the malformed-`@@`
+    // path reachable rather than silently accepting junk.
+    if parts.next().is_some() {
+        return None;
+    }
+    Some((old_start, old_count, new_start, new_count))
 }
 
-struct RangeTail {
-    start: u32,
-    count: u32,
-    tail: String,
-}
-
-/// Parse `<number>[,<count>]` and return the unconsumed suffix.
+/// Parse `<start>[,<count>]`.
 ///
-/// An omitted count is treated as 1 — matches git's convention for
-/// `@@ -5 +5 @@` (a single-line hunk). `count == 0` is legal and is what
-/// appears for new and emptied files; it is preserved verbatim.
-fn parse_range_with_tail(s: &str) -> Option<RangeTail> {
-    let (start_str, rest) = match s.find(|c: char| c == ',' || c.is_whitespace()) {
-        Some(idx) => (&s[..idx], &s[idx..]),
-        None => (s, ""),
-    };
-    let start: u32 = start_str.parse().ok()?;
-
-    let (count, tail) = if let Some(after_comma) = rest.strip_prefix(',') {
-        let end = after_comma
-            .find(|c: char| c == ',' || c.is_whitespace())
-            .unwrap_or(after_comma.len());
-        let count_str = &after_comma[..end];
-        let count: u32 = count_str.parse().ok()?;
-        (count, after_comma[end..].to_owned())
-    } else {
-        (1, rest.to_owned())
-    };
-
-    Some(RangeTail { start, count, tail })
+/// An omitted count is 1, matching git's convention for a single-line hunk
+/// (`@@ -5 +5 @@`). A count of 0 is legal and is what appears for new and
+/// emptied files.
+fn parse_range(s: &str) -> Option<(u32, u32)> {
+    match s.split_once(',') {
+        Some((start, count)) => Some((start.parse().ok()?, count.parse().ok()?)),
+        None => Some((s.parse().ok()?, 1)),
+    }
 }
 
 #[cfg(test)]
 mod tests {
+    //! Tests for items private to this module, which the sibling
+    //! `diff::tests::hunks` cannot reach. Everything exercised through the
+    //! public API lives there instead.
+
     use super::*;
 
     #[test]
-    fn empty_input_returns_no_hunks() {
-        assert!(parse_unified_diff("").is_empty());
-        assert!(parse_unified_diff("   \n\n  \n").is_empty());
-    }
-
-    #[test]
     fn hunk_header_with_full_counts() {
-        let parsed = parse_hunk_header(" -1,3 +1,4 @@").expect("header");
-        assert_eq!(parsed, (1, 3, 1, 4));
+        assert_eq!(parse_hunk_header(" -1,3 +1,4 @@"), Some((1, 3, 1, 4)));
     }
 
     #[test]
     fn hunk_header_with_omitted_counts_defaults_to_one() {
-        let parsed = parse_hunk_header(" -5 +5 @@").expect("header");
-        assert_eq!(parsed, (5, 1, 5, 1));
+        assert_eq!(parse_hunk_header(" -5 +5 @@"), Some((5, 1, 5, 1)));
     }
 
     #[test]
     fn hunk_header_with_zero_counts_is_legal() {
-        let parsed = parse_hunk_header(" -0,0 +1,3 @@").expect("header");
-        assert_eq!(parsed, (0, 0, 1, 3));
+        assert_eq!(parse_hunk_header(" -0,0 +1,3 @@"), Some((0, 0, 1, 3)));
     }
 
     #[test]
-    fn hunk_header_allows_trailing_function_name() {
-        let parsed = parse_hunk_header(" -1,3 +1,4 @@ fn compute()").expect("header");
-        assert_eq!(parsed, (1, 3, 1, 4));
+    fn hunk_header_allows_a_trailing_function_signature() {
+        assert_eq!(
+            parse_hunk_header(" -1,3 +1,4 @@ fn compute()"),
+            Some((1, 3, 1, 4))
+        );
     }
 
     #[test]
-    fn malformed_hunk_header_returns_none() {
+    fn hunk_header_signature_containing_at_at_does_not_extend_the_ranges() {
+        // `split_once` must take the first `@@`, not the last.
+        assert_eq!(
+            parse_hunk_header(" -1,3 +1,4 @@ fn f() { \"@@\" }"),
+            Some((1, 3, 1, 4))
+        );
+    }
+
+    #[test]
+    fn malformed_hunk_headers_are_rejected() {
         assert!(parse_hunk_header("garbage").is_none());
+        // No closing `@@`.
         assert!(parse_hunk_header(" -1,3 +1,4").is_none());
+        // Non-numeric start.
         assert!(parse_hunk_header(" -a +1 @@").is_none());
+        // A third range.
+        assert!(parse_hunk_header(" -1,3 +1,4 +9,9 @@").is_none());
+        // A count that is not a number.
+        assert!(parse_hunk_header(" -1,3,5 +1,4 @@").is_none());
+    }
+
+    #[test]
+    fn range_without_a_comma_has_an_implicit_count_of_one() {
+        assert_eq!(parse_range("42"), Some((42, 1)));
+        assert_eq!(parse_range("42,7"), Some((42, 7)));
+        assert!(parse_range("").is_none());
     }
 }
