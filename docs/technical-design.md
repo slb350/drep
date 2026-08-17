@@ -1,10 +1,36 @@
 # Technical Design: drep
 
-**Document Version:** 4.3
-**Last Updated:** 2026-05-24
-**Status:** Production (v1.1.2) - Phase 1, 2, & 3 Complete
+**Document Version:** 4.5
+**Last Updated:** 2026-08-16
+**Status:** Production (v1.3.0) - Phase 1, 2, & 3 Complete
 
 ## Recent Updates
+
+**v4.5 (2026-08-16):**
+- **🎉 Version 1.3.0 Release - The Local Gate**
+- **Two analysis layers, split by source rather than severity.** `drep/languages/runner.py`
+  runs the project's own tools (ruff, eslint, tsc, gofmt, go vet, clippy); their findings
+  populate `AnalysisResult.blocking` and gate. The LLM's findings stay in `findings` and
+  inform. Severity thresholds over LLM output were never calibratable - precision does not
+  vary with severity, it varies with source.
+- **Language registry** (`drep/languages/`): a `LanguageSupport` carries its extensions,
+  tools, vendored directories and prompt conventions. Discovery, analyzer support, prompts
+  and cache keys all route through it, so no `if python` branch exists. Adding a language
+  is an entry in `definitions.py`.
+- Multi-language code review needed no parser: the LLM reads any language, which is why
+  this shipped without the tree-sitter foundation `multi-language-analysis.md` assumed.
+  Doc-comment generation still needs one and remains Python-only.
+- **A check that did not run is never a pass.** Analyzer failures propagate rather than
+  returning empty; `drep check` exits 2 for unanalyzed files or configured-but-missing
+  tools; `drep scan` no longer records an incomplete scan's SHA (which had been excluding
+  the missed files from every future incremental scan).
+- New commands: `drep doctor` (what will run here), `drep init-llm` (model from a preset),
+  `drep init-hooks` (pre-push gate, including the `core.hooksPath` handling).
+- `ParallelAnalyzer` and `timeout_with_partial_results` removed as announced in 1.2.0.
+- 1034 tests passing
+
+**v4.4 (2026-08-16):**
+- **Version 1.2.0 Release** - audit-driven correctness and simplification; see CHANGELOG
 
 **v4.3 (2026-05-24):**
 - **🔍 Version 1.1.2 Release - Type-Safety Hardening**
