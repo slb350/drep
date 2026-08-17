@@ -5,6 +5,7 @@ issues; _run_review runs the LLM PR review pipeline. Both are also used
 by the webhook server (drep.server).
 """
 
+import asyncio
 import logging
 import os
 import shutil
@@ -12,8 +13,10 @@ import tempfile
 from pathlib import Path
 
 import click
+import yaml
 from git import Repo
 from git.exc import GitCommandError, InvalidGitRepositoryError
+from pydantic_core import ValidationError
 
 from drep.adapters.base import BaseAdapter
 from drep.adapters.gitea import GiteaAdapter
@@ -26,6 +29,7 @@ from drep.core.scanner import RepositoryScanner
 from drep.db import init_database
 from drep.documentation.analyzer import DocumentationAnalyzer
 from drep.llm.metrics import LLMMetrics, MetricsCollector
+from drep.models.findings import Finding
 from drep.models.wizard import PLATFORM_TOKEN_ENV_VARS
 
 logger = logging.getLogger(__name__)
@@ -449,3 +453,102 @@ async def _run_review(
             await adapter.close()
         except Exception as e:
             logger.error(f"Error closing adapter: {e}")
+
+
+async def _run_check(path: str, staged: bool, config_path: str) -> list[Finding]:
+    """Run local file check without platform API.
+
+    Args:
+        path: Path to check (file or directory)
+        staged: Only check staged files
+        config_path: Config file path (optional)
+
+    Returns:
+        List of Finding objects
+    """
+    # Load config with platform not required (pre-commit mode)
+    if config_path:
+        try:
+            config = load_config(config_path, require_platform=False)
+        except FileNotFoundError as exc:
+            click.echo(f"Error: Config file not found: {config_path}", err=True)
+            raise SystemExit(1) from exc
+        except yaml.YAMLError as e:
+            click.echo(f"Error: Invalid YAML in {config_path}\n{e}", err=True)
+            raise SystemExit(1) from e
+        except ValidationError as e:
+            click.echo(f"Error: Configuration validation failed\n{e}", err=True)
+            raise SystemExit(1) from e
+        # DO NOT CATCH: KeyboardInterrupt, SystemExit, ImportError
+        # These should propagate to allow proper termination and debugging
+    else:
+        # Create minimal config for local-only mode
+
+        config = Config(require_platform_config=False)
+
+    # Initialize database (in-memory for check command)
+    db = init_database("sqlite:///:memory:")
+
+    # Initialize scanner
+    scanner = RepositoryScanner(db, config=config)
+
+    try:
+        # Validate and resolve path
+        try:
+            path_obj = Path(path).resolve(strict=True)
+        except FileNotFoundError as exc:
+            click.echo(f"Error: Path not found: {path}", err=True)
+            raise SystemExit(1) from exc
+
+        # Additional validation
+        if not path_obj.exists():
+            click.echo(f"Error: Path does not exist: {path}", err=True)
+            raise SystemExit(1)
+
+        if staged:
+            # Get staged files from git index
+            files = scanner.get_staged_files(str(path_obj))
+            click.echo(f"Checking {len(files)} staged file(s)...")
+        else:
+            # Get all Python/Markdown files
+            if path_obj.is_file():
+                # Single file
+                files = [str(path_obj.relative_to(path_obj.parent))]
+            else:
+                # Directory - get all .py and .md files
+                files = scanner.get_scan_targets(str(path_obj))
+            click.echo(f"Checking {len(files)} file(s)...")
+
+        if not files:
+            return []
+
+        # Analyze files
+        all_findings = []
+
+        if config.llm and config.llm.enabled:
+            analysis_root = str(path_obj.parent if path_obj.is_file() else path_obj)
+            # The two passes are independent; run them concurrently. The rate
+            # limiter provides the back-pressure.
+            code_findings, docstring_findings = await asyncio.gather(
+                scanner.analyze_code_quality(
+                    repo_path=analysis_root,
+                    files=files,
+                    repo_id="local",
+                    commit_sha="local",
+                ),
+                scanner.analyze_docstrings(
+                    repo_path=analysis_root,
+                    files=files,
+                    repo_id="local",
+                    commit_sha="local",
+                ),
+            )
+            all_findings.extend(code_findings)
+            all_findings.extend(docstring_findings)
+
+        # Presentation belongs to the command, not the workflow
+        return all_findings
+
+    finally:
+        # Cleanup
+        await scanner.close()

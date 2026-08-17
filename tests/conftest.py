@@ -39,3 +39,31 @@ def temp_config_file(tmp_path):
     }
     config_path.write_text(yaml.dump(config_data))
     return config_path
+
+
+def wizard_input(*answers: str) -> str:
+    """Join wizard answers into the newline-delimited string CliRunner expects.
+
+    The `drep init` wizard is a sequence of prompts, so tests drive it with a
+    literal like "1\ngitea\n\n\nn\ny\nn\nn\nn\nn\n". Written inline that is
+    opaque and the failure mode of an off-by-one is answering the wrong
+    question silently. Prefer the named flows below, or spell the answers out
+    one per argument so each is readable at the call site.
+    """
+    return "".join(f"{answer}\n" for answer in answers)
+
+
+#: The most common flow: config in the current directory, Gitea with default
+#: URL and repositories, no LLM, docs enabled, everything else declined.
+GITEA_MINIMAL_INPUT = wizard_input(
+    "1",  # config location: current directory
+    "gitea",  # platform
+    "",  # Gitea URL: default
+    "",  # repositories: default
+    "n",  # enable LLM
+    "y",  # enable documentation analysis
+    "n",  # markdown checks
+    "n",  # custom dictionary
+    "n",  # custom database URL
+    "n",  # check env vars now
+)

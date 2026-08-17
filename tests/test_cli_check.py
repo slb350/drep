@@ -37,7 +37,7 @@ class TestCheckCommand:
             test_file.write_text("def foo(): pass  # No docstring")
 
             # Mock scanner/analyzer to avoid real analysis
-            with patch("drep.cli.RepositoryScanner") as mock_scanner_class:
+            with patch("drep.cli_workflows.RepositoryScanner") as mock_scanner_class:
                 mock_scanner = mock_scanner_class.return_value
                 mock_scanner.get_staged_files.return_value = []
                 mock_scanner.analyze_code_quality = AsyncMock(return_value=[])
@@ -67,7 +67,7 @@ class TestCheckCommand:
             test_file.write_text("def foo(): pass")
 
             # Mock finding issues
-            with patch("drep.cli.RepositoryScanner") as mock_scanner_class:
+            with patch("drep.cli_workflows.RepositoryScanner") as mock_scanner_class:
                 # Mock scanner to return findings
                 from drep.models.findings import Finding
 
@@ -103,7 +103,7 @@ class TestCheckCommand:
             }
             config_path.write_text(yaml.dump(config_data))
 
-            # Patch at the location where it's imported (_run_check imports from drep.core.scanner)
+            # Patch where _run_check resolves it (drep.cli_workflows)
             with patch("drep.core.scanner.Repo") as mock_repo:
                 mock_repo.return_value.index.diff.return_value = []
 

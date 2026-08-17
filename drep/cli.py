@@ -8,8 +8,6 @@ from enum import Enum
 from pathlib import Path
 
 import click
-import yaml
-from pydantic_core import ValidationError
 
 from drep.cli_wizard import (
     _collect_database_config,
@@ -18,13 +16,10 @@ from drep.cli_wizard import (
     _collect_platform_config,
     _write_and_validate_config,
 )
-from drep.cli_workflows import _run_review, _run_scan
+from drep.cli_workflows import _run_check, _run_review, _run_scan
 from drep.config import find_config_file, get_user_config_dir, load_config
 from drep.constants import default_metrics_file
-from drep.core.scanner import RepositoryScanner
-from drep.db import init_database
 from drep.documentation.analyzer import DocumentationAnalyzer
-from drep.models.config import Config
 
 
 class OutputFormat(str, Enum):
@@ -339,7 +334,9 @@ def check(path, staged, config, exit_zero, format):
             config_path = str(config_file)
 
     # Run async check
-    findings = asyncio.run(_run_check(path, staged, config_path, format))
+    findings = asyncio.run(_run_check(path, staged, config_path))
+    if findings:
+        _output_findings(findings, format)
 
     # Print findings summary
     if findings:
@@ -355,113 +352,6 @@ def check(path, staged, config, exit_zero, format):
             raise SystemExit(1)
     else:
         click.echo("✓ No issues found")
-
-
-async def _run_check(path: str, staged: bool, config_path: str, output_format: str):
-    """Run local file check without platform API.
-
-    Args:
-        path: Path to check (file or directory)
-        staged: Only check staged files
-        config_path: Config file path (optional)
-        output_format: Output format (text or json)
-
-    Returns:
-        List of Finding objects
-    """
-    from pathlib import Path as PathLib
-
-    from drep.config import load_config
-
-    # Load config with platform not required (pre-commit mode)
-    if config_path:
-        try:
-            config = load_config(config_path, require_platform=False)
-        except FileNotFoundError as exc:
-            click.echo(f"Error: Config file not found: {config_path}", err=True)
-            raise SystemExit(1) from exc
-        except yaml.YAMLError as e:
-            click.echo(f"Error: Invalid YAML in {config_path}\n{e}", err=True)
-            raise SystemExit(1) from e
-        except ValidationError as e:
-            click.echo(f"Error: Configuration validation failed\n{e}", err=True)
-            raise SystemExit(1) from e
-        # DO NOT CATCH: KeyboardInterrupt, SystemExit, ImportError
-        # These should propagate to allow proper termination and debugging
-    else:
-        # Create minimal config for local-only mode
-
-        config = Config(require_platform_config=False)
-
-    # Initialize database (in-memory for check command)
-    db = init_database("sqlite:///:memory:")
-
-    # Initialize scanner
-    scanner = RepositoryScanner(db, config=config)
-
-    try:
-        # Validate and resolve path
-        try:
-            path_obj = PathLib(path).resolve(strict=True)
-        except FileNotFoundError as exc:
-            click.echo(f"Error: Path not found: {path}", err=True)
-            raise SystemExit(1) from exc
-
-        # Additional validation
-        if not path_obj.exists():
-            click.echo(f"Error: Path does not exist: {path}", err=True)
-            raise SystemExit(1)
-
-        if staged:
-            # Get staged files from git index
-            files = scanner.get_staged_files(str(path_obj))
-            click.echo(f"Checking {len(files)} staged file(s)...")
-        else:
-            # Get all Python/Markdown files
-            if path_obj.is_file():
-                # Single file
-                files = [str(path_obj.relative_to(path_obj.parent))]
-            else:
-                # Directory - get all .py and .md files
-                files = scanner.get_scan_targets(str(path_obj))
-            click.echo(f"Checking {len(files)} file(s)...")
-
-        if not files:
-            return []
-
-        # Analyze files
-        all_findings = []
-
-        if config.llm and config.llm.enabled:
-            analysis_root = str(path_obj.parent if path_obj.is_file() else path_obj)
-            # The two passes are independent; run them concurrently. The rate
-            # limiter provides the back-pressure.
-            code_findings, docstring_findings = await asyncio.gather(
-                scanner.analyze_code_quality(
-                    repo_path=analysis_root,
-                    files=files,
-                    repo_id="local",
-                    commit_sha="local",
-                ),
-                scanner.analyze_docstrings(
-                    repo_path=analysis_root,
-                    files=files,
-                    repo_id="local",
-                    commit_sha="local",
-                ),
-            )
-            all_findings.extend(code_findings)
-            all_findings.extend(docstring_findings)
-
-        # Output findings
-        if all_findings:
-            _output_findings(all_findings, output_format)
-
-        return all_findings
-
-    finally:
-        # Cleanup
-        await scanner.close()
 
 
 def _output_findings(findings, format_type):

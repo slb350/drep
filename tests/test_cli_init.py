@@ -6,6 +6,7 @@ from unittest.mock import patch
 import yaml
 
 from drep.cli import cli
+from tests.conftest import GITEA_MINIMAL_INPUT
 
 
 class TestInitCommand:
@@ -47,18 +48,7 @@ class TestInitCommand:
         """Test that init command creates config.yaml with minimal setup."""
         # Run in temp directory
         with runner.isolated_filesystem(temp_dir=tmp_path):
-            # Wizard inputs:
-            # 0. Config location: 1 (current directory)
-            # 1. Platform: gitea
-            # 2. Gitea URL: (default)
-            # 3. Repositories: (default)
-            # 4. Enable LLM: n
-            # 5. Enable docs: y
-            # 6. Markdown checks: n
-            # 7. Custom dictionary: n
-            # 8. Custom DB: n
-            # 9. Check env vars: n
-            inputs = "1\ngitea\n\n\nn\ny\nn\nn\nn\nn\n"
+            inputs = GITEA_MINIMAL_INPUT
             result = runner.invoke(cli, ["init"], input=inputs)
 
             assert result.exit_code == 0
@@ -229,7 +219,7 @@ class TestInitCommand:
             mock_write.side_effect = PermissionError("Permission denied")
 
             # Wizard inputs (minimal)
-            inputs = "1\ngitea\n\n\nn\ny\nn\nn\nn\nn\n"
+            inputs = GITEA_MINIMAL_INPUT
             result = runner.invoke(cli, ["init"], input=inputs)
 
             # Should abort with clear error message
@@ -249,7 +239,7 @@ class TestInitCommand:
             mock_write.side_effect = OSError(28, "No space left on device")
 
             # Wizard inputs (minimal)
-            inputs = "1\ngitea\n\n\nn\ny\nn\nn\nn\nn\n"
+            inputs = GITEA_MINIMAL_INPUT
             result = runner.invoke(cli, ["init"], input=inputs)
 
             # Should abort with clear error message
@@ -269,7 +259,7 @@ class TestInitCommand:
             mock_dump.side_effect = yaml.YAMLError("Cannot serialize non-standard type")
 
             # Wizard inputs (minimal)
-            inputs = "1\ngitea\n\n\nn\ny\nn\nn\nn\nn\n"
+            inputs = GITEA_MINIMAL_INPUT
             result = runner.invoke(cli, ["init"], input=inputs)
 
             # Should abort with clear error message
@@ -285,7 +275,7 @@ class TestInitCommand:
         with runner.isolated_filesystem(temp_dir=tmp_path):
             # Wizard inputs:
             # 1-9: same as minimal test
-            inputs = "1\ngitea\n\n\nn\ny\nn\nn\nn\nn\n"
+            inputs = GITEA_MINIMAL_INPUT
             result = runner.invoke(cli, ["init"], input=inputs)
 
             assert result.exit_code == 0
@@ -350,7 +340,7 @@ class TestInitCommand:
         with runner.isolated_filesystem(temp_dir=tmp_path):
             # Wizard inputs:
             # 1-9: same as minimal test
-            inputs = "1\ngitea\n\n\nn\ny\nn\nn\nn\nn\n"
+            inputs = GITEA_MINIMAL_INPUT
             result = runner.invoke(cli, ["init"], input=inputs)
 
             assert result.exit_code == 0
