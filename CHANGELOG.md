@@ -8,6 +8,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added - 2026-08-16
+- **Language registry** (`drep/languages/`) — the foundation for multi-language support,
+  with no `if python` branching anywhere. A `LanguageSupport` carries the extensions it
+  owns, the deterministic tools that check it, and the conventions its LLM prompt names.
+  Registered today: Python, JavaScript, TypeScript, Go, Rust.
+- **Deterministic tool runner** (`drep/languages/runner.py`). Two-layer analysis: the
+  project's own tools (ruff, eslint, tsc, gofmt, go vet, clippy) are precise, so their
+  findings gate; the LLM's semantic findings inform. Splitting by *source* rather than by
+  severity is what makes the gate calibratable — no `--fail-on` guessing.
+  - Binaries resolve **repo-local first, then PATH**, so a project is checked by the
+    version its own CI runs (`node_modules/.bin/eslint`, not whatever is global).
+  - A tool runs only where the project **configured** it: no eslint config means no eslint
+    findings, rather than a wall of default-preset complaints.
+  - Three distinct outcomes: `ok`, `skipped` (the project didn't opt in — a pass), and
+    `unavailable` (should have run, couldn't — **not** a pass). The last one is the same
+    "unanalyzed is not clean" invariant that `drep check` now enforces.
+  - Output parsers for ruff/eslint JSON, gofmt line output, compiler-style positions,
+    tsc, and cargo's newline-delimited JSON. `go vet` writes diagnostics to **stderr**, so
+    `ToolSpec.diagnostics_stream` selects the stream — reading stdout alone would have
+    reported every Go file clean.
 - **Local git hooks** (`.pre-commit-config.yaml`), split by cost:
   - **pre-commit** - ruff check, ruff format, `drep lint-docs`. Instant, deterministic.
   - **pre-push** - `drep check --fail-on error`. A reasoning model costs minutes and real

@@ -1,0 +1,102 @@
+"""Language registry tests.
+
+The registry is what keeps `if python: ... else: ...` out of the codebase.
+Every language fact - which extensions it owns, which deterministic tools
+check it, how its prompt names it - lives on a LanguageSupport, and callers
+ask the registry rather than branching.
+"""
+
+import pytest
+
+from drep.languages import LanguageSupport, ToolSpec, registry
+
+
+class TestExtensionRouting:
+    """Which language owns a file is a registry lookup, never a conditional."""
+
+    @pytest.mark.parametrize(
+        ("path", "expected"),
+        [
+            ("src/main.py", "python"),
+            ("SRC/MAIN.PY", "python"),
+            ("app/index.ts", "typescript"),
+            ("app/index.tsx", "typescript"),
+            ("app/index.js", "javascript"),
+            ("app/index.jsx", "javascript"),
+            ("cmd/server.go", "go"),
+            ("src/lib.rs", "rust"),
+        ],
+    )
+    def test_detects_language_by_extension(self, path, expected):
+        language = registry.detect(path)
+        assert language is not None
+        assert language.name == expected
+
+    def test_unknown_extension_has_no_language(self):
+        assert registry.detect("notes.txt") is None
+        assert registry.detect("Makefile") is None
+
+    def test_markdown_is_not_a_code_language(self):
+        """Docs are handled by the documentation analyzer, not a code analyzer."""
+        assert registry.detect("README.md") is None
+
+    def test_source_extensions_cover_every_registered_language(self):
+        extensions = registry.source_extensions()
+        for language in registry.languages():
+            assert set(language.extensions) <= extensions
+
+
+class TestLanguagePrompts:
+    """The analysis prompt names the language instead of hardcoding PEP 8."""
+
+    def test_every_language_names_itself_in_its_prompt(self):
+        for language in registry.languages():
+            prompt = language.analysis_prompt()
+            assert language.display_name in prompt
+
+    def test_python_prompt_mentions_its_own_conventions(self):
+        python = registry.get("python")
+        assert "PEP 8" in python.analysis_prompt()
+
+    def test_go_prompt_does_not_mention_python_conventions(self):
+        go = registry.get("go")
+        prompt = go.analysis_prompt()
+        assert "PEP 8" not in prompt
+        assert "Python" not in prompt
+
+
+class TestDeterministicTools:
+    """Each language declares the tools that check it deterministically."""
+
+    def test_python_declares_ruff(self):
+        python = registry.get("python")
+        assert any(t.name == "ruff" for t in python.tools)
+
+    def test_every_tool_declares_how_to_find_and_run_it(self):
+        for language in registry.languages():
+            for tool in language.tools:
+                assert isinstance(tool, ToolSpec)
+                assert tool.command, f"{tool.name} has no command"
+                # A repo-local path is what makes `node_modules/.bin/eslint`
+                # win over a globally installed one
+                assert tool.local_paths is not None
+
+    def test_tools_are_only_run_when_the_repo_configures_them(self):
+        """ "Style adherence where defined" - a tool with no config is not the
+        project's style, so running it would invent findings the project never
+        asked for."""
+        for language in registry.languages():
+            for tool in language.tools:
+                assert tool.config_files, f"{tool.name} declares no config files"
+
+
+class TestRegistryIsClosed:
+    """Registration is the only way in, so nothing can special-case a language."""
+
+    def test_get_rejects_an_unregistered_language(self):
+        with pytest.raises(KeyError):
+            registry.get("cobol")
+
+    def test_languages_are_LanguageSupport_instances(self):
+        for language in registry.languages():
+            assert isinstance(language, LanguageSupport)
