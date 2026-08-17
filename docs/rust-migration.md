@@ -122,6 +122,35 @@ tempfile   = "3.27"
 
 Edition 2024, `rust-version = "1.85"` (floor set by the SDK).
 
+## Working agreement (how these phases get built)
+
+Implementation is delegated to MiniMax M3 via `opencode run`; Claude writes the
+specification and adversarially verifies the result. The global
+`delegate-and-verify` skill has the full procedure. The parts specific to this
+repo:
+
+- **Paste every dependency API into the spec.** The agent is sandboxed to
+  `--dir` and cannot read `~/.cargo/registry`; an external read is auto-rejected
+  and the run dies inside a minute. Two runs died that way (`ignore 0.4`,
+  `toml 1.x`). Verify the API from the installed source yourself first.
+- **Add dependencies yourself**, and forbid the spec from touching the manifest.
+- **Write acceptance criteria that discriminate.** A criterion satisfiable by a
+  wrong implementation manufactures confidence. Every real defect across five
+  phases was in the *verification*, not the code: orphaned test files, a
+  three-dot test that passed under two-dot, retry tests that bypassed the
+  production path, fenced-JSON tests that only used single-line bodies.
+- **Verify by breaking the implementation**, not by reading the tests. Invert the
+  behaviour a test claims to pin and confirm that specific test fails.
+- **`cargo mutants` is the systematic version of that** and gates both
+  pre-commit and CI. A surviving mutant *is* a non-discriminating test. Fix it by
+  making a test discriminate, never by excluding the mutant.
+- **Distrust prose the agent writes.** It has claimed verifications it did not
+  run, including one describing the inverse of the correct check.
+- **Never run it concurrently with anything that reads the working tree** — a
+  `git push` whose hook analyzes files will read half-written ones.
+- **Never pipe its output through `tail`**; that buffers until EOF, so a hung run
+  looks identical to a quiet one. Redirect to a file and poll.
+
 ## Phases
 
 TDD throughout: failing test, implement, refactor, commit. Every phase ends
