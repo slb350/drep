@@ -94,7 +94,7 @@ Versions verified 2026-08-17.
 
 ```toml
 [dependencies]
-open-agent-sdk = { git = "https://github.com/slb350/open-agent-sdk-rust", tag = "v0.6.9" }
+open-agent-sdk = "0.6.9"    # crates.io; docs at https://docs.rs/open-agent-sdk
 tokio          = { version = "1.53", features = ["rt-multi-thread", "macros", "process", "fs", "sync", "time"] }
 clap           = { version = "4.6", features = ["derive"] }
 serde          = { version = "1.0", features = ["derive"] }
@@ -144,9 +144,15 @@ shelling out to `git`. Ends with correct file sets for all three input modes,
 deduped.
 
 ### Phase 3 — LLM layer
-Wire `open-agent-sdk`. Port the cache (content-addressed on prompt + content +
-model + temperature), tolerant JSON parsing, and a simplified concurrency
-limiter. Test against `wiremock`, not a live endpoint.
+Wire `open-agent-sdk` (0.6.9, crates.io, edition 2024, rust-version 1.85 — it
+is what sets this crate's MSRV). Port the cache (content-addressed on prompt +
+content + model + temperature), tolerant JSON parsing, and a simplified
+concurrency limiter. Test against `wiremock`, not a live endpoint.
+
+The SDK published 2026-08-09, so it post-dates the training cutoff of any model
+generating code against it. Run `cargo doc -p open-agent-sdk` into the working
+tree before delegating this phase, so the real API is readable locally rather
+than guessed; [docs.rs](https://docs.rs/open-agent-sdk) has the same content.
 
 ### Phase 4 — Analysis and exit codes
 `code_quality.rs` sending **diff hunks with enclosing context**, `findings.rs`
