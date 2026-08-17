@@ -30,10 +30,52 @@ the rewrite needs no Python interpreter and no tree-sitter.
 
 Distribution via `cargo-dist`: multi-arch binaries, a shell installer, and a Homebrew tap.
 
+### Landed - 2026-08-17 — Phase 1: deterministic tool runner
+
+`src/languages/runner.rs` ports `drep/languages/runner.py` faithfully. The
+five output parsers (`lines`, `json` for both ruff and eslint, `position` for
+`go vet`, `tsc`, `cargo` for clippy NDJSON) are in one module; `Finding` lands
+in `src/analysis/findings.rs` so the tool parsers can produce it.
+
+31 acceptance tests cover every criterion in `PHASE1_SPEC.md` (deleted):
+3 for `resolve_tool`, 4 for `is_configured`/`tool_status`/`passed`, 3 for
+`lines`, 6 for `json` (including the empty-string and invalid-JSON split
+that makes the gate refuse to "green" on a broken plugin), 3 for `position`
+(package-header skip + `vet:` prefix), 3 for `tsc`, 4 for `cargo`
+(non-JSON is an error, primary span wins), 1 for unknown format, and 4
+real-`/bin/sh`-script end-to-end runs of `run_tool` covering skipped,
+unavailable, stderr-streaming, and unparseable.
+
+`tests/real_tool_output.rs` adds 5 more against output captured from ruff
+0.16, gofmt and go vet 1.21 run on deliberately broken files. Hand-written
+fixtures prove the parser matches its spec; only real output proves the spec
+matches the tools. It covers both `go vet` shapes — the bare
+`main.go:6:14:` form and the `# package` header with a `./` prefix — and
+pins that a clean run (`[]`, or empty output) is zero findings rather than a
+parse error.
+
+Total test count went 27 → 63. `cargo test --all-targets`,
+`cargo clippy --all-targets --all-features`, and `cargo fmt --all --check`
+all pass; no new dependencies beyond the ones Phase 1 declared.
+
+The runner is a directory module — `runner/mod.rs` decides whether a tool runs,
+`runner/parsers.rs` reads what it said, and `runner/tests/` holds the unit
+tests. Largest file is 371 lines, against this repo's 600-line soft limit.
+
+**Caught during review: four test files that were never compiled.** An earlier
+draft left `runner/tests/{parsers,resolve,run_tool,support}.rs` on disk with no
+`mod` declaration reaching them. Rust only compiles files a `mod` points at, so
+those 31 tests silently did not exist — appending invalid Rust to one did not
+fail the build. They also duplicated the tests running inline, which is what
+made the gap invisible: the count looked right. Every file under
+`runner/tests/` is now verified by appending garbage and confirming the build
+breaks. If you add a file there, declare it in that directory's `mod.rs`.
+
 ### Planned
 - Doc-comment generation for JavaScript/TypeScript, Go and Rust (needs a parser per
   language; the LLM review path does not) — **dropped in 2.0**, see above
 - Removal of deprecated `CodeQualityAnalyzer.analyze_files` (1.4.0)
+
 
 ## [1.3.0] - 2026-08-16
 

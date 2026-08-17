@@ -139,9 +139,16 @@ fully testable offline, which makes it the right place to establish testing
 patterns.
 
 Port `ToolSpec`/`LanguageSupport`/registry, the five language definitions, tool
-resolution, subprocess execution, and the three output parsers (json, tsc,
-lines). Ends with `drep check --no-llm PATHS` producing blocking findings from
-real ruff/eslint/gofmt runs against fixture repos.
+resolution, subprocess execution, and **five** output parsers — `json`, `tsc`,
+`lines`, `position` (go vet), `cargo` (clippy). `json` alone covers two
+unrelated shapes: ruff's flat records with a `location`, and eslint's one
+record per file with a nested `messages` array.
+
+`Finding` lands here too, not in Phase 4 as first written: the tool parsers
+produce findings, so the type cannot wait for the LLM path.
+
+Ends with `drep check --no-llm PATHS` producing blocking findings from real
+ruff/eslint/gofmt runs against fixture repos.
 
 ### Phase 2 — File targeting and diff
 `src/files.rs` on the `ignore` crate (replaces the hand-rolled walk + prune;
@@ -159,6 +166,25 @@ The SDK published 2026-08-09, so it post-dates the training cutoff of any model
 generating code against it. Run `cargo doc -p open-agent-sdk` into the working
 tree before delegating this phase, so the real API is readable locally rather
 than guessed; [docs.rs](https://docs.rs/open-agent-sdk) has the same content.
+
+**Retry policy must discriminate by failure class.** The Python has one
+`max_retries` governing every failure, which forces a bad trade and is why 7 of
+28 files went unanalyzed on the first real gated push:
+
+| Failure | Deterministic? | Retry? |
+|---|---|---|
+| Response truncated at `max_tokens`, unparseable JSON | Yes - repeats identically | **No.** Re-burns a full reasoning-model call for the same result |
+| 429, 5xx, connection reset, timeout | No - transient | **Yes.** A failed request consumes no tokens, so a retry is nearly free |
+
+`config.yaml` sets `max_retries: 1` with the comment "a 'length' failure repeats
+deterministically; retrying just burns tokens" - correct for the first row, and
+it silently disables the second. Split the two in `llm/client.rs`: transport
+errors retry with backoff, length and parse errors fail the file immediately.
+
+Keep the existing invariant while doing it: `max_retries` is a **total attempt
+count with a floor of 1**. Config permits 0, and a bare `0..max_retries` loop
+would skip the request entirely and then report a bogus "no exception was
+captured".
 
 ### Phase 4 — Analysis and exit codes
 `code_quality.rs` sending **diff hunks with enclosing context**, `findings.rs`
@@ -211,6 +237,13 @@ Each needs a test in the Rust suite.
 - `unavailable` is **not a pass**. A missing tool is a distinct outcome.
 - Honour `diagnostics_stream`. `go vet` writes to **stderr**; reading stdout
   alone reports every Go file clean.
+- Unparseable tool output is **`unavailable`, not zero findings**. Output we
+  cannot read means we do not know whether the file is clean, and guessing
+  "clean" is the failure the whole module exists to prevent. The one exception
+  is line-oriented formats: `position` and `tsc` *skip* non-matching lines by
+  design, because Go interleaves `# package/path` headers among its
+  diagnostics. `cargo`'s NDJSON does not get that latitude — a line that is not
+  JSON means we are not reading what we think we are.
 
 **Gate semantics**
 - Deterministic findings block; LLM findings inform. Split by **source**, not

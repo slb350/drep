@@ -13,6 +13,7 @@
 
 pub mod analysis;
 pub mod cli;
+pub mod languages;
 
 /// How the process terminated.
 ///

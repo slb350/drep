@@ -85,6 +85,26 @@ impl std::fmt::Display for Severity {
     }
 }
 
+/// One finding produced by an analyzer.
+///
+/// Field naming follows the Python `drep.models.findings.Finding` so the two
+/// stay translatable; `kind` here is `type` there, since `type` is a reserved
+/// word in Rust and would force `r#type` at every call site.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Finding {
+    /// Rule code (e.g. `"F401"`) for a structured finding, or the tool name
+    /// (`"ruff"`, `"gofmt"`) when the tool emits no per-rule identifier.
+    pub kind: String,
+    pub severity: Severity,
+    pub file_path: String,
+    pub line: u32,
+    pub column: Option<u32>,
+    pub message: String,
+    /// Optional one-line suggested fix from the tool. None when the tool
+    /// does not emit one (e.g. eslint messages carry only a rule id).
+    pub suggestion: Option<String>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
