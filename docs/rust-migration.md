@@ -340,8 +340,72 @@ there, because `BTreeMap<PathBuf, FailureReason>` is free now and a breaking
 change later.
 
 ### Phase 5 — CLI assembly
-`check` end to end: deterministic findings block, LLM findings inform unless
-`--fail-on`, `--format text|json`, exit 0/1/2. Then `doctor` and `init`.
+Split three ways. 5a is where every subsystem built in isolation meets, and the
+first phase whose mistakes are user-visible rather than internal.
+
+**Phase 5a — `check` end to end.** Input resolution for all three modes, both
+analysis layers, the union of their failure sets, gating, exit 0/1/2, and
+`--format text|json`.
+
+**Phase 5b — `doctor` and `init`.** Near-mechanical ports of `cli_doctor.py`
+(112 LOC) and `cli_init_hooks.py` (206 LOC) plus the `init-llm` presets.
+
+**Phase 5c — multi-provider LLM failover.** See below; deliberately last,
+because it changes the cache-key layer.
+
+Decisions taken before 5a, so the spec does not have to re-litigate them:
+
+- **The LLM is mandatory.** There is no `--no-llm` flag (Phase 1's exit
+  criterion mentioned one; it was never added and is not wanted). A
+  misconfigured or unreachable endpoint is a failure to surface, not a mode to
+  fall back to.
+- **`failed_files` becomes `BTreeMap<PathBuf, FailureReason>`.** A bare path set
+  cannot tell a dead endpoint from a rate limit from a truncated response, and
+  `analyze_file` currently discards the detail at `Err(_)` — so a 429 cannot be
+  reported today even though `LlmError` carries it. Keep the status code
+  structured (`Transport { status: Option<u16>, message: String }`) rather than
+  only as a string, because 5c's failover needs to branch on it.
+- **Tool-level `Unavailable` maps to file-level failure.** `ToolOutcome` is
+  per-tool; `failed_files` is per-file. If ruff cannot execute, every Python
+  file it would have checked is unanalyzed. This join is where exit 2 either
+  works or silently does not.
+- **The two failure sets union, never sum.** Both layers cover the same files.
+- **A file too large for whole-file mode is `failed_files`, not skipped.** 1.x
+  returned `[]` for anything over 32k chars, which under this contract is the
+  banned move: a file we declined to analyze is not clean.
+- **Progress output is display-only.** LLM calls take seconds and a silent hook
+  reads as hung, but failures never travel through that channel.
+
+Also due here, both deferred from Phase 3: a `git_ref` beginning with `--`
+reaches git as a flag (now one site, `since_diff`), and `which_first` checks
+`is_file()` rather than executability - which matters precisely because
+`doctor` is the command that displays tool status.
+
+### Phase 5c — multi-provider failover (a deliberate reversal)
+
+This rewrite dropped the circuit breaker and the rate limiter as server-shaped
+complexity, and failover is the same category. It is taken anyway for a
+specific failure that happens in practice: a local endpoint that is off blocks
+every commit, because exit 2 is a hard stop by design. The reversal is recorded
+here rather than slipped in, so the next person weighing "should drep grow
+resilience machinery" sees the bar it had to clear.
+
+Constraints, in order of how much they cost:
+
+- **Only transport failures fail over** - the SDK's retryable set (408, 429,
+  5xx, timeout, connection). A 401/403 must not: that is misconfiguration, and
+  falling back masks it. Truncation is deliberately excluded to start: a
+  different model might not truncate, but it doubles cost exactly when
+  responses are longest.
+- **The cache key must move inside the failover loop.** The key is computed
+  from the model before the call. If provider 1 is keyed and provider 2 serves
+  the response, the answer is cached under a key it did not come from, and a
+  later run with provider 1 up gets a hit that never came from provider 1.
+- **The config shape is `[[llm]]`, an ordered list.** This is why 5b must write
+  `[[llm]]` with a single entry from day one - `drep init` writes that file, and
+  landing the single-provider shape first would break the file init just wrote.
+- **The run reports which provider served it.** A silent fallback from a local
+  endpoint to a paid API is a cost surprise, not a feature.
 
 ### Phase 6 — `lint-docs`
 Port the markdown checks including `_fence_mask`. No LLM, fast, runs on every
