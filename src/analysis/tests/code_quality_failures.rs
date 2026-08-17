@@ -19,7 +19,7 @@ use crate::llm::cache::Cache;
 
 use super::support::analyzer_with_fast_retry;
 use super::support::{analyzer_for, hunks_for_python_at, hunks_for_python_at_two_lines};
-use crate::test_support::{cfg_for, mount_sse, sse};
+use crate::test_support::{cfg_for, mount_sse, request_count, server_returning, sse};
 
 /// Criterion 11: a response with two issues yields two findings with the
 /// right `kind`/`line`/`message`/`suggestion`.
@@ -120,7 +120,7 @@ async fn out_of_range_line_is_dropped_not_clamped() {
     let hunks = vec![Hunk {
         file_path: PathBuf::from("src/lib.py"),
         old_start: 99,
-        old_count: 1,
+        old_count: 0,
         new_start: 100,
         new_count: 11,
         // 11 numbered lines: 100..=110. Line 5 is out of range.
@@ -209,6 +209,12 @@ async fn missing_required_field_marks_the_file_unanalyzed() {
         result.failed_files.contains(&PathBuf::from("src/lib.py")),
         "missing field must mark the file unanalyzed, got {:?}",
         result.failed_files
+    );
+    assert_eq!(
+        result.dropped_out_of_range, 0,
+        "a missing field is a malformed record, not an out-of-range drop - \
+         without this the two failure classes are indistinguishable here, got {}",
+        result.dropped_out_of_range
     );
 }
 
@@ -307,6 +313,74 @@ async fn line_beyond_u32_marks_the_file_unanalyzed() {
     assert_eq!(
         result.dropped_out_of_range, 0,
         "this is a malformed record, not an out-of-range drop, got {}",
+        result.dropped_out_of_range
+    );
+}
+
+/// A schema-invalid response is not cached.
+///
+/// It is valid JSON, so it arrives as `Extracted::Complete` and the cache
+/// would happily store it - and then serve the same file-level failure for the
+/// whole TTL, with no request made to notice the endpoint had recovered. It
+/// gets the same treatment as a truncated response for the same reason.
+#[tokio::test]
+async fn a_schema_invalid_response_is_not_cached() {
+    // Valid JSON, no `issues` array: parses, then fails the schema.
+    let server = server_returning(&["{\"summary\": \"nothing useful\"}"]).await;
+
+    let (analyzer, _dir) = analyzer_for(&server);
+    let first = analyzer.analyze_file(&hunks_for_python_at(100)).await;
+    let second = analyzer.analyze_file(&hunks_for_python_at(100)).await;
+
+    assert!(
+        !first.failed_files.is_empty(),
+        "first call must fail the file"
+    );
+    assert!(!second.failed_files.is_empty(), "second call must fail too");
+    assert_eq!(
+        request_count(&server).await,
+        2,
+        "a schema-invalid response must not be cached: the second call has to \
+         ask again rather than replay the stored failure"
+    );
+}
+
+/// A record that is BOTH out of range and malformed fails the file.
+///
+/// This is the case neither criterion 13 nor 14 constrains, and it is decided
+/// by the order of the checks in `parse_issue`: shape before membership. An
+/// unknown severity is evidence the response's vocabulary is wrong, which
+/// contaminates the records we did accept - so it must fail the file even
+/// though the record also cites a line we never sent. Checking membership
+/// first would report a demonstrably schema-violating response as fully
+/// understood.
+#[tokio::test]
+async fn an_out_of_range_record_with_a_bad_severity_still_fails_the_file() {
+    let server = MockServer::start().await;
+    // Line 5 is not in the payload (valid_lines is 100), and `blocker` is not
+    // a severity we asked for.
+    let body = "{\"issues\": [\
+        {\"line\": 5, \"severity\": \"blocker\", \"category\": \"bug\", \"message\": \"m\"}\
+    ], \"summary\": \"\"}";
+    mount_sse(
+        &server,
+        ResponseTemplate::new(200).set_body_raw(sse(&[body]), "text/event-stream"),
+    )
+    .await;
+
+    let (analyzer, _dir) = analyzer_for(&server);
+    let result = analyzer.analyze_file(&hunks_for_python_at(100)).await;
+
+    assert!(result.findings.is_empty());
+    assert!(
+        result.failed_files.contains(&PathBuf::from("src/lib.py")),
+        "shape is checked before membership, so the bad severity wins, got {:?}",
+        result.failed_files
+    );
+    assert_eq!(
+        result.dropped_out_of_range, 0,
+        "it is malformed, not a drop - counting it as a drop would report the \
+         file as analyzed, got {}",
         result.dropped_out_of_range
     );
 }

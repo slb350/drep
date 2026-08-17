@@ -39,8 +39,11 @@ pub(crate) fn analyzer_with_fast_retry(cfg: &LlmConfig, cache: Cache) -> CodeQua
 pub(crate) fn python_hunk(file_path: &str, line_no: u32) -> Hunk {
     Hunk {
         file_path: PathBuf::from(file_path),
+        // A pure insertion: the old side contributes no lines, so `old_count`
+        // is 0. It was 1, which describes a one-line modification and does not
+        // match a `lines` vector holding only `Added` entries.
         old_start: line_no.saturating_sub(1),
-        old_count: 1,
+        old_count: 0,
         new_start: line_no,
         new_count: 1,
         lines: vec![HunkLine::Added("x = 1".to_owned())],
@@ -57,7 +60,8 @@ pub(crate) fn hunks_for_python_at_two_lines() -> Vec<Hunk> {
     vec![Hunk {
         file_path: PathBuf::from("src/lib.py"),
         old_start: 99,
-        old_count: 2,
+        // Pure insertion again - see `python_hunk`.
+        old_count: 0,
         new_start: 100,
         new_count: 2,
         lines: vec![

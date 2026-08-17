@@ -119,7 +119,7 @@ impl CodeQualityAnalyzer {
         // response would be, and the duplicate is silent — the caller's
         // view is identical to a fresh request.
         if let Some(cached) = self.cache.get(&cache_key) {
-            return parse_response(&payload, &first.file_path, Extracted::Complete(cached));
+            return parse_response(&payload, &first.file_path, &Extracted::Complete(cached));
         }
 
         // Rule 5: concurrency. Acquire a slot before the LLM call and
@@ -134,17 +134,26 @@ impl CodeQualityAnalyzer {
 
         match result {
             // Rule 6: complete → parse, store in the cache.
-            Ok(Extracted::Complete(value)) => {
-                // Best-effort cache write: a failure here is a log line
-                // for the caller's diagnostics, not a failure of the
-                // analysis. The result we return is the one we parsed.
-                let _ = self.cache.put(&cache_key, &value);
-                parse_response(&payload, &first.file_path, Extracted::Complete(value))
-            }
-            // Rule 7: truncated → parse the partial result AND mark the
-            // file failed. Never cache a truncated response.
-            Ok(Extracted::Truncated(value)) => {
-                parse_response(&payload, &first.file_path, Extracted::Truncated(value))
+            // Rules 6 and 7 in one arm. Both never-cache rules live in the
+            // `if let` below rather than being split across two arms, where
+            // the `Complete` arm's guard could only ever be true.
+            Ok(extracted) => {
+                let result = parse_response(&payload, &first.file_path, &extracted);
+                // Cache only a `Complete` response we fully understood. A
+                // truncated one is a prefix, and a body can be valid JSON and
+                // still schema-invalid - a missing `issues` array, a record
+                // with an unknown severity - which yields a file-level
+                // failure. Caching either replays it for the whole TTL
+                // instead of letting the next run ask again.
+                //
+                // The write itself is best-effort: a cache failure is a
+                // diagnostic, not a failure of the analysis.
+                if let Extracted::Complete(value) = &extracted
+                    && result.failed_files.is_empty()
+                {
+                    let _ = self.cache.put(&cache_key, value);
+                }
+                result
             }
             // Rule 8: any LLM error → no findings, file in `failed_files`.
             Err(_) => {
@@ -185,7 +194,7 @@ impl CodeQualityAnalyzer {
 fn parse_response(
     payload: &payload::Payload,
     file_path: &Path,
-    extracted: Extracted,
+    extracted: &Extracted,
 ) -> AnalysisResult {
     let mut result = AnalysisResult::default();
 
@@ -263,14 +272,6 @@ fn parse_issue(issue: &Value, payload: &payload::Payload, file_path: &str) -> Is
         return IssueOutcome::Malformed;
     };
 
-    // The line must be one the model was actually shown. Dropping
-    // it is the right move: a finding on a line the model never
-    // saw is a hallucination, and clamping it to the nearest valid
-    // line would attach a real-looking finding to arbitrary code.
-    if !payload.valid_lines.contains(&line) {
-        return IssueOutcome::Dropped;
-    }
-
     // `severity` must be one of the levels the prompt asked for. Anything
     // else is malformed: we cannot map it to a `Severity`, and we do not
     // silently coerce. The vocabulary lives on `LlmSeverity` so the prompt
@@ -304,6 +305,24 @@ fn parse_issue(issue: &Value, payload: &payload::Payload, file_path: &str) -> Is
         .and_then(Value::as_str)
         .filter(|s| !s.is_empty())
         .map(str::to_owned);
+
+    // Membership is checked LAST, after the record's shape.
+    //
+    // Shape asks "did the model answer in our schema"; membership asks "did it
+    // talk about code we sent". A record with an unknown severity is evidence
+    // the response's vocabulary is wrong, and that contaminates the records we
+    // did accept - so it must fail the file even when the record also cites a
+    // line we never sent. Checking membership first would let a demonstrably
+    // schema-violating response be reported as fully understood.
+    //
+    // A well-formed record about code we did not send is different: we
+    // understood it perfectly, it is simply out of scope. It is dropped and
+    // counted, never clamped onto the nearest valid line, which would attach a
+    // real-looking finding to arbitrary code. Pinned by
+    // `out_of_range_line_is_dropped_not_clamped`.
+    if !payload.valid_lines.contains(&line) {
+        return IssueOutcome::Dropped;
+    }
 
     IssueOutcome::Finding(Finding {
         kind,

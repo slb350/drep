@@ -7,6 +7,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Landed - 2026-08-17 — Phase 4b review-gate fixes
+
+The pre-push gate (drep 1.x reviewing drep 2.0) blocked the Phase 4b push with
+exit 2 and 22 advisory findings. Exit 2 was correct: `analysis/tests/result.rs`
+came back `finish_reason='length'`, so 1.x got nothing for it — which is exactly
+the truncation case 2.0 was built to handle and 1.x has no type for.
+
+Real defects found, two of them regressions introduced hours earlier:
+
+- **`UnknownSeverity` reported the wrong vocabulary.** Its `Display` hardcoded
+  `Severity::ALL`, so once `LlmSeverity` began sharing the error type a rejected
+  `"blocker"` said "expected one of: info, warning, error" — a list the parser
+  never accepts and the model was never asked for. It now carries the expected
+  names, derived from `ALL` in a const so the two cannot drift.
+- **A previously-fixed test regressed.** `unset_max_tokens_is_absent_from_the_request`
+  was back to `is_none_or(is_null)`, accepting an explicit `null` where the
+  contract says absent — the exact defect `docs/phase-3-followups.md` records as
+  fixed in `8a20522`. Now `is_none()`.
+- **A schema-invalid response was cached.** Valid JSON with no `issues` array
+  arrives as `Complete`, so the cache stored it and replayed the same
+  file-level failure for the whole TTL with no request to notice the endpoint
+  had recovered. Only responses that parse without a file-level failure are
+  cached now, the same rule truncation already had.
+
+Four tests did not test what they claimed: the merge test had every file
+succeed so the union was never exercised; the cache-hit test never observed the
+limiter it is named for; the clean-response test would have passed had no
+request been made; and the missing-field test did not pin
+`dropped_out_of_range == 0`, leaving the two failure classes indistinguishable
+there.
+
+**`parse_issue` now checks record shape before line membership.** The old order
+left the combined case — an out-of-range line *and* an unknown severity — as a
+silent drop, reporting a demonstrably schema-violating response as fully
+understood. Neither existing criterion constrained that case, so the comment
+claiming criterion 13 required the old order was a coincidence retrofitted with
+a justification. Shape asks "did the model answer in our schema", membership
+asks "did it talk about code we sent"; shape is the more conservative first
+question, and a test now pins it.
+
+Declined, with reasons: the `transient_500` retry test (flagged `error`, but it
+asserts `calls >= 2`, which cannot pass unless a failure was served first);
+`format!` panicking on braces (braces in argument *values* are not re-parsed);
+`summary` not validated (ignored by design); cache stampede (one file is one
+key, and files are distinct).
+
+Testing:
+- 250 passing, break-tests re-derived at 16/16
+- `cargo mutants`: 10 mutants, 5 caught, 5 unviable, 0 missed
+
 ### Landed - 2026-08-17 — Phase 4b: analysis and the failure contract
 
 `src/analysis/prompt.rs` (system prompt per language), `src/analysis/result.rs`

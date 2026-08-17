@@ -5,11 +5,13 @@
 //! approaches were tried and neither discriminates — see the note on that
 //! test.
 
+use std::collections::BTreeSet;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use tempfile::TempDir;
-use wiremock::matchers::{method, path};
+use wiremock::matchers::{body_string_contains, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use crate::analysis::code_quality::CodeQualityAnalyzer;
@@ -20,24 +22,47 @@ use crate::llm::concurrency::Limiter;
 
 use super::support::analyzer_with_fast_retry;
 use super::support::{analyzer_for, python_hunk};
-use crate::test_support::{cfg_for, mount_sse, request_count, sse};
+use crate::test_support::{cfg_for, request_count, sse};
 
-/// Criterion 21: `analyze_files` over three files merges their findings
-/// and unions their failures.
+/// Criterion 21: `analyze_files` merges findings across files and **unions**
+/// their failures.
+///
+/// Two of the three files fail and one succeeds. All-three-fail would not
+/// discriminate: `failed_files.len() == 3` over three analyzed files is also
+/// what "insert every path we looked at" produces. Only a run where some file
+/// succeeds can tell a union from a blanket insert, which is why the mock is
+/// matched per file rather than shared.
 #[tokio::test]
 async fn analyze_files_merges_findings_and_unions_failures() {
     let server = MockServer::start().await;
-    // Three issues, one per file, at each file's single line.
-    let body = "{\"issues\": [\
-        {\"line\": 100, \"severity\": \"high\", \"category\": \"bug\", \"message\": \"a\"}, \
-        {\"line\": 200, \"severity\": \"medium\", \"category\": \"bug\", \"message\": \"b\"}, \
-        {\"line\": 300, \"severity\": \"info\", \"category\": \"bug\", \"message\": \"c\"}\
-    ], \"summary\": \"\"}";
-    mount_sse(
-        &server,
-        ResponseTemplate::new(200).set_body_raw(sse(&[body]), "text/event-stream"),
-    )
-    .await;
+
+    // `a.py` and `b.py` get a valid finding plus a record with an unknown
+    // severity, which makes the file unanalyzed. `c.py` gets a clean finding.
+    // Matched on the payload, which names the file it is about.
+    for (file, line, failing) in [
+        ("a.py", 100, true),
+        ("b.py", 200, true),
+        ("c.py", 300, false),
+    ] {
+        let bad = if failing {
+            format!(
+                ", {{\"line\": {line}, \"severity\": \"blocker\", \"category\": \"bug\", \"message\": \"d\"}}"
+            )
+        } else {
+            String::new()
+        };
+        let body = format!(
+            "{{\"issues\": [{{\"line\": {line}, \"severity\": \"high\", \"category\": \"bug\", \"message\": \"{file}\"}}{bad}], \"summary\": \"\"}}"
+        );
+        Mock::given(method("POST"))
+            .and(path("/v1/chat/completions"))
+            .and(body_string_contains(format!("src/{file}")))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_raw(sse(&[&body]), "text/event-stream"),
+            )
+            .mount(&server)
+            .await;
+    }
 
     let (analyzer, _dir) = analyzer_for(&server);
     let by_file = vec![
@@ -48,18 +73,22 @@ async fn analyze_files_merges_findings_and_unions_failures() {
 
     let result = analyzer.analyze_files(&by_file).await;
 
-    assert_eq!(
-        result.findings.len(),
-        3,
-        "all three findings must be merged"
-    );
     let mut messages: Vec<&str> = result.findings.iter().map(|f| f.message.as_str()).collect();
-    messages.sort();
-    assert_eq!(messages, vec!["a", "b", "c"]);
-    assert!(
-        result.failed_files.is_empty(),
-        "no files failed, got {:?}",
-        result.failed_files
+    messages.sort_unstable();
+    assert_eq!(
+        messages,
+        vec!["a.py", "b.py", "c.py"],
+        "every file's finding must reach the merged result"
+    );
+
+    let failed: BTreeSet<PathBuf> = result.failed_files.clone();
+    assert_eq!(
+        failed,
+        [PathBuf::from("src/a.py"), PathBuf::from("src/b.py")]
+            .into_iter()
+            .collect::<BTreeSet<_>>(),
+        "exactly the two failing files, by identity - a blanket insert would \
+         also name src/c.py"
     );
 }
 
@@ -167,18 +196,65 @@ async fn cache_hit_does_not_acquire_a_limiter_slot() {
 
     let dir = TempDir::new().expect("temp dir");
     let cache = Cache::new(dir.path().to_path_buf(), 30, 1024 * 1024);
-    let cfg = cfg_for(&server, "m", 1);
+    let mut cfg = cfg_for(&server, "m", 1);
+    // Exactly one permit, so the test can hold it and starve anything that
+    // tries to acquire.
+    cfg.max_concurrent = 1;
     let limiter = Limiter::new(cfg.max_concurrent);
     let analyzer = CodeQualityAnalyzer::new(&cfg, cache, limiter).expect("analyzer");
 
     let hunks = vec![python_hunk("src/lib.py", 100)];
-    let _ = analyzer.analyze_file(&hunks).await;
-    let _ = analyzer.analyze_file(&hunks).await;
+    let first = analyzer.analyze_file(&hunks).await;
+    // Discarding these with `let _` would let an `Err`-shaped regression hide
+    // behind the request count.
+    assert!(first.failed_files.is_empty(), "first call should succeed");
+    let second = analyzer.analyze_file(&hunks).await;
+    assert!(second.failed_files.is_empty(), "cache hit should succeed");
+    assert_eq!(
+        first.findings, second.findings,
+        "a cache hit must return what the live call returned"
+    );
 
     assert_eq!(
         request_count(&server).await,
         1,
         "the second call must be served from the cache; only one HTTP request should occur"
+    );
+    // Now prove a cache hit takes no permit, by holding the only one.
+    //
+    // Sampling `available()` during the call cannot work here: the cache path
+    // has no await points, so it runs to completion before a concurrent
+    // sampler is ever polled and the sampler observes nothing. Asserting
+    // `available() == max` *after* the call is worse - it is vacuous, because
+    // `analyze_file` drops its guard on the way out whether or not it took
+    // one. An earlier version of this test did exactly that while claiming to
+    // pin the behaviour.
+    //
+    // Holding the sole permit is deterministic: if the cache path acquired, it
+    // would wait here forever.
+    let held = analyzer.limiter.acquire().await;
+    assert_eq!(
+        analyzer.limiter.available(),
+        0,
+        "the test holds the only permit"
+    );
+    let third = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        analyzer.analyze_file(&hunks),
+    )
+    .await
+    .expect("a cache hit must not wait on a limiter permit");
+    drop(held);
+
+    assert!(third.failed_files.is_empty());
+    assert_eq!(
+        third.findings, first.findings,
+        "the cached result must match the live one"
+    );
+    assert_eq!(
+        request_count(&server).await,
+        1,
+        "still only one HTTP request after three calls"
     );
 }
 

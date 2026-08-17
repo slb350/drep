@@ -1,6 +1,22 @@
 //! `prompt::build_analysis_prompt` — criteria 1-4.
 
 use crate::analysis::prompt::build_analysis_prompt;
+
+/// The prompt's first line must name the language.
+///
+/// Checked on line 1 rather than with a bare `contains`: the conventions
+/// heading is `**<display_name>-specific concerns:**`, so `contains("Go")` is
+/// satisfied by the heading alone and cannot tell a prompt rendered for this
+/// language from one that never read `display_name`. Line 1 carries no
+/// heading, and asserting "line 1 mentions the language" rather than the whole
+/// opening sentence leaves the wording free to change.
+fn assert_opening_names(prompt: &str, display_name: &str) {
+    let first = prompt.lines().next().unwrap_or_default();
+    assert!(
+        first.contains(display_name),
+        "the prompt must open by naming the language `{display_name}`, got first line: {first}"
+    );
+}
 use crate::languages::definitions::{GO, PYTHON};
 use crate::languages::spec::LanguageSupport;
 
@@ -12,10 +28,7 @@ use crate::languages::spec::LanguageSupport;
 fn python_prompt_carries_display_name_and_every_convention() {
     let prompt = build_analysis_prompt(&PYTHON);
 
-    assert!(
-        prompt.contains("Python"),
-        "Python prompt must mention the language's display_name, got:\n{prompt}"
-    );
+    assert_opening_names(&prompt, PYTHON.display_name);
     for convention in PYTHON.conventions {
         assert!(
             prompt.contains(convention),
@@ -31,10 +44,7 @@ fn python_prompt_carries_display_name_and_every_convention() {
 fn go_prompt_carries_display_name_and_every_convention() {
     let prompt = build_analysis_prompt(&GO);
 
-    assert!(
-        prompt.contains("Go"),
-        "Go prompt must mention the language's display_name, got:\n{prompt}"
-    );
+    assert_opening_names(&prompt, GO.display_name);
     for convention in GO.conventions {
         assert!(
             prompt.contains(convention),
@@ -63,13 +73,26 @@ fn language_with_no_conventions_omits_the_concerns_block() {
         !prompt.contains("-specific concerns:"),
         "an empty conventions list must drop the heading entirely, got:\n{prompt}"
     );
-    // The template places two newlines where the block would be followed
-    // by the next paragraph. An empty block leaves a single newline. A
-    // doubled blank line — `\\n\\n\\n` between two non-empty lines — is
-    // the failure mode.
+    // Structural, not a literal: assert no two consecutive blank lines
+    // anywhere. Pinning a substring that spans the *categories* paragraph
+    // would couple this test to wording it has no stake in, and a blanket
+    // `!contains("\n\n\n")` is the same check expressed less precisely.
+    let doubled = prompt
+        .lines()
+        .collect::<Vec<_>>()
+        .windows(2)
+        .any(|pair| pair[0].trim().is_empty() && pair[1].trim().is_empty());
     assert!(
-        !prompt.contains("\n\n\n"),
-        "an empty conventions block must not produce a doubled blank line, got:\n{prompt}"
+        !doubled,
+        "an empty conventions block must not leave a doubled blank line, got:\n{prompt}"
+    );
+
+    // The populated case must still render the heading, or "no heading" would
+    // pass for a build that never emits one.
+    let populated = build_analysis_prompt(&PYTHON);
+    assert!(
+        populated.contains("**Python-specific concerns:**"),
+        "a language with conventions must get the heading, got:\n{populated}"
     );
 }
 

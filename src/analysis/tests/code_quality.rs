@@ -89,6 +89,14 @@ async fn clean_response_yields_no_findings_and_no_failures() {
     let (analyzer, _dir) = analyzer_for(&server);
     let result = analyzer.analyze_file(&hunks_for_python_at(100)).await;
 
+    // Without this, an analyzer that never issued the request at all would
+    // also produce empty findings and no failures, and this test would call
+    // that a clean run.
+    assert_eq!(
+        request_count(&server).await,
+        1,
+        "a clean result must come from a response, not from never asking"
+    );
     assert!(
         result.findings.is_empty(),
         "clean response is empty findings, got {:?}",

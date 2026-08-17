@@ -33,27 +33,36 @@ pub enum Severity {
 ///
 /// An unrecognised severity is a bug to surface, not a value to coerce to the
 /// lowest rank - coercion is how a finding silently stops blocking.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct UnknownSeverity(pub String);
-
-impl std::fmt::Display for UnknownSeverity {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "unknown severity `{}` (expected one of: ", self.0)?;
-        for (i, sev) in Severity::ALL.iter().enumerate() {
-            if i > 0 {
-                f.write_str(", ")?;
-            }
-            f.write_str(sev.as_str())?;
-        }
-        f.write_str(")")
-    }
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("unknown severity `{value}` (expected one of: {})", expected.join(", "))]
+pub struct UnknownSeverity {
+    /// The value that failed to parse.
+    pub value: String,
+    /// The vocabulary that was expected.
+    ///
+    /// Carried rather than hardcoded because two different scales parse into
+    /// this error: drep's three-level [`Severity`] and the model-facing
+    /// five-level [`LlmSeverity`]. A fixed list meant a rejected `"blocker"`
+    /// from an LLM response reported "expected one of: info, warning, error" -
+    /// a vocabulary the parser does not accept and the model was never asked
+    /// for, which sends whoever reads it looking in the wrong place.
+    pub expected: &'static [&'static str],
 }
-
-impl std::error::Error for UnknownSeverity {}
 
 impl Severity {
     /// Every severity, lowest first. The one place the vocabulary is listed.
     pub const ALL: [Severity; 3] = [Severity::Info, Severity::Warning, Severity::Error];
+
+    /// Every wire name, in rank order — the list an error message quotes.
+    ///
+    /// Derived from `ALL` in a const, not written out. A second literal list
+    /// would need a test to stop it drifting, and a derived list plus a
+    /// consistency test is a weaker construction than derivation.
+    pub const NAMES: [&'static str; 3] = [
+        Self::ALL[0].as_str(),
+        Self::ALL[1].as_str(),
+        Self::ALL[2].as_str(),
+    ];
 
     /// The wire name, as tool parsers and the LLM emit it.
     ///
@@ -75,7 +84,10 @@ impl FromStr for Severity {
         Severity::ALL
             .into_iter()
             .find(|sev| sev.as_str() == s)
-            .ok_or_else(|| UnknownSeverity(s.to_owned()))
+            .ok_or_else(|| UnknownSeverity {
+                value: s.to_owned(),
+                expected: &Severity::NAMES,
+            })
     }
 }
 
@@ -135,6 +147,16 @@ impl LlmSeverity {
         LlmSeverity::Info,
     ];
 
+    /// Every wire name, most severe first. Derived from `ALL` — see
+    /// [`Severity::NAMES`].
+    pub const NAMES: [&'static str; 5] = [
+        Self::ALL[0].as_str(),
+        Self::ALL[1].as_str(),
+        Self::ALL[2].as_str(),
+        Self::ALL[3].as_str(),
+        Self::ALL[4].as_str(),
+    ];
+
     /// The wire name, as the prompt asks for it and the response carries it.
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -157,14 +179,11 @@ impl LlmSeverity {
 
     /// The `critical|high|medium|low|info` alternation, for the prompt.
     ///
-    /// Rendered from `ALL` rather than written out, so a level added here
-    /// reaches the prompt without anyone remembering to update it.
+    /// Rendered from `NAMES`, which is itself derived from `ALL`, so a level
+    /// added to the enum reaches the prompt without anyone remembering to
+    /// update it.
     pub fn alternation() -> String {
-        Self::ALL
-            .iter()
-            .map(|s| s.as_str())
-            .collect::<Vec<_>>()
-            .join("|")
+        Self::NAMES.join("|")
     }
 }
 
@@ -175,7 +194,10 @@ impl FromStr for LlmSeverity {
         LlmSeverity::ALL
             .into_iter()
             .find(|level| level.as_str() == s)
-            .ok_or_else(|| UnknownSeverity(s.to_owned()))
+            .ok_or_else(|| UnknownSeverity {
+                value: s.to_owned(),
+                expected: &LlmSeverity::NAMES,
+            })
     }
 }
 
@@ -215,7 +237,7 @@ mod tests {
     #[test]
     fn unknown_severity_is_an_error_not_a_default() {
         let err = "critical".parse::<Severity>().unwrap_err();
-        assert_eq!(err, UnknownSeverity("critical".to_owned()));
+        assert_eq!(err.value, "critical");
         assert!(err.to_string().contains("critical"));
         // The message must list the vocabulary, so a producer mismatch is
         // diagnosable from the error alone.
@@ -227,6 +249,31 @@ mod tests {
         // Producers emit lowercase. Accepting "ERROR" would mean quietly
         // normalising, and normalising is how a second vocabulary starts.
         assert!("ERROR".parse::<Severity>().is_err());
+    }
+
+    #[test]
+    fn a_rejected_llm_severity_quotes_the_llm_vocabulary_not_dreps() {
+        // The two scales share one error type. Reporting drep's three levels
+        // for a rejected LLM level sends the reader looking for a value the
+        // parser never accepts.
+        let err = "blocker".parse::<LlmSeverity>().unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("critical, high, medium, low, info"),
+            "got {msg}"
+        );
+        assert!(
+            !msg.contains("warning"),
+            "must not quote drep's scale: {msg}"
+        );
+
+        let err = "blocker".parse::<Severity>().unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("info, warning, error"), "got {msg}");
+        assert!(
+            !msg.contains("critical"),
+            "must not quote the LLM scale: {msg}"
+        );
     }
 
     #[test]

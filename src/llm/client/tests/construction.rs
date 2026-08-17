@@ -83,10 +83,12 @@ async fn unset_max_tokens_is_absent_from_the_request() {
     let reqs = server.received_requests().await.expect("log");
     let body: serde_json::Value =
         serde_json::from_slice(&reqs[0].body).expect("request body is JSON");
+    // `is_none()`, not `is_none_or(is_null)`. Accepting an explicit `null`
+    // lets a regression that serialises `None` as `null` pass while the field
+    // is plainly on the wire - which is the thing this test exists to catch.
     assert!(
-        body.get("max_tokens")
-            .is_none_or(serde_json::Value::is_null),
-        "an unset cap must not appear on the wire, got {:?}",
+        body.get("max_tokens").is_none(),
+        "an unset cap must be absent from the wire entirely, got {:?}",
         body.get("max_tokens")
     );
 }
