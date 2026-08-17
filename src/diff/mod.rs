@@ -25,6 +25,10 @@ use tokio::process::Command;
 
 use crate::files;
 
+pub mod hunks;
+
+use hunks::{Hunk, parse_unified_diff};
+
 /// The well-known SHA for the empty git tree.
 ///
 /// On a fresh `git init` (no commits yet) there is no `HEAD` to diff against,
@@ -189,6 +193,55 @@ pub async fn changed_since(root: &Path, git_ref: &str) -> Result<Vec<PathBuf>, G
     let spec = format!("{git_ref}...{ref_b}");
     let output = run_git(root, &["diff", "--name-only", "--diff-filter=ACMR", &spec]).await?;
     Ok(filter_scan_targets(&output))
+}
+
+/// How many lines of unchanged context to request around each change.
+///
+/// Generous on purpose. The model has no parser and no whole-file view, so
+/// this is the only thing giving it the surrounding function body to judge a
+/// change against. git merges hunks whose context windows overlap, so a large
+/// value cannot produce duplicate coverage of the same lines.
+pub const CONTEXT_LINES: u32 = 20;
+
+/// Hunks for the files staged for commit.
+///
+/// Same selection as `staged_files` — `--diff-filter=ACMR`, empty-tree
+/// fallback when there is no HEAD — but the diff itself rather than the
+/// names. `CONTEXT_LINES` of context is requested so the model reading each
+/// hunk has the surrounding function body to compare against.
+pub async fn staged_hunks(root: &Path) -> Result<Vec<Hunk>, GitError> {
+    let unified = format!("--unified={CONTEXT_LINES}");
+    let args: &[&str] = if has_head(root).await {
+        &["diff", "--cached", "--diff-filter=ACMR", &unified]
+    } else {
+        &[
+            "diff",
+            "--cached",
+            "--diff-filter=ACMR",
+            &unified,
+            EMPTY_TREE,
+        ]
+    };
+    let output = run_git(root, args).await?;
+    Ok(parse_unified_diff(&output))
+}
+
+/// Hunks for what this branch changed relative to `git_ref`.
+///
+/// Three-dot (`<ref>...HEAD`), matching `changed_since`: the merge-base diff,
+/// so work that landed on the base branch after the fork is not attributed to
+/// this branch. `CONTEXT_LINES` of context is requested so the model has
+/// enough surrounding code to judge each change.
+pub async fn hunks_since(root: &Path, git_ref: &str) -> Result<Vec<Hunk>, GitError> {
+    let ref_b = if has_head(root).await {
+        "HEAD"
+    } else {
+        EMPTY_TREE
+    };
+    let spec = format!("{git_ref}...{ref_b}");
+    let unified = format!("--unified={CONTEXT_LINES}");
+    let output = run_git(root, &["diff", "--diff-filter=ACMR", &unified, &spec]).await?;
+    Ok(parse_unified_diff(&output))
 }
 
 /// The current commit's SHA, with `"unknown"` on any failure.

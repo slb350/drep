@@ -304,9 +304,33 @@ In 2.0 (**landed in Phase 3a**):
 concurrency). Requires open-agent-sdk **0.7.0**. See CHANGELOG for the full note.
 
 ### Phase 4 — Analysis and exit codes
-`code_quality.rs` sending **diff hunks with enclosing context**, `findings.rs`
-with the severity vocabulary, and the failure contract: unanalyzed files are
-counted and surfaced, never reported clean.
+Split into 4a and 4b: together they exceed the size where a single delegated
+handoff stays reliable, and 4a is fully offline while 4b is not.
+
+**Phase 4a ✅ — hunks and payload. Landed 2026-08-17.** `src/diff/hunks.rs`
+(parser), `staged_hunks`/`hunks_since` in `src/diff/mod.rs` at
+`--unified=20`, and `src/analysis/payload.rs`. See the CHANGELOG for the full
+note. `findings.rs` already carried `Severity` and `Finding` from Phase 0, so
+the phase list's mention of it was stale.
+
+**Phase 4b — analysis and the failure contract.** `code_quality.rs`: prompt
+assembly from `LanguageSupport::conventions`, the LLM call through
+`LlmClient`/`Cache`/`Limiter`, mapping the response to `Finding`s, and
+`AnalysisResult { findings, failed_files }`. Severity mapping is
+critical|high → error, medium → warning, low|info → info.
+
+Two rules for 4b that are decisions, not ports:
+
+- **`Extracted::Truncated` records the file in `failed_files` *and* returns its
+  partial findings.** Unconditionally — the analysis layer never consults
+  `--fail-on`. Phase 5's CLI decides what a failed file maps to. Conditioning it
+  on the flag would make `failed_files` flag-dependent, so the JSON `unanalyzed`
+  field would mean different things per invocation.
+- **A finding whose line is not in `Payload::valid_lines` is dropped, not
+  clamped** — it is about code the model was never shown. Dropped findings are
+  counted so the drop is observable rather than silent. A *malformed* finding
+  record (unknown severity, missing field) is different: it makes the file
+  unanalyzed, because we cannot know what it said.
 
 ### Phase 5 — CLI assembly
 `check` end to end: deterministic findings block, LLM findings inform unless
@@ -378,6 +402,22 @@ Each needs a test in the Rust suite.
 - `max_retries` is a **total attempt count with a floor of 1**. Config permits
   0, and a naive `0..max_retries` loop skips the request entirely and then
   reports a bogus "no exception captured".
+
+**Diff parsing and the LLM payload**
+- The file a hunk belongs to comes from the **`+++ b/<path>` line**, never from
+  `diff --git a/… b/…`. The git header carries two paths on one line with no
+  unambiguous separator, so any "find `b/`" rule captures the wrong span for a
+  repository path that itself contains `b/` (`src/b/mod.rs`). The Python
+  `diff_parser.py` had exactly this bug.
+- **Inside a hunk body, the first byte alone decides the line kind.** Do not
+  also skip lines starting with `---` or `+++`: those headers appear only before
+  the first `@@` of a file, and a removed source line beginning with `--`
+  arrives as `---…`. Skipping it silently drops real removed code.
+- **The payload states each line's true new-file line number**; the model is
+  never asked to derive one from an `@@` header. Removed lines render with a
+  blank number field because they have no line in the new file. A finding
+  outside `Payload::valid_lines` is about code that was never sent, and is
+  dropped rather than clamped onto whatever line is nearest.
 
 **Markdown**
 - One `fence_mask` answers "is this line inside a code fence", consulted by

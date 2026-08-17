@@ -7,6 +7,57 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Landed - 2026-08-17 — Phase 4a: diff hunks and the LLM payload
+
+The first half of Phase 4, and the first part of the rewrite with no Python to
+port: 1.x sent whole files (`analyze_file`, capped at 32k chars), so there is no
+reference implementation for sending changed hunks with enclosing context.
+
+`src/diff/hunks.rs` parses `git diff --unified=N` into `Hunk`/`HunkLine`.
+`src/diff/mod.rs` gains `staged_hunks` and `hunks_since`, mirroring the
+selection rules of `staged_files`/`changed_since` (`--diff-filter=ACMR`,
+empty-tree fallback, three-dot for the branch case) but returning the diff
+rather than the names. `CONTEXT_LINES = 20`: git merges hunks whose context
+windows overlap, so a generous value cannot double-cover the same lines, and it
+substitutes for the parser drep deliberately does not have.
+
+`drep/pr_review/diff_parser.py` was the nearest reference and carries two
+defects the Rust does not reproduce:
+
+- It reads the file path off `diff --git a/… b/…` with `re.search(r"b/(.+)$")`.
+  A repository path containing `b/` — `src/b/mod.rs` — captures the wrong span.
+  The Rust reads it off the unambiguous `+++ b/<path>` line instead.
+- It skips any hunk-body line starting with `---` or `+++` as a file header.
+  Removing a source line beginning with `--` arrives as `---…` and was silently
+  dropped. Those headers only appear before the first `@@`, so inside a body the
+  first byte alone decides the kind.
+
+`src/analysis/payload.rs` renders hunks into the text the model sees. Each line
+carries its **true new-file line number** in a gutter — `{marker}{n:>6} | ` —
+because a model handed a bare diff must infer line numbers from the `@@` header,
+and every finding then points at plausible-looking wrong code. Removed lines get
+a blank number field. `render` returns the text plus `valid_lines`, the set of
+numbers actually shown; Phase 4b drops any finding outside it as a finding about
+code the model never saw. Context lines are in the set deliberately — they were
+shown with real numbers, so a finding on one is an observation, not a
+hallucination. The scope sentence is chosen from the data (any Added/Removed
+line means diff mode, otherwise whole-file mode), so no caller can set it wrong.
+
+Testing:
+- 33 tests added, 216 passing
+- 9 targeted break-tests: each load-bearing behaviour inverted and confirmed to
+  fail its naming test — path source, `---` body lines, removed-line numbering,
+  payload-relative numbering, `valid_lines` membership, omission-gap
+  arithmetic, `--unified` reaching git, scope-sentence selection, three-dot
+- `cargo mutants` on the diff: 54 mutants, 11 caught, 43 unviable, 0 missed
+- Ground truth: parsed a real commit (`f3ad627..8a20522`) and verified all
+  1,870 numbered lines against the actual file content at that revision
+- One non-discriminating test found and fixed:
+  `valid_lines_contains_context_and_added_numbers_only` used a mid-hunk removed
+  line, whose number collides with the following numbered line, so an
+  implementation that wrongly numbered removals was invisible to it. The fixture
+  now ends with a trailing removal.
+
 ### Landed - 2026-08-17 — Phase 2: file targeting and diff
 
 `src/files/` ports `drep/core/file_targets.py` onto the `ignore` crate. The

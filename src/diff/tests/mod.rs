@@ -7,5 +7,7 @@
 
 mod changed_since;
 mod current_commit_sha;
+mod hunk_commands;
+mod hunks;
 mod staged_files;
 pub(crate) mod support;

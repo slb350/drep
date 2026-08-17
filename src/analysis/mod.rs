@@ -5,3 +5,7 @@
 //! `analysis::findings::Severity` and drift apart.
 
 pub mod findings;
+pub mod payload;
+
+#[cfg(test)]
+mod tests;

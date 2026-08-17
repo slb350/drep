@@ -75,3 +75,6 @@ external/
 # cargo-mutants run output
 /mutants.out/
 /mutants.out.old/
+
+# Delegation specs — working files, not shipped docs
+PHASE_*_SPEC.md
