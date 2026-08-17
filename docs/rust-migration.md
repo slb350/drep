@@ -157,8 +157,8 @@ deduped. **Landed 2026-08-17** — see CHANGELOG for the full note (30 new tests
 `src/files/{mod,tests}` and `src/diff/{mod,tests}` follow the directory-module
 pattern from Phase 1, `ignore = "0.4"` is the only new dependency).
 
-### Phase 3 — LLM layer
-Wire `open-agent-sdk` (0.6.9, crates.io, edition 2024, rust-version 1.85 — it
+### Phase 3 — LLM layer ✅
+Wire `open-agent-sdk` (0.7.0, crates.io, edition 2024, rust-version 1.85 — it
 is what sets this crate's MSRV). Port the cache (content-addressed on prompt +
 content + model + temperature), tolerant JSON parsing, and a simplified
 concurrency limiter. Test against `wiremock`, not a live endpoint.
@@ -262,14 +262,17 @@ In 2.0 (**landed in Phase 3a**):
   reconciles actual usage on exit, so the forward guess only has to prevent a
   stampede. Preserve that reconcile step.
 
-  Use `open_agent::estimate_tokens(&[Message])` for the prompt half rather than
-  re-deriving a chars-per-token heuristic. It is the same 4-chars-per-token
-  approximation the Python used, but it also accounts for per-message role
-  overhead, and keeping one implementation means the reservation cannot drift
-  from what the SDK actually sends. `is_approaching_limit` and
-  `truncate_messages` are there too if a prompt ever needs trimming.
+  **Superseded by Phase 3b:** the limiter ended up as a bare concurrency cap
+  with no token budget, so there is nothing to reserve and nothing to reconcile.
+  429 is handled by the SDK's retry. If a token budget is ever reintroduced,
+  use `open_agent::estimate_tokens(&[Message])` rather than re-deriving a
+  chars-per-token heuristic.
+
 - A user-set `max_tokens` is sent to the API but must **not** inflate the
   reservation.
+
+**Landed 2026-08-17** as 3a (config, client, JSON extraction) and 3b (cache,
+concurrency). Requires open-agent-sdk **0.7.0**. See CHANGELOG for the full note.
 
 ### Phase 4 — Analysis and exit codes
 `code_quality.rs` sending **diff hunks with enclosing context**, `findings.rs`

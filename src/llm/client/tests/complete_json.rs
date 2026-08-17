@@ -269,7 +269,10 @@ async fn unparseable_is_never_retried() {
 /// silently becomes wrong - this test makes that drift visible.
 #[test]
 fn sdk_classifies_400_as_non_retryable() {
-    let e400 = open_agent::Error::api("API error 400 Bad Request".to_string());
+    // api_status, not api: the latter leaves `status: None`, so the assertion
+    // would pass merely because status-less errors are unretryable - it could
+    // not tell that apart from "400 is classified non-retryable".
+    let e400 = open_agent::Error::api_status(400, "Bad Request");
     assert!(
         !is_retryable_error(&e400),
         "the SDK must keep 400 in the non-retryable class"

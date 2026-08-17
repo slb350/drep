@@ -74,6 +74,53 @@ all pass.
 
 
 
+### Landed - 2026-08-17 — Phase 3: the LLM layer
+
+**3a** — `src/config.rs` (TOML, `${VAR}` expansion over the whole parsed tree so
+future fields inherit it), `src/llm/json_parsing.rs` (fence → direct → comma
+repair → truncation recovery, returning `Complete` or **`Truncated`** as a type
+because under `--fail-on` a truncated response could omit the one blocking
+finding), and `src/llm/client/` over open-agent-sdk.
+
+**3b** — `src/llm/cache.rs` and `src/llm/concurrency.rs`, both deliberately
+smaller than the Python:
+
+- The cache key is **content-addressed and not git-aware**. 1.x mixed the commit
+  SHA in, which forced a miss on every unchanged file at every new commit — the
+  exact case a commit gate's cache exists to serve. Fields are length-prefixed so
+  `("ab","c")` cannot collide with `("a","bc")`. Reads are infallible: a corrupt
+  entry is a miss, never an error, because a cache must not be able to take the
+  gate down.
+- The limiter is **just a concurrency cap**. The per-repo semaphores,
+  requests-per-minute window, token budget with two-phase reservation, and
+  circuit breaker all existed because 1.x was a server scanning whole repos. One
+  repo per invocation, 429 now retried by the SDK, no token budget means nothing
+  to reconcile, and one developer committing is not a stampede.
+
+**Requires open-agent-sdk 0.7.0**, which fixes three bugs found here: streamed
+text was silently discarded when a response ended without `finish_reason`; 429
+was not classified retryable; and `max_tokens` could not be left unset.
+
+**Bugs the gate found in its own new code.** drep 1.x reviewing drep 2.0 returned
+23 advisory findings; five were real:
+
+- `FENCE_RE` had no `(?s)`, so `.` never crossed a newline and **no multi-line
+  fenced response parsed** — and real model output is pretty-printed. It failed
+  safe (unanalyzed, never a false clean) but the primary path was unusable. The
+  three existing fenced tests used single-line bodies and did not discriminate.
+- The trailing-comma repair was a regex over raw text with no string awareness:
+  `{"a":",}","b":1,}` was rewritten to `{"a":"}",...}` and returned `Complete`.
+  Same defect class as the single-quote repair this module deliberately omits.
+  Now a string-aware walk.
+- Repairs did not compose, so truncated-plus-trailing-comma was unrecoverable.
+  Balancing now happens before stripping, because a dangling comma at the end of
+  a truncated response has no delimiter after it to be seen by.
+- `LlmClient` derived `Debug` while holding a plaintext `api_key`.
+- `run_git` had no timeout except at one call site.
+
+Test count 117 → 183. `cargo mutants`: 170 mutants, 69 caught, 101 unviable,
+zero missed.
+
 ### Decided - 2026-08-17
 
 **drep 2.0 will be a Rust binary with a much smaller scope.** Plan in

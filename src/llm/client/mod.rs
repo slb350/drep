@@ -47,7 +47,6 @@ use crate::llm::json_parsing::{Extracted, extract_json};
 /// with a non-default retry config (the production default sleeps 1s
 /// between attempts, which would make the retry tests take seconds). They
 /// are not part of the public API.
-#[derive(Debug)]
 pub struct LlmClient {
     pub(crate) base_url: String,
     pub(crate) model: String,
@@ -60,6 +59,23 @@ pub struct LlmClient {
     pub(crate) max_tokens: Option<u32>,
     pub(crate) timeout_secs: u64,
     pub(crate) retry_config: RetryConfig,
+}
+
+/// Hand-written so the API key cannot reach a log.
+///
+/// A derived `Debug` prints every field, so any `{:?}`, `dbg!` or tracing line
+/// touching the client would emit a live credential.
+impl std::fmt::Debug for LlmClient {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LlmClient")
+            .field("base_url", &self.base_url)
+            .field("model", &self.model)
+            .field("api_key", &"<redacted>")
+            .field("temperature", &self.temperature)
+            .field("max_tokens", &self.max_tokens)
+            .field("timeout_secs", &self.timeout_secs)
+            .finish()
+    }
 }
 
 /// What can go wrong at the LLM boundary.

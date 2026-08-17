@@ -40,6 +40,13 @@ const EMPTY_TREE: &str = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
 /// "unknown" and the cache key falls through.
 const SHA_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// Ceiling on any single git invocation.
+///
+/// Generous compared with `SHA_TIMEOUT` because `git diff` on a large history
+/// is legitimately slower than `rev-parse`, but bounded so a hung git cannot
+/// stall a commit.
+const GIT_TIMEOUT: Duration = Duration::from_secs(60);
+
 /// What went wrong shelling out to git.
 ///
 /// Distinct from `std::io::Error` because the most common cause — git exits
@@ -86,6 +93,12 @@ async fn has_head(root: &Path) -> bool {
 /// All the diff commands want the same shape: capture stdout, capture
 /// stderr separately, never panic. `kill_on_drop` ensures a hung git cannot
 /// outlive its caller.
+/// Every git invocation is bounded.
+///
+/// The timeout lives here rather than at one call site: `current_commit_sha`
+/// wrapped itself, but `staged_files`, `changed_since` and `has_head` called
+/// this bare, so a hung git blocked the gate indefinitely. `kill_on_drop` only
+/// helps when the future is dropped, which nothing was doing.
 async fn run_git(root: &Path, args: &[&str]) -> Result<String, GitError> {
     let mut command = Command::new("git");
     command
@@ -96,10 +109,17 @@ async fn run_git(root: &Path, args: &[&str]) -> Result<String, GitError> {
         .stderr(Stdio::piped())
         .kill_on_drop(true);
 
-    let output = command
-        .output()
-        .await
-        .map_err(|err| GitError::Spawn(err.to_string()))?;
+    let output = match tokio::time::timeout(GIT_TIMEOUT, command.output()).await {
+        Ok(result) => result,
+        Err(_) => {
+            return Err(GitError::Spawn(format!(
+                "git {} timed out after {}s",
+                args.join(" "),
+                GIT_TIMEOUT.as_secs()
+            )));
+        }
+    }
+    .map_err(|err| GitError::Spawn(err.to_string()))?;
 
     if !output.status.success() {
         return Err(GitError::NonZero {

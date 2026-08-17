@@ -56,13 +56,65 @@ static FENCE_RE: LazyLock<Regex> = LazyLock::new(|| {
     // ``` (literal) + optional `json` info string + newline + body + newline + ```
     // Non-greedy body so a second fence in the same text doesn't swallow
     // everything in between.
-    Regex::new(r"```(?:json)?\n(.*?)\n```").expect("FENCE_RE is a constant regex")
+    // (?s) so `.` crosses newlines. Without it only a single-line body matches,
+    // and real model output is pretty-printed - every fenced multi-line response
+    // fell through to `None` and the file was reported unanalyzed.
+    // Also tolerate CRLF, trailing spaces after the info string, and an indented
+    // closing fence, all of which real responses produce.
+    Regex::new(r"(?s)```(?:json)?[ \t]*\r?\n(.*?)\r?\n[ \t]*```")
+        .expect("FENCE_RE is a constant regex")
 });
 
 /// Match a trailing comma before `}` or `]`, capturing the closing delimiter
 /// so `replace_all` can drop just the comma.
-static TRAILING_COMMA_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r",(\s*[}\]])").expect("TRAILING_COMMA_RE is a constant regex"));
+/// Drop commas that sit immediately before a closing `}` or `]`, ignoring any
+/// that appear inside a JSON string.
+///
+/// This was a regex (`,(\s*[}\]])`) applied to the raw text, which had no idea
+/// what a string was: `{"a":",}","b":1,}` was "repaired" into `{"a":"}","b":1}`,
+/// parsing as `Complete` with the string value silently rewritten from `,}` to
+/// `}`. That is the same defect class as the single-quote repair this module
+/// deliberately does not implement - a repair that damages valid input.
+fn strip_trailing_commas(s: &str) -> String {
+    let bytes = s.as_bytes();
+    let mut out = String::with_capacity(s.len());
+    let mut in_string = false;
+    let mut escape = false;
+
+    for (i, ch) in s.char_indices() {
+        if escape {
+            escape = false;
+            out.push(ch);
+            continue;
+        }
+        if in_string {
+            match ch {
+                '\\' => escape = true,
+                '"' => in_string = false,
+                _ => {}
+            }
+            out.push(ch);
+            continue;
+        }
+        if ch == '"' {
+            in_string = true;
+            out.push(ch);
+            continue;
+        }
+        if ch == ',' {
+            // Look ahead past whitespace for a closing delimiter. Only a comma
+            // outside a string can be structural, which is why this check lives
+            // here rather than in a regex over the whole text.
+            let rest = &bytes[i + 1..];
+            let next = rest.iter().find(|b| !b.is_ascii_whitespace());
+            if matches!(next, Some(b'}') | Some(b']')) {
+                continue;
+            }
+        }
+        out.push(ch);
+    }
+    out
+}
 
 /// Run the strategy ladder against one LLM response and return the first thing
 /// that parses.
@@ -86,7 +138,7 @@ pub fn extract_json(content: &str) -> Option<Extracted> {
     // Strategy 3: repair trailing commas. This is the only repair we attempt
     // - single-quote substitution is deliberately omitted because it
     // corrupts apostrophes inside strings.
-    let repaired = TRAILING_COMMA_RE.replace_all(&working, "$1").into_owned();
+    let repaired = strip_trailing_commas(&working);
     if let Ok(value) = serde_json::from_str::<Value>(&repaired) {
         return Some(Extracted::Complete(value));
     }
@@ -96,7 +148,12 @@ pub fn extract_json(content: &str) -> Option<Extracted> {
     // `Truncated` is the load-bearing signal: a successful parse here means
     // the response was cut off and the value is a prefix of the intended
     // document.
-    if let Some(balanced) = balance_unclosed(&working) {
+    // Balance first, then strip: a truncated response very often ends mid-element
+    // (`{"a":1,`), where the dangling comma has no closing delimiter after it yet
+    // and so is invisible to the stripper. Appending the closers first turns it
+    // into `{"a":1,}`, which the stripper then repairs. Doing it the other way
+    // round leaves the comma in place and the parse fails.
+    if let Some(balanced) = balance_unclosed(&repaired).map(|b| strip_trailing_commas(&b)) {
         if let Ok(value) = serde_json::from_str::<Value>(&balanced) {
             return Some(Extracted::Truncated(value));
         }
@@ -405,5 +462,92 @@ mod balance_tests {
         let v = value_of(extract_json(r#"{"path":"C:\\","n":2"#));
         assert_eq!(v["path"], r"C:\");
         assert_eq!(v["n"], 2);
+    }
+}
+
+#[cfg(test)]
+mod fence_tests {
+    use super::*;
+
+    /// The realistic shape: a pretty-printed body inside a fence.
+    ///
+    /// The original regex had no `(?s)`, so `.` never crossed a newline and this
+    /// returned `None`. The single-line fenced tests all passed regardless,
+    /// which is why the gap survived review.
+    #[test]
+    fn a_multi_line_fenced_block_parses() {
+        let content = "Here is the review:\n```json\n{\n  \"findings\": [\n    {\"line\": 1}\n  ]\n}\n```\ndone";
+        match extract_json(content) {
+            Some(Extracted::Complete(v)) => assert_eq!(v["findings"][0]["line"], 1),
+            other => panic!("expected Complete, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn crlf_line_endings_in_a_fence_parse() {
+        let content = "```json\r\n{\r\n  \"a\": 1\r\n}\r\n```";
+        match extract_json(content) {
+            Some(Extracted::Complete(v)) => assert_eq!(v["a"], 1),
+            other => panic!("expected Complete, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn an_indented_closing_fence_parses() {
+        let content = "```json\n{\n  \"a\": 1\n}\n  ```";
+        match extract_json(content) {
+            Some(Extracted::Complete(v)) => assert_eq!(v["a"], 1),
+            other => panic!("expected Complete, got {other:?}"),
+        }
+    }
+}
+
+#[cfg(test)]
+mod repair_tests {
+    use super::*;
+
+    /// A comma inside a string is data, not syntax.
+    ///
+    /// The regex this replaced rewrote `{"a":",}","b":1,}` into
+    /// `{"a":"}","b":1}` and returned `Complete` - a silent corruption of a
+    /// string value, in a field that carries finding messages.
+    #[test]
+    fn a_comma_inside_a_string_is_not_stripped() {
+        match extract_json(r#"{"a":",}","b":1,}"#) {
+            Some(Extracted::Complete(v)) => {
+                assert_eq!(v["a"], ",}", "the string value must survive intact");
+                assert_eq!(v["b"], 1);
+            }
+            other => panic!("expected Complete, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_structural_trailing_comma_is_still_stripped() {
+        match extract_json(r#"{"a":1,}"#) {
+            Some(Extracted::Complete(v)) => assert_eq!(v["a"], 1),
+            other => panic!("expected Complete, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn an_escaped_quote_does_not_expose_a_comma_to_the_stripper() {
+        match extract_json(r#"{"a":"x\",}","b":2,}"#) {
+            Some(Extracted::Complete(v)) => {
+                assert_eq!(v["a"], r#"x",}"#);
+                assert_eq!(v["b"], 2);
+            }
+            other => panic!("expected Complete, got {other:?}"),
+        }
+    }
+
+    /// Repairs must compose: truncated *and* trailing-comma is the common shape
+    /// of a response cut off mid-element.
+    #[test]
+    fn a_truncated_object_with_a_trailing_comma_recovers() {
+        match extract_json(r#"{"a":1,"#) {
+            Some(Extracted::Truncated(v)) => assert_eq!(v["a"], 1),
+            other => panic!("expected Truncated, got {other:?}"),
+        }
     }
 }
