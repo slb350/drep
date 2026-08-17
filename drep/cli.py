@@ -550,9 +550,14 @@ def metrics(days, export, detailed):
         click.echo(f"\n✓ Metrics exported to {export_path}")
 
 
-# Registers the lint-docs command on the group above. Imported last, and for
-# its side effect, because it imports `cli` from here.
+# Registered after the group exists. cli_lint imports `cli` from here, so it
+# has to come last; doctor is a plain command the group adopts.
 from drep import cli_lint as _cli_lint  # noqa: E402,F401
+from drep.cli_doctor import doctor as _doctor  # noqa: E402
+from drep.cli_init_llm import init_llm as _init_llm  # noqa: E402
+
+cli.add_command(_doctor)
+cli.add_command(_init_llm)
 
 if __name__ == "__main__":
     cli()

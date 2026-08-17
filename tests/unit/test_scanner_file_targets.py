@@ -284,3 +284,28 @@ class TestDocstringPassStaysPythonOnly:
         from drep.core.file_targets import is_python_source
 
         assert is_python_source("src/main.py")
+
+
+class TestVendoredTreesForEveryLanguage:
+    """The ignore list predates multi-language support.
+
+    It covered Python's venv/ and build/ but not node_modules/, target/ or
+    vendor/, so adding JS, Rust and Go coverage meant walking straight into a
+    dependency tree - hundreds of thousands of files, and findings against
+    code the project does not own.
+    """
+
+    @pytest.mark.parametrize(
+        "name",
+        ["node_modules", "target", "vendor", "venv", "__pycache__", ".git", "dist", ".next"],
+    )
+    def test_dependency_and_build_trees_are_skipped(self, name):
+        from drep.core.file_targets import is_ignored_dir
+
+        assert is_ignored_dir(name)
+
+    @pytest.mark.parametrize("name", ["src", "cmd", "internal", "lib", "app", "tests"])
+    def test_ordinary_source_directories_are_kept(self, name):
+        from drep.core.file_targets import is_ignored_dir
+
+        assert not is_ignored_dir(name)

@@ -26,15 +26,28 @@ PYTHON_SOURCE_SUFFIXES = frozenset({".py"})
 # is built once rather than per candidate file.
 IGNORED_DIRS = frozenset(
     {
+        # Python
         "__pycache__",
-        ".git",
         "venv",
         "env",
         ".venv",
         ".tox",
+        ".eggs",
+        # JavaScript / TypeScript - node_modules is the big one: walking it
+        # means hundreds of thousands of files and findings against code the
+        # project does not own.
+        "node_modules",
+        ".next",
+        ".nuxt",
+        # Rust
+        "target",
+        # Go
+        "vendor",
+        # Shared
+        ".git",
         "build",
         "dist",
-        ".eggs",
+        ".cache",
     }
 )
 

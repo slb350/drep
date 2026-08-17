@@ -1,22 +1,48 @@
+# Hooks published for other repositories to consume:
+#
+#   repos:
+#     - repo: https://github.com/slb350/drep
+#       rev: v1.3.0
+#       hooks:
+#         - id: drep-check-push
+#
+# `language: python` so pre-commit builds an isolated environment from this
+# package. With `language: system` the consumer had to install drep-ai
+# themselves first, and the hook simply failed if they had not.
+#
+# types_or covers every language the registry knows: with `types: [python]`
+# these hooks never fired in a Go or TypeScript repo.
+
 - id: drep-check
   name: drep code quality check
-  description: Run drep analysis on staged Python files (local-only, no platform API)
+  description: Check staged files (deterministic tools always; LLM if configured)
   entry: drep check --staged
-  language: system
+  language: python
   pass_filenames: false
-  types: [python]
+  types_or: [python, javascript, jsx, ts, tsx, go, rust]
+
+- id: drep-check-push
+  name: drep code quality check (pre-push)
+  description: Check the files an outgoing push touches
+  entry: drep check
+  language: python
+  # Filenames come from pre-commit, which at the pre-push stage resolves them
+  # to what the outgoing commits touch. `--staged` would be wrong here: nothing
+  # is staged at push time, so it would analyze nothing and pass silently.
+  stages: [pre-push]
+  types_or: [python, javascript, jsx, ts, tsx, go, rust]
 
 - id: drep-check-all
   name: drep full check
-  description: Run drep analysis on all Python files in repository
+  description: Check every supported file in the repository
   entry: drep check
-  language: system
+  language: python
   pass_filenames: false
-  types: [python]
+  types_or: [python, javascript, jsx, ts, tsx, go, rust]
 
 - id: drep-lint-docs
   name: drep markdown lint
   description: Rule-based markdown checks on staged docs (no LLM, no config)
   entry: drep lint-docs --strict
-  language: system
+  language: python
   types: [markdown]

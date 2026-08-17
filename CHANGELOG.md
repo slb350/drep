@@ -8,6 +8,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added - 2026-08-16
+- **`scripts/install.sh`** — curl-able installer that adds drep as a pre-push gate to any
+  repository. Deliberately thin: provider presets live in `drep init-llm` and detection in
+  `drep doctor`, so the script never duplicates that knowledge. What is left is genuinely
+  shell-shaped — finding a Python, installing the package, and working around
+  `core.hooksPath`, where git ignores `.git/hooks` entirely and both failure modes are
+  silent. Idempotent, and skips the model prompt when piped from curl with no tty.
+- **`drep doctor`** — reports what drep will actually do here: languages present, which
+  tools are ready, which are unconfigured, and which are configured but missing. Never
+  fails; it is diagnosis, not a gate.
+- **`drep init-llm --provider {local,openai,openrouter,custom}`** — writes just the `llm`
+  block from a named preset, without `drep init`'s platform credentials that a local gate
+  never uses. Cloud presets ship a reasoning-sized token budget, and write `${VAR}` rather
+  than the key, since config.yaml is usually committed.
 - **Multi-language analysis.** drep now analyzes Python, JavaScript, TypeScript, Go and
   Rust. Discovery, analyzer support and prompts all route through the language registry,
   so no `if python` branch exists anywhere.
@@ -82,6 +95,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   1.3.0), matching the existing `ParallelAnalyzer` deprecation.
 
 ### Fixed - 2026-08-16
+- **The hooks published for other repos did not work.** `language: system` meant
+  pre-commit never installed drep, so the hook failed unless the consumer had already
+  installed `drep-ai` themselves; `types: [python]` meant they never fired in a Go or
+  TypeScript repo; and there was no pre-push variant, only a `--staged` one that analyzes
+  nothing at push time. Now `language: python`, `types_or` across every registered
+  language, and a `drep-check-push` hook.
+- **`IGNORED_DIRS` predated multi-language support** — no `node_modules`, `target` or
+  `vendor`, so adding JS, Rust and Go coverage meant walking into dependency trees and
+  reporting findings against code the project does not own.
 - **The pre-push hook still passed `--fail-on error`**, which opted the LLM back into
   gating and blocked a real push with 18 "blocking" findings that were model opinions,
   not tool output — reintroducing the exact problem the two-layer split solved. The hook
