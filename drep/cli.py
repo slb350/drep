@@ -554,9 +554,11 @@ def metrics(days, export, detailed):
 # has to come last; doctor is a plain command the group adopts.
 from drep import cli_lint as _cli_lint  # noqa: E402,F401
 from drep.cli_doctor import doctor as _doctor  # noqa: E402
+from drep.cli_init_hooks import init_hooks as _init_hooks  # noqa: E402
 from drep.cli_init_llm import init_llm as _init_llm  # noqa: E402
 
 cli.add_command(_doctor)
+cli.add_command(_init_hooks)
 cli.add_command(_init_llm)
 
 if __name__ == "__main__":

@@ -10,7 +10,9 @@ from pathlib import Path
 
 import click
 import yaml
+from pydantic import ValidationError
 
+from drep.models.config import LLMConfig
 from drep.models.llm_presets import LLM_PRESETS, preset_names
 
 
@@ -62,6 +64,15 @@ def init_llm(provider, model, endpoint, config_path, force):
 
     # Other sections are the user's; only llm is ours to write.
     existing["llm"] = preset.to_config(model=resolved_model, endpoint=resolved_endpoint)
+
+    # Validated before it lands: an unloadable config written here would only
+    # surface much later, inside `drep check`.
+    try:
+        LLMConfig(**{k: v for k, v in existing["llm"].items() if k != "api_key"})
+    except ValidationError as exc:
+        click.echo(f"Error: that would produce an invalid config:\n{exc}", err=True)
+        raise SystemExit(1) from exc
+
     path.write_text(yaml.dump(existing, sort_keys=False))
 
     click.echo(f"✓ {path} now uses {preset.display_name} ({resolved_model})")

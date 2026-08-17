@@ -60,6 +60,9 @@ class LanguageSupport:
         tools: Deterministic checkers, in the order they should run.
         conventions: Language-specific guidance appended to the analysis
             prompt - the part that used to be hardcoded as PEP 8.
+        vendored_dirs: Dependency and build directories this language creates,
+            never descended into. Declared here rather than in a global list
+            so adding a language stays a single-file change.
     """
 
     name: str
@@ -67,6 +70,7 @@ class LanguageSupport:
     extensions: tuple[str, ...]
     tools: tuple[ToolSpec, ...] = ()
     conventions: tuple[str, ...] = ()
+    vendored_dirs: tuple[str, ...] = ()
 
     def analysis_prompt(self) -> str:
         """Code-quality prompt for this language.
@@ -137,6 +141,12 @@ class LanguageRegistry:
     def source_extensions(self) -> frozenset[str]:
         """Every extension drep can analyze as source code."""
         return frozenset(self._by_extension)
+
+    def vendored_dirs(self) -> frozenset[str]:
+        """Every dependency/build directory any registered language creates."""
+        return frozenset(
+            directory for language in self._by_name.values() for directory in language.vendored_dirs
+        )
 
 
 registry = LanguageRegistry()

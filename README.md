@@ -11,9 +11,19 @@
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![Downloads](https://pepy.tech/badge/drep-ai)](https://pepy.tech/project/drep-ai)
 
-Automated code review and documentation improvement tool for **Gitea, GitHub, and GitLab**. Powered by your choice of LLM backend: local models (LM Studio, Ollama, llama.cpp), AWS Bedrock (Claude 4.5), or Anthropic's Claude API.
+A local code review gate for **Python, JavaScript, TypeScript, Go and Rust** — and an automated reviewer for **Gitea, GitHub, and GitLab**.
 
-> **v1.1.2:** Internal type-safety hardening — mypy is now clean across the codebase and gated in CI (no user-facing changes). v1.1.1 fixed Gitea inline review comments being rejected with "review event requires a body" (#11). Interactive configuration wizard with guided setup, plus full support for Python repositories on all three major git platforms: Gitea, GitHub, and GitLab. Support for additional languages and direct Anthropic API provider coming soon.
+Run it on `git push` and it checks your changes twice: your project's own linters and formatters gate the push, and an LLM reviews the semantics without blocking on opinions.
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/slb350/drep/main/scripts/install.sh | bash
+```
+
+> **v1.3.0:** Local pre-push gate with multi-language support. drep now runs the tools your
+> project already configures — ruff, eslint, tsc, gofmt, go vet, clippy — and gates on their
+> findings, while LLM review runs advisory alongside. Works with no configuration at all: the
+> deterministic half needs no model, no key and no tokens. See
+> [Local Gate](#local-gate-pre-push--pre-pr).
 
 </div>
 
@@ -473,111 +483,102 @@ volumes:
 docker compose up -d
 ```
 
-### Pre-Commit Integration
+## Local Gate (pre-push / pre-PR)
 
-drep can run as a pre-commit hook to analyze code locally before commits, without requiring platform API tokens. Perfect for catching issues early in your workflow.
+drep runs on your machine before code leaves it. No platform tokens, and for the
+deterministic half, no model and no API key either.
 
-#### Option 1: Using pre-commit framework
+### Install
 
-1. Install pre-commit framework:
 ```bash
-pip install pre-commit
+cd your-repo
+curl -fsSL https://raw.githubusercontent.com/slb350/drep/main/scripts/install.sh | bash
 ```
 
-2. Add drep to your `.pre-commit-config.yaml`:
+The installer detects your languages, installs a pre-push hook, and asks which model
+you want for the advisory review — **None**, **Local** (LM Studio/Ollama), **OpenRouter**
+or **OpenAI**. "None" is a real answer: the gate still works.
+
+It is safe to re-run, and it handles `core.hooksPath` — if you have a global git hooks
+directory, a repo-local hook would otherwise never fire, silently.
+
+### The two layers
+
+| | Source | Precision | Blocks the push? |
+|---|---|---|---|
+| **Deterministic** | ruff, eslint, tsc, gofmt, go vet, clippy | Exact | **Yes** |
+| **Semantic** | Your chosen LLM | Variable | No — reported only |
+
+Splitting by *source* rather than severity is what makes the gate usable. Your linters are
+precise enough to gate on; an LLM's opinion about naming is not, at any severity. If you
+do want LLM findings to block, opt in with `--fail-on error`.
+
+### What will it actually check?
+
+```bash
+drep doctor
+```
+
+```
+Languages found:
+  Go: 12 file(s)         Python: 48 file(s)      TypeScript: 31 file(s)
+
+Deterministic checks (these gate):
+  ruff: ready
+  gofmt: ready
+  go vet: ready
+  eslint: not configured (add one of: eslint.config.js, ...)
+  tsc: configured but NOT INSTALLED - these checks will not run
+```
+
+That last line matters: a configured-but-missing tool makes `drep check` exit **2**, not 0.
+A check that did not run is never reported as a pass.
+
+### Manual setup
+
+If you would rather not pipe a script into bash, add drep to `.pre-commit-config.yaml`
+yourself:
+
 ```yaml
 repos:
   - repo: https://github.com/slb350/drep
-    rev: v1.2.0  # Use the latest version
+    rev: v1.3.0
     hooks:
-      - id: drep-check          # Checks only staged files
-      # - id: drep-check-all    # OR check all Python files
-      # - id: drep-lint-docs    # Rule-based markdown gate (no LLM)
+      - id: drep-check-push     # pre-push: checks what the push touches
+      # - id: drep-check        # pre-commit: checks staged files
+      # - id: drep-lint-docs    # markdown, rule-based
 ```
-
-`drep-check` sends every staged Python file to your LLM endpoint, so the hook is
-only as fast as that backend. Pass `--fail-on error` so style suggestions do not
-block the commit, or `--exit-zero` (see below) to be warned rather than blocked.
-
-3. Install the hook:
-```bash
-pre-commit install
-```
-
-Now drep will automatically check your staged files before each commit!
-
-#### Option 2: Manual git hook
-
-Add to `.git/hooks/pre-commit`:
-```bash
-#!/bin/bash
-drep check --staged
-```
-
-Make it executable:
-```bash
-chmod +x .git/hooks/pre-commit
-```
-
-#### Pre-Commit Commands
 
 ```bash
-# Check only staged files (pre-commit workflow)
-drep check --staged
-
-# Check specific file or directory
-drep check path/to/file.py
-drep check src/
-
-# Warning mode (don't block commits)
-drep check --staged --exit-zero
-
-# JSON output for tools
-drep check --format json
+pre-commit install --hook-type pre-push
 ```
 
-`drep check` exit codes:
+To add a model afterwards:
+
+```bash
+drep init-llm --provider openrouter    # or local / openai / custom
+export OPENROUTER_API_KEY='...'
+```
+
+### Commands
+
+```bash
+drep check                    # current directory
+drep check src/ main.go       # specific files or directories
+drep check --staged           # only staged files
+drep check --fail-on error    # also block on LLM findings
+drep check --format json      # machine-readable
+drep doctor                   # what will run here
+drep lint-docs --strict       # markdown as a gate
+```
+
+Exit codes:
 
 | Code | Meaning |
 |------|---------|
-| 0 | Analysis ran and found nothing above `--fail-on` (or `--exit-zero` was passed) |
-| 1 | Analysis ran and found issues at or above `--fail-on` |
-| 2 | One or more files could not be analyzed - the LLM endpoint failed, so the result is **not** a pass |
-
-Use `--fail-on` to choose what is worth blocking a commit over. The LLM emits
-info-level style suggestions on almost any file, so the default (`info` - block
-on any finding) is too strict for a gate:
-
-```bash
-drep check --staged --fail-on error    # only bugs/security block; the rest just reports
-```
-
-#### Local-Only Config (No Platform Required)
-
-For pre-commit usage, you don't need Gitea/GitHub/GitLab tokens. Create a minimal `config.yaml`:
-
-```yaml
-# Minimal config for local-only analysis
-llm:
-  enabled: true
-  endpoint: http://localhost:1234/v1
-  model: qwen3-30b-a3b
-
-documentation:
-  enabled: true
-```
-
-`drep check` needs no platform configuration - but it **does** need an LLM. Its
-code-quality and docstring passes are the only checks it runs, so with
-`llm.enabled: false` it has nothing to do and always reports zero findings.
-
-For a gate that needs no LLM at all, use `drep lint-docs`, which is purely
-rule-based:
-
-```bash
-drep lint-docs docs/ README.md   # report markdown issues
-drep lint-docs --strict          # exit 1 on issues, for a commit gate
-```
+| 0 | Everything that should have run, ran, and found nothing blocking |
+| 1 | Blocking findings |
+| 2 | Something that should have run did not — **not** a pass |
 
 ## How It Works
 
@@ -635,9 +636,21 @@ PR Opened → Analyze changed files
 - Performance issues
 
 ### Supported Languages
-- Python (Google-style docstrings)
 
-*Additional language support is planned for upcoming releases.*
+| Language | Deterministic tools | LLM review | Docstring generation |
+|---|---|---|---|
+| Python | ruff | ✅ | ✅ Google-style |
+| TypeScript | eslint, tsc | ✅ | — |
+| JavaScript | eslint | ✅ | — |
+| Go | gofmt, go vet | ✅ | — |
+| Rust | clippy | ✅ | — |
+
+Deterministic tools run only where your project has configured them — a repo with no
+eslint config gets no eslint findings, rather than a wall of default-preset complaints.
+A tool that *is* configured but missing is reported as a gap, never as a pass.
+
+Docstring generation is Python-only because it parses the AST; the LLM review needs no
+parser, which is why every other language works without one.
 
 ## Example Output
 

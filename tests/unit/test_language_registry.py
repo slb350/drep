@@ -133,3 +133,57 @@ class TestDiffLanguages:
         rubric = build_review_rubric([])
         assert "PEP 8" not in rubric
         assert rubric.strip()
+
+
+class TestPublishedHookCoverage:
+    """The hooks other repos consume must fire for every language we support.
+
+    `types: [python]` once meant they never fired in a Go repo. Replacing it
+    with a longer hand-written list reintroduces the same silent failure the
+    next time a language is registered, so this ties the YAML to the registry.
+    """
+
+    @staticmethod
+    def _hook_tags():
+        import pathlib
+
+        import yaml
+
+        hooks = yaml.safe_load(pathlib.Path(".pre-commit-hooks.yaml").read_text())
+        return {
+            hook["id"]: set(hook.get("types_or", []) or hook.get("types", [])) for hook in hooks
+        }
+
+    # `identify` has no tag for these TypeScript module variants, and
+    # pre-commit's types_or cannot match an untagged file. `drep check` still
+    # analyzes them - only the published hook cannot target them. Listed here
+    # so the gap stays this size: anything new failing this test is a bug.
+    KNOWN_UNTAGGABLE = frozenset({".mts", ".cts"})
+
+    def test_every_registered_extension_maps_to_a_declared_tag(self):
+        from identify import identify
+
+        declared = self._hook_tags()["drep-check-push"]
+        unreachable = []
+        for language in registry.languages():
+            for extension in language.extensions:
+                if extension in self.KNOWN_UNTAGGABLE:
+                    continue
+                tags = identify.tags_from_filename(f"x{extension}")
+                if not tags:
+                    unreachable.append((extension, "identify knows no tag for it"))
+                elif not (tags & declared):
+                    unreachable.append((extension, f"tags {sorted(tags)} not in hook types"))
+
+        assert not unreachable, (
+            f"these registered extensions would never trigger the published hook: {unreachable}"
+        )
+
+    def test_the_code_hooks_all_declare_the_same_tags(self):
+        tags = self._hook_tags()
+        assert tags["drep-check"] == tags["drep-check-push"] == tags["drep-check-all"]
+
+    def test_the_known_gap_is_still_only_a_gap_in_the_hook(self):
+        """Those extensions must still work for a direct `drep check`."""
+        for extension in self.KNOWN_UNTAGGABLE:
+            assert registry.detect(f"a{extension}") is not None

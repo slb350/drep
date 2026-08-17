@@ -19,6 +19,7 @@ from drep.cli_validators import (
     URLType,
 )
 from drep.config import load_config
+from drep.models.llm_presets import LLM_PRESETS
 from drep.models.wizard import (
     BedrockLLMData,
     BedrockRegionModel,
@@ -168,8 +169,11 @@ def _collect_llm_config() -> LLMConfig | None:
 
     if provider == "openai-compatible":
         click.echo("\nOpenAI-Compatible Configuration:")
-        endpoint = click.prompt("API Endpoint", default="http://localhost:1234/v1", type=URLType())
-        model = click.prompt("Model name", default="qwen3-30b-a3b", type=NonEmptyString())
+        # Defaults come from the shared preset table, so `drep init` and
+        # `drep init-llm --provider local` cannot drift apart.
+        local = LLM_PRESETS["local"]
+        endpoint = click.prompt("API Endpoint", default=local.endpoint, type=URLType())
+        model = click.prompt("Model name", default=local.default_model, type=NonEmptyString())
         llm_config["endpoint"] = endpoint
         llm_config["model"] = model
 

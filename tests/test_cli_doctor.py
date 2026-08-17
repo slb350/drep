@@ -77,7 +77,8 @@ class TestToolReporting:
             result = runner.invoke(cli, ["doctor"])
 
             assert "tsc" in result.output
-            assert "not installed" in result.output.lower()
+            # Wording comes from runner.tool_status, the single derivation
+            assert "configured but not found" in result.output.lower()
             # A gap in coverage the user should know about, but running doctor
             # is diagnosis, not a gate - it does not fail.
             assert result.exit_code == 0

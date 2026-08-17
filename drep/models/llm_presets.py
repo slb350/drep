@@ -34,8 +34,10 @@ class LLMPreset:
             provider needs no credentials. The variable *name* goes into
             config.yaml as a `${...}` placeholder - never the key itself,
             because config.yaml is usually committed.
-        max_tokens: Completion budget.
-        timeout: Request timeout in seconds.
+        max_tokens: Completion budget, or None to inherit LLMConfig's default.
+            Only the reasoning presets override it; restating the default here
+            forked it once already.
+        timeout: Request timeout in seconds, or None to inherit.
     """
 
     display_name: str
@@ -43,8 +45,8 @@ class LLMPreset:
     endpoint: str | None
     default_model: str | None
     api_key_env: str | None
-    max_tokens: int = 8_000
-    timeout: int = 120
+    max_tokens: int | None = None
+    timeout: int | None = None
 
     def to_config(self, model: str, endpoint: str | None = None) -> dict:
         """Render the `llm` block of config.yaml for this preset."""
@@ -53,9 +55,12 @@ class LLMPreset:
             "provider": "openai-compatible",
             "endpoint": endpoint or self.endpoint,
             "model": model,
-            "max_tokens": self.max_tokens,
-            "timeout": self.timeout,
         }
+        # Omitted rather than restated, so LLMConfig stays the single default.
+        if self.max_tokens is not None:
+            config["max_tokens"] = self.max_tokens
+        if self.timeout is not None:
+            config["timeout"] = self.timeout
         if self.api_key_env:
             config["api_key"] = f"${{{self.api_key_env}}}"
         return config

@@ -4,26 +4,35 @@
 #
 #   curl -fsSL https://raw.githubusercontent.com/slb350/drep/main/scripts/install.sh | bash
 #
-# Deliberately thin. Everything it can delegate to drep itself, it does:
-# `drep init-llm` owns the provider presets and `drep doctor` owns language
-# and tool detection, so this script never duplicates that knowledge and
-# cannot drift from it. What is left is genuinely shell-shaped: finding a
-# Python, installing the package, and working around git's core.hooksPath.
+# Bootstrap only. Everything that can damage a repository - editing the
+# pre-commit config, touching core.hooksPath - lives in `drep init-hooks`,
+# where it has tests; the provider presets live in `drep init-llm` and
+# detection in `drep doctor`. What is left here genuinely needs a shell:
+# finding a Python, installing the package, and getting onto PATH.
 #
-# Safe to re-run: every step checks before it writes.
+# Safe to re-run.
 
 set -euo pipefail
 
-REPO_URL="https://github.com/slb350/drep"
+[ -n "${BASH_VERSION:-}" ] || {
+  echo "error: this script needs bash (try: curl ... | bash)" >&2
+  exit 1
+}
+
 PACKAGE="drep-ai"
 
-say()  { printf '%s\n' "$*"; }
-step() { printf '\n\033[1m==> %s\033[0m\n' "$*"; }
-warn() { printf '\033[33mwarning:\033[0m %s\n' "$*" >&2; }
-die()  { printf '\033[31merror:\033[0m %s\n' "$*" >&2; exit 1; }
+# Colour only when stdout is a terminal, so piping to a log stays readable.
+if [ -t 1 ]; then
+  BOLD=$'\033[1m'; YELLOW=$'\033[33m'; RED=$'\033[31m'; RESET=$'\033[0m'
+else
+  BOLD=""; YELLOW=""; RED=""; RESET=""
+fi
 
-# --------------------------------------------------------------------------
-# 0. Preconditions
+say()  { printf '%s\n' "$*"; }
+step() { printf '\n%s==> %s%s\n' "$BOLD" "$*" "$RESET"; }
+warn() { printf '%swarning:%s %s\n' "$YELLOW" "$RESET" "$*" >&2; }
+die()  { printf '%serror:%s %s\n' "$RED" "$RESET" "$*" >&2; exit 1; }
+
 # --------------------------------------------------------------------------
 step "Checking this is a git repository"
 git rev-parse --show-toplevel >/dev/null 2>&1 \
@@ -33,135 +42,85 @@ cd "$REPO_ROOT"
 say "  $REPO_ROOT"
 
 # --------------------------------------------------------------------------
-# 1. drep itself
-# --------------------------------------------------------------------------
-step "Installing drep"
-if command -v drep >/dev/null 2>&1; then
-  say "  Already installed: $(drep --version 2>/dev/null || echo 'drep')"
-elif command -v pipx >/dev/null 2>&1; then
-  # pipx keeps drep in its own environment, which is what you want for a CLI
-  # that will be invoked from a git hook with an unpredictable PATH.
-  pipx install "$PACKAGE"
-elif command -v uv >/dev/null 2>&1; then
-  uv tool install "$PACKAGE"
-else
+step "Installing drep and pre-commit"
+
+# pip --user fails inside an active venv and on PEP 668 systems (Debian 12+,
+# Fedora), so it is the last resort rather than the default.
+install_with_pip() {
   command -v python3 >/dev/null 2>&1 || die "Need python3, pipx or uv to install drep."
   python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)' \
-    || die "drep needs Python 3.10 or newer (found $(python3 -V))."
-  warn "pipx not found; installing with pip --user. pipx is recommended."
-  python3 -m pip install --user --upgrade "$PACKAGE"
-fi
+    || die "drep needs Python 3.10 or newer (found $(python3 -V 2>&1))."
+  python3 -m pip install --user --upgrade "$@" 2>/dev/null \
+    || python3 -m pip install --upgrade "$@" \
+    || die "pip could not install $*. Install pipx and re-run, or pip install it yourself."
+}
 
-command -v drep >/dev/null 2>&1 \
-  || die "drep installed but is not on PATH. Add your user bin directory to PATH and re-run."
-
-# --------------------------------------------------------------------------
-# 2. Which model, if any
-# --------------------------------------------------------------------------
-# The deterministic half - ruff, eslint, go vet, clippy - needs no model and
-# no key. The LLM half is advisory and entirely optional, so this asks rather
-# than assumes, and "none" is a first-class answer.
-step "Choosing a model for the advisory analysis (optional)"
-if [ -f config.yaml ] && grep -q '^llm:' config.yaml 2>/dev/null; then
-  say "  config.yaml already configures a model; leaving it alone."
-elif [ ! -t 0 ]; then
-  # Piped from curl with no tty: skip rather than hang on a prompt.
-  say "  Non-interactive install; skipping. Run 'drep init-llm --provider ...' later."
-else
-  say "  The deterministic checks below run either way. This only adds LLM review."
-  say ""
-  say "    1) None            - deterministic tools only, no key, no cost"
-  say "    2) Local           - LM Studio / Ollama on this machine"
-  say "    3) OpenRouter      - one key, many models"
-  say "    4) OpenAI          - directly against the OpenAI API"
-  say ""
-  printf 'Choose [1]: '
-  read -r choice || choice=1
-  case "${choice:-1}" in
-    1|"") say "  Skipping - deterministic checks only." ;;
-    2)    drep init-llm --provider local ;;
-    3)    drep init-llm --provider openrouter ;;
-    4)    drep init-llm --provider openai ;;
-    *)    warn "Unrecognised choice '${choice}'; skipping model setup." ;;
-  esac
-fi
-
-# --------------------------------------------------------------------------
-# 3. The hook
-# --------------------------------------------------------------------------
-step "Installing the pre-push hook"
-command -v pre-commit >/dev/null 2>&1 || {
-  if command -v pipx >/dev/null 2>&1; then pipx install pre-commit
-  else python3 -m pip install --user --upgrade pre-commit
+install_tool() {
+  local binary="$1" package="$2"
+  if command -v "$binary" >/dev/null 2>&1; then
+    say "  $binary: already installed"
+  elif command -v pipx >/dev/null 2>&1; then
+    # pipx isolates the CLI, which matters for something a git hook invokes
+    # with an unpredictable PATH.
+    pipx install "$package"
+  elif command -v uv >/dev/null 2>&1; then
+    uv tool install "$package"
+  else
+    warn "pipx not found; falling back to pip. pipx is recommended."
+    install_with_pip "$package"
   fi
 }
 
-if [ -f .pre-commit-config.yaml ] && grep -q 'drep' .pre-commit-config.yaml; then
-  say "  .pre-commit-config.yaml already references drep; leaving it alone."
-else
-  if [ -f .pre-commit-config.yaml ]; then
-    warn "Appending to your existing .pre-commit-config.yaml - review the result."
-    cat >> .pre-commit-config.yaml <<YAML
+install_tool drep "$PACKAGE"
+install_tool pre-commit pre-commit
 
-  - repo: ${REPO_URL}
-    rev: main
-    hooks:
-      - id: drep-check-push
-YAML
-  else
-    cat > .pre-commit-config.yaml <<YAML
-repos:
-  - repo: ${REPO_URL}
-    rev: main
-    hooks:
-      # Runs at pre-push: the deterministic tools this project already
-      # configures gate the push, and LLM findings (if a model is set up)
-      # are reported without blocking.
-      - id: drep-check-push
-YAML
-  fi
-  say "  Wrote .pre-commit-config.yaml"
-fi
+# Checked after installing, not before: pip --user lands binaries in a
+# directory that is not on PATH by default on macOS and Debian, and the next
+# steps would fail confusingly.
+for binary in drep pre-commit; do
+  command -v "$binary" >/dev/null 2>&1 \
+    || die "$binary installed but is not on PATH. Add your user bin directory to PATH and re-run."
+done
 
-# git consults core.hooksPath INSTEAD of .git/hooks when it is set, so a
-# repo-local hook silently never fires - and pre-commit refuses to install at
-# all while it is set. Both failure modes are quiet, which is why this is
-# handled rather than documented.
-HOOKS_PATH="$(git config --get core.hooksPath || true)"
-if [ -n "$HOOKS_PATH" ]; then
-  warn "core.hooksPath is set to '${HOOKS_PATH}'."
-  say  "  git will look there and not in .git/hooks, so a repo-local hook would never run."
-  EXPANDED="${HOOKS_PATH/#\~/$HOME}"
-  if [ -e "${EXPANDED}/pre-push" ]; then
-    say "  ${EXPANDED}/pre-push already exists - assuming it chains to the repo hook."
-  else
-    say "  Writing a chainer at ${EXPANDED}/pre-push so repo-local hooks still run."
-    mkdir -p "$EXPANDED"
-    cat > "${EXPANDED}/pre-push" <<'CHAINER'
-#!/bin/bash
-# Chains to the repo-local pre-push hook, which git would otherwise ignore
-# because core.hooksPath is set. `exec` matters twice: it keeps the local
-# hook's exit status (that is what aborts the push) and hands over stdin
-# unread, which is how git delivers the refs being pushed.
-REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"
-LOCAL_HOOK="$REPO_ROOT/.git/hooks/pre-push"
-if [[ -x "$LOCAL_HOOK" ]]; then
-    exec "$LOCAL_HOOK" "$@"
-fi
-CHAINER
-    chmod +x "${EXPANDED}/pre-push"
-  fi
-  # pre-commit refuses while hooksPath is set; an empty repo-local override
-  # satisfies it, and is removed immediately so the global chain is untouched.
-  git config --local core.hooksPath ""
-  pre-commit install --hook-type pre-push
-  git config --local --unset core.hooksPath
+# --------------------------------------------------------------------------
+# The deterministic half - ruff, eslint, go vet, clippy - needs no model and
+# no key, so "none" is a first-class answer here.
+step "Choosing a model for the advisory review (optional)"
+if [ ! -t 0 ] && [ ! -e /dev/tty ]; then
+  say "  Non-interactive; skipping. Run 'drep init-llm --provider ...' later."
 else
-  pre-commit install --hook-type pre-push
+  say "  The deterministic checks run either way. This only adds LLM review."
+  say ""
+  say "    1) None        - deterministic tools only, no key, no cost"
+  say "    2) Local       - LM Studio / Ollama on this machine"
+  say "    3) OpenRouter  - one key, many models"
+  say "    4) OpenAI      - directly against the OpenAI API"
+  say ""
+  printf 'Choose [1]: '
+  # Read from the terminal, not stdin: under `curl | bash` stdin is the script.
+  read -r choice < /dev/tty || choice=1
+  provider=""
+  case "${choice:-1}" in
+    1|"") say "  Skipping - deterministic checks only." ;;
+    2)    provider=local ;;
+    3)    provider=openrouter ;;
+    4)    provider=openai ;;
+    *)    warn "Unrecognised choice '${choice}'; skipping model setup." ;;
+  esac
+  # Never fatal: the model is optional, and the hook is the point of running
+  # this at all.
+  if [ -n "$provider" ]; then
+    drep init-llm --provider "$provider" || warn "Model setup failed; continuing without it."
+  fi
 fi
 
 # --------------------------------------------------------------------------
-# 4. What this repository will actually get
+step "Installing the pre-push hook"
+# Owns the pre-commit config merge and the core.hooksPath handling, both of
+# which have tests. Doing either in shell went wrong in ways that silently
+# disabled every hook in the repository.
+drep init-hooks
+
 # --------------------------------------------------------------------------
 step "What drep will check here"
 drep doctor || true

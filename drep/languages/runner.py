@@ -265,6 +265,33 @@ def _parse_json_payload(spec: ToolSpec, payload: object, root_name: str) -> list
     return findings
 
 
+def tool_status(spec: ToolSpec, root: Path) -> ToolOutcome:
+    """Whether this tool will run here, without running it.
+
+    The single derivation of eligibility, so `drep doctor` reports exactly what
+    `drep check` will do. Deriving it twice means doctor confidently says
+    "ready" for a tool check then skips - the failure doctor exists to prevent.
+    """
+    if not is_configured(spec, root):
+        return ToolOutcome(
+            tool=spec.name,
+            status="skipped",
+            detail=(f"not configured (add one of: {', '.join(spec.config_files[:3])})"),
+        )
+
+    if resolve_tool(spec, root) is None:
+        return ToolOutcome(
+            tool=spec.name,
+            status="unavailable",
+            detail=(
+                f"configured but not found (looked in "
+                f"{', '.join(spec.local_paths) or 'PATH'} then PATH)"
+            ),
+        )
+
+    return ToolOutcome(tool=spec.name, status="ok", detail="ready")
+
+
 async def run_tool(
     spec: ToolSpec,
     root: Path,
@@ -286,21 +313,18 @@ async def run_tool(
         reported as `unavailable` so the caller can surface it rather than
         mistake it for a clean result.
     """
-    if not is_configured(spec, root):
-        return ToolOutcome(
-            tool=spec.name,
-            status="skipped",
-            detail=f"{spec.name} is not configured in this project",
-        )
+    eligibility = tool_status(spec, root)
+    if eligibility.status != "ok" or _force_missing:
+        if _force_missing:
+            eligibility = ToolOutcome(
+                tool=spec.name, status="unavailable", detail="binary not found"
+            )
+        if eligibility.status == "unavailable":
+            logger.warning(f"{spec.name}: {eligibility.detail}")
+        return eligibility
 
-    executable = None if _force_missing else resolve_tool(spec, root)
-    if executable is None:
-        detail = (
-            f"{spec.name} is configured but was not found "
-            f"(looked in {', '.join(spec.local_paths) or 'PATH'} then PATH)"
-        )
-        logger.warning(detail)
-        return ToolOutcome(tool=spec.name, status="unavailable", detail=detail)
+    executable = resolve_tool(spec, root)
+    assert executable is not None  # tool_status just confirmed it resolves
 
     argv = [str(executable), *spec.command[1:], *files]
     try:

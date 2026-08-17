@@ -666,7 +666,11 @@ messages = [
 ---
 
 ### 4.2 Multi-Language Support
-**Effort:** Large | **Impact:** High | **Status:** Not Started
+**Effort:** Large | **Impact:** High | **Status:** Code review delivered in 1.3.0
+
+Review and deterministic linting now work for JavaScript, TypeScript, Go and Rust.
+Remaining: doc-comment generation for those languages, which needs a parser per language
+(see `docs/multi-language-analysis.md` §0).
 
 Support JavaScript, TypeScript, Go, Rust beyond Python.
 

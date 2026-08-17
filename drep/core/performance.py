@@ -1,38 +1,13 @@
-"""Performance optimization tools for parallel analysis and progress tracking."""
+"""Progress tracking for long-running analysis.
 
-import asyncio
+Once also held ParallelAnalyzer and timeout_with_partial_results, both
+deprecated in 1.2.0 with no production callers and removed in 1.3.0.
+"""
+
 import logging
-import warnings
-from collections.abc import AsyncIterator, Callable
-from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from typing import Any
 
 logger = logging.getLogger(__name__)
-
-# Compatibility: asyncio.timeout is only available in Python 3.11+
-# Provide a minimal polyfill for Python 3.10 environments.
-try:  # Python 3.11+
-    from asyncio import timeout as _asyncio_timeout  # type: ignore[attr-defined,unused-ignore]
-except Exception:  # Python 3.10 fallback
-
-    @asynccontextmanager
-    async def _asyncio_timeout(delay: float) -> AsyncIterator[None]:  # type: ignore[misc]
-        """A minimal context manager emulating asyncio.timeout for 3.10.
-
-        Cancels the current task after the specified delay, raising TimeoutError.
-        """
-        task = asyncio.current_task()
-        if task is None:
-            raise RuntimeError("_asyncio_timeout must be used inside a running task")
-        loop = asyncio.get_event_loop()
-        handle = loop.call_later(delay, task.cancel)
-        try:
-            yield
-        except asyncio.CancelledError as e:  # Normalize to TimeoutError
-            raise asyncio.TimeoutError() from e
-        finally:
-            handle.cancel()
 
 
 @dataclass
@@ -93,127 +68,3 @@ class ProgressTracker:
             f"Progress: {self.total_processed}/{self.total} ({self.percent_complete:.1f}%) "
             f"[completed: {self.completed}, failed: {self.failed}, skipped: {self.skipped}]"
         )
-
-
-class ParallelAnalyzer:
-    """DEPRECATED: no production callers — will be removed in drep 1.3.0.
-
-    Optimize parallel file analysis with memory management.
-
-    Features:
-    - Concurrent execution with semaphore control
-    - Graceful handling of individual failures
-    - Progress tracking via callbacks
-    - Memory-aware execution
-    """
-
-    def __init__(
-        self,
-        max_concurrent: int = 5,
-        max_memory_mb: int = 500,
-    ):
-        """Initialize parallel analyzer.
-
-        Args:
-            max_concurrent: Maximum number of concurrent operations
-            max_memory_mb: Maximum memory usage in megabytes (unused for now)
-        """
-        warnings.warn(
-            "ParallelAnalyzer is deprecated (no production callers) and will be "
-            "removed in drep 1.3.0",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        self.max_concurrent = max_concurrent
-        self.max_memory_mb = max_memory_mb
-        self.semaphore = asyncio.Semaphore(max_concurrent)
-
-    async def analyze_files_parallel(
-        self,
-        files: list[str],
-        analyzer_func: Callable,
-        progress_callback: Callable[[ProgressTracker], None] | None = None,
-    ) -> list[Any]:
-        """Analyze files in parallel with memory management.
-
-        Features:
-        - Adaptive concurrency based on memory usage
-        - Progress callbacks for UI updates
-        - Graceful handling of individual file failures
-
-        Args:
-            files: List of file paths to analyze
-            analyzer_func: Async function to call for each file
-            progress_callback: Optional callback for progress updates
-
-        Returns:
-            List of successful analysis results
-        """
-        if not files:
-            return []
-
-        tracker = ProgressTracker(total=len(files))
-
-        async def analyze_with_tracking(file_path: str):
-            """Analyze single file with tracking."""
-            async with self.semaphore:
-                try:
-                    result = await analyzer_func(file_path)
-                    tracker.update(completed=1)
-
-                    if progress_callback:
-                        progress_callback(tracker)
-
-                    return result
-
-                except Exception as e:
-                    logger.warning(f"Failed to analyze {file_path}: {e}")
-                    tracker.update(failed=1)
-
-                    if progress_callback:
-                        progress_callback(tracker)
-
-                    return None
-
-        # Execute all analyses in parallel
-        all_results = await asyncio.gather(
-            *[analyze_with_tracking(f) for f in files],
-            return_exceptions=False,
-        )
-
-        # Filter out None (failed) results
-        return [r for r in all_results if r is not None]
-
-
-@asynccontextmanager
-async def timeout_with_partial_results(timeout_seconds: float, partial_results: list):
-    """Context manager that returns partial results on timeout.
-
-    Usage:
-        async with timeout_with_partial_results(30.0, results):
-            for item in items:
-                result = await analyze(item)
-                results.append(result)
-
-    Args:
-        timeout_seconds: Timeout in seconds
-        partial_results: List to collect results in
-
-    Raises:
-        TimeoutError (asyncio.TimeoutError): If timeout is exceeded
-    """
-    warnings.warn(
-        "timeout_with_partial_results is deprecated (no production callers) and "
-        "will be removed in drep 1.3.0",
-        DeprecationWarning,
-        stacklevel=2,
-    )
-    try:
-        async with _asyncio_timeout(timeout_seconds):
-            yield
-    except TimeoutError:
-        # Partial results are already in the list
-        logger.warning(
-            f"Timeout after {timeout_seconds}s, returning {len(partial_results)} partial results"
-        )
-        raise

@@ -1,9 +1,36 @@
 # Multi-Language Support Analysis
 
-**Created:** 2025-11-09  
-**Last Validated:** 2025-11-09 (Codex deep dive)  
-**Status:** Investigation Phase  
+**Created:** 2025-11-09
+**Last Validated:** 2025-11-09 (Codex deep dive)
+**Status:** Partly delivered in 1.3.0 — see the note below
 **Goal:** Determine whether multi-language support can be achieved via additive analyzers or requires foundational refactoring
+
+---
+
+## 0. Status update (1.3.0)
+
+The LLM-review half of this plan shipped without the tree-sitter foundation it assumed.
+The reason: **the LLM parses nothing.** Feeding TypeScript to the analyzer through the
+then-unmodified Python prompt produced five findings, all TypeScript-correct, including
+two that only make sense in TypeScript. So code review for JavaScript, TypeScript, Go and
+Rust needed a registry, a prompt per language, and a wider file filter — hours, not the
+15-20 estimated for Phase 1.
+
+What shipped in 1.3.0:
+
+- `drep/languages/` — `LanguageSupport` + registry (§5.1, §5.2), driving discovery,
+  analyzer support, prompts and cache keys (§5.3)
+- Deterministic tool integration (§4.1 "External lint hook") as the *primary* gating
+  layer rather than an optional extra — ruff, eslint, tsc, gofmt, go vet, clippy
+- Language-aware code-quality and PR-review prompts (§5.4)
+
+What this document still describes accurately, and is **not** done:
+
+- `extract_symbols` / tree-sitter (§5.1). Still required, but only for **doc-comment
+  generation** in non-Python languages — the one feature that genuinely needs an AST.
+- The `languages:` config block (§5.5). Every registered language is currently active.
+
+The effort table in §6 should be read as applying to doc-comment generation only.
 
 ---
 

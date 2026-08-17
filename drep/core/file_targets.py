@@ -24,32 +24,12 @@ PYTHON_SOURCE_SUFFIXES = frozenset({".py"})
 
 # Directory names never descended into during discovery. Module-level so the set
 # is built once rather than per candidate file.
-IGNORED_DIRS = frozenset(
-    {
-        # Python
-        "__pycache__",
-        "venv",
-        "env",
-        ".venv",
-        ".tox",
-        ".eggs",
-        # JavaScript / TypeScript - node_modules is the big one: walking it
-        # means hundreds of thousands of files and findings against code the
-        # project does not own.
-        "node_modules",
-        ".next",
-        ".nuxt",
-        # Rust
-        "target",
-        # Go
-        "vendor",
-        # Shared
-        ".git",
-        "build",
-        "dist",
-        ".cache",
-    }
-)
+# Build artefacts and VCS metadata that belong to no single language. The
+# per-language dependency trees (node_modules, target, vendor, …) are declared
+# on their LanguageSupport, so adding a language never edits this module.
+_SHARED_IGNORED_DIRS = frozenset({".git", "build", "dist", ".cache"})
+
+IGNORED_DIRS = _SHARED_IGNORED_DIRS | registry.vendored_dirs()
 
 
 def _suffix_of(path: str | Path) -> str:

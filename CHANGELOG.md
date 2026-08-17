@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Planned
+- Doc-comment generation for JavaScript/TypeScript, Go and Rust (needs a parser per
+  language; the LLM review path does not)
+- Removal of deprecated `CodeQualityAnalyzer.analyze_files` (1.4.0)
+
+## [1.3.0] - 2026-08-16
+
+**The local gate.** drep now runs on `git push` against Python, JavaScript, TypeScript, Go
+and Rust — using the linters and formatters your project already configures, with LLM
+review alongside. It works with no configuration at all: the deterministic half needs no
+model, no key and no tokens.
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/slb350/drep/main/scripts/install.sh | bash
+```
+
+Two layers, split by **source** rather than severity — which is what makes the gate usable.
+ruff and eslint are precise enough to block a push; an LLM's opinion about naming is not, at
+any severity:
+
+| Layer | Source | Blocks? |
+|---|---|---|
+| Deterministic | ruff, eslint, tsc, gofmt, go vet, clippy | **Yes** |
+| Semantic | Your chosen LLM | No — reported only |
+
+A tool runs only where the project configured it, and a configured-but-missing tool exits
+**2** rather than reporting those files clean.
+
 ### Added - 2026-08-16
 - **`scripts/install.sh`** — curl-able installer that adds drep as a pre-push gate to any
   repository. Deliberately thin: provider presets live in `drep init-llm` and detection in
@@ -92,7 +120,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Shared pruning walk** — `file_targets.walk_targets()` is the one directory traversal;
   `RepositoryScanner.get_scan_targets` and `lint-docs` both use it.
 - **`CodeQualityAnalyzer.analyze_files` deprecated** (no production callers; removal in
-  1.3.0), matching the existing `ParallelAnalyzer` deprecation.
+  1.4.0), matching the existing `ParallelAnalyzer` deprecation.
 
 ### Fixed - 2026-08-16
 - **The hooks published for other repos did not work.** `language: system` meant
@@ -181,14 +209,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the open-agent-sdk path did not. Since analyzer failures now propagate, that latent
   `AttributeError` would have marked the file unanalyzed rather than being swallowed.
 
-### Planned
+### Still planned
 - Vector database integration for cross-file context
 - Custom rule definitions
-- Integration with existing linters (pylint, eslint, etc.)
 - Metrics dashboard
 - Notification system (Slack, Discord)
 - Multi-repository analysis features
-- Removal of deprecated `ParallelAnalyzer` / `timeout_with_partial_results` (1.3.0)
 
 ## [1.2.0] - 2026-08-16
 

@@ -120,7 +120,7 @@ class CodeQualityAnalyzer:
         warnings.warn(
             "CodeQualityAnalyzer.analyze_files is deprecated (no production callers - "
             "RepositoryScanner._analyze_files_with runs the files concurrently and "
-            "reports which ones failed) and will be removed in drep 1.3.0",
+            "reports which ones failed) and will be removed in drep 1.4.0",
             DeprecationWarning,
             stacklevel=2,
         )

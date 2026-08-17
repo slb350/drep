@@ -84,6 +84,7 @@ PYTHON = LanguageSupport(
         "Context managers for resources rather than manual cleanup",
         "Mutable default arguments, and late-binding closures in loops",
     ),
+    vendored_dirs=("__pycache__", "venv", ".venv", "env", ".tox", ".eggs"),
 )
 
 JAVASCRIPT = LanguageSupport(
@@ -97,6 +98,7 @@ JAVASCRIPT = LanguageSupport(
         "var versus let/const, and accidental global scope",
         "Equality coercion (== versus ===)",
     ),
+    vendored_dirs=("node_modules", ".next", ".nuxt"),
 )
 
 TYPESCRIPT = LanguageSupport(
@@ -110,6 +112,7 @@ TYPESCRIPT = LanguageSupport(
         "Non-null assertions (!) that hide a genuine null case",
         "Sequential awaits in a loop where the work is independent",
     ),
+    vendored_dirs=("node_modules", ".next", ".nuxt"),
 )
 
 GO = LanguageSupport(
@@ -123,6 +126,7 @@ GO = LanguageSupport(
         "defer inside a loop, and defer that never runs",
         "Data races on shared state without synchronisation",
     ),
+    vendored_dirs=("vendor",),
 )
 
 RUST = LanguageSupport(
@@ -136,6 +140,7 @@ RUST = LanguageSupport(
         "Unnecessary clones and allocations in hot paths",
         "Send/Sync correctness for types crossing threads",
     ),
+    vendored_dirs=("target",),
 )
 
 
