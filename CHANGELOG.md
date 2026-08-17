@@ -20,6 +20,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Audit-driven correctness and simplification release. All 24 accepted findings from the
 simplification audit resolved; rejected findings (C9, C11) documented with rationale.
+A second `/simplify` pass over the merged branch (reuse, simplification, efficiency,
+altitude) resolved a further round of findings — recorded below under their headings.
 
 ### Fixed - Reliability
 - **Rate-limit permit leak on cancelled entry** (C3): cancellation or a rate-check error
@@ -73,6 +75,98 @@ simplification audit resolved; rejected findings (C9, C11) documented with ratio
   restoring ~43 silently-excluded hermetic tests to CI (839 vs 796).
 - **`issue_number` is NOT NULL** (C20): a NULL row suppressed a finding forever; legacy
   SQLite tables are migrated (NULL rows dropped so findings can be re-reported).
+
+### Fixed - Concurrency and rate limiting (second pass)
+- **Rate limiter held its lock across sleeps**: both `_check_request_rate_limit` and
+  `_check_token_rate_limit` slept while holding the shared lock, which blocked
+  `RateLimitContext.__aexit__` — needing the same lock to reconcile tokens before
+  releasing permits — and stalled all LLM traffic for the duration of the wait.
+- **Unsatisfiable token reservation spun forever**: a request estimating more tokens
+  than the entire per-minute budget could never satisfy the bucket condition and looped
+  indefinitely (previously while holding the lock, deadlocking every request).
+  `RateLimiter.request()` now clamps the reservation.
+- **Concurrency permits taken before rate waits**: a merely time-throttled request
+  occupied one of the scarce `max_concurrent` slots while sleeping, dropping effective
+  concurrency well below the configured value. The requests-per-minute wait now happens
+  first.
+- **Circuit-breaker probe reservation could be cleared by another task**: `finally`
+  cleared `_probe_in_flight` unconditionally, so a CLOSED-state call finishing after the
+  breaker re-entered HALF_OPEN wiped a probe reservation and let probes dogpile the
+  recovering service. Only the reserving call clears it.
+- **Webhook config failures no longer fail open**: `_load_webhook_secret` caught every
+  exception and returned `None`, downgrading the endpoint to accepting unauthenticated
+  requests on a YAML typo. A missing config still means "unset"; an unreadable one is
+  now rejected with 503.
+- **`ValidationError` escaped the JSON fallback ladder**: a response that parsed but
+  failed schema validation propagated out of `extract_json`, past the stricter-prompt
+  retry in `analyze_code_json` that exists for exactly that case. All strategies now
+  share one recoverable-exception policy (and no longer swallow real bugs via bare
+  `except Exception`).
+- **Gitea inline-comment fallback retried on any status**: the `new_position` →
+  `position` retry exists for older Gitea versions rejecting the field name (400/422),
+  but fired on 401/403/404/5xx too, issuing a pointless second POST and burying the real
+  cause in a compound error message.
+
+### Changed - Performance (second pass)
+- **Per-file LLM analysis runs concurrently**: `analyze_code_quality` and
+  `analyze_docstrings` awaited one round trip at a time, so a scan took the *sum* of all
+  LLM latencies while the configured `max_concurrent_global`/`max_concurrent_per_repo`
+  went unused. Both now gather; the rate limiter supplies back-pressure.
+- **Review fetches the PR once**: `get_review_anchor` internally called `get_pr`, then
+  the prompt fetched the identical payload again. Anchor derivation is now the pure
+  `anchor_from_pr(pr_data, ...)` hook, and the PR and diff are fetched concurrently.
+  The diff is also no longer re-serialized from parsed hunks for the prompt.
+- **Per-repo rate limiting reached PR reviews**: `repo_id` was computed and threaded
+  through `_analyze_diff_with_llm` but never passed to the LLM client, silently
+  disabling per-repo limiting for reviews. It and `commit_sha` (cache key) now are.
+- **Scan discovery prunes ignored trees**: `rglob("*")` stat'd every entry under `.git`,
+  `venv`, `build` before filtering; discovery now walks with in-place directory pruning.
+- **Cheaper hot paths**: idle repo-semaphore eviction sweeps once per TTL instead of
+  scanning all tracked repos per request; `request_times` is a deque; the webhook secret
+  is cached per (path, mtime) instead of re-parsing the config per request; the LLM cache
+  tracks a running byte total instead of stat'ing the whole cache directory on every
+  write; the metrics history file is capped and written off the event loop;
+  `git rev-parse` runs via `asyncio.to_thread`; `fuzzy_inference` regexes are compiled
+  once per (schema, field); the issue-manager dedup check is one query instead of one
+  per finding; `_collect_function_nodes` no longer walks function bodies to build lists
+  it always discarded.
+
+### Changed - Structure (second pass)
+- **Adapter contract shrank to what actually varies**: `post_review_comment` and
+  `close()` are concrete on `BaseAdapter` (three byte-identical overrides removed;
+  Gitea gains close()'s error handling). A shared `_network_error()` replaces 15 copies
+  of the timeout/connect cascade, and `_decode_file_content()` the duplicated base64
+  decode. `git_clone_url()` is a new adapter method, so GitHub Enterprise and GitLab
+  self-hosted URL rules leave the shared workflow.
+- **Mixins inherit instead of restating their host**: `GitHubReviewMixin`,
+  `GitLabPrMixin` and `GitLabReviewMixin` derive from `BaseAdapter`/`GitLabMixinBase`
+  rather than each re-declaring the host surface in a duplicate `if TYPE_CHECKING` block.
+- **Platform identity derives from the typed data**: each `*PlatformData` variant carries
+  `config_key`/`display_name`/`token_env_var`, removing four scattered mappings —
+  including a `"${LLM_API_KEY}" in yaml.dump(config_dict)` string search in the CLI for a
+  fact the model already held, and an isinstance chain whose fallthrough silently
+  labelled unknown variants "gitlab".
+- **New shared modules**: `drep/core/file_targets.py` (one file-target policy the
+  analyzers reuse instead of re-implementing suffix checks), `drep/logging_utils.py`
+  (one secret-redaction helper, previously inlined in three places),
+  `drep/llm/http_compat.py` (the OpenAI-shaped HTTP shim, previously six classes rebuilt
+  inside every `LLMClient.__init__` and closing over the whole init frame).
+- **`load_raw_config()`** in `drep/config.py` is shared by `load_config` and the webhook
+  server, which had hand-rolled the same read/substitute sequence and reached across
+  modules for a private helper.
+- **`_run_check` moved to `drep/cli_workflows.py`** beside `_run_scan`/`_run_review`, and
+  returns findings instead of printing them.
+- **The `finding_cache` migration builds its table from the model** rather than a raw DDL
+  string that could silently drop a future column, and probes on a read-only connection.
+- **`RepositoryScanner._get_all_python_files` → `get_scan_targets`** (it returns `.md`
+  too), and `PRReviewAnalyzer`/`RepositoryScanner` take `adapter`, not `gitea_adapter`.
+
+### Breaking Changes (second pass)
+- **`PlatformConfig.env_var` is a derived property**, no longer a constructor argument.
+- **`BaseAdapter.git_clone_url(owner, repo)` is abstract** — custom adapters must
+  implement it. `post_review_comment` and `close()` are no longer abstract.
+- **`PRReviewAnalyzer(llm_client, adapter)`** — the second parameter was `gitea_adapter`.
+- **`RepositoryScanner(db, config, adapter=...)`** — the keyword was `gitea_adapter`.
 
 ### Security
 - **Webhook HMAC verification** (out-of-audit finding): optional `webhook_secret`
