@@ -186,6 +186,37 @@ count with a floor of 1**. Config permits 0, and a bare `0..max_retries` loop
 would skip the request entirely and then report a bogus "no exception was
 captured".
 
+**`max_tokens` defaults to unset, and never feeds the rate limiter.** In 1.x one
+number does two jobs that want opposite values:
+
+- As the **API completion cap** it wants to be generous. Reasoning tokens count
+  against it, so a cap that is too small truncates the model mid-thought and
+  yields unparseable output — the deterministic length failure above.
+- As the **rate-limit reservation** (`(prompt + code + max_tokens) / 4`) it wants
+  to be tight. It is a worst-case guess, and overestimating throttles requests
+  that were never going to use it.
+
+Coupling them means every increase in reasoning headroom silently buys a
+throughput cut. Shipped 1.3.0 demonstrates it: `drep init-llm --provider
+openrouter` writes `max_tokens: 100000` and does *not* write
+`max_tokens_per_minute`, which inherits the 100,000 default — so one 13KB file
+reserves 28,845 tokens and the preset throttles itself to **3 requests per
+minute** out of the box.
+
+In 2.0:
+
+- **No cap is sent unless the user sets one.** Models ship 256k–1M context;
+  inventing a ceiling is drep's bug, not the model's limit. Omit `max_tokens`
+  from the request and let the server decide. Keep it as an option for capping
+  spend or runaway generation, defaulted off.
+- **Reserve against an expected completion size, not the cap** — a modest
+  constant, or the observed rolling average. This is safe because the limiter
+  already does two-phase accounting: it reserves an estimate on entry and
+  reconciles actual usage on exit, so the forward guess only has to prevent a
+  stampede. Preserve that reconcile step.
+- A user-set `max_tokens` is sent to the API but must **not** inflate the
+  reservation.
+
 ### Phase 4 — Analysis and exit codes
 `code_quality.rs` sending **diff hunks with enclosing context**, `findings.rs`
 with the severity vocabulary, and the failure contract: unanalyzed files are
