@@ -150,3 +150,51 @@ class TestAnalysisConcurrency:
         assert [f.file_path for f in result.findings] == ["good.py"]
         # The failing file is named, not silently absent from the findings
         assert result.failed_files == ["bad.py"]
+
+
+class TestFileTargetCaseInsensitivity:
+    """The module promises "identical, case-insensitive decisions" - all of them.
+
+    The suffix predicates lowercase, but is_ignored_dir compared raw, so a
+    directory named VENV or .Git was descended into and analyzed. On a
+    case-insensitive filesystem those are the same directory.
+    """
+
+    def test_ignored_dirs_are_matched_case_insensitively(self):
+        from drep.core.file_targets import is_ignored_dir
+
+        assert is_ignored_dir("venv")
+        assert is_ignored_dir("VENV")
+        assert is_ignored_dir("__PyCache__")
+        assert is_ignored_dir(".GIT")
+
+    def test_egg_info_suffix_is_matched_case_insensitively(self):
+        from drep.core.file_targets import is_ignored_dir
+
+        assert is_ignored_dir("drep.egg-info")
+        assert is_ignored_dir("drep.EGG-INFO")
+
+    def test_ordinary_directories_are_still_kept(self):
+        from drep.core.file_targets import is_ignored_dir
+
+        assert not is_ignored_dir("drep")
+        assert not is_ignored_dir("tests")
+        assert not is_ignored_dir("environment")
+
+
+class TestSuffixExtraction:
+    """A dot in a parent directory is not the file's extension."""
+
+    def test_dotted_directory_does_not_create_a_suffix(self):
+        from drep.core.file_targets import is_python_source, is_scan_target
+
+        # rpartition over the whole string yielded '.v1/file' / '.py/README'
+        assert not is_scan_target("src.v1/file")
+        assert not is_python_source("docs.py/README")
+
+    def test_real_extensions_still_match(self):
+        from drep.core.file_targets import is_markdown, is_python_source
+
+        assert is_python_source("src/main.py")
+        assert is_python_source("SRC/MAIN.PY")
+        assert is_markdown("docs/guide.md")

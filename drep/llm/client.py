@@ -476,6 +476,12 @@ class LLMClient:
                 temperature=self.temperature,
                 commit_sha=commit_sha,
             )
+            # A cached entry with no content is a poisoned entry, not a hit:
+            # replaying it re-raises the original parse failure forever, and
+            # never calls the LLM again to heal itself.
+            if cached and not cached.get("content"):
+                logger.warning("Ignoring cached response with empty content; refetching")
+                cached = None
             if cached:
                 logger.debug("Cache hit for analyze_code")
                 # Record cached request
@@ -545,11 +551,24 @@ class LLMClient:
                         # the OpenAI schema and some local servers omit it; missing
                         # accounting must not throw away a response we already have
                         # (the HTTP fallback in http_compat already defaults it).
-                        content = response.choices[0].message.content
+                        choice = response.choices[0]
+                        content = choice.message.content
                         usage = response.usage
                         tokens_used = usage.total_tokens if usage else 0
                         prompt_tokens = usage.prompt_tokens if usage else 0
                         completion_tokens = usage.completion_tokens if usage else 0
+
+                        # `content` is nullable in the OpenAI schema. A reasoning
+                        # model that spends its whole budget on `reasoning`, or a
+                        # refusal, returns null here - which reached the JSON
+                        # parser as "argument of type 'NoneType' is not a
+                        # container". Name the cause instead; finish_reason
+                        # 'length' means raise max_tokens or change model.
+                        if not content:
+                            raise ValueError(
+                                "LLM returned no content "
+                                f"(finish_reason={getattr(choice, 'finish_reason', None)!r})"
+                            )
 
                     # Update actual tokens
                     ctx.set_actual_tokens(tokens_used)

@@ -765,3 +765,84 @@ class _FakeChat:
         self.chat = type(
             "Chat", (), {"completions": type("Completions", (), {"create": staticmethod(create)})()}
         )()
+
+
+class TestEmptyContentResponses:
+    """A response with no content is a failed request, not a TypeError.
+
+    Reasoning models can spend the whole token budget on `reasoning` and return
+    `content: null`; refusals do the same. That used to surface four frames
+    deep as "argument of type 'NoneType' is not a container or iterable".
+    """
+
+    @staticmethod
+    def _transport(content, finish_reason="stop"):
+        async def create(**kwargs):
+            message = type("Message", (), {"content": content})()
+            choice = type("Choice", (), {"message": message, "finish_reason": finish_reason})()
+            usage = type(
+                "Usage", (), {"total_tokens": 5, "prompt_tokens": 3, "completion_tokens": 2}
+            )()
+            return type("Response", (), {"choices": [choice], "usage": usage, "model": "m"})()
+
+        return create
+
+    @pytest.mark.asyncio
+    async def test_none_content_raises_a_diagnostic_error(self):
+        from drep.llm.client import LLMClient
+
+        client = LLMClient(endpoint="http://localhost:1234/v1", model="m", max_retries=1)
+        client.client = _FakeChat(self._transport(None, finish_reason="length"))
+
+        with pytest.raises(ValueError, match="no content"):
+            await client.analyze_code("sys", "code")
+
+    @pytest.mark.asyncio
+    async def test_error_names_the_finish_reason(self):
+        """'length' is the actionable case - raise max_tokens or drop the reasoning model."""
+        from drep.llm.client import LLMClient
+
+        client = LLMClient(endpoint="http://localhost:1234/v1", model="m", max_retries=1)
+        client.client = _FakeChat(self._transport(None, finish_reason="length"))
+
+        with pytest.raises(ValueError, match="length"):
+            await client.analyze_code("sys", "code")
+
+    @pytest.mark.asyncio
+    async def test_normal_content_still_returns(self):
+        from drep.llm.client import LLMClient
+
+        client = LLMClient(endpoint="http://localhost:1234/v1", model="m", max_retries=1)
+        client.client = _FakeChat(self._transport("hello"))
+
+        response = await client.analyze_code("sys", "code")
+        assert response.content == "hello"
+
+    @pytest.mark.asyncio
+    async def test_cached_empty_content_is_treated_as_a_miss(self):
+        """A poisoned cache entry must not replay the crash forever.
+
+        The first bad response was written to the cache before the parser
+        choked on it, so every later run replayed content=None from cache and
+        failed in 0.6s without ever calling the LLM again.
+        """
+        from unittest.mock import MagicMock
+
+        from drep.llm.client import LLMClient
+
+        cache = MagicMock()
+        cache.get.return_value = {
+            "content": None,
+            "tokens_used": 5,
+            "latency_ms": 1,
+            "model": "m",
+        }
+        client = LLMClient(
+            endpoint="http://localhost:1234/v1", model="m", max_retries=1, cache=cache
+        )
+        client.client = _FakeChat(self._transport("fresh"))
+
+        response = await client.analyze_code("sys", "code")
+
+        # Refetched rather than replayed
+        assert response.content == "fresh"

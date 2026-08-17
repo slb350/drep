@@ -57,8 +57,14 @@ def is_markdown(path: str | Path) -> bool:
 
 
 def is_ignored_dir(name: str) -> bool:
-    """Return True if a directory component should never be descended into."""
-    return name in IGNORED_DIRS or name.endswith(".egg-info")
+    """Return True if a directory component should never be descended into.
+
+    Case-insensitive like the suffix predicates: this module promises identical
+    decisions, and on a case-insensitive filesystem `VENV` and `venv` are the
+    same directory - matching only one of them means walking it anyway.
+    """
+    folded = name.casefold()
+    return folded in IGNORED_DIRS or folded.endswith(".egg-info")
 
 
 def walk_targets(root: str | Path, predicate: Callable[[str], bool]) -> Iterator[Path]:

@@ -60,6 +60,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     matches a run of `#`, so `split()` is never empty.
 - **`drep check --format json` emitted a status line on stdout**, so "JSON output for tools"
   did not parse. `Checking N file(s)...` now goes to stderr.
+- **A `content: null` response crashed four frames deep** as "argument of type 'NoneType'
+  is not a container or iterable", from inside the JSON parser. Reasoning models that spend
+  their whole budget on `reasoning` return exactly that. The client now raises a named
+  error quoting `finish_reason`, so `length` points straight at `max_tokens`.
+- **The poisoned entry was cached.** The bad response was written to the cache *before* the
+  parser choked, so every later run replayed `content=None` in 0.6s without ever calling
+  the LLM again. A cached entry with empty content is now treated as a miss.
+- **`is_ignored_dir` was case-sensitive** while the module promised "identical,
+  case-insensitive decisions" - a directory named `VENV` or `.Git` was descended into and
+  analyzed. It now casefolds, matching the suffix predicates.
 - **A response without a `usage` block crashed the SDK path.** `usage` is optional in the
   OpenAI schema and some local servers omit it; the HTTP fallback already defaulted it,
   the open-agent-sdk path did not. Since analyzer failures now propagate, that latent
