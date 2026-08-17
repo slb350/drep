@@ -7,6 +7,73 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Landed - 2026-08-17 — Phase 2: file targeting and diff
+
+`src/files/` ports `drep/core/file_targets.py` onto the `ignore` crate. The
+walker prunes vendored directories during traversal rather than collecting
+then filtering (the reason `rglob` is wrong on a real repo: it `stat`s every
+entry under `node_modules/` before discarding it), and a single hardcoded
+ignored-dir set plus `languages::vendored_dirs()` keeps the registry as the
+only place to add a build directory.
+
+`is_scan_target` derives from `languages::source_extensions()` so adding a
+language widens discovery automatically. `is_python_source` stays separate
+on purpose: the docstring-style pass runs `ast.parse`-equivalent logic and
+must never see a Go file even after a future registry addition.
+`is_markdown` is its own predicate for the same reason — the documentation
+analyzer is not a code language.
+
+`expand_paths` deduplicates via `BTreeSet`, so `drep check a.rs .` pays once
+for `a.rs`. The gitignore asymmetry with `walk_targets` is deliberate and
+pinned by `explicit_filenames_are_honoured_even_when_gitignored`: an explicit
+file path is a stronger signal than a repo-wide `.gitignore`.
+
+`src/diff/` shells out to `git` rather than adding libgit2, matching the
+migration plan's principle that the only operations drep needs are the ones
+git's own CLI was built for. Three filters:
+
+- `staged_files` — `git diff --cached --name-only --diff-filter=ACMR`,
+  with the empty-tree fallback for repos that have no `HEAD` yet.
+- `changed_since` — three-dot diff (`<ref>...HEAD`), so a pre-push gate
+  reports only what the branch changed since the merge base, never what
+  landed on the base afterwards. Pinned by
+  `three_dot_excludes_base_modifications_that_two_dot_would_report`.
+
+  The first attempt at that test did *not* discriminate. It had the base branch
+  **add** a file, which a two-dot diff reports as a deletion — and
+  `--diff-filter=ACMR` drops deletions, so it passed under `..` as well. The
+  base has to **modify** a shared file, which two-dot reports as `M` and the
+  filter keeps. Both tests are retained: the first documents intent, the second
+  is verified to fail under `..` and pass under `...`.
+- `current_commit_sha` — 5s timeout, `"unknown"` on every failure. The one
+  counter-example to "git errors propagate" here: this feeds a cache key
+  only, and a cache-key component must never take analysis down.
+
+`drep::files::is_scan_target` and `drep::languages::source_extensions()` are
+the new shared module pattern for "do not re-implement these in a CLI
+command"; `docs/rust-migration.md` already points to them and the next
+phase uses them directly.
+
+30 new tests cover every criterion in `PHASE2_SPEC.md` (deleted), one per
+acceptance point, plus a discriminating three-dot test and
+`tests/ground_truth_walk.rs`, which walks *this* repository and asserts the
+walk never descends into the 222MB `venv/`, `target/`, `node_modules/` or
+`.git/`, keeps gitignored `.claude/` and `.pytest_cache/` out despite
+`hidden(false)`, finds Python, Rust and Markdown sources, and honours an
+explicitly named gitignored file. Test count went 63 → 95. Both source files stay well
+under the 600-line soft limit; the directories `src/files/tests/` and
+`src/diff/tests/` follow the same `mod.rs` declare-a-sub-module pattern
+that the runner introduced in Phase 1 after the orphaned-files incident.
+Every file is reachable through a `mod` declaration, verified by appending
+invalid Rust to each and confirming the build *fails* — all 8 confirmed live.
+
+`ignore = "0.4"` arrives in `Cargo.toml` for the gitignore-aware walk; no
+other dependency changes. `cargo test --all-targets`,
+`cargo clippy --all-targets --all-features`, and `cargo fmt --all --check`
+all pass.
+
+
+
 ### Decided - 2026-08-17
 
 **drep 2.0 will be a Rust binary with a much smaller scope.** Plan in

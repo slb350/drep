@@ -82,9 +82,8 @@ cargo only `.rs`.
 | `src/languages/definitions.rs` | `languages/definitions.py` | The language table |
 | `src/languages/runner.rs` | `languages/runner.py` | Tool resolution + execution |
 | `src/languages/parsers/` | `languages/runner.py` parsers | json / tsc / lines output formats |
-| `src/files.rs` | `core/file_targets.py` | Uses the `ignore` crate for the walk |
-| `src/diff/parser.rs` | `pr_review/diff_parser.py` | Now the primary input path |
-| `src/diff/git.rs` | `llm/git_utils.py` | Shells out to `git`; no libgit2 |
+| `src/files/mod.rs` | `core/file_targets.py` | `ignore` crate for the walk |
+| `src/diff/mod.rs` | `pr_review/diff_parser.py` + `llm/git_utils.py` | `--staged` and `--diff <ref>`; shells out to git |
 | `src/llm/client.rs` | `llm/client.py` | Thin over `open-agent-sdk` |
 | `src/llm/cache.rs` | `llm/cache.py` | Content-addressed, keyed on hunks |
 | `src/llm/concurrency.rs` | `rate_limiter.py` + `circuit_breaker.py` | Deliberately simplified |
@@ -150,11 +149,13 @@ produce findings, so the type cannot wait for the LLM path.
 Ends with `drep check --no-llm PATHS` producing blocking findings from real
 ruff/eslint/gofmt runs against fixture repos.
 
-### Phase 2 — File targeting and diff
-`src/files.rs` on the `ignore` crate (replaces the hand-rolled walk + prune;
+### Phase 2 — File targeting and diff ✅
+`src/files/` on the `ignore` crate (replaces the hand-rolled walk + prune;
 gitignore-awareness comes free). `src/diff/` for `--staged` and `--diff <ref>`,
 shelling out to `git`. Ends with correct file sets for all three input modes,
-deduped.
+deduped. **Landed 2026-08-17** — see CHANGELOG for the full note (30 new tests,
+`src/files/{mod,tests}` and `src/diff/{mod,tests}` follow the directory-module
+pattern from Phase 1, `ignore = "0.4"` is the only new dependency).
 
 ### Phase 3 — LLM layer
 Wire `open-agent-sdk` (0.6.9, crates.io, edition 2024, rust-version 1.85 — it
