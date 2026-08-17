@@ -19,6 +19,11 @@ pub mod files;
 pub mod languages;
 pub mod llm;
 
+/// Shared fixtures for tests across every module. Compiled only under
+/// `cfg(test)`, so it adds nothing to the shipped binary.
+#[cfg(test)]
+pub(crate) mod test_support;
+
 /// How the process terminated.
 ///
 /// Load-bearing, not cosmetic: a gate that cannot tell "clean" apart from

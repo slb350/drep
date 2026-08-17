@@ -1,4 +1,11 @@
-//! Shared fixtures for the LLM client tests.
+//! Shared test fixtures for everything that talks to a mock LLM endpoint.
+//!
+//! Crate-level rather than per-module because the LLM client tests and the
+//! analysis tests need exactly the same four helpers. They were duplicated
+//! once - byte-identical except that the copy dropped the doc paragraph
+//! explaining why `fast_retry_client` must not override `max_attempts`, which
+//! is the paragraph recording a real bug. Two copies of the SSE builder in
+//! particular is a trap: it encodes an SDK behaviour that fails silently.
 //!
 //! The SSE builder here is the one piece that cannot be guessed: the SDK
 //! buffers text deltas and only emits `ContentBlock`s when a chunk carries a
@@ -8,7 +15,8 @@
 
 use std::time::Duration;
 
-use wiremock::MockServer;
+use wiremock::matchers::{method, path};
+use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use crate::config::LlmConfig;
 use crate::llm::client::LlmClient;
@@ -71,4 +79,28 @@ pub(crate) fn fast_retry_client(cfg: &LlmConfig) -> LlmClient {
     client.retry_config.max_delay = Duration::from_millis(50);
     client.retry_config.jitter_factor = 0.0;
     client
+}
+
+/// Mount a 200 SSE response returning `parts`, and hand back the server.
+///
+/// Every mock in these suites wants the same six lines; stating them once
+/// keeps the endpoint path and the content type from drifting between
+/// suites.
+pub(crate) async fn server_returning(parts: &[&str]) -> MockServer {
+    let server = MockServer::start().await;
+    mount_sse(
+        &server,
+        ResponseTemplate::new(200).set_body_raw(sse(parts), "text/event-stream"),
+    )
+    .await;
+    server
+}
+
+/// Mount an arbitrary response template at the chat-completions endpoint.
+pub(crate) async fn mount_sse(server: &MockServer, template: ResponseTemplate) {
+    Mock::given(method("POST"))
+        .and(path("/v1/chat/completions"))
+        .respond_with(template)
+        .mount(server)
+        .await;
 }

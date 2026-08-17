@@ -8,9 +8,9 @@
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
-use super::support::{cfg_for, sse};
 use crate::config::LlmConfig;
 use crate::llm::client::{LlmClient, LlmError};
+use crate::test_support::{cfg_for, sse};
 
 /// Criterion 20: `new` returns `NotConfigured` when `enabled` is false.
 #[test]

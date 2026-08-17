@@ -10,8 +10,8 @@ use serde_json::json;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
-use crate::llm::client::tests::support::{cfg_for, fast_retry_client, request_count, sse};
 use crate::llm::client::{Extracted, LlmClient, LlmError};
+use crate::test_support::{cfg_for, fast_retry_client, request_count, sse};
 
 /// Criterion 22: a 200 response with a fenced JSON body yields `Complete`.
 #[tokio::test]

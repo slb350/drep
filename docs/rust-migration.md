@@ -313,11 +313,11 @@ handoff stays reliable, and 4a is fully offline while 4b is not.
 note. `findings.rs` already carried `Severity` and `Finding` from Phase 0, so
 the phase list's mention of it was stale.
 
-**Phase 4b — analysis and the failure contract.** `code_quality.rs`: prompt
-assembly from `LanguageSupport::conventions`, the LLM call through
-`LlmClient`/`Cache`/`Limiter`, mapping the response to `Finding`s, and
-`AnalysisResult { findings, failed_files }`. Severity mapping is
-critical|high → error, medium → warning, low|info → info.
+**Phase 4b ✅ — analysis and the failure contract. Landed 2026-08-17.**
+`src/analysis/{prompt,result,code_quality}.rs`. The five-level LLM scale lives
+on `LlmSeverity` beside `Severity` in `findings.rs`, and the prompt renders its
+alternation from `LlmSeverity::ALL` so the levels asked for and the levels
+parsed are the same list. See the CHANGELOG for the full note.
 
 Two rules for 4b that are decisions, not ports:
 
@@ -329,8 +329,15 @@ Two rules for 4b that are decisions, not ports:
 - **A finding whose line is not in `Payload::valid_lines` is dropped, not
   clamped** — it is about code the model was never shown. Dropped findings are
   counted so the drop is observable rather than silent. A *malformed* finding
-  record (unknown severity, missing field) is different: it makes the file
-  unanalyzed, because we cannot know what it said.
+  record (unknown severity, missing field, a line beyond `u32`) is different: it
+  makes the file unanalyzed, because we cannot know what it said.
+
+**Open for Phase 5:** `failed_files` is a `BTreeSet<PathBuf>`, so transport
+failure, truncation and a malformed record all collapse to the same entry while
+`LlmError` kept them distinct. Exit code 2 does not need the reason, but
+`--format json`'s `unanalyzed` field and the human-readable line may; decide
+there, because `BTreeMap<PathBuf, FailureReason>` is free now and a breaking
+change later.
 
 ### Phase 5 — CLI assembly
 `check` end to end: deterministic findings block, LLM findings inform unless

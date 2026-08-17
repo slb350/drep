@@ -1,0 +1,82 @@
+//! Analysis-specific test fixtures.
+//!
+//! The mock-endpoint helpers (`cfg_for`, `sse`, `request_count`,
+//! `fast_retry_client`, `server_returning`) live in `crate::test_support` and
+//! are shared with the LLM client suite. Only the analyzer builder is specific
+//! to this module.
+
+use std::path::PathBuf;
+
+use tempfile::TempDir;
+use wiremock::MockServer;
+
+use crate::analysis::code_quality::CodeQualityAnalyzer;
+use crate::config::LlmConfig;
+use crate::diff::hunks::{Hunk, HunkLine};
+use crate::llm::cache::Cache;
+use crate::llm::concurrency::Limiter;
+use crate::test_support::{cfg_for, fast_retry_client};
+
+/// Build an analyzer through the production `CodeQualityAnalyzer::new`, then
+/// swap in a fast-retry client.
+///
+/// Going through `new` is the point. An earlier version assembled the struct
+/// by literal, which meant it restated `new`'s cache-key derivation by hand -
+/// so a change to how the key is built would leave these tests passing against
+/// a key production never generates. The limiter comes from `cfg.max_concurrent`
+/// exactly as it does in production, so a test wanting serial execution sets
+/// that field rather than reaching for a second constructor.
+pub(crate) fn analyzer_with_fast_retry(cfg: &LlmConfig, cache: Cache) -> CodeQualityAnalyzer {
+    let limiter = Limiter::new(cfg.max_concurrent);
+    let mut analyzer =
+        CodeQualityAnalyzer::new(cfg, cache, limiter).expect("analyzer builds from a valid config");
+    analyzer.client = fast_retry_client(cfg);
+    analyzer
+}
+
+/// A `Hunk` carrying one Python file with one added line at a known position.
+/// The line number is what the mocked response should reference.
+pub(crate) fn python_hunk(file_path: &str, line_no: u32) -> Hunk {
+    Hunk {
+        file_path: PathBuf::from(file_path),
+        old_start: line_no.saturating_sub(1),
+        old_count: 1,
+        new_start: line_no,
+        new_count: 1,
+        lines: vec![HunkLine::Added("x = 1".to_owned())],
+    }
+}
+
+/// A one-line Python file at `line_no`.
+pub(crate) fn hunks_for_python_at(line_no: u32) -> Vec<Hunk> {
+    vec![python_hunk("src/lib.py", line_no)]
+}
+
+/// A two-line Python file: the response should reference lines 100-101.
+pub(crate) fn hunks_for_python_at_two_lines() -> Vec<Hunk> {
+    vec![Hunk {
+        file_path: PathBuf::from("src/lib.py"),
+        old_start: 99,
+        old_count: 2,
+        new_start: 100,
+        new_count: 2,
+        lines: vec![
+            HunkLine::Added("a = 1".to_owned()),
+            HunkLine::Added("b = 2".to_owned()),
+        ],
+    }]
+}
+
+/// Build an analyzer backed by `server` and a fresh cache directory.
+///
+/// The `TempDir` is returned so the caller keeps it alive: dropping it would
+/// delete the cache mid-test.
+pub(crate) fn analyzer_for(server: &MockServer) -> (CodeQualityAnalyzer, TempDir) {
+    let dir = TempDir::new().expect("temp dir");
+    let cache = Cache::new(dir.path().to_path_buf(), 30, 1024 * 1024);
+    let cfg = cfg_for(server, "m", 3);
+    let limiter = Limiter::new(cfg.max_concurrent);
+    let analyzer = CodeQualityAnalyzer::new(&cfg, cache, limiter)
+        .expect("analyzer builds from a valid config");
+    (analyzer, dir)
+}

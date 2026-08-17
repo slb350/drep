@@ -5,4 +5,11 @@
 //! so cargo never compiled them. If you add a file here, declare it in this
 //! directory's `mod.rs`.
 
+mod code_quality;
+mod code_quality_failures;
+mod code_quality_multi;
+mod code_quality_truncation;
 mod payload;
+mod prompt;
+mod result;
+pub(crate) mod support;

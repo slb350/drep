@@ -105,6 +105,80 @@ pub struct Finding {
     pub suggestion: Option<String>,
 }
 
+/// The five-level scale the LLM is asked to use, and its mapping onto
+/// [`Severity`].
+///
+/// The model does not emit `Severity` directly: a reviewer reasons in
+/// critical/high/medium/low/info, and collapsing that to three levels is
+/// drep's decision, not the model's. Keeping the wire vocabulary as its own
+/// type means the prompt renders the alternation from `ALL` and the parser
+/// accepts exactly the same list, so the two cannot drift. They previously
+/// could, and the consequence was not cosmetic: a level named in the prompt
+/// but missing from the parser makes every record carrying it `Malformed`,
+/// which marks the file unanalyzed and turns the gate's exit code to 2.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LlmSeverity {
+    Critical,
+    High,
+    Medium,
+    Low,
+    Info,
+}
+
+impl LlmSeverity {
+    /// Every level, most severe first - the order the prompt lists them in.
+    pub const ALL: [LlmSeverity; 5] = [
+        LlmSeverity::Critical,
+        LlmSeverity::High,
+        LlmSeverity::Medium,
+        LlmSeverity::Low,
+        LlmSeverity::Info,
+    ];
+
+    /// The wire name, as the prompt asks for it and the response carries it.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            LlmSeverity::Critical => "critical",
+            LlmSeverity::High => "high",
+            LlmSeverity::Medium => "medium",
+            LlmSeverity::Low => "low",
+            LlmSeverity::Info => "info",
+        }
+    }
+
+    /// Collapse onto drep's three-level vocabulary.
+    pub const fn to_severity(self) -> Severity {
+        match self {
+            LlmSeverity::Critical | LlmSeverity::High => Severity::Error,
+            LlmSeverity::Medium => Severity::Warning,
+            LlmSeverity::Low | LlmSeverity::Info => Severity::Info,
+        }
+    }
+
+    /// The `critical|high|medium|low|info` alternation, for the prompt.
+    ///
+    /// Rendered from `ALL` rather than written out, so a level added here
+    /// reaches the prompt without anyone remembering to update it.
+    pub fn alternation() -> String {
+        Self::ALL
+            .iter()
+            .map(|s| s.as_str())
+            .collect::<Vec<_>>()
+            .join("|")
+    }
+}
+
+impl FromStr for LlmSeverity {
+    type Err = UnknownSeverity;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        LlmSeverity::ALL
+            .into_iter()
+            .find(|level| level.as_str() == s)
+            .ok_or_else(|| UnknownSeverity(s.to_owned()))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -153,5 +227,41 @@ mod tests {
         // Producers emit lowercase. Accepting "ERROR" would mean quietly
         // normalising, and normalising is how a second vocabulary starts.
         assert!("ERROR".parse::<Severity>().is_err());
+    }
+
+    #[test]
+    fn llm_severity_wire_names_round_trip() {
+        for level in LlmSeverity::ALL {
+            assert_eq!(level.as_str().parse::<LlmSeverity>(), Ok(level));
+        }
+        assert!("blocker".parse::<LlmSeverity>().is_err());
+    }
+
+    #[test]
+    fn llm_severity_collapses_onto_the_three_level_vocabulary() {
+        // All five in one assertion: a single hardcoded mapping cannot pass.
+        let mapped: Vec<Severity> = LlmSeverity::ALL
+            .into_iter()
+            .map(LlmSeverity::to_severity)
+            .collect();
+        assert_eq!(
+            mapped,
+            vec![
+                Severity::Error,
+                Severity::Error,
+                Severity::Warning,
+                Severity::Info,
+                Severity::Info
+            ]
+        );
+    }
+
+    #[test]
+    fn alternation_is_derived_from_all_not_written_out() {
+        assert_eq!(LlmSeverity::alternation(), "critical|high|medium|low|info");
+        // Every level must appear, so adding one cannot silently miss the prompt.
+        for level in LlmSeverity::ALL {
+            assert!(LlmSeverity::alternation().contains(level.as_str()));
+        }
     }
 }

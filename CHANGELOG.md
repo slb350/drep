@@ -7,6 +7,99 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Landed - 2026-08-17 — Phase 4b: analysis and the failure contract
+
+`src/analysis/prompt.rs` (system prompt per language), `src/analysis/result.rs`
+(`AnalysisResult`), and `src/analysis/code_quality.rs` (payload → cache → LLM →
+findings). Phase 4 is complete; `drep check` can be wired up in Phase 5.
+
+The contract, which is the whole point of the phase:
+
+- **`Extracted::Truncated` returns its partial findings *and* marks the file
+  unanalyzed**, unconditionally. This layer never consults `--fail-on`; Phase 5
+  decides what a failed file maps to. A truncated response is also **never
+  cached** — caching it would make one truncation permanent for the TTL.
+- **A finding whose line is not in `Payload::valid_lines` is dropped and
+  counted, never clamped.** Clamping attaches a real-looking finding to
+  arbitrary code. The file still counts as analyzed: the model misreported, but
+  the response was understood.
+- **A malformed record makes the file unanalyzed** — unknown severity, missing
+  `line`/`severity`/`message`, a non-integer or out-of-`u32` line. Deliberately
+  a different class from an out-of-range line, and the tests are written so an
+  implementation cannot conflate the two.
+
+`LlmSeverity` joins `Severity` in `findings.rs`: the model reasons in
+critical/high/medium/low/info and collapsing that to three levels is drep's
+decision. The prompt renders its alternation from `LlmSeverity::ALL` and the
+parser accepts the same list, so the two cannot drift — a level named in the
+prompt but missing from the parser would mark every file carrying it
+unanalyzed, which is an exit-code consequence, not a cosmetic one.
+
+Testing:
+- 31 tests added, 247 passing
+- 14 break-tests, one per contract rule, each confirmed to fail its naming test
+- `cargo mutants`: 24 mutants, 13 caught, 11 unviable, 0 missed
+- **Criterion 22 was decoration and took three attempts to fix.** Deleting the
+  limiter acquisition outright left it green. An in-flight counter in
+  `respond_with` cannot work — wiremock runs that closure under its own state
+  lock, so requests serialise inside it regardless. Wall-clock with `set_delay`
+  cannot work either: measured, four requests take 652 ms at
+  `max_concurrent = 1` and 595 ms at `max_concurrent = 8`, because wiremock
+  never overlaps requests at all. The test now watches the limiter's own permit
+  count, and both dead ends are recorded on it.
+- One coverage gap found by break-testing: nothing covered a line beyond
+  `u32`, which the old `unwrap_or(u32::MAX)` clamp let fall into `Dropped` by
+  accident. Now `Malformed`, with a test.
+
+### Landed - 2026-08-17 — Phase 4b cleanup (`/simplify`)
+
+Four agents over the staged diff. The structural findings:
+
+**`model`/`temperature` were duplicated onto the analyzer** on the stated
+grounds that `LlmClient`'s fields are "not part of the public API" — they are
+`pub(crate)` and readable from the same crate, so the justification did not
+exist. The doc then said "take the model from the validated client instead"
+directly above code reaching back into `cfg`, with an unreachable
+`unwrap_or_else(|| "unknown")` of exactly the kind `findings.rs` refuses
+elsewhere. Both fields deleted; the cache key reads the client.
+
+**`parse_response` took `extracted: Extracted` *and* a `truncated: bool`**, then
+discarded the discriminant and trusted the bool. `(Extracted::Truncated(v),
+false)` compiled and reported a truncated file as clean — the one outcome the
+module exists to prevent, resting on four call sites agreeing by convention.
+The flag is now read off the discriminant.
+
+**The limiter is a constructor parameter**, like the cache. Built per analyzer
+it would stop capping the moment a second analyzer existed: two of them put
+`2 * max_concurrent` requests in flight against one endpoint.
+
+**`src/analysis/tests/support.rs` was a byte-identical copy of
+`src/llm/client/tests/support.rs`** — and the copy had dropped the doc paragraph
+explaining why `fast_retry_client` must not override `max_attempts`, which is
+the paragraph recording a real past bug. Both now come from
+`src/test_support.rs`. The analyzer fixtures also built the struct by literal,
+restating the cache-key derivation by hand; they go through
+`CodeQualityAnalyzer::new` now, and `analyzer_with_fast_retry_serial` is gone
+(its only caller already set `max_concurrent = 1`).
+
+Also: `parse_response`/`parse_issue` are free functions (they read no analyzer
+state, so the parsing core is testable without a `MockServer`, a `Cache` and a
+`TempDir`); the gutter format is described only by `payload.rs`, which owns it —
+`prompt.rs` had drifted into describing removed lines even for a whole-file
+payload that has none; the two "makes no request" tests no longer mount a mock,
+so a wrongly-issued call 404s and is caught twice over.
+
+Declined: making `dropped_out_of_range` a map keyed by path. The objection was
+that it sums where `failed_files` unions — but the two axes differ for a
+reason. `failed_files` identifies *files*, where the same file failing twice is
+one failure; `dropped_out_of_range` counts *findings*, and two analyzers drop
+distinct findings. Summing is correct; the doc now says why.
+
+Testing:
+- 247 passing, unchanged by the refactor
+- Break-tests re-derived for the new shapes: 14/14 caught
+- `cargo mutants`: 24 mutants, 13 caught, 11 unviable, 0 missed
+
 ### Landed - 2026-08-17 — Phase 4a cleanup (`/simplify`)
 
 A four-agent `/simplify` pass over 8ec1ed1. The findings that mattered were
