@@ -7,6 +7,64 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added - 2026-08-16
+- **Local pre-commit gate** (`.pre-commit-config.yaml`): ruff check, ruff format,
+  `drep lint-docs`, and `drep check --staged --fail-on error`, all run from `./venv` via
+  `language: system`. Installed into `.git/hooks/pre-commit`, which the machine's global
+  `core.hooksPath` chainer execs. `lint-docs` runs report-only here on purpose - its
+  `long_line` check contradicts this repo's `MD013: false`.
+- **`drep check --fail-on {info,warning,error}`** (default `info`, unchanged behaviour):
+  the severity at or above which a finding blocks. Everything is still reported; only the
+  exit code changes. Without it a commit gate is unusable - the LLM emits info-level style
+  suggestions on almost every file, so exit 1 on any finding means no commit ever passes.
+- **`drep lint-docs --strict`**: exits 1 when issues are found, so the rule-based markdown
+  checks can gate a commit. Default behaviour is unchanged (report, exit 0).
+- **`drep lint-docs` accepts multiple paths** (`nargs=-1`, defaults to `.`), which is what
+  pre-commit passes.
+- **`drep-lint-docs` hook id** in `.pre-commit-hooks.yaml` for downstream consumers.
+
+### Changed - 2026-08-16
+- **Scanner passes return `AnalysisResult(findings, failed_files)`** instead of a bare
+  finding list. `analyze_code_quality` / `analyze_docstrings` now name the files they could
+  not analyze, rather than leaving the caller to infer it from a progress callback.
+  `drep scan` warns when a scan was incomplete instead of printing only "Found N issues".
+- **Shared pruning walk** — `file_targets.walk_targets()` is the one directory traversal;
+  `RepositoryScanner.get_scan_targets` and `lint-docs` both use it.
+- **`CodeQualityAnalyzer.analyze_files` deprecated** (no production callers; removal in
+  1.3.0), matching the existing `ParallelAnalyzer` deprecation.
+
+### Fixed - 2026-08-16
+- **`drep check` reported unanalyzed files as clean.** `CodeQualityAnalyzer.analyze_file`
+  and `DocstringGenerator._generate_docstring` swallowed every exception and returned
+  empty, so an unreachable LLM endpoint printed "✓ No issues found" and exited 0 — a
+  pre-commit hook that rubber-stamped every commit. Both now propagate; `RepositoryScanner`
+  counts the file as failed; `_run_check` returns `CheckOutcome(findings, unanalyzed)`; and
+  `drep check` exits **2** with "N file(s) could not be analyzed".
+- **`max_retries: 0` never sent the request.** `range(self.max_retries)` skipped the loop
+  entirely and raised `RuntimeError("LLM request failed but no exception was captured")`,
+  hiding the real transport error. Attempts now floor at 1, so failures name their cause.
+- **`lint-docs` walked ignored directories**, reporting on `venv/`, `build/`, and
+  `*.egg-info`. It now uses the shared pruning walk (126ms → 1.6ms here, and 38 real
+  files instead of 62).
+- **Markdown check false positives** — 1668 findings across this repo became 256:
+  - `missing_space_after_heading` fired on *every* well-formed heading below level 1:
+    `^#{1,6}\S` backtracks to one `#` and matches the second one.
+  - Heading checks ignored code fences, flagging `#!/bin/bash` in every bash sample.
+  - `link_syntax_invalid` counted parentheses line-locally, flagging any prose
+    parenthetical that wrapped onto a second line.
+  - `bare_url` flagged URLs inside inline-code spans.
+  - `bare_url` *missed* a real bare URL whenever any well-formed link appeared on the same
+    line. Well-formed links are now blanked and the remainder searched, rather than the
+    whole line being excused (this is why the repo baseline is 269, not 256).
+  - Dead `else 1` branch in the `empty_heading` level calculation - `_HEADING_EMPTY` only
+    matches a run of `#`, so `split()` is never empty.
+- **`drep check --format json` emitted a status line on stdout**, so "JSON output for tools"
+  did not parse. `Checking N file(s)...` now goes to stderr.
+- **A response without a `usage` block crashed the SDK path.** `usage` is optional in the
+  OpenAI schema and some local servers omit it; the HTTP fallback already defaulted it,
+  the open-agent-sdk path did not. Since analyzer failures now propagate, that latent
+  `AttributeError` would have marked the file unanalyzed rather than being swallowed.
+
 ### Planned
 - Vector database integration for cross-file context
 - Custom rule definitions

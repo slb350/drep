@@ -10,6 +10,7 @@ import logging
 import os
 import shutil
 import tempfile
+from dataclasses import dataclass
 from pathlib import Path
 
 import click
@@ -276,10 +277,11 @@ fi
                     continue
 
         # 2. Code quality analysis (LLM-powered)
+        unanalyzed: set[str] = set()
         if config.llm and config.llm.enabled:
             click.echo("Analyzing code quality...")
             repo_id = f"{owner}/{repo}"
-            code_findings = await scanner.analyze_code_quality(
+            code_result = await scanner.analyze_code_quality(
                 repo_path=str(repo_path),
                 files=files,
                 repo_id=repo_id,
@@ -290,11 +292,12 @@ fi
             if show_progress:
                 click.echo("")  # New line after progress bar completes
 
-            findings.extend(code_findings)
+            findings.extend(code_result.findings)
+            unanalyzed.update(code_result.failed_files)
 
             # 3. Docstring analysis (LLM-powered)
             click.echo("Analyzing docstrings...")
-            docstring_findings = await scanner.analyze_docstrings(
+            docstring_result = await scanner.analyze_docstrings(
                 repo_path=str(repo_path),
                 files=files,
                 repo_id=repo_id,
@@ -305,9 +308,19 @@ fi
             if show_progress:
                 click.echo("")  # New line after progress bar completes
 
-            findings.extend(docstring_findings)
+            findings.extend(docstring_result.findings)
+            unanalyzed.update(docstring_result.failed_files)
 
         click.echo(f"Found {len(findings)} issues")
+
+        # "Found N issues" over a partial scan reads as a clean bill of health
+        # for files the LLM never saw. Say which ones were missed.
+        if unanalyzed:
+            click.echo(
+                f"Warning: {len(unanalyzed)} file(s) could not be analyzed, "
+                f"so this scan is incomplete: {', '.join(sorted(unanalyzed))}",
+                err=True,
+            )
 
         # Create issues
         if findings:
@@ -455,7 +468,19 @@ async def _run_review(
             logger.error(f"Error closing adapter: {e}")
 
 
-async def _run_check(path: str, staged: bool, config_path: str) -> list[Finding]:
+@dataclass
+class CheckOutcome:
+    """Result of a local check run.
+
+    `unanalyzed` is what separates "analyzed and clean" from "never analyzed" -
+    a commit gate must not treat an unreachable LLM as a passing grade.
+    """
+
+    findings: list[Finding]
+    unanalyzed: list[str]
+
+
+async def _run_check(path: str, staged: bool, config_path: str | None) -> CheckOutcome:
     """Run local file check without platform API.
 
     Args:
@@ -464,7 +489,8 @@ async def _run_check(path: str, staged: bool, config_path: str) -> list[Finding]
         config_path: Config file path (optional)
 
     Returns:
-        List of Finding objects
+        CheckOutcome carrying the findings and the files that could not be
+        analyzed
     """
     # Load config with platform not required (pre-commit mode)
     if config_path:
@@ -508,7 +534,8 @@ async def _run_check(path: str, staged: bool, config_path: str) -> list[Finding]
         if staged:
             # Get staged files from git index
             files = scanner.get_staged_files(str(path_obj))
-            click.echo(f"Checking {len(files)} staged file(s)...")
+            # stderr: stdout is the machine-readable channel for --format json
+            click.echo(f"Checking {len(files)} staged file(s)...", err=True)
         else:
             # Get all Python/Markdown files
             if path_obj.is_file():
@@ -517,19 +544,20 @@ async def _run_check(path: str, staged: bool, config_path: str) -> list[Finding]
             else:
                 # Directory - get all .py and .md files
                 files = scanner.get_scan_targets(str(path_obj))
-            click.echo(f"Checking {len(files)} file(s)...")
+            click.echo(f"Checking {len(files)} file(s)...", err=True)
 
         if not files:
-            return []
+            return CheckOutcome(findings=[], unanalyzed=[])
 
         # Analyze files
-        all_findings = []
+        all_findings: list[Finding] = []
+        unanalyzed: set[str] = set()
 
         if config.llm and config.llm.enabled:
             analysis_root = str(path_obj.parent if path_obj.is_file() else path_obj)
             # The two passes are independent; run them concurrently. The rate
             # limiter provides the back-pressure.
-            code_findings, docstring_findings = await asyncio.gather(
+            code_result, docstring_result = await asyncio.gather(
                 scanner.analyze_code_quality(
                     repo_path=analysis_root,
                     files=files,
@@ -543,11 +571,14 @@ async def _run_check(path: str, staged: bool, config_path: str) -> list[Finding]
                     commit_sha="local",
                 ),
             )
-            all_findings.extend(code_findings)
-            all_findings.extend(docstring_findings)
+            for result in (code_result, docstring_result):
+                all_findings.extend(result.findings)
+                # Union, not sum: both passes run over the same files, so a
+                # single unreachable endpoint fails each file twice.
+                unanalyzed.update(result.failed_files)
 
         # Presentation belongs to the command, not the workflow
-        return all_findings
+        return CheckOutcome(findings=all_findings, unanalyzed=sorted(unanalyzed))
 
     finally:
         # Cleanup

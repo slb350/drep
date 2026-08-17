@@ -498,9 +498,12 @@ class LLMClient:
         estimated_tokens = (len(system_prompt) + len(code) + self.max_tokens) // 4
         estimated_tokens = max(1, min(estimated_tokens, MAX_ESTIMATED_TOKENS))
 
-        # Retry logic
+        # Retry logic. max_retries counts total attempts, and config permits 0;
+        # without the floor the request would never be sent and the caller would
+        # see a bogus "no exception was captured" instead of the real failure.
+        attempts = max(1, self.max_retries)
         last_exception = None
-        for attempt in range(self.max_retries):
+        for attempt in range(attempts):
             try:
                 async with self.rate_limiter.request(estimated_tokens, repo_id) as ctx:
                     # Make request
@@ -538,11 +541,15 @@ class LLMClient:
                         prompt_tokens = response["usage"]["prompt_tokens"]
                         completion_tokens = response["usage"]["completion_tokens"]
                     else:
-                        # OpenAI-compatible returns object
+                        # OpenAI-compatible returns object. `usage` is optional in
+                        # the OpenAI schema and some local servers omit it; missing
+                        # accounting must not throw away a response we already have
+                        # (the HTTP fallback in http_compat already defaults it).
                         content = response.choices[0].message.content
-                        tokens_used = response.usage.total_tokens
-                        prompt_tokens = response.usage.prompt_tokens
-                        completion_tokens = response.usage.completion_tokens
+                        usage = response.usage
+                        tokens_used = usage.total_tokens if usage else 0
+                        prompt_tokens = usage.prompt_tokens if usage else 0
+                        completion_tokens = usage.completion_tokens if usage else 0
 
                     # Update actual tokens
                     ctx.set_actual_tokens(tokens_used)
@@ -604,7 +611,7 @@ class LLMClient:
                     latency_ms=0,
                 )
 
-                if attempt < self.max_retries - 1:
+                if attempt < attempts - 1:
                     # Calculate backoff delay
                     if self.exponential_backoff:
                         delay = self.retry_delay * (2**attempt)
@@ -615,14 +622,12 @@ class LLMClient:
 
                     logger.warning(
                         f"LLM request failed (attempt {attempt + 1}/"
-                        f"{self.max_retries}): {error_msg}. Retrying in {delay}s..."
+                        f"{attempts}): {error_msg}. Retrying in {delay}s..."
                     )
                     await asyncio.sleep(delay)
                 else:
                     error_msg = sanitize_secrets(str(e))
-                    logger.error(
-                        f"LLM request failed after {self.max_retries} attempts: {error_msg}"
-                    )
+                    logger.error(f"LLM request failed after {attempts} attempts: {error_msg}")
 
         # All retries failed
         if last_exception is not None:

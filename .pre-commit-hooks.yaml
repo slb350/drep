@@ -13,3 +13,10 @@
   language: system
   pass_filenames: false
   types: [python]
+
+- id: drep-lint-docs
+  name: drep markdown lint
+  description: Rule-based markdown checks on staged docs (no LLM, no config)
+  entry: drep lint-docs --strict
+  language: system
+  types: [markdown]

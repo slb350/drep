@@ -1,0 +1,49 @@
+# drep's own commit gate. Install with: ./venv/bin/pre-commit install
+#
+# Every hook runs out of ./venv (language: system), so pre-commit builds no
+# isolated environments and the tool versions match the ones CI and the release
+# checklist use.
+#
+# Ordering is deliberate: the instant rule-based checks run first so an obvious
+# lint failure does not cost an LLM round-trip. `drep check` is last and is by
+# far the slowest hook - it sends each staged Python file to the LLM endpoint in
+# config.yaml. Exit 2 from it means files could not be analyzed (endpoint down),
+# which is a failed gate, not a pass.
+repos:
+  - repo: local
+    hooks:
+      - id: ruff-check
+        name: ruff check
+        entry: ./venv/bin/ruff check --fix --force-exclude
+        language: system
+        types_or: [python, pyi]
+        require_serial: true
+
+      - id: ruff-format
+        name: ruff format
+        entry: ./venv/bin/ruff format --force-exclude
+        language: system
+        types_or: [python, pyi]
+        require_serial: true
+
+      # Report-only, deliberately: lint-docs' long_line check flags >120 chars,
+      # and this repo turns that rule off (MD013: false in .markdownlint.json).
+      # Add --strict in a project that wants markdown to gate the commit.
+      - id: drep-lint-docs
+        name: drep lint-docs
+        entry: ./venv/bin/drep lint-docs
+        language: system
+        types: [markdown]
+
+      # --fail-on error: the LLM emits info-level style suggestions on almost
+      # any file (9 on a 142-line constants module), so gating on every finding
+      # means no commit ever passes. Bugs and security issues map to `error`
+      # (critical/high) and still block; suggestions are printed, not enforced.
+      - id: drep-check
+        name: drep check (LLM code quality)
+        entry: ./venv/bin/drep check --staged --fail-on error
+        language: system
+        types: [python]
+        # `drep check --staged` reads the git index itself
+        pass_filenames: false
+        require_serial: true

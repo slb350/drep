@@ -189,8 +189,12 @@ def calculate_total(prices: List[float], tax_rate: float) -> float:
         assert call_kwargs["commit_sha"] == "abc123"
 
     @pytest.mark.asyncio
-    async def test_handles_llm_error_gracefully(self, docstring_generator, mock_llm_client):
-        """Test that LLM errors are handled gracefully."""
+    async def test_llm_error_propagates(self, docstring_generator, mock_llm_client):
+        """LLM failures must propagate so the file counts as unanalyzed.
+
+        Returning None here would let `drep check` report a clean file when the
+        endpoint was simply unreachable.
+        """
         func = FunctionInfo(
             name="test_func",
             line_number=5,
@@ -207,16 +211,14 @@ def calculate_total(prices: List[float], tax_rate: float) -> float:
 
         file_content = "def test_func():\n    pass"
 
-        # Should return None and not crash
-        finding = await docstring_generator._generate_docstring(
-            file_path="test.py",
-            func_info=func,
-            full_content=file_content,
-            repo_id="test/repo",
-            commit_sha="abc123",
-        )
-
-        assert finding is None
+        with pytest.raises(Exception, match="LLM timeout"):
+            await docstring_generator._generate_docstring(
+                file_path="test.py",
+                func_info=func,
+                full_content=file_content,
+                repo_id="test/repo",
+                commit_sha="abc123",
+            )
 
 
 class TestAnalyzeFile:

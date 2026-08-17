@@ -488,11 +488,16 @@ pip install pre-commit
 ```yaml
 repos:
   - repo: https://github.com/slb350/drep
-    rev: v0.9.0  # Use the latest version
+    rev: v1.2.0  # Use the latest version
     hooks:
       - id: drep-check          # Checks only staged files
       # - id: drep-check-all    # OR check all Python files
+      # - id: drep-lint-docs    # Rule-based markdown gate (no LLM)
 ```
+
+`drep-check` sends every staged Python file to your LLM endpoint, so the hook is
+only as fast as that backend. Pass `--fail-on error` so style suggestions do not
+block the commit, or `--exit-zero` (see below) to be warned rather than blocked.
 
 3. Install the hook:
 ```bash
@@ -531,6 +536,22 @@ drep check --staged --exit-zero
 drep check --format json
 ```
 
+`drep check` exit codes:
+
+| Code | Meaning |
+|------|---------|
+| 0 | Analysis ran and found nothing above `--fail-on` (or `--exit-zero` was passed) |
+| 1 | Analysis ran and found issues at or above `--fail-on` |
+| 2 | One or more files could not be analyzed - the LLM endpoint failed, so the result is **not** a pass |
+
+Use `--fail-on` to choose what is worth blocking a commit over. The LLM emits
+info-level style suggestions on almost any file, so the default (`info` - block
+on any finding) is too strict for a gate:
+
+```bash
+drep check --staged --fail-on error    # only bugs/security block; the rest just reports
+```
+
 #### Local-Only Config (No Platform Required)
 
 For pre-commit usage, you don't need Gitea/GitHub/GitLab tokens. Create a minimal `config.yaml`:
@@ -546,16 +567,17 @@ documentation:
   enabled: true
 ```
 
-Or disable LLM features entirely:
-```yaml
-documentation:
-  enabled: true
+`drep check` needs no platform configuration - but it **does** need an LLM. Its
+code-quality and docstring passes are the only checks it runs, so with
+`llm.enabled: false` it has nothing to do and always reports zero findings.
 
-llm:
-  enabled: false  # Use only rule-based checks
+For a gate that needs no LLM at all, use `drep lint-docs`, which is purely
+rule-based:
+
+```bash
+drep lint-docs docs/ README.md   # report markdown issues
+drep lint-docs --strict          # exit 1 on issues, for a commit gate
 ```
-
-The `drep check` command works without any platform configuration!
 
 ## How It Works
 

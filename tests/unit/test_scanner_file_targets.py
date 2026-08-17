@@ -140,11 +140,13 @@ class TestAnalysisConcurrency:
         scanner.code_analyzer = MagicMock()
         scanner.code_analyzer.analyze_file = analyze
 
-        findings = await scanner.analyze_code_quality(
+        result = await scanner.analyze_code_quality(
             repo_path=str(tmp_path),
             files=["good.py", "bad.py"],
             repo_id="o/r",
             commit_sha="sha",
         )
 
-        assert [f.file_path for f in findings] == ["good.py"]
+        assert [f.file_path for f in result.findings] == ["good.py"]
+        # The failing file is named, not silently absent from the findings
+        assert result.failed_files == ["bad.py"]

@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import yaml
 
 from drep.cli import cli
+from drep.models.findings import AnalysisResult, Finding
 
 
 class TestScanCommand:
@@ -229,10 +230,13 @@ class TestScanWorkflow:
         scanner = MagicMock()
         scanner.scan_repository = AsyncMock(return_value=(["test.py"], "abc123"))
         scanner.record_scan = MagicMock()
-        # Mock the LLM-powered analysis methods
-        mock_finding = MagicMock()
-        scanner.analyze_code_quality = AsyncMock(return_value=[mock_finding])
-        scanner.analyze_docstrings = AsyncMock(return_value=[])
+        # Mock the LLM-powered analysis methods. AnalysisResult validates its
+        # contents, so this is a real Finding rather than a MagicMock.
+        finding = Finding(
+            type="bug", severity="high", file_path="test.py", line=1, message="Test finding"
+        )
+        scanner.analyze_code_quality = AsyncMock(return_value=AnalysisResult(findings=[finding]))
+        scanner.analyze_docstrings = AsyncMock(return_value=AnalysisResult())
         scanner.close = AsyncMock()
         mock_scanner_class.return_value = scanner
 

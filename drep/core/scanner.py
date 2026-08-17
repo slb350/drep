@@ -2,7 +2,6 @@
 
 import asyncio
 import logging
-import os
 from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
 from pathlib import Path
@@ -12,14 +11,19 @@ from git.exc import GitCommandError, InvalidGitRepositoryError
 
 from drep.adapters.base import BaseAdapter
 from drep.code_quality.analyzer import CodeQualityAnalyzer
-from drep.core.file_targets import is_ignored_dir, is_python_source, is_scan_target
+from drep.core.file_targets import (
+    is_ignored_dir,
+    is_python_source,
+    is_scan_target,
+    walk_targets,
+)
 from drep.core.performance import ProgressTracker
 from drep.db.models import RepositoryScan
 from drep.docstring.generator import DocstringGenerator
 from drep.llm.cache import IntelligentCache
 from drep.llm.client import LLMClient
 from drep.models.config import Config
-from drep.models.findings import Finding
+from drep.models.findings import AnalysisResult, Finding
 from drep.pr_review.analyzer import PRReviewAnalyzer
 
 logger = logging.getLogger(__name__)
@@ -191,18 +195,8 @@ class RepositoryScanner:
         Returns:
             List of relative file paths (e.g., ["src/main.py", "README.md"])
         """
-        # os.walk with in-place pruning so ignored trees (.git, venv, build, …)
-        # are never descended into. rglob("*") would stat every entry in them
-        # first — tens of thousands of wasted syscalls on a cloned repo.
         root = Path(repo_path)
-        targets: list[str] = []
-        for dirpath, dirnames, filenames in os.walk(repo_path):
-            dirnames[:] = [d for d in dirnames if not is_ignored_dir(d)]
-            base = Path(dirpath)
-            targets.extend(
-                str((base / name).relative_to(root)) for name in filenames if is_scan_target(name)
-            )
-        return targets
+        return [str(path.relative_to(root)) for path in walk_targets(root, is_scan_target)]
 
     def _should_ignore(self, file_path: Path) -> bool:
         """Check if file should be ignored.
@@ -314,7 +308,7 @@ class RepositoryScanner:
         repo_id: str,
         commit_sha: str,
         progress_callback: Callable[["ProgressTracker"], None] | None = None,
-    ) -> list[Finding]:
+    ) -> AnalysisResult:
         """Analyze Python files for code quality issues using LLM.
 
         Args:
@@ -325,7 +319,8 @@ class RepositoryScanner:
             progress_callback: Optional callback for progress updates
 
         Returns:
-            List of Finding objects describing code quality issues
+            AnalysisResult with the findings and the files that could not be
+            analyzed - callers must not read an empty findings list as "clean"
 
         Note:
             - Only analyzes if code_analyzer is initialized
@@ -334,7 +329,7 @@ class RepositoryScanner:
         """
         if not self.code_analyzer:
             logger.debug("Code analyzer not initialized, skipping code quality analysis")
-            return []
+            return AnalysisResult()
 
         repo_path_obj = Path(repo_path)
 
@@ -343,7 +338,7 @@ class RepositoryScanner:
 
         if not python_files:
             logger.debug("No Python files to analyze for code quality")
-            return []
+            return AnalysisResult()
 
         logger.info(f"Analyzing {len(python_files)} Python files for code quality")
 
@@ -364,7 +359,7 @@ class RepositoryScanner:
         repo_id: str,
         commit_sha: str,
         progress_callback: Callable[["ProgressTracker"], None] | None = None,
-    ) -> list[Finding]:
+    ) -> AnalysisResult:
         """Analyze Python files for missing/poor docstrings using LLM.
 
         Args:
@@ -375,7 +370,8 @@ class RepositoryScanner:
             progress_callback: Optional callback for progress updates
 
         Returns:
-            List of Finding objects for docstring issues
+            AnalysisResult with the findings and the files that could not be
+            analyzed - callers must not read an empty findings list as "clean"
 
         Note:
             - Only analyzes if docstring_generator is initialized
@@ -384,7 +380,7 @@ class RepositoryScanner:
         """
         if not self.docstring_generator:
             logger.debug("Docstring generator not initialized, skipping docstring analysis")
-            return []
+            return AnalysisResult()
 
         repo_path_obj = Path(repo_path)
 
@@ -393,7 +389,7 @@ class RepositoryScanner:
 
         if not python_files:
             logger.debug("No Python files to analyze for docstrings")
-            return []
+            return AnalysisResult()
 
         logger.info(f"Analyzing {len(python_files)} Python files for docstrings")
 
@@ -416,7 +412,7 @@ class RepositoryScanner:
         commit_sha: str,
         progress_callback: Callable[["ProgressTracker"], None] | None,
         what: str,
-    ) -> list[Finding]:
+    ) -> AnalysisResult:
         """Read each file and run one LLM analyzer over it, concurrently.
 
         Shared by analyze_code_quality and analyze_docstrings, which differed
@@ -438,13 +434,20 @@ class RepositoryScanner:
             what: Noun phrase for the summary log line
 
         Returns:
-            Combined findings from every file that could be read and analyzed
+            AnalysisResult with the combined findings and every file that could
+            not be read or analyzed
         """
         tracker = ProgressTracker(total=len(files))
+        failed_files: list[str] = []
 
         def report() -> None:
             if progress_callback:
                 progress_callback(tracker)
+
+        def fail(file_path: str) -> None:
+            """Record a file as unanalyzed. Returned to the caller, not just counted."""
+            failed_files.append(file_path)
+            tracker.update(failed=1)
 
         # Phase 1: read. Local I/O, and it establishes which files are analyzable
         # before any LLM request is issued.
@@ -462,10 +465,10 @@ class RepositoryScanner:
                 tracker.update(skipped=1)
             except PermissionError:
                 logger.error(f"Permission denied: {file_path}")
-                tracker.update(failed=1)
+                fail(file_path)
             except OSError as e:
                 logger.error(f"Failed to read {file_path}: {e}")
-                tracker.update(failed=1)
+                fail(file_path)
             report()
 
         # Phase 2: analyze concurrently
@@ -481,7 +484,7 @@ class RepositoryScanner:
                 return result
             except Exception as e:
                 logger.error(f"Failed to analyze {file_path}: {e}")
-                tracker.update(failed=1)
+                fail(file_path)
                 return []
             finally:
                 report()
@@ -490,7 +493,7 @@ class RepositoryScanner:
 
         findings = [finding for result in results for finding in result]
         logger.info(f"Found {len(findings)} {what} across {len(files)} files")
-        return findings
+        return AnalysisResult(findings=findings, failed_files=failed_files)
 
     async def close(self):
         """Close LLM client and cleanup resources."""

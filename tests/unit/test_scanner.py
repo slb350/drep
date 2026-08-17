@@ -490,18 +490,20 @@ class TestDocstringAnalysis:
 
     @pytest.mark.asyncio
     async def test_analyze_docstrings_without_llm(self):
-        """Test that analyze_docstrings returns empty list when LLM not enabled."""
+        """Test that analyze_docstrings returns an empty result when LLM not enabled."""
         db_session = Mock()
         scanner = RepositoryScanner(db_session)  # No config = no LLM
 
-        findings = await scanner.analyze_docstrings(
+        result = await scanner.analyze_docstrings(
             repo_path="/fake/path",
             files=["module.py"],
             repo_id="test/repo",
             commit_sha="abc123",
         )
 
-        assert findings == []
+        assert result.findings == []
+        # No analyzer is not the same as a failed analyzer
+        assert result.failed_files == []
 
     @pytest.mark.asyncio
     async def test_analyze_docstrings_filters_python_files(self, tmp_path):

@@ -141,26 +141,22 @@ class DocstringGenerator:
             f"Analyzing {len(functions_to_analyze)}/{len(functions)} functions in {file_path}"
         )
 
-        # Analyze each function
+        # Analyze each function. Missing and poor-quality docstrings take the
+        # same LLM round-trip and differ only in how the Finding is labelled,
+        # so the distinction is passed in rather than patched on afterwards.
         for func_info in functions_to_analyze:
-            # Case 1: Missing docstring
             if func_info.docstring is None:
-                finding = await self._generate_docstring(
-                    file_path, func_info, content, repo_id, commit_sha
-                )
-                if finding:
-                    findings.append(finding)
-
-            # Case 2: Poor quality docstring
+                poor = False
             elif self._is_poor_docstring(func_info.docstring):
-                finding = await self._generate_docstring(
-                    file_path, func_info, content, repo_id, commit_sha
+                poor = True
+            else:
+                continue
+
+            findings.append(
+                await self._generate_docstring(
+                    file_path, func_info, content, repo_id, commit_sha, poor=poor
                 )
-                if finding:
-                    # Change type to indicate improvement
-                    finding.type = "poor-docstring"
-                    finding.message = f"Poor quality docstring for function '{func_info.name}'"
-                    findings.append(finding)
+            )
 
         logger.info(f"Found {len(findings)} docstring issues in {file_path}")
 
@@ -242,8 +238,9 @@ class DocstringGenerator:
         full_content: str,
         repo_id: str,
         commit_sha: str,
-    ) -> Finding | None:
-        """Generate docstring for function missing one.
+        poor: bool = False,
+    ) -> Finding:
+        """Generate a docstring for a function that is missing or has a poor one.
 
         Args:
             file_path: Path to the file
@@ -251,9 +248,14 @@ class DocstringGenerator:
             full_content: Full file content
             repo_id: Repository ID
             commit_sha: Commit SHA
+            poor: The function has a docstring, but a low-quality one
 
         Returns:
-            Finding with suggested docstring, or None if generation fails
+            Finding with the suggested docstring
+
+        Raises:
+            Exception: Any LLM transport or response-parsing failure, so the
+                caller counts the file as unanalyzed instead of clean.
         """
         # Extract function code
         lines = full_content.split("\n")
@@ -272,41 +274,40 @@ class DocstringGenerator:
             function_code=function_code,
         )
 
-        try:
-            # Call LLM with structured output
-            result_dict = await self.llm_client.analyze_code_json(
-                system_prompt=prompt,
-                code="",  # Code is in prompt
-                schema=DocstringGenerationResult,
-                repo_id=repo_id,
-                commit_sha=commit_sha,
-                analyzer="docstring",
-            )
+        # Call LLM with structured output
+        result_dict = await self.llm_client.analyze_code_json(
+            system_prompt=prompt,
+            code="",  # Code is in prompt
+            schema=DocstringGenerationResult,
+            repo_id=repo_id,
+            commit_sha=commit_sha,
+            analyzer="docstring",
+        )
 
-            result = DocstringGenerationResult(**result_dict)
+        result = DocstringGenerationResult(**result_dict)
 
-            # Create Finding
-            finding = Finding(
-                type="missing-docstring",
-                severity="info",  # Docstrings are info-level
-                file_path=file_path,
-                line=func_info.line_number,
-                column=None,
-                original=None,
-                replacement=None,  # Don't auto-replace
-                message=f"Missing docstring for function '{func_info.name}'",
-                suggestion=self._format_docstring_suggestion(
-                    func_info.name, result.docstring, result.reasoning
-                ),
-            )
+        # Create Finding
+        finding = Finding(
+            type="poor-docstring" if poor else "missing-docstring",
+            severity="info",  # Docstrings are info-level
+            file_path=file_path,
+            line=func_info.line_number,
+            column=None,
+            original=None,
+            replacement=None,  # Don't auto-replace
+            message=(
+                f"Poor quality docstring for function '{func_info.name}'"
+                if poor
+                else f"Missing docstring for function '{func_info.name}'"
+            ),
+            suggestion=self._format_docstring_suggestion(
+                func_info.name, result.docstring, result.reasoning
+            ),
+        )
 
-            logger.debug(f"Generated docstring for {func_info.name} (quality: {result.quality})")
+        logger.debug(f"Generated docstring for {func_info.name} (quality: {result.quality})")
 
-            return finding
-
-        except Exception as e:
-            logger.error(f"Failed to generate docstring for {func_info.name}: {e}")
-            return None
+        return finding
 
     def _format_docstring_suggestion(self, func_name: str, docstring: str, reasoning: str) -> str:
         """Format docstring suggestion for issue.

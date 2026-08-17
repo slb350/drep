@@ -725,6 +725,24 @@ class TestCircuitBreakerWiring:
         assert calls["n"] == 2
 
     @pytest.mark.asyncio
+    async def test_zero_retries_still_attempts_once(self):
+        """max_retries=0 means "no retries", not "never send the request".
+
+        Config allows 0 (ge=0). Skipping the loop entirely would raise a
+        misleading "no exception was captured" RuntimeError that hides the real
+        transport error from whoever is reading a failed pre-commit run.
+        """
+        from drep.llm.client import LLMClient
+
+        calls, create = self._failing_transport()
+        client = LLMClient(endpoint="http://localhost:1234/v1", model="m", max_retries=0)
+        client.client = _FakeChat(create)
+
+        with pytest.raises(RuntimeError, match="transport down"):
+            await client.analyze_code("sys", "code")
+        assert calls["n"] == 1
+
+    @pytest.mark.asyncio
     async def test_disabled_breaker_leaves_transport_unwrapped(self):
         """enable_circuit_breaker=False keeps direct transport calls."""
         from drep.llm.client import LLMClient

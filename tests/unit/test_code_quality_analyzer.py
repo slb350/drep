@@ -174,32 +174,36 @@ async def test_analyze_file_whitespace_only(analyzer, mock_llm_client):
 
 @pytest.mark.asyncio
 async def test_analyze_file_json_parse_error(analyzer, mock_llm_client):
-    """Test handling of JSON parsing errors."""
+    """An unparseable response means the file went unanalyzed - say so."""
     # Mock LLM to raise ValueError (JSON parsing failure)
     mock_llm_client.analyze_code_json.side_effect = ValueError("Failed to parse JSON")
 
-    # Analyze file
-    findings = await analyzer.analyze_file(
-        file_path="test.py", content="def test(): pass", repo_id="test-repo", commit_sha="abc123"
-    )
-
-    # Should return empty list and not crash
-    assert len(findings) == 0
+    with pytest.raises(ValueError, match="Failed to parse JSON"):
+        await analyzer.analyze_file(
+            file_path="test.py",
+            content="def test(): pass",
+            repo_id="test-repo",
+            commit_sha="abc123",
+        )
 
 
 @pytest.mark.asyncio
 async def test_analyze_file_llm_request_error(analyzer, mock_llm_client):
-    """Test handling of LLM request errors."""
+    """LLM transport failures must propagate, never read as a clean file.
+
+    The caller (RepositoryScanner) counts the file as failed; swallowing here
+    would make an unreachable endpoint indistinguishable from clean code.
+    """
     # Mock LLM to raise exception
     mock_llm_client.analyze_code_json.side_effect = Exception("LLM request failed")
 
-    # Analyze file
-    findings = await analyzer.analyze_file(
-        file_path="test.py", content="def test(): pass", repo_id="test-repo", commit_sha="abc123"
-    )
-
-    # Should return empty list and not crash
-    assert len(findings) == 0
+    with pytest.raises(Exception, match="LLM request failed"):
+        await analyzer.analyze_file(
+            file_path="test.py",
+            content="def test(): pass",
+            repo_id="test-repo",
+            commit_sha="abc123",
+        )
 
 
 @pytest.mark.asyncio
@@ -266,8 +270,8 @@ async def test_analyze_files_multiple(analyzer, mock_llm_client):
 
 
 @pytest.mark.asyncio
-async def test_analyze_files_with_failures(analyzer, mock_llm_client):
-    """Test analyzing multiple files where some fail."""
+async def test_analyze_files_propagates_failure(analyzer, mock_llm_client):
+    """A failure mid-batch aborts rather than returning partial results as complete."""
     # Mock LLM: first succeeds, second fails, third succeeds
     mock_llm_client.analyze_code_json.side_effect = [
         {
@@ -289,11 +293,8 @@ async def test_analyze_files_with_failures(analyzer, mock_llm_client):
 
     files = [("file1.py", "content1"), ("file2.py", "content2"), ("file3.py", "content3")]
 
-    findings = await analyzer.analyze_files(files, repo_id="test-repo", commit_sha="abc123")
-
-    # Should return findings from successful files only
-    assert len(findings) == 1  # Only file1 had an issue
-    assert findings[0].file_path == "file1.py"
+    with pytest.raises(Exception, match="LLM failed"):
+        await analyzer.analyze_files(files, repo_id="test-repo", commit_sha="abc123")
 
 
 @pytest.mark.asyncio

@@ -82,3 +82,15 @@ class DocumentationFindings(BaseModel):
         )
 
         return findings
+
+
+class AnalysisResult(BaseModel):
+    """What an analyzer pass produced, and what it never got to.
+
+    `failed_files` is the load-bearing half: a caller that only reads
+    `findings` cannot distinguish "analyzed and clean" from "the LLM was
+    unreachable", which is how a commit gate ends up rubber-stamping.
+    """
+
+    findings: list[Finding] = Field(default_factory=list)
+    failed_files: list[str] = Field(default_factory=list)

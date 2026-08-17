@@ -19,6 +19,7 @@ from drep.cli_wizard import (
 from drep.cli_workflows import _run_check, _run_review, _run_scan
 from drep.config import find_config_file, get_user_config_dir, load_config
 from drep.constants import default_metrics_file
+from drep.core.file_targets import is_markdown, walk_targets
 from drep.documentation.analyzer import DocumentationAnalyzer
 
 
@@ -27,6 +28,10 @@ class OutputFormat(str, Enum):
 
     TEXT = "text"
     JSON = "json"
+
+
+# Finding.severity, ordered. Anything at or above the --fail-on rank blocks.
+SEVERITY_RANK = {"info": 0, "warning": 1, "error": 2}
 
 
 def _resolve_config_file(config: str | None) -> Path | None:
@@ -306,7 +311,13 @@ def review(repository, pr_number, config, post):
     default=OutputFormat.TEXT.value,
     help="Output format",
 )
-def check(path, staged, config, exit_zero, format):
+@click.option(
+    "--fail-on",
+    type=click.Choice(list(SEVERITY_RANK)),
+    default="info",
+    help="Lowest severity that blocks (default: info, i.e. any finding)",
+)
+def check(path, staged, config, exit_zero, format, fail_on):
     """Check local files without platform API (pre-commit friendly).
 
     Examples:
@@ -314,6 +325,12 @@ def check(path, staged, config, exit_zero, format):
         drep check --staged           # Check only staged files
         drep check path/to/file.py    # Check specific file
         drep check --exit-zero        # Warn without blocking commits
+        drep check --fail-on error    # Only bugs block; style notes just report
+
+    Exit codes:
+        0  analysis ran and found nothing above --fail-on (or --exit-zero)
+        1  analysis ran and found issues at or above --fail-on
+        2  one or more files could not be analyzed - the result is not a pass
     """
     import asyncio
 
@@ -334,24 +351,41 @@ def check(path, staged, config, exit_zero, format):
             config_path = str(config_file)
 
     # Run async check
-    findings = asyncio.run(_run_check(path, staged, config_path))
+    outcome = asyncio.run(_run_check(path, staged, config_path))
+    findings = outcome.findings
+    # Everything is reported; the threshold only decides what blocks.
+    threshold = SEVERITY_RANK[fail_on]
+    blocking = [f for f in findings if SEVERITY_RANK.get(f.severity, 0) >= threshold]
+
     if findings:
         _output_findings(findings, format)
-
-    # Print findings summary
-    if findings:
         if exit_zero:
             # Warning mode - print to stdout
             click.echo(f"\n⚠ Found {len(findings)} issue(s) (warning mode)")
-        else:
+        elif blocking:
             # Error mode - print to stderr
-            click.echo(f"\n✗ Found {len(findings)} issue(s)", err=True)
-
-        # Exit with appropriate code
-        if not exit_zero:
-            raise SystemExit(1)
-    else:
+            click.echo(f"\n✗ Found {len(blocking)} issue(s) at or above '{fail_on}'", err=True)
+        else:
+            click.echo(f"\n⚠ Found {len(findings)} issue(s), all below '{fail_on}'")
+    elif not outcome.unanalyzed:
         click.echo("✓ No issues found")
+
+    # An unanalyzed file is not a clean file. Reported after the findings so it
+    # is the last thing on screen, and with its own exit code so a hook can tell
+    # "your code has issues" from "drep could not run".
+    if outcome.unanalyzed:
+        click.echo(
+            f"\n✗ {len(outcome.unanalyzed)} file(s) could not be analyzed - results are "
+            f"incomplete (see errors above): {', '.join(outcome.unanalyzed)}",
+            err=True,
+        )
+
+    if exit_zero:
+        return
+    if outcome.unanalyzed:
+        raise SystemExit(2)
+    if blocking:
+        raise SystemExit(1)
 
 
 def _output_findings(findings, format_type):
@@ -448,57 +482,75 @@ def metrics(days, export, detailed):
         click.echo(f"\n✓ Metrics exported to {export_path}")
 
 
+def _collect_markdown(paths: tuple[str, ...]) -> list[Path]:
+    """Expand files and directories into the markdown files to lint.
+
+    Directories go through the shared pruning walk, so vendored trees (venv/,
+    build/, *.egg-info) are never descended into rather than filtered after.
+    """
+    md_files: list[Path] = []
+    for raw in paths:
+        path_obj = Path(raw)
+        if path_obj.is_file():
+            if is_markdown(path_obj):
+                md_files.append(path_obj)
+        else:
+            md_files.extend(walk_targets(path_obj, is_markdown))
+    # A file named twice (directly and via its directory) is still one file
+    return sorted(set(md_files))
+
+
 @cli.command()
-@click.argument("path", type=click.Path(exists=True))
+@click.argument("paths", nargs=-1, type=click.Path(exists=True))
 @click.option("--output", type=click.Choice(["text", "json"]), default="text", help="Output format")
-def lint_docs(path, output):
+@click.option("--strict", is_flag=True, help="Exit non-zero when issues are found (pre-commit)")
+def lint_docs(paths, output, strict):
     """Lint markdown documentation files for style and formatting issues.
+
+    Accepts any number of files or directories; defaults to the current
+    directory. Rule-based only - no LLM, no config, no platform token.
 
     Examples:
         drep lint-docs docs/
-        drep lint-docs README.md
+        drep lint-docs README.md CHANGELOG.md
         drep lint-docs docs/ --output json
+        drep lint-docs --strict          # block a commit on issues
     """
-    from pathlib import Path
-
     from drep.models.config import DocumentationConfig
 
     # Create analyzer with markdown checks enabled
     config = DocumentationConfig(enabled=True, markdown_checks=True)
     analyzer = DocumentationAnalyzer(config)
 
-    # Find markdown files
-    path_obj = Path(path)
-    if path_obj.is_file():
-        md_files = [path_obj] if path_obj.suffix == ".md" else []
-    else:
-        md_files = list(path_obj.rglob("*.md"))
+    md_files = _collect_markdown(paths or (".",))
 
     if not md_files:
         click.echo("No markdown files found.")
         return
 
-    # Analyze all files
-    total_issues = 0
-    results = []
+    async def analyze_all():
+        """One event loop for the whole run, not one per file."""
+        results = []
+        for md_file in md_files:
+            try:
+                content = md_file.read_text(encoding="utf-8")
+                findings = await analyzer.analyze_file(str(md_file), content)
 
-    for md_file in sorted(md_files):
-        try:
-            content = md_file.read_text(encoding="utf-8")
-            findings = asyncio.run(analyzer.analyze_file(str(md_file), content))
+                if findings.pattern_issues:
+                    results.append((md_file, findings))
+            except (  # noqa: PERF203 - per-file isolation: one bad file must not abort the scan
+                OSError,
+                UnicodeDecodeError,
+            ) as e:
+                click.echo(f"Error reading {md_file}: {e}", err=True)
+            except Exception as e:
+                # Unexpected error - show details and re-raise for debugging
+                click.echo(f"Unexpected error analyzing {md_file}: {e}", err=True)
+                raise
+        return results
 
-            if findings.pattern_issues:
-                total_issues += len(findings.pattern_issues)
-                results.append((md_file, findings))
-        except (  # noqa: PERF203 - per-file isolation: one bad file must not abort the scan
-            OSError,
-            UnicodeDecodeError,
-        ) as e:
-            click.echo(f"Error reading {md_file}: {e}", err=True)
-        except Exception as e:
-            # Unexpected error - show details and re-raise for debugging
-            click.echo(f"Unexpected error analyzing {md_file}: {e}", err=True)
-            raise
+    results = asyncio.run(analyze_all())
+    total_issues = sum(len(findings.pattern_issues) for _, findings in results)
 
     # Output results
     if output == "json":
@@ -525,6 +577,9 @@ def lint_docs(path, output):
                 for issue in findings.pattern_issues:
                     click.echo(f"  Line {issue.line}:{issue.column} [{issue.type}]")
                 click.echo()
+
+    if strict and total_issues:
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":

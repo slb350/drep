@@ -9,6 +9,8 @@ This module deliberately has no drep imports: analyzer packages
 ``drep.core.scanner``, which imports those packages in turn.
 """
 
+import os
+from collections.abc import Callable, Iterator
 from pathlib import Path
 
 SCAN_TARGET_SUFFIXES = frozenset({".py", ".md"})
@@ -57,3 +59,18 @@ def is_markdown(path: str | Path) -> bool:
 def is_ignored_dir(name: str) -> bool:
     """Return True if a directory component should never be descended into."""
     return name in IGNORED_DIRS or name.endswith(".egg-info")
+
+
+def walk_targets(root: str | Path, predicate: Callable[[str], bool]) -> Iterator[Path]:
+    """Yield files under ``root`` matching ``predicate``, skipping ignored trees.
+
+    os.walk with in-place pruning so ignored trees (.git, venv, build, …) are
+    never descended into. rglob("*") would stat every entry in them first -
+    tens of thousands of wasted syscalls on a cloned repo.
+    """
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [d for d in dirnames if not is_ignored_dir(d)]
+        base = Path(dirpath)
+        for name in filenames:
+            if predicate(name):
+                yield base / name

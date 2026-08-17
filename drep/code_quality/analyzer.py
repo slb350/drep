@@ -1,6 +1,7 @@
 """LLM-powered code quality analyzer."""
 
 import logging
+import warnings
 
 from drep.core.file_targets import is_python_source
 from drep.llm.client import LLMClient
@@ -94,10 +95,15 @@ class CodeQualityAnalyzer:
         Returns:
             List of Finding objects describing issues found
 
+        Raises:
+            Exception: Any LLM transport or response-parsing failure. The file
+                went unanalyzed, and callers must be able to tell that apart
+                from a file that analyzed cleanly - see RepositoryScanner,
+                which counts the file as failed.
+
         Note:
             - Files larger than MAX_FILE_SIZE (32k chars) are skipped
-            - LLM failures are logged but don't raise exceptions
-            - Returns empty list if analysis fails or file is too large
+            - Returns empty list if the file is too large or empty
         """
         # Check file size limit
         if len(content) > MAX_FILE_SIZE:
@@ -111,43 +117,30 @@ class CodeQualityAnalyzer:
             logger.debug(f"Skipping {file_path}: empty file")
             return []
 
-        try:
-            # Call LLM with structured schema
-            logger.debug(f"Analyzing {file_path} ({len(content)} chars)")
+        # Call LLM with structured schema
+        logger.debug(f"Analyzing {file_path} ({len(content)} chars)")
 
-            result_dict = await self.llm_client.analyze_code_json(
-                system_prompt=PYTHON_ANALYSIS_PROMPT,
-                code=content,
-                schema=CodeAnalysisResult,
-                repo_id=repo_id,
-                commit_sha=commit_sha,
-                analyzer="code_quality",
-            )
+        result_dict = await self.llm_client.analyze_code_json(
+            system_prompt=PYTHON_ANALYSIS_PROMPT,
+            code=content,
+            schema=CodeAnalysisResult,
+            repo_id=repo_id,
+            commit_sha=commit_sha,
+            analyzer="code_quality",
+        )
 
-            # Convert dict to Pydantic model
-            result = CodeAnalysisResult(**result_dict)
+        # Convert dict to Pydantic model
+        result = CodeAnalysisResult(**result_dict)
 
-            # Log analysis results
-            critical_high_count = sum(
-                1 for i in result.issues if i.severity in ["critical", "high"]
-            )
-            logger.info(
-                f"Analyzed {file_path}: found {len(result.issues)} issues "
-                f"({critical_high_count} critical/high)"
-            )
+        # Log analysis results
+        critical_high_count = sum(1 for i in result.issues if i.severity in ["critical", "high"])
+        logger.info(
+            f"Analyzed {file_path}: found {len(result.issues)} issues "
+            f"({critical_high_count} critical/high)"
+        )
 
-            # Convert to Finding objects
-            return result.to_findings(file_path)
-
-        except ValueError as e:
-            # JSON parsing failed after all strategies
-            logger.error(f"Failed to parse LLM response for {file_path}: {e}")
-            return []
-
-        except Exception as e:
-            # LLM request failed or other error
-            logger.error(f"LLM analysis failed for {file_path}: {e}", exc_info=True)
-            return []
+        # Convert to Finding objects
+        return result.to_findings(file_path)
 
     async def analyze_files(
         self, files: list[tuple[str, str]], repo_id: str, commit_sha: str
@@ -161,7 +154,17 @@ class CodeQualityAnalyzer:
 
         Returns:
             Combined list of findings from all files
+
+        Raises:
+            Exception: Propagated from the first file that fails to analyze
         """
+        warnings.warn(
+            "CodeQualityAnalyzer.analyze_files is deprecated (no production callers - "
+            "RepositoryScanner._analyze_files_with runs the files concurrently and "
+            "reports which ones failed) and will be removed in drep 1.3.0",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         all_findings: list[Finding] = []
 
         for file_path, content in files:

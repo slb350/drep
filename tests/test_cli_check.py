@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, patch
 import yaml
 
 from drep.cli import cli
+from drep.models.findings import AnalysisResult, Finding
 
 
 class TestCheckCommand:
@@ -40,8 +41,8 @@ class TestCheckCommand:
             with patch("drep.cli_workflows.RepositoryScanner") as mock_scanner_class:
                 mock_scanner = mock_scanner_class.return_value
                 mock_scanner.get_staged_files.return_value = []
-                mock_scanner.analyze_code_quality = AsyncMock(return_value=[])
-                mock_scanner.analyze_docstrings = AsyncMock(return_value=[])
+                mock_scanner.analyze_code_quality = AsyncMock(return_value=AnalysisResult())
+                mock_scanner.analyze_docstrings = AsyncMock(return_value=AnalysisResult())
                 mock_scanner.close = AsyncMock()
 
                 result = runner.invoke(cli, ["check", ".", "--config", "config.yaml"])
@@ -76,17 +77,19 @@ class TestCheckCommand:
 
                 # Mock analyze methods to return findings
                 async def mock_analyze(*args, **kwargs):
-                    return [
-                        Finding(
-                            type="test",
-                            severity="warning",
-                            file_path="test.py",
-                            line=1,
-                            message="Test finding",
-                        )
-                    ]
+                    return AnalysisResult(
+                        findings=[
+                            Finding(
+                                type="test",
+                                severity="warning",
+                                file_path="test.py",
+                                line=1,
+                                message="Test finding",
+                            )
+                        ]
+                    )
 
-                mock_scanner.analyze_code_quality = AsyncMock(return_value=[])
+                mock_scanner.analyze_code_quality = AsyncMock(return_value=AnalysisResult())
                 mock_scanner.analyze_docstrings = AsyncMock(side_effect=mock_analyze)
 
                 result = runner.invoke(cli, ["check", ".", "--config", "config.yaml"])
@@ -168,20 +171,24 @@ class TestCheckCommand:
         # the exit code is 0 even if findings are present.
         # We mock the async _run_check to return findings directly.
 
+        from drep.cli_workflows import CheckOutcome
         from drep.models.findings import Finding
 
         with runner.isolated_filesystem(temp_dir=tmp_path):
             # Mock _run_check to return findings
             async def mock_run_check(*args, **kwargs):
-                return [
-                    Finding(
-                        type="test",
-                        severity="warning",
-                        file_path="test.py",
-                        line=1,
-                        message="Test finding",
-                    )
-                ]
+                return CheckOutcome(
+                    findings=[
+                        Finding(
+                            type="test",
+                            severity="warning",
+                            file_path="test.py",
+                            line=1,
+                            message="Test finding",
+                        )
+                    ],
+                    unanalyzed=[],
+                )
 
             with patch("drep.cli._run_check", side_effect=mock_run_check):
                 result = runner.invoke(cli, ["check", ".", "--exit-zero"])
@@ -190,3 +197,166 @@ class TestCheckCommand:
                 assert result.exit_code == 0
                 # Should show it's in warning mode
                 assert "warning mode" in result.output.lower()
+
+
+class TestCheckAnalysisFailures:
+    """A file that could not be analyzed must never be reported as clean.
+
+    `drep check` gates commits. Reporting success when the LLM was unreachable
+    turns the hook into a rubber stamp, so unanalyzed files get their own exit
+    code (2) distinct from "analysis ran and found issues" (1).
+    """
+
+    @staticmethod
+    def _write_project():
+        Path("config.yaml").write_text(
+            yaml.dump(
+                {
+                    "llm": {
+                        "enabled": True,
+                        "endpoint": "http://localhost:1234/v1",
+                        "model": "test-model",
+                    },
+                    "documentation": {"enabled": False},
+                }
+            )
+        )
+        Path("test.py").write_text("def foo(): pass")
+
+    @staticmethod
+    def _scanner_failing_on(mock_scanner_class, *failed_files):
+        """Wire a scanner where both passes fail on the same files.
+
+        Both passes report the same file so the test also pins that the count
+        the user sees is a file count, not a count of pass-failures.
+        """
+        mock_scanner = mock_scanner_class.return_value
+        mock_scanner.get_scan_targets.return_value = ["test.py"]
+        mock_scanner.get_staged_files.return_value = ["test.py"]
+        mock_scanner.close = AsyncMock()
+
+        result = AnalysisResult(findings=[], failed_files=list(failed_files))
+        mock_scanner.analyze_code_quality = AsyncMock(return_value=result)
+        mock_scanner.analyze_docstrings = AsyncMock(return_value=result)
+
+    def test_unanalyzed_file_exits_two_and_is_not_reported_clean(self, runner, tmp_path):
+        """An LLM failure must block the commit, not report success."""
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            self._write_project()
+
+            with patch("drep.cli_workflows.RepositoryScanner") as mock_scanner_class:
+                self._scanner_failing_on(mock_scanner_class, "test.py")
+
+                result = runner.invoke(cli, ["check", ".", "--config", "config.yaml"])
+
+            assert result.exit_code == 2
+            assert "No issues found" not in result.output
+            assert "could not be analyzed" in result.output.lower()
+            assert "test.py" in result.output
+
+    def test_failure_count_is_files_not_passes(self, runner, tmp_path):
+        """One file failing both passes is one unanalyzed file, not two."""
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            self._write_project()
+
+            with patch("drep.cli_workflows.RepositoryScanner") as mock_scanner_class:
+                self._scanner_failing_on(mock_scanner_class, "test.py")
+
+                result = runner.invoke(cli, ["check", ".", "--config", "config.yaml"])
+
+            assert "1 file(s) could not be analyzed" in result.output
+
+    def test_unanalyzed_file_still_warns_under_exit_zero(self, runner, tmp_path):
+        """--exit-zero keeps its promise not to block, but must still say so."""
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            self._write_project()
+
+            with patch("drep.cli_workflows.RepositoryScanner") as mock_scanner_class:
+                self._scanner_failing_on(mock_scanner_class, "test.py")
+
+                result = runner.invoke(
+                    cli, ["check", ".", "--config", "config.yaml", "--exit-zero"]
+                )
+
+            assert result.exit_code == 0
+            assert "No issues found" not in result.output
+            assert "could not be analyzed" in result.output.lower()
+
+
+class TestCheckSeverityThreshold:
+    """--fail-on decides what is worth blocking a commit over.
+
+    The LLM emits info-level style suggestions on almost any file (9 on a
+    142-line constants module), so a gate that exits 1 on every finding can
+    never pass. The threshold lets the hook block on bugs without blocking on
+    "consider adding a type hint".
+    """
+
+    @staticmethod
+    def _run(runner, severities, *extra_args):
+        Path("config.yaml").write_text(
+            yaml.dump({"llm": {"enabled": True, "endpoint": "http://x/v1", "model": "m"}})
+        )
+        Path("test.py").write_text("def foo(): pass")
+
+        findings = [
+            Finding(
+                type="test",
+                severity=severity,
+                file_path="test.py",
+                line=1,
+                message=f"a {severity} finding",
+            )
+            for severity in severities
+        ]
+        with patch("drep.cli_workflows.RepositoryScanner") as mock_scanner_class:
+            mock_scanner = mock_scanner_class.return_value
+            mock_scanner.get_scan_targets.return_value = ["test.py"]
+            mock_scanner.close = AsyncMock()
+            mock_scanner.analyze_code_quality = AsyncMock(
+                return_value=AnalysisResult(findings=findings)
+            )
+            mock_scanner.analyze_docstrings = AsyncMock(return_value=AnalysisResult())
+
+            return runner.invoke(cli, ["check", ".", "--config", "config.yaml", *extra_args])
+
+    def test_defaults_to_blocking_on_any_finding(self, runner, tmp_path):
+        """Unchanged default: every finding blocks."""
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            result = self._run(runner, ["info"])
+            assert result.exit_code == 1
+
+    def test_below_threshold_findings_are_reported_but_do_not_block(self, runner, tmp_path):
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            result = self._run(runner, ["info", "warning"], "--fail-on", "error")
+            assert result.exit_code == 0
+            # Reported, not hidden - the point is to inform without blocking
+            assert "a info finding" in result.output
+            assert "a warning finding" in result.output
+
+    def test_at_threshold_findings_block(self, runner, tmp_path):
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            result = self._run(runner, ["info", "error"], "--fail-on", "error")
+            assert result.exit_code == 1
+
+    def test_threshold_does_not_mask_unanalyzed_files(self, runner, tmp_path):
+        """A lenient threshold is about findings, never about "drep could not run"."""
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            Path("config.yaml").write_text(
+                yaml.dump({"llm": {"enabled": True, "endpoint": "http://x/v1", "model": "m"}})
+            )
+            Path("test.py").write_text("def foo(): pass")
+
+            with patch("drep.cli_workflows.RepositoryScanner") as mock_scanner_class:
+                mock_scanner = mock_scanner_class.return_value
+                mock_scanner.get_scan_targets.return_value = ["test.py"]
+                mock_scanner.close = AsyncMock()
+                failed = AnalysisResult(failed_files=["test.py"])
+                mock_scanner.analyze_code_quality = AsyncMock(return_value=failed)
+                mock_scanner.analyze_docstrings = AsyncMock(return_value=AnalysisResult())
+
+                result = runner.invoke(
+                    cli, ["check", ".", "--config", "config.yaml", "--fail-on", "error"]
+                )
+
+            assert result.exit_code == 2

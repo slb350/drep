@@ -10,6 +10,36 @@ from drep.core.file_targets import is_markdown
 from drep.models.config import DocumentationConfig
 from drep.models.findings import DocumentationFindings, PatternIssue
 
+# Compiled once each: every one of these runs per line of every file scanned.
+_INLINE_CODE = re.compile(r"`[^`]*`")  # inline code span: `like this`
+_HEADING_EMPTY = re.compile(r"^#{1,6}\s*$")  # '#   ' or '##'
+# '#Heading'. The class must exclude '#' itself: \S lets the regex backtrack and
+# match the second '#' of a well-formed '## Heading'.
+_HEADING_NO_SPACE = re.compile(r"^#{1,6}[^#\s]")
+_BARE_URL = re.compile(r"https?://\S+")
+_MARKDOWN_LINK = re.compile(r"\[[^\]]*\]\([^)]*\)")  # a complete [text](url)
+
+
+def _blank(match: re.Match[str]) -> str:
+    """Same-length blanks, so blanking a span leaves every column intact."""
+    return " " * len(match.group())
+
+
+def _fence_mask(lines: list[str]) -> list[bool]:
+    """One answer to "is this line code?" - True for fenced lines and delimiters.
+
+    Derived once instead of per check: every check that forgot to consult its
+    loop's private `in_fence` toggle became a false positive on code samples.
+    """
+    mask: list[bool] = []
+    in_fence = False
+    for line in lines:
+        is_delimiter = line.strip().startswith("```")
+        if is_delimiter:
+            in_fence = not in_fence
+        mask.append(in_fence or is_delimiter)
+    return mask
+
 
 class DocumentationAnalyzer:
     """Orchestrates documentation analysis.
@@ -40,16 +70,12 @@ class DocumentationAnalyzer:
     def _analyze_markdown(self, content: str) -> list[PatternIssue]:
         issues: list[PatternIssue] = []
         lines = content.splitlines()
-
-        # Track code fence state
-        in_fence = False
+        fenced = _fence_mask(lines)
 
         # Per-line checks: trailing whitespace, tabs, empty headings,
         # missing space after heading, long lines
         for idx, line in enumerate(lines, start=1):
-            stripped = line.rstrip("\n")
-            if stripped.strip().startswith("```"):
-                in_fence = not in_fence
+            in_fence = fenced[idx - 1]
 
             # Trailing whitespace
             if line != line.rstrip(" \t"):
@@ -75,33 +101,35 @@ class DocumentationAnalyzer:
                     )
                 )
 
-            # Empty heading like '#   ' or '##'
-            if re.match(r"^#{1,6}\s*$", line):
-                level = len(line.split()[0]) if line.strip() else 1
-                replacement = ("#" * level) + " Heading"
-                issues.append(
-                    PatternIssue(
-                        type="empty_heading",
-                        line=idx,
-                        column=1,
-                        matched_text=line,
-                        replacement=replacement,
+            # Heading checks. Guarded on the cheap prefix test first: most lines
+            # cannot be headings, and the regexes are the bulk of this loop.
+            if not in_fence and line.startswith("#"):
+                # Empty heading like '#   ' or '##'
+                if _HEADING_EMPTY.match(line):
+                    # The regex only matches a run of '#', so split() is never empty
+                    level = len(line.split()[0])
+                    issues.append(
+                        PatternIssue(
+                            type="empty_heading",
+                            line=idx,
+                            column=1,
+                            matched_text=line,
+                            replacement=("#" * level) + " Heading",
+                        )
                     )
-                )
 
-            # Missing space after heading marker, e.g. '#Heading'
-            if re.match(r"^#{1,6}\S", line):
-                level = len(line) - len(line.lstrip("#"))
-                replacement = ("#" * level) + " " + line[level:]
-                issues.append(
-                    PatternIssue(
-                        type="missing_space_after_heading",
-                        line=idx,
-                        column=level + 1,
-                        matched_text=line,
-                        replacement=replacement,
+                # Missing space after heading marker, e.g. '#Heading'
+                elif _HEADING_NO_SPACE.match(line):
+                    level = len(line) - len(line.lstrip("#"))
+                    issues.append(
+                        PatternIssue(
+                            type="missing_space_after_heading",
+                            line=idx,
+                            column=level + 1,
+                            matched_text=line,
+                            replacement=("#" * level) + " " + line[level:],
+                        )
                     )
-                )
 
             # Long lines (>120) - skip inside code fences
             if not in_fence and len(line) > 120:
@@ -116,14 +144,10 @@ class DocumentationAnalyzer:
                 )
 
         # Multiple blank lines (>=3) outside code fences
-        in_fence = False
         blank_run = 0
         for idx, line in enumerate(lines, start=1):
-            if line.strip().startswith("```"):
-                in_fence = not in_fence
+            if fenced[idx - 1]:
                 blank_run = 0
-                continue
-            if in_fence:
                 continue
             if line.strip() == "":
                 blank_run += 1
@@ -153,17 +177,20 @@ class DocumentationAnalyzer:
             )
 
         # Basic link syntax checks and bare URL detection (outside fences)
-        in_fence = False
         for idx, line in enumerate(lines, start=1):
-            if line.strip().startswith("```"):
-                in_fence = not in_fence
-                continue
-            if in_fence:
+            if fenced[idx - 1]:
                 continue
 
-            # Bare URL not wrapped in markdown link
-            m = re.search(r"(?<!\()https?://\S+", line)
-            if m and not re.search(r"\[[^\]]+\]\(https?://", line):
+            # Inline code is a literal to type, not prose: a URL or a stray
+            # bracket inside backticks is neither a link nor broken syntax.
+            # Blanked rather than removed so columns still match the real line.
+            uncoded = _INLINE_CODE.sub(_blank, line) if "`" in line else line
+
+            # Bare URL not wrapped in a markdown link. Blank the well-formed
+            # links and look at what is left, rather than letting one link on
+            # the line excuse every bare URL beside it.
+            m = _BARE_URL.search(_MARKDOWN_LINK.sub(_blank, uncoded))
+            if m:
                 issues.append(
                     PatternIssue(
                         type="bare_url",
@@ -174,8 +201,12 @@ class DocumentationAnalyzer:
                     )
                 )
 
-            # Unmatched brackets/parentheses hinting broken link syntax
-            if line.count("[") != line.count("]") or line.count("(") != line.count(")"):
+            # Unmatched brackets, or unmatched parens in a line that actually
+            # holds a link. Bare paren counting flags every prose parenthetical
+            # that wraps onto a second line.
+            if uncoded.count("[") != uncoded.count("]") or (
+                "](" in uncoded and uncoded.count("(") != uncoded.count(")")
+            ):
                 issues.append(
                     PatternIssue(
                         type="link_syntax_invalid",
