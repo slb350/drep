@@ -301,7 +301,7 @@ def review(repository, pr_number, config, post):
 
 
 @cli.command()
-@click.argument("path", default=".")
+@click.argument("paths", nargs=-1, type=click.Path())
 @click.option("--staged", is_flag=True, help="Only check git staged files")
 @click.option("--config", default=None, help="Config file path (optional for local-only mode)")
 @click.option("--exit-zero", is_flag=True, help="Always exit with 0 (don't block commits)")
@@ -317,13 +317,13 @@ def review(repository, pr_number, config, post):
     default="info",
     help="Lowest severity that blocks (default: info, i.e. any finding)",
 )
-def check(path, staged, config, exit_zero, format, fail_on):
+def check(paths, staged, config, exit_zero, format, fail_on):
     """Check local files without platform API (pre-commit friendly).
 
     Examples:
         drep check                    # Check current directory
         drep check --staged           # Check only staged files
-        drep check path/to/file.py    # Check specific file
+        drep check a.py b.py src/     # Check specific files/directories
         drep check --exit-zero        # Warn without blocking commits
         drep check --fail-on error    # Only bugs block; style notes just report
 
@@ -351,7 +351,7 @@ def check(path, staged, config, exit_zero, format, fail_on):
             config_path = str(config_file)
 
     # Run async check
-    outcome = asyncio.run(_run_check(path, staged, config_path))
+    outcome = asyncio.run(_run_check(paths or (".",), staged, config_path))
     findings = outcome.findings
     # Everything is reported; the threshold only decides what blocks.
     threshold = SEVERITY_RANK[fail_on]

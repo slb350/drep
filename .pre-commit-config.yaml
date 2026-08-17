@@ -35,15 +35,23 @@ repos:
         language: system
         types: [markdown]
 
+      # Pre-push, not pre-commit: a reasoning model spends minutes and real
+      # money per file (deepseek-v4-pro ~3.5min and ~$0.16 a file), which is
+      # fine once per push and intolerable on every commit.
+      #
       # --fail-on error: the LLM emits info-level style suggestions on almost
       # any file (9 on a 142-line constants module), so gating on every finding
-      # means no commit ever passes. Bugs and security issues map to `error`
+      # means nothing ever passes. Bugs and security issues map to `error`
       # (critical/high) and still block; suggestions are printed, not enforced.
+      #
+      # Filenames come from pre-commit, which at the pre-push stage resolves
+      # them to the files the outgoing commits actually touch. `--staged` would
+      # be wrong here: nothing is staged at push time, so it would analyze
+      # nothing and pass silently.
       - id: drep-check
         name: drep check (LLM code quality)
-        entry: ./venv/bin/drep check --staged --fail-on error
+        entry: ./venv/bin/drep check --fail-on error
         language: system
         types: [python]
-        # `drep check --staged` reads the git index itself
-        pass_filenames: false
+        stages: [pre-push]
         require_serial: true

@@ -480,11 +480,21 @@ class CheckOutcome:
     unanalyzed: list[str]
 
 
-async def _run_check(path: str, staged: bool, config_path: str | None) -> CheckOutcome:
+def _common_root(paths: list[Path]) -> Path:
+    """Directory that contains every path, for one consistent set of relatives."""
+    if not paths:
+        return Path.cwd()
+    directories = [p if p.is_dir() else p.parent for p in paths]
+    if len(directories) == 1:
+        return directories[0]
+    return Path(os.path.commonpath([str(d) for d in directories]))
+
+
+async def _run_check(paths: tuple[str, ...], staged: bool, config_path: str | None) -> CheckOutcome:
     """Run local file check without platform API.
 
     Args:
-        path: Path to check (file or directory)
+        paths: Files and/or directories to check
         staged: Only check staged files
         config_path: Config file path (optional)
 
@@ -519,31 +529,37 @@ async def _run_check(path: str, staged: bool, config_path: str | None) -> CheckO
     scanner = RepositoryScanner(db, config=config)
 
     try:
-        # Validate and resolve path
+        # Validate and resolve every path up front
         try:
-            path_obj = Path(path).resolve(strict=True)
+            resolved = [Path(raw).resolve(strict=True) for raw in paths]
         except FileNotFoundError as exc:
-            click.echo(f"Error: Path not found: {path}", err=True)
+            click.echo(f"Error: Path not found: {exc.filename}", err=True)
             raise SystemExit(1) from exc
 
-        # Additional validation
-        if not path_obj.exists():
-            click.echo(f"Error: Path does not exist: {path}", err=True)
-            raise SystemExit(1)
+        # Analysis is rooted at the common ancestor so the file paths handed to
+        # the analyzers stay relative to one directory, whatever mix of files
+        # and directories the caller (or a pre-push hook) passed.
+        analysis_root = _common_root(resolved)
 
         if staged:
             # Get staged files from git index
-            files = scanner.get_staged_files(str(path_obj))
+            files = scanner.get_staged_files(str(analysis_root))
             # stderr: stdout is the machine-readable channel for --format json
             click.echo(f"Checking {len(files)} staged file(s)...", err=True)
         else:
-            # Get all Python/Markdown files
-            if path_obj.is_file():
-                # Single file
-                files = [str(path_obj.relative_to(path_obj.parent))]
-            else:
-                # Directory - get all .py and .md files
-                files = scanner.get_scan_targets(str(path_obj))
+            # Collected absolutely, then re-rooted once: a directory's targets
+            # come back relative to that directory, which is only the same as
+            # analysis_root when it is the sole argument.
+            absolute: list[Path] = []
+            for path_obj in resolved:
+                if path_obj.is_file():
+                    absolute.append(path_obj)
+                else:
+                    # Directory - get all .py and .md files
+                    absolute.extend(
+                        path_obj / rel for rel in scanner.get_scan_targets(str(path_obj))
+                    )
+            files = [str(p.relative_to(analysis_root)) for p in absolute]
             click.echo(f"Checking {len(files)} file(s)...", err=True)
 
         if not files:
@@ -554,18 +570,17 @@ async def _run_check(path: str, staged: bool, config_path: str | None) -> CheckO
         unanalyzed: set[str] = set()
 
         if config.llm and config.llm.enabled:
-            analysis_root = str(path_obj.parent if path_obj.is_file() else path_obj)
             # The two passes are independent; run them concurrently. The rate
             # limiter provides the back-pressure.
             code_result, docstring_result = await asyncio.gather(
                 scanner.analyze_code_quality(
-                    repo_path=analysis_root,
+                    repo_path=str(analysis_root),
                     files=files,
                     repo_id="local",
                     commit_sha="local",
                 ),
                 scanner.analyze_docstrings(
-                    repo_path=analysis_root,
+                    repo_path=str(analysis_root),
                     files=files,
                     repo_id="local",
                     commit_sha="local",

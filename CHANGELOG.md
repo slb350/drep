@@ -8,11 +8,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added - 2026-08-16
-- **Local pre-commit gate** (`.pre-commit-config.yaml`): ruff check, ruff format,
-  `drep lint-docs`, and `drep check --staged --fail-on error`, all run from `./venv` via
-  `language: system`. Installed into `.git/hooks/pre-commit`, which the machine's global
-  `core.hooksPath` chainer execs. `lint-docs` runs report-only here on purpose - its
-  `long_line` check contradicts this repo's `MD013: false`.
+- **Local git hooks** (`.pre-commit-config.yaml`), split by cost:
+  - **pre-commit** - ruff check, ruff format, `drep lint-docs`. Instant, deterministic.
+  - **pre-push** - `drep check --fail-on error`. A reasoning model costs minutes and real
+    money per file, which is fine once per push and intolerable on every commit.
+  Both run from `./venv` via `language: system`. `lint-docs` is report-only here on
+  purpose - its `long_line` check contradicts this repo's `MD013: false`.
+- **`drep check` accepts multiple paths** (`nargs=-1`, defaults to `.`), rooting analysis at
+  their common ancestor. This is what the pre-push hook passes: at push time nothing is
+  staged, so `--staged` would analyze nothing and pass silently, while pre-commit resolves
+  filenames to exactly the files the outgoing commits touch.
+- **`max_tokens` ceiling raised to 200000 and `timeout` to 3600s.** Reasoning models bill
+  `reasoning` against the completion budget and emit no content if they exhaust it, so the
+  old 20000/300s ceilings made them unusable rather than merely slow.
 - **`drep check --fail-on {info,warning,error}`** (default `info`, unchanged behaviour):
   the severity at or above which a finding blocks. Everything is still reported; only the
   exit code changes. Without it a commit gate is unusable - the LLM emits info-level style

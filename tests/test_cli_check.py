@@ -360,3 +360,50 @@ class TestCheckSeverityThreshold:
                 )
 
             assert result.exit_code == 2
+
+
+class TestCheckPathArguments:
+    """At pre-push nothing is staged; pre-commit hands over the pushed files.
+
+    So `check` has to accept a list of paths, the way lint-docs does.
+    """
+
+    def test_accepts_multiple_paths(self, runner, tmp_path):
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            Path("config.yaml").write_text(
+                yaml.dump({"llm": {"enabled": True, "endpoint": "http://x/v1", "model": "m"}})
+            )
+            for name in ("a.py", "b.py", "c.py"):
+                Path(name).write_text("def foo(): pass")
+
+            with patch("drep.cli_workflows.RepositoryScanner") as mock_scanner_class:
+                mock_scanner = mock_scanner_class.return_value
+                mock_scanner.close = AsyncMock()
+                mock_scanner.analyze_code_quality = AsyncMock(return_value=AnalysisResult())
+                mock_scanner.analyze_docstrings = AsyncMock(return_value=AnalysisResult())
+
+                result = runner.invoke(cli, ["check", "a.py", "b.py", "--config", "config.yaml"])
+
+                assert result.exit_code == 0
+                analyzed = mock_scanner.analyze_code_quality.call_args.kwargs["files"]
+                assert sorted(analyzed) == ["a.py", "b.py"]
+
+    def test_defaults_to_current_directory(self, runner, tmp_path):
+        """Bare `drep check` keeps scanning the tree."""
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            Path("config.yaml").write_text(
+                yaml.dump({"llm": {"enabled": True, "endpoint": "http://x/v1", "model": "m"}})
+            )
+            Path("a.py").write_text("def foo(): pass")
+
+            with patch("drep.cli_workflows.RepositoryScanner") as mock_scanner_class:
+                mock_scanner = mock_scanner_class.return_value
+                mock_scanner.close = AsyncMock()
+                mock_scanner.get_scan_targets.return_value = ["a.py"]
+                mock_scanner.analyze_code_quality = AsyncMock(return_value=AnalysisResult())
+                mock_scanner.analyze_docstrings = AsyncMock(return_value=AnalysisResult())
+
+                result = runner.invoke(cli, ["check", "--config", "config.yaml"])
+
+                assert result.exit_code == 0
+                mock_scanner.get_scan_targets.assert_called_once()

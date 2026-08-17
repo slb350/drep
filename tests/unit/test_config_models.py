@@ -462,3 +462,37 @@ def test_llm_config_rejects_unknown_provider():
 
     with pytest.raises(ValidationError):
         LLMConfig(enabled=True, provider="openai", endpoint="http://x", model="m")
+
+
+class TestReasoningModelBudgets:
+    """Reasoning models spend the completion budget on `reasoning` before answering.
+
+    deepseek-v4-pro exhausted a 20000-token cap on reasoning alone and returned
+    `content: null`, so the old ceilings made those models unusable rather than
+    merely slow.
+    """
+
+    def test_max_tokens_accepts_a_reasoning_sized_budget(self):
+        from drep.models.config import LLMConfig
+
+        config = LLMConfig(
+            enabled=True, endpoint="http://localhost:1234/v1", model="m", max_tokens=100000
+        )
+        assert config.max_tokens == 100000
+
+    def test_timeout_accepts_the_wall_clock_a_large_budget_needs(self):
+        """20k tokens took 212s; 100k cannot land inside the old 300s ceiling."""
+        from drep.models.config import LLMConfig
+
+        config = LLMConfig(
+            enabled=True, endpoint="http://localhost:1234/v1", model="m", timeout=1800
+        )
+        assert config.timeout == 1800
+
+    def test_absurd_values_are_still_rejected(self):
+        from drep.models.config import LLMConfig
+
+        with pytest.raises(ValidationError):
+            LLMConfig(enabled=True, endpoint="http://x/v1", model="m", max_tokens=10_000_000)
+        with pytest.raises(ValidationError):
+            LLMConfig(enabled=True, endpoint="http://x/v1", model="m", timeout=100_000)

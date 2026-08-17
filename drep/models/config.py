@@ -148,10 +148,13 @@ class LLMConfig(BaseModel):
     )
     api_key: str | None = Field(default=None, description="API key (optional for local endpoints)")
     temperature: float = Field(default=0.2, ge=0.0, le=2.0, description="Sampling temperature")
+    # Reasoning models bill `reasoning` against the same completion budget and
+    # emit no content if they exhaust it, so these ceilings have to clear a
+    # whole reasoning trace plus the answer - and the wall clock that implies.
     max_tokens: int = Field(
-        default=8000, ge=100, le=20000, description="Maximum tokens per request"
+        default=8000, ge=100, le=200000, description="Maximum tokens per request"
     )
-    timeout: int = Field(default=60, ge=10, le=300, description="Request timeout in seconds")
+    timeout: int = Field(default=60, ge=10, le=3600, description="Request timeout in seconds")
     max_retries: int = Field(
         default=3, ge=0, le=10, description="Maximum number of retries on failure"
     )
