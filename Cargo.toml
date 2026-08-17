@@ -1,0 +1,53 @@
+[package]
+name = "drep-ai"
+version = "2.0.0-alpha.0"
+edition = "2024"
+# Set by open-agent-sdk, which is the floor for the whole crate.
+rust-version = "1.85"
+description = "A local commit gate: runs the linters your repo configures, and sends changed code to an LLM for review"
+license = "MIT"
+repository = "https://github.com/slb350/drep"
+homepage = "https://github.com/slb350/drep"
+readme = "README.md"
+keywords = ["code-review", "linter", "pre-commit", "llm", "static-analysis"]
+categories = ["command-line-utilities", "development-tools"]
+
+# `drep` is taken on crates.io (0.1.3), exactly as it is on PyPI. The package
+# keeps the `-ai` suffix; the binary and the library are both `drep`.
+#
+# The bin `path` is required because the binary name differs from the package
+# name; the lib path is inferred and left implicit.
+[[bin]]
+name = "drep"
+path = "src/main.rs"
+
+[lib]
+name = "drep"
+
+# The one place warnings are denied. Previously this lived in RUSTFLAGS in CI
+# and in `-- -D warnings` in the pre-commit hook, so a developer's local
+# `cargo clippy` disagreed with both by construction - and the MSRV job would
+# have reported an ordinary warning as an MSRV violation.
+[lints.rust]
+warnings = "deny"
+
+[lints.clippy]
+all = { level = "deny", priority = -1 }
+
+# Dependencies arrive with the phase that first needs them - see
+# docs/rust-migration.md. Declaring the full target set up front would mean
+# carrying unused crates through every build for no benefit.
+[dependencies]
+anyhow = "1.0"
+clap = { version = "4.6", features = ["derive"] }
+
+[dev-dependencies]
+assert_cmd = "2.2"
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
+# main.rs turns every error into an ExitCode rather than panicking, so nothing
+# depends on unwinding. Measured at -13% binary size with no build-time cost.
+panic = "abort"

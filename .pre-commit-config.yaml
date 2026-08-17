@@ -26,6 +26,33 @@ repos:
         types_or: [python, pyi]
         require_serial: true
 
+      # drep 2.0 is Rust (docs/rust-migration.md). These gate the new code the
+      # way ruff gates the old; both sets coexist until Python is deleted.
+      # `cargo fmt` rewrites in place, so pre-commit sees the modified file and
+      # fails the commit - same contract as ruff-format above.
+      - id: cargo-fmt
+        name: cargo fmt
+        entry: cargo fmt --
+        language: system
+        types: [rust]
+        require_serial: true
+
+      # --all-targets so test code is linted too: most of the port's early
+      # output is tests, and unlinted tests is where the rot starts. Lint
+      # levels come from [lints] in Cargo.toml, so this agrees with CI and
+      # with a plain local `cargo clippy` by construction.
+      #
+      # Warm-incremental this is ~0.14s, but a cold target dir costs seconds
+      # and goes cold on every toolchain bump, branch switch and dependency
+      # change. Move it to pre-push if that starts biting.
+      - id: cargo-clippy
+        name: cargo clippy
+        entry: cargo clippy --all-targets --all-features
+        language: system
+        types: [rust]
+        pass_filenames: false
+        require_serial: true
+
       # Report-only, deliberately: lint-docs' long_line check flags >120 chars,
       # and this repo turns that rule off (MD013: false in .markdownlint.json).
       # Add --strict in a project that wants markdown to gate the commit.
@@ -48,10 +75,16 @@ repos:
       # them to the files the outgoing commits actually touch. `--staged` would
       # be wrong here: nothing is staged at push time, so it would analyze
       # nothing and pass silently.
+      #
+      # types_or includes rust: drep 1.x already registers Rust (clippy, gated
+      # on Cargo.toml), and the 2.0 port is now the code most worth reviewing.
+      # Leaving this python-only would have shipped the entire rewrite without
+      # it ever passing through the gate it exists to provide - drep 1.x
+      # reviewing drep 2.0 is the point.
       - id: drep-check
         name: drep check (LLM code quality)
         entry: ./venv/bin/drep check
         language: system
-        types: [python]
+        types_or: [python, rust]
         stages: [pre-push]
         require_serial: true

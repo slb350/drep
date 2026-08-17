@@ -57,11 +57,17 @@ reference-only from Phase 1 onward — no further changes to it.
 ```
 Cargo.toml           # new
 src/                 # new
-tests/rust/          # new (integration tests)
+tests/*.rs           # new (integration tests, alongside the Python suite)
 drep/                # Python, reference only, deleted in Phase 8
 tests/               # Python, reference only, deleted in Phase 8
 pyproject.toml       # deleted in Phase 8
 ```
+
+Rust integration tests go directly in `tests/` as `tests/*.rs`, not a `tests/rust/`
+subdirectory: cargo only discovers test targets at `tests/*.rs` (or
+`tests/<dir>/main.rs`), so a nested `tests/rust/cli.rs` would silently never
+run. The two suites coexist there until Phase 8 - pytest collects only `.py`,
+cargo only `.rs`.
 
 ## Module map
 

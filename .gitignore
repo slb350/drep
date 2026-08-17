@@ -68,3 +68,6 @@ __pycache__/
 
 # External dependencies
 external/
+
+# Rust
+/target/

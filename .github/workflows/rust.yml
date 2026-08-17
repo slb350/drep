@@ -1,0 +1,64 @@
+name: rust
+
+on:
+  push:
+    branches: [main, rust-rewrite]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # fmt and clippy are byte-identical work on every OS - there is no cfg(unix)
+  # or cfg(windows) in the tree - and clippy's check-only artifacts do not seed
+  # the codegen build that `cargo test` needs. Running them once, here, avoids
+  # paying a second full pass over the dependency tree on the macOS runner.
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Format
+        run: cargo fmt --all --check
+
+      # Lint levels come from [lints] in Cargo.toml, not from flags here.
+      - name: Clippy
+        run: cargo clippy --all-targets --all-features
+
+  test:
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - run: cargo test --all-targets --all-features
+
+  msrv:
+    name: msrv (1.85)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      # open-agent-sdk sets the floor. If this breaks, the MSRV in Cargo.toml
+      # is wrong - do not paper over it by bumping the toolchain here.
+      - uses: dtolnay/rust-toolchain@1.85.0
+
+      - uses: Swatinem/rust-cache@v2
+
+      # No --all-targets: MSRV is a property of [dependencies]. Whether the dev
+      # dependencies build on 1.85 has no consumer.
+      - run: cargo check
