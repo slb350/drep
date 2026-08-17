@@ -39,10 +39,10 @@ repos:
       # money per file (deepseek-v4-pro ~3.5min and ~$0.16 a file), which is
       # fine once per push and intolerable on every commit.
       #
-      # --fail-on error: the LLM emits info-level style suggestions on almost
-      # any file (9 on a 142-line constants module), so gating on every finding
-      # means nothing ever passes. Bugs and security issues map to `error`
-      # (critical/high) and still block; suggestions are printed, not enforced.
+      # No --fail-on: deterministic tool findings (ruff, eslint, go vet) block
+      # on their own, and the LLM's findings inform. Passing --fail-on error
+      # here opted the LLM back into gating and blocked a push with 18
+      # "blocking" findings that were model opinions, not tool output.
       #
       # Filenames come from pre-commit, which at the pre-push stage resolves
       # them to the files the outgoing commits actually touch. `--staged` would
@@ -50,7 +50,7 @@ repos:
       # nothing and pass silently.
       - id: drep-check
         name: drep check (LLM code quality)
-        entry: ./venv/bin/drep check --fail-on error
+        entry: ./venv/bin/drep check
         language: system
         types: [python]
         stages: [pre-push]

@@ -426,6 +426,21 @@ def check(paths, staged, config, exit_zero, format, fail_on):
         raise SystemExit(1)
 
 
+def _echo_finding(finding, *, with_suggestion: bool) -> None:
+    """One finding as `file:line:col: severity: [rule] message`.
+
+    The rule code is the actionable half of a deterministic finding: without it
+    you cannot look the rule up or suppress it.
+    """
+    col = f":{finding.column}" if finding.column else ""
+    click.echo(
+        f"{finding.file_path}:{finding.line}{col}: "
+        f"{finding.severity}: [{finding.type}] {finding.message}"
+    )
+    if with_suggestion and finding.suggestion:
+        click.echo(f"  → {finding.suggestion}")
+
+
 def _output_findings(outcome, format_type):
     """Output an analysis outcome in the specified format.
 
@@ -437,7 +452,6 @@ def _output_findings(outcome, format_type):
         outcome: AnalysisResult from the run
         format_type: OutputFormat value ('text' or 'json')
     """
-    findings = outcome.blocking + outcome.findings
     if format_type == OutputFormat.JSON.value:
         click.echo(
             json.dumps(
@@ -451,18 +465,17 @@ def _output_findings(outcome, format_type):
             )
         )
     else:
-        # Text format: file:line:column: severity: message
+        # Text format: file:line:column: severity: [type] message
+        #
+        # Blocking findings print in full - they are what the user has to act
+        # on. Advisory ones print one line each: 122 of them with their
+        # multi-line suggestions overwhelmed pre-commit's writer and crashed
+        # it. The full text stays available via --format json.
         click.echo()
-        for finding in findings:
-            col = f":{finding.column}" if finding.column else ""
-            # The rule code is the actionable half of a deterministic finding:
-            # without it you cannot look the rule up or suppress it.
-            click.echo(
-                f"{finding.file_path}:{finding.line}{col}: "
-                f"{finding.severity}: [{finding.type}] {finding.message}"
-            )
-            if finding.suggestion:
-                click.echo(f"  → {finding.suggestion}")
+        for finding in outcome.blocking:
+            _echo_finding(finding, with_suggestion=True)
+        for finding in outcome.findings:
+            _echo_finding(finding, with_suggestion=False)
 
 
 @cli.command()

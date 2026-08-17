@@ -82,6 +82,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   1.3.0), matching the existing `ParallelAnalyzer` deprecation.
 
 ### Fixed - 2026-08-16
+- **The pre-push hook still passed `--fail-on error`**, which opted the LLM back into
+  gating and blocked a real push with 18 "blocking" findings that were model opinions,
+  not tool output — reintroducing the exact problem the two-layer split solved. The hook
+  now relies on deterministic findings to gate.
+- **Advisory output crashed pre-commit.** 122 advisory findings printed with their full
+  multi-line suggestions overwhelmed its writer (`BlockingIOError: [Errno 35]`). Blocking
+  findings still print in full; advisory ones print one line each, with the full text
+  still available via `--format json`.
 - **`llm: {enabled: false}` was rejected by config validation** - the exact config the
   README documents for disabling LLM features. The provider validators checked the
   provider but never `enabled`, so switching the LLM off still demanded an endpoint and

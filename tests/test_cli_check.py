@@ -597,3 +597,69 @@ class TestDeterministicLayer:
 
             assert result.exit_code == 2
             assert "could not" in result.output.lower()
+
+
+class TestOutputVolume:
+    """Advisory findings are informational, so they print compactly.
+
+    A push produced 122 advisory findings; printing each with its full
+    multi-line suggestion overwhelmed pre-commit's writer and crashed it with
+    BlockingIOError. Blocking findings still print in full - those are the
+    ones the user has to act on.
+    """
+
+    @staticmethod
+    def _outcome(n_advisory):
+        return AnalysisResult(
+            blocking=[
+                Finding(
+                    type="F401",
+                    severity="error",
+                    file_path="a.py",
+                    line=1,
+                    message="`os` imported but unused",
+                    suggestion="Remove unused import: `os`",
+                )
+            ],
+            findings=[
+                Finding(
+                    type="bug",
+                    severity="warning",
+                    file_path=f"f{i}.py",
+                    line=i,
+                    message=f"advisory {i}",
+                    suggestion="a very long suggestion\n" * 20,
+                )
+                for i in range(n_advisory)
+            ],
+        )
+
+    def test_blocking_findings_keep_their_suggestions(self, runner, tmp_path, capsys):
+        from drep.cli import _output_findings
+
+        _output_findings(self._outcome(0), "text")
+
+        out = capsys.readouterr().out
+        assert "[F401]" in out
+        assert "Remove unused import" in out
+
+    def test_advisory_suggestions_are_not_printed(self, runner, tmp_path, capsys):
+        from drep.cli import _output_findings
+
+        _output_findings(self._outcome(3), "text")
+
+        out = capsys.readouterr().out
+        assert "advisory 0" in out
+        # The finding is named; its essay is not
+        assert "a very long suggestion" not in out
+
+    def test_json_still_carries_everything(self, runner, tmp_path, capsys):
+        import json
+
+        from drep.cli import _output_findings
+
+        _output_findings(self._outcome(3), "json")
+
+        payload = json.loads(capsys.readouterr().out)
+        assert len(payload["findings"]) == 3
+        assert "a very long suggestion" in payload["findings"][0]["suggestion"]
