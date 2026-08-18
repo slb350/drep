@@ -24,6 +24,7 @@ use crate::Exit;
 use crate::config;
 use crate::files;
 use crate::languages;
+use toml::Value;
 
 /// The header underline, exactly 60 characters wide. `write!` cannot express
 /// the count cleanly, and the spec pins the exact width: a `=`-string of any
@@ -222,20 +223,43 @@ fn write_llm_section<W: Write>(out: &mut W, args: &DoctorArgs, root: &Path) -> R
         }
     };
 
-    let providers = value
-        .get("llm")
-        .and_then(|v| v.as_array())
-        .cloned()
-        .unwrap_or_default();
-
-    if providers.is_empty() {
-        writeln!(
-            out,
-            "  {} declares no `[[llm]]` provider. Run `drep init`.",
-            config_path.display()
-        )?;
-        return Ok(());
-    }
+    // The three cases are distinguished, not collapsed. Folding "not an array"
+    // into "absent" made `[llm]` (the pre-2.0 single-table shape) report as
+    // "declares no `[[llm]]` provider. Run `drep init`." and return early - so
+    // the `config::load` check below, which would have named the actual type
+    // mismatch, was never reached, and the user was pointed at a command that
+    // would refuse to overwrite their file.
+    let providers = match value.get("llm") {
+        None => {
+            writeln!(
+                out,
+                "  {} declares no `[[llm]]` provider. Run `drep init`.",
+                config_path.display()
+            )?;
+            return Ok(());
+        }
+        Some(Value::Array(entries)) if entries.is_empty() => {
+            writeln!(
+                out,
+                "  {} declares no `[[llm]]` provider. Run `drep init`.",
+                config_path.display()
+            )?;
+            return Ok(());
+        }
+        Some(Value::Array(entries)) => entries.clone(),
+        Some(_) => {
+            writeln!(
+                out,
+                "  {} has an `llm` key that is not a `[[llm]]` array of tables. \
+                 Providers are declared as `[[llm]]`, one block per provider.",
+                config_path.display()
+            )?;
+            // Fall through to `config::load` below, which names the parse
+            // error precisely.
+            report_load_failure(out, &config_path)?;
+            return Ok(());
+        }
+    };
 
     // Print providers verbatim from the raw file: model and endpoint come out
     // unexpanded, so `${VAR}` shows as `${VAR}` rather than being swallowed by
@@ -294,13 +318,26 @@ fn write_llm_section<W: Write>(out: &mut W, args: &DoctorArgs, root: &Path) -> R
     // Surface other load failures. `EnvVarUnset` is already reported above;
     // repeating it reads as two separate problems.
     match config::load(&config_path) {
-        Ok(_) => {}
-        Err(config::ConfigError::EnvVarUnset(_, _)) => {}
-        Err(err) => {
-            writeln!(out, "  {} will not load: {err}", config_path.display())?;
-        }
+        Err(config::ConfigError::EnvVarUnset(_, _)) => Ok(()),
+        other => report_load_result(out, &config_path, other),
     }
+}
 
+/// Report why the config will not load, if it will not.
+fn report_load_failure<W: Write>(out: &mut W, config_path: &Path) -> Result<()> {
+    let loaded = config::load(config_path);
+    report_load_result(out, config_path, loaded)
+}
+
+/// Shared tail of the two load-reporting paths.
+fn report_load_result<W: Write>(
+    out: &mut W,
+    config_path: &Path,
+    loaded: Result<config::Config, config::ConfigError>,
+) -> Result<()> {
+    if let Err(err) = loaded {
+        writeln!(out, "  {} will not load: {err}", config_path.display())?;
+    }
     Ok(())
 }
 
@@ -338,11 +375,13 @@ fn failover_line(enabled: usize) -> String {
 
 /// Every variable the config references that is not set, in first-seen order.
 ///
-/// The *reference* grammar is `config::env_var_refs_in`, shared with the
+/// The *reference* grammar is `config::required_env_var_refs`, shared with the
 /// substituter so the two cannot disagree; all this adds is the "and it is not
-/// set" filter.
+/// set" filter. It excludes disabled providers for the same reason `load` does
+/// not expand them: a variable only a parked provider names is not required,
+/// and warning about it reports a problem `drep check` does not have.
 fn unset_env_vars(value: &toml::Value) -> Vec<String> {
-    config::env_var_refs_in(value)
+    config::required_env_var_refs(value)
         .into_iter()
         .filter(|name| std::env::var(name).is_err())
         .collect()

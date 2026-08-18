@@ -346,3 +346,120 @@ endpoint = "http://live/v1"
         "a disabled entry holds no position in the chain; got {parked:?}"
     );
 }
+
+/// An `llm` key that is not an array of tables is reported as such.
+///
+/// The pre-2.0 single-table `[llm]` shape used to read here as "declares no
+/// `[[llm]]` provider. Run `drep init`." - which points the user at a command
+/// that will refuse to overwrite their file, and skipped the `config::load`
+/// check that would have named the real problem.
+#[test]
+fn a_non_array_llm_key_is_not_reported_as_a_missing_provider() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    std::fs::write(
+        temp.path().join("drep.toml"),
+        "[llm]\nmodel = \"x\"\nendpoint = \"http://a/v1\"\n",
+    )
+    .expect("write config");
+
+    let rendered = report_for(temp.path());
+    assert!(
+        !rendered.contains("declares no `[[llm]]` provider"),
+        "the key is present - saying it is absent sends the user to `drep init`:\n{rendered}"
+    );
+    assert!(
+        rendered.contains("not a `[[llm]]` array of tables"),
+        "the shape problem must be named:\n{rendered}"
+    );
+    assert!(
+        rendered.contains("will not load"),
+        "and the load error must still be surfaced:\n{rendered}"
+    );
+}
+
+/// An empty `llm = []` array reports as "no provider", not "all disabled".
+///
+/// The two look alike once the entries are gone: an empty array walks the same
+/// listing loop as an all-disabled one and reaches the same trailing summary.
+/// They are different problems — one needs a provider written, the other needs
+/// one re-enabled — and the message has to send the user to the right fix.
+#[test]
+fn an_empty_llm_array_is_reported_as_declaring_no_provider() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    std::fs::write(temp.path().join("drep.toml"), "llm = []\n").expect("write config");
+
+    let rendered = report_for(temp.path());
+    assert!(
+        rendered.contains("declares no `[[llm]]` provider"),
+        "an empty array declares no provider:\n{rendered}"
+    );
+    assert!(
+        !rendered.contains("Every provider is disabled"),
+        "there is nothing to re-enable - that message sends the user to the wrong fix:\n{rendered}"
+    );
+}
+
+/// A parked provider's unset variable is not reported as a problem.
+///
+/// `config::load` no longer expands a disabled entry, so the variable is not
+/// required — and `doctor` warning "LLM analysis will fail until you export it"
+/// about a run that will succeed is the same disagreement, in the opposite
+/// direction, that its old narrower `${VAR}` scanner produced.
+#[test]
+fn a_disabled_providers_unset_env_var_is_not_warned_about() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    std::fs::write(
+        temp.path().join("drep.toml"),
+        r#"
+[[llm]]
+model = "live"
+endpoint = "http://live/v1"
+
+[[llm]]
+enabled = false
+model = "parked"
+endpoint = "http://parked/v1"
+api_key = "${DREP_DOCTOR_VAR_THAT_IS_NOT_SET}"
+"#,
+    )
+    .expect("write config");
+
+    let rendered = report_for(temp.path());
+    assert!(
+        !rendered.contains("DREP_DOCTOR_VAR_THAT_IS_NOT_SET"),
+        "the parked provider's variable is not required:\n{rendered}"
+    );
+    assert!(
+        !rendered.contains("will not load"),
+        "and the config does load:\n{rendered}"
+    );
+}
+
+/// An *enabled* provider's unset variable is still reported.
+///
+/// The discriminating half: a scanner that skipped every provider would pass
+/// the test above and go silent on the one warning that matters.
+#[test]
+fn an_enabled_providers_unset_env_var_is_still_warned_about() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    std::fs::write(
+        temp.path().join("drep.toml"),
+        r#"
+[[llm]]
+model = "live"
+endpoint = "http://live/v1"
+api_key = "${DREP_DOCTOR_VAR_THAT_IS_NOT_SET}"
+
+[[llm]]
+enabled = false
+model = "parked"
+"#,
+    )
+    .expect("write config");
+
+    let rendered = report_for(temp.path());
+    assert!(
+        rendered.contains("DREP_DOCTOR_VAR_THAT_IS_NOT_SET is NOT set"),
+        "the live provider's variable must still be flagged:\n{rendered}"
+    );
+}

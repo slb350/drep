@@ -123,3 +123,103 @@ fn failed_files_is_a_btreemap_in_the_returned_result() {
     let result = AnalysisResult::default();
     let _: BTreeMap<PathBuf, FailureReason> = result.failed_files;
 }
+
+/// An empty `suggestion` is `None`, not `Some("")`.
+///
+/// An empty suggestion is not a suggestion: rendered, `Some("")` prints a bare
+/// `suggestion:` line under the finding with nothing after it. The optional
+/// fields are the ones where "absent", "empty" and "wrong type" all have to
+/// stay distinct, so each is pinned rather than assumed.
+#[tokio::test]
+async fn an_empty_suggestion_is_none_rather_than_an_empty_string() {
+    let server = server_returning(&[
+        r#"{"issues": [{"line": 100, "severity": "medium", "category": "style",
+            "message": "m", "suggestion": ""}], "summary": "s"}"#,
+    ])
+    .await;
+    let (analyzer, _dir) = analyzer_for(&server);
+
+    let result = analyzer.analyze_file(&hunks_for_python_at(100)).await;
+    assert!(
+        result.failed_files.is_empty(),
+        "an empty suggestion is legal"
+    );
+    assert_eq!(result.findings.len(), 1);
+    assert_eq!(
+        result.findings[0].suggestion, None,
+        "an empty suggestion must not survive as Some(\"\")"
+    );
+}
+
+/// A present-but-non-string `suggestion` makes the file unanalyzed.
+///
+/// The discriminating counterpart: absent and empty both mean "no suggestion",
+/// but a `suggestion` of `7` is a response we did not understand. Treating it
+/// as absent recorded a schema-violating response as fully understood — and
+/// then cached it for the whole TTL.
+#[tokio::test]
+async fn a_non_string_suggestion_makes_the_file_unanalyzed() {
+    let server = server_returning(&[
+        r#"{"issues": [{"line": 100, "severity": "medium", "category": "style",
+            "message": "m", "suggestion": 7}], "summary": "s"}"#,
+    ])
+    .await;
+    let (analyzer, _dir) = analyzer_for(&server);
+
+    let result = analyzer.analyze_file(&hunks_for_python_at(100)).await;
+    let reason = result
+        .failed_files
+        .values()
+        .next()
+        .expect("a non-string suggestion is malformed");
+    assert!(
+        matches!(reason, FailureReason::MalformedFinding(detail) if detail.contains("suggestion")),
+        "got {reason:?}"
+    );
+}
+
+/// A present-but-non-string `category` makes the file unanalyzed.
+///
+/// Absent means "unknown"; a `category` of `7` does not. Defaulting both to
+/// `"unknown"` reported a response whose schema we demonstrably did not
+/// understand as a clean finding.
+#[tokio::test]
+async fn a_non_string_category_makes_the_file_unanalyzed() {
+    let server = server_returning(&[
+        r#"{"issues": [{"line": 100, "severity": "medium", "category": 7,
+            "message": "m"}], "summary": "s"}"#,
+    ])
+    .await;
+    let (analyzer, _dir) = analyzer_for(&server);
+
+    let result = analyzer.analyze_file(&hunks_for_python_at(100)).await;
+    let reason = result
+        .failed_files
+        .values()
+        .next()
+        .expect("a non-string category is malformed");
+    assert!(
+        matches!(reason, FailureReason::MalformedFinding(detail) if detail.contains("category")),
+        "got {reason:?}"
+    );
+}
+
+/// An absent `category` defaults to `"unknown"` and the file stays analyzed.
+///
+/// The third leg: without it, a rule that rejected every category would pass
+/// both tests above.
+#[tokio::test]
+async fn an_absent_category_defaults_to_unknown() {
+    let server = server_returning(&[
+        r#"{"issues": [{"line": 100, "severity": "medium", "message": "m"}], "summary": "s"}"#,
+    ])
+    .await;
+    let (analyzer, _dir) = analyzer_for(&server);
+
+    let result = analyzer.analyze_file(&hunks_for_python_at(100)).await;
+    assert!(
+        result.failed_files.is_empty(),
+        "an absent category is legal"
+    );
+    assert_eq!(result.findings[0].kind, "unknown");
+}

@@ -225,3 +225,101 @@ fn an_entry_without_an_enabled_key_participates() {
 fn providers_of_an_empty_config_is_empty() {
     assert!(Config::default().providers().is_empty());
 }
+
+/// A parked provider's unset `${VAR}` does not refuse to load the file.
+///
+/// `enabled = false` means the entry is inert. Refusing to load because a
+/// provider the user just switched off names a variable they have not exported
+/// contradicts that in the one place they would notice — switching it off is
+/// exactly what they did to stop it mattering.
+#[test]
+fn a_disabled_provider_with_an_unset_env_var_still_loads() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let path = write_config(
+        &temp,
+        r#"
+[[llm]]
+model = "local"
+endpoint = "http://localhost:1234/v1"
+
+[[llm]]
+enabled = false
+model = "cloud"
+endpoint = "https://api.example/v1"
+api_key = "${DREP_TEST_VAR_THAT_IS_NOT_SET}"
+"#,
+    );
+
+    let config = load(&path).expect("a parked provider's env var is not required");
+    assert_eq!(config.providers().len(), 1);
+    assert_eq!(config.providers()[0].model.as_deref(), Some("local"));
+}
+
+/// An *enabled* provider's unset `${VAR}` is still an error.
+///
+/// The discriminating half: a rule that skipped expansion everywhere would pass
+/// the test above and silently hand a literal `${VAR}` to the endpoint as a
+/// credential.
+#[test]
+fn an_enabled_provider_with_an_unset_env_var_is_still_rejected() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let path = write_config(
+        &temp,
+        r#"
+[[llm]]
+model = "cloud"
+endpoint = "https://api.example/v1"
+api_key = "${DREP_TEST_VAR_THAT_IS_NOT_SET}"
+"#,
+    );
+    let err = load(&path).expect_err("an enabled provider needs its variable");
+    match err {
+        ConfigError::EnvVarUnset(name, _) => {
+            assert_eq!(name, "DREP_TEST_VAR_THAT_IS_NOT_SET");
+        }
+        other => panic!("expected EnvVarUnset, got {other:?}"),
+    }
+}
+
+/// A disabled provider's out-of-range temperature does not block the load.
+#[test]
+fn a_disabled_provider_is_not_validated() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let path = write_config(
+        &temp,
+        r#"
+[[llm]]
+model = "live"
+
+[[llm]]
+enabled = false
+model = "parked"
+temperature = 9.0
+max_concurrent = 0
+"#,
+    );
+    load(&path).expect("a parked provider's fields are not validated");
+}
+
+/// `max_concurrent = 0` is rejected rather than left to hang.
+///
+/// A semaphore with no permits never hands one out, so every request waits for
+/// a slot forever - a commit gate that reports nothing and never returns. The
+/// index names the offending block.
+#[test]
+fn zero_max_concurrent_is_rejected() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let path = write_config(
+        &temp,
+        "[[llm]]\nmodel = \"a\"\n\n[[llm]]\nmodel = \"b\"\nmax_concurrent = 0\n",
+    );
+    let err = load(&path).expect_err("zero concurrency must not load");
+    match err {
+        ConfigError::ZeroConcurrency { index } => {
+            assert_eq!(index, 1, "the second provider is the offender");
+            let rendered = ConfigError::ZeroConcurrency { index }.to_string();
+            assert!(rendered.contains("#2 in file order"), "got {rendered:?}");
+        }
+        other => panic!("expected ZeroConcurrency, got {other:?}"),
+    }
+}

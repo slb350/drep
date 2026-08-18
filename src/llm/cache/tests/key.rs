@@ -17,8 +17,8 @@ fn identical_inputs_produce_identical_keys() {
     let temp = tempfile::tempdir().expect("tempdir");
     let cache = cache_in(&temp);
 
-    let k1 = cache.key("sys", "content", "model", 0.2);
-    let k2 = cache.key("sys", "content", "model", 0.2);
+    let k1 = cache.key("sys", "content", "http://endpoint/v1", "model", 0.2);
+    let k2 = cache.key("sys", "content", "http://endpoint/v1", "model", 0.2);
 
     assert_eq!(k1, k2, "identical inputs must hash identically");
 }
@@ -29,8 +29,8 @@ fn different_content_produces_different_key() {
     let temp = tempfile::tempdir().expect("tempdir");
     let cache = cache_in(&temp);
 
-    let k1 = cache.key("sys", "alpha", "model", 0.2);
-    let k2 = cache.key("sys", "beta", "model", 0.2);
+    let k1 = cache.key("sys", "alpha", "http://endpoint/v1", "model", 0.2);
+    let k2 = cache.key("sys", "beta", "http://endpoint/v1", "model", 0.2);
 
     assert_ne!(k1, k2, "different content must hash differently");
 }
@@ -41,8 +41,8 @@ fn different_system_prompt_produces_different_key() {
     let temp = tempfile::tempdir().expect("tempdir");
     let cache = cache_in(&temp);
 
-    let k1 = cache.key("prompt A", "content", "model", 0.2);
-    let k2 = cache.key("prompt B", "content", "model", 0.2);
+    let k1 = cache.key("prompt A", "content", "http://e/v1", "model", 0.2);
+    let k2 = cache.key("prompt B", "content", "http://e/v1", "model", 0.2);
 
     assert_ne!(k1, k2, "different system_prompt must hash differently");
 }
@@ -53,8 +53,8 @@ fn different_model_produces_different_key() {
     let temp = tempfile::tempdir().expect("tempdir");
     let cache = cache_in(&temp);
 
-    let k1 = cache.key("sys", "content", "gpt-4", 0.2);
-    let k2 = cache.key("sys", "content", "llama-3", 0.2);
+    let k1 = cache.key("sys", "content", "http://endpoint/v1", "gpt-4", 0.2);
+    let k2 = cache.key("sys", "content", "http://endpoint/v1", "llama-3", 0.2);
 
     assert_ne!(k1, k2, "different model must hash differently");
 }
@@ -65,8 +65,8 @@ fn different_temperature_produces_different_key() {
     let temp = tempfile::tempdir().expect("tempdir");
     let cache = cache_in(&temp);
 
-    let k1 = cache.key("sys", "content", "model", 0.0);
-    let k2 = cache.key("sys", "content", "model", 0.5);
+    let k1 = cache.key("sys", "content", "http://endpoint/v1", "model", 0.0);
+    let k2 = cache.key("sys", "content", "http://endpoint/v1", "model", 0.5);
 
     assert_ne!(k1, k2, "different temperature must hash differently");
 }
@@ -81,8 +81,8 @@ fn field_boundaries_cannot_be_confused() {
     let temp = tempfile::tempdir().expect("tempdir");
     let cache = cache_in(&temp);
 
-    let boundary_left = cache.key("ab", "c", "model", 0.2);
-    let boundary_right = cache.key("a", "bc", "model", 0.2);
+    let boundary_left = cache.key("ab", "c", "http://endpoint/v1", "model", 0.2);
+    let boundary_right = cache.key("a", "bc", "http://endpoint/v1", "model", 0.2);
 
     assert_ne!(
         boundary_left, boundary_right,
@@ -99,11 +99,26 @@ fn key_is_stable_across_cache_instances() {
     let cache_a = Cache::new(temp_a.path().to_path_buf(), 30, 1024);
     let cache_b = Cache::new(temp_b.path().to_path_buf(), 30, 1024 * 1024);
 
-    let k_a = cache_a.key("sys", "content", "model", 0.2);
-    let k_b = cache_b.key("sys", "content", "model", 0.2);
+    let k_a = cache_a.key("sys", "content", "http://endpoint/v1", "model", 0.2);
+    let k_b = cache_b.key("sys", "content", "http://endpoint/v1", "model", 0.2);
 
     assert_eq!(
         k_a, k_b,
         "the key must depend only on the four inputs, not on root/ttl/max_bytes"
     );
+}
+
+/// The endpoint is part of the key, not just the model.
+///
+/// A model name is not an identity. The canonical failover pair is one open
+/// model served from a local runtime and from a cloud provider, both naming it
+/// the same thing - and keyed on the model alone, the second provider's answer
+/// lands where the first would look for its own.
+#[test]
+fn two_endpoints_serving_the_same_model_key_differently() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let cache = Cache::new(temp.path().to_path_buf(), 30, 1024);
+    let local = cache.key("sys", "content", "http://localhost:1234/v1", "qwen3", 0.2);
+    let cloud = cache.key("sys", "content", "https://api.example/v1", "qwen3", 0.2);
+    assert_ne!(local, cloud);
 }

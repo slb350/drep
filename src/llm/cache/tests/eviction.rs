@@ -31,8 +31,8 @@ fn evict_if_needed_removes_until_under_limit_and_reports_freed() {
     // entry out.
     let cache = Cache::new(temp.path().to_path_buf(), 30, 60);
 
-    let k1 = cache.key("sys", "alpha", "model", 0.2);
-    let k2 = cache.key("sys", "beta", "model", 0.2);
+    let k1 = cache.key("sys", "alpha", "http://endpoint/v1", "model", 0.2);
+    let k2 = cache.key("sys", "beta", "http://endpoint/v1", "model", 0.2);
     cache
         .put(
             &k1,
@@ -94,8 +94,8 @@ fn eviction_removes_oldest_entry_first() {
     // cap that fits one but not both, the older must go.
     let cache = Cache::new(temp.path().to_path_buf(), 30, 60);
 
-    let k_old = cache.key("sys", "older", "model", 0.2);
-    let k_new = cache.key("sys", "newer", "model", 0.2);
+    let k_old = cache.key("sys", "older", "http://endpoint/v1", "model", 0.2);
+    let k_new = cache.key("sys", "newer", "http://endpoint/v1", "model", 0.2);
 
     cache
         .put(
@@ -140,7 +140,7 @@ fn evict_if_needed_is_a_no_op_when_already_under_limit() {
     // Plenty of headroom; entries are small.
     let cache = Cache::new(temp.path().to_path_buf(), 30, 10 * 1024 * 1024);
 
-    let k = cache.key("sys", "content", "model", 0.2);
+    let k = cache.key("sys", "content", "http://endpoint/v1", "model", 0.2);
     cache.put(&k, &json!({"x": 1})).expect("put");
 
     let freed = cache.evict_if_needed().expect("eviction");

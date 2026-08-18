@@ -493,14 +493,24 @@ resilience machinery" sees the bar it had to clear.
 
 #### The cache key moves with the provider
 
-The key is computed from the model, so it is computed **inside** the loop, once
-per provider tried, and `Served::key` names whoever answered. Keying the head
-and letting the fallback serve would file that answer under a key it did not
-come from, and a later run with the head restored would get a hit that never
-came from the head. Pinned at two levels: `llm/chain/tests/cache_key.rs`
+The key is computed from the provider's **endpoint and** model, inside the
+loop, once per provider tried, and `Served::key` names whoever answered. Keying
+the head and letting the fallback serve would file that answer under a key it
+did not come from, and a later run with the head restored would get a hit that
+never came from the head. Pinned at two levels: `llm/chain/tests/cache_key.rs`
 asserts on the key itself and on a second run with the head restored, and
 `analysis/tests/code_quality_failover.rs` asserts the actual `cache.put`
 landed under the fallback's key and not the head's.
+
+**The endpoint was missing from the key on the first cut, and every one of
+those tests passed.** They all used distinct model names, so the key differed
+for the wrong reason. Two providers running the *same* model at different
+endpoints — one open model served locally and from a cloud provider, which is
+the canonical failover pair — collided, and the fallback's answer was served to
+the restored head. Composition now lives on `Provider::cache_key`, so a test
+cannot spell the key out a different way than production does; spelling it out
+by hand is what made the tests agree with the bug. Found by drep's own pre-push
+gate reviewing this phase.
 
 #### Reporting
 

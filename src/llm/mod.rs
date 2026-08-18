@@ -1,6 +1,6 @@
 //! LLM client and JSON extraction.
 //!
-//! Four sub-modules, split by concern rather than by phase:
+//! Five sub-modules, split by concern rather than by phase:
 //!
 //! - [`json_parsing`] turns whatever the model returned into a `serde_json::Value`.
 //!   Tolerant of fences, prose, trailing commas and truncated output, in that

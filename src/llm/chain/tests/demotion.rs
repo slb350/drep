@@ -145,7 +145,10 @@ async fn a_demoted_provider_is_skipped_even_when_it_has_a_cached_answer() {
 
     let planted = serde_json::json!({"issues": [], "summary": "clean"});
     cache
-        .put(&cache.key(SYSTEM, "file two", "model-a", 0.2), &planted)
+        .put(
+            &chain.providers()[0].cache_key(&cache, SYSTEM, "file two"),
+            &planted,
+        )
         .expect("cache write");
 
     let served = chain

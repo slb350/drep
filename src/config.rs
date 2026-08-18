@@ -126,6 +126,14 @@ pub enum ConfigError {
     )]
     Temperature { index: usize, temperature: f32 },
 
+    /// `max_concurrent = 0` builds a semaphore with no permits, so every
+    /// request waits for one forever. Rejected at load rather than clamped: a
+    /// silent bump to 1 would run a gate at a concurrency the user did not ask
+    /// for, and the alternative - the documented "callers are expected to set a
+    /// positive value" - is a hang with no message at all.
+    #[error("[[llm]] #{} in file order: max_concurrent must be at least 1", index + 1)]
+    ZeroConcurrency { index: usize },
+
     #[error(
         "{0} declares no `[[llm]]` provider; drep 2.x has no deterministic-only mode. \
          Run `drep init` to write one."
@@ -170,7 +178,13 @@ pub fn load(path: &Path) -> Result<Config, ConfigError> {
         ConfigError::Parse(path.to_path_buf(), err.message().to_owned())
     })?;
 
-    expand_env_in(&mut tree, path)?;
+    // Disabled providers are pruned from expansion, not from the tree: a
+    // parked entry is inert, so an unset `${OPENROUTER_API_KEY}` in the cloud
+    // block a user just switched off must not refuse to load the file. It stays
+    // in `Config.llm` with its `${VAR}` unexpanded, which nothing reads - only
+    // `providers()` is consulted, and it filters the entry out.
+    let disabled = disabled_provider_indices(&tree);
+    expand_env_except(&mut tree, path, &disabled)?;
 
     let config: Config = tree.try_into().map_err(|err: toml::de::Error| {
         ConfigError::Parse(path.to_path_buf(), err.message().to_owned())
@@ -199,13 +213,77 @@ fn validate(config: &Config, path: &Path) -> Result<(), ConfigError> {
     if config.providers().is_empty() {
         return Err(ConfigError::NoEnabledProviders(path.to_path_buf()));
     }
-    for (index, llm) in config.llm.iter().enumerate() {
+    // Disabled entries are skipped. `enabled = false` means "this entry is
+    // inert", and refusing to load the file because a *parked* provider names
+    // an out-of-range temperature contradicts that in the one place a user
+    // would notice: they parked it precisely to stop it mattering.
+    for (index, llm) in config.llm.iter().enumerate().filter(|(_, l)| l.enabled) {
         let t = llm.temperature;
         if !(0.0..=2.0).contains(&t) {
             return Err(ConfigError::Temperature {
                 index,
                 temperature: t,
             });
+        }
+        if llm.max_concurrent == 0 {
+            return Err(ConfigError::ZeroConcurrency { index });
+        }
+    }
+    Ok(())
+}
+
+/// The positions of the `[[llm]]` tables that carry `enabled = false`.
+///
+/// Read from the raw tree because expansion runs before deserialization - and
+/// it has to, since an unset variable must be reported with the variable's name
+/// rather than as a downstream parse failure inside the substituted text. The
+/// default comes from `LlmConfig::default()` so this cannot disagree with serde
+/// about what an absent `enabled` key means.
+fn disabled_provider_indices(tree: &Value) -> std::collections::BTreeSet<usize> {
+    let default_enabled = LlmConfig::default().enabled;
+    tree.get("llm")
+        .and_then(Value::as_array)
+        .map(|entries| {
+            entries
+                .iter()
+                .enumerate()
+                .filter(|(_, entry)| {
+                    !entry
+                        .get("enabled")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(default_enabled)
+                })
+                .map(|(index, _)| index)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// [`expand_env_in`] over the whole tree except the named `[[llm]]` entries.
+fn expand_env_except(
+    tree: &mut Value,
+    source: &Path,
+    skip: &std::collections::BTreeSet<usize>,
+) -> Result<(), ConfigError> {
+    if skip.is_empty() {
+        return expand_env_in(tree, source);
+    }
+    let Some(table) = tree.as_table_mut() else {
+        return expand_env_in(tree, source);
+    };
+    for (key, value) in table.iter_mut() {
+        if key != "llm" {
+            expand_env_in(value, source)?;
+            continue;
+        }
+        let Some(entries) = value.as_array_mut() else {
+            expand_env_in(value, source)?;
+            continue;
+        };
+        for (index, entry) in entries.iter_mut().enumerate() {
+            if !skip.contains(&index) {
+                expand_env_in(entry, source)?;
+            }
         }
     }
     Ok(())
@@ -270,6 +348,43 @@ pub fn env_var_refs(s: &str) -> Vec<String> {
         rest = after_close;
     }
     refs
+}
+
+/// Every `${NAME}` reference that [`load`] will actually try to substitute.
+///
+/// The same tree as [`env_var_refs_in`], minus the `[[llm]]` entries that
+/// carry `enabled = false` — because `load` skips expanding those, so a
+/// variable named only by a parked provider is not required and reporting it
+/// as missing is a false alarm. This is the shared definition, so `doctor`
+/// cannot warn about a variable `check` does not need; a narrower scanner in
+/// `doctor` is what once made it call a config fine that `check` refused to
+/// load.
+pub fn required_env_var_refs(value: &Value) -> Vec<String> {
+    let disabled = disabled_provider_indices(value);
+    if disabled.is_empty() {
+        return env_var_refs_in(value);
+    }
+    let mut seen = std::collections::BTreeSet::new();
+    let mut out = Vec::new();
+    let Some(table) = value.as_table() else {
+        return env_var_refs_in(value);
+    };
+    for (key, inner) in table {
+        if key != "llm" {
+            collect_env_refs(inner, &mut seen, &mut out);
+            continue;
+        }
+        let Some(entries) = inner.as_array() else {
+            collect_env_refs(inner, &mut seen, &mut out);
+            continue;
+        };
+        for (index, entry) in entries.iter().enumerate() {
+            if !disabled.contains(&index) {
+                collect_env_refs(entry, &mut seen, &mut out);
+            }
+        }
+    }
+    out
 }
 
 /// Every `${NAME}` reference in any string value of a parsed TOML tree.

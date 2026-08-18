@@ -47,6 +47,8 @@ pub struct Limiter {
 /// it is a no-op - the limiter cannot make a phantom permit do useful
 /// work, but the type stays total so callers do not have to handle a
 /// second error variant.
+#[must_use = "dropping the guard immediately releases the slot, so a bare \
+              `limiter.acquire().await;` provides no backpressure at all"]
 pub struct LimiterGuard<'a> {
     /// The held permit, if any. `Option` so the unreachable error case
     /// can leave the guard empty; `Drop` below explicitly drops the

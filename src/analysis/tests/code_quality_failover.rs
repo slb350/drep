@@ -91,8 +91,10 @@ async fn the_cache_entry_is_written_under_the_serving_provider_s_key() {
     let payload = crate::analysis::payload::render(language, &hunks).expect("payload");
     let system = crate::analysis::prompt::build_analysis_prompt(language);
 
-    let key_a = cache.key(&system, &payload.text, "model-a", 0.2);
-    let key_b = cache.key(&system, &payload.text, "model-b", 0.2);
+    // Through `Provider::cache_key`, the same call production makes - a key
+    // spelled out by hand here would agree with whatever bug production has.
+    let key_a = analyzer.chain().providers()[0].cache_key(&cache, &system, &payload.text);
+    let key_b = analyzer.chain().providers()[1].cache_key(&cache, &system, &payload.text);
     assert!(
         cache.get(&key_b).is_some(),
         "the fallback's answer must be cached under the fallback's key"

@@ -57,33 +57,56 @@ fn local_render_omits_api_key_and_timeout_secs_but_openrouter_has_both() {
     );
 }
 
+/// What `init` writes, `config::load` accepts.
+///
+/// Uses the `local` preset, which names no API key, so the round trip needs no
+/// environment variable. The `${VAR}` half is covered by
+/// `render_names_the_api_key_env_var_rather_than_the_secret` below, on the
+/// rendered text.
+///
+/// The earlier version rendered the openrouter preset and exported
+/// `OPENROUTER_API_KEY` around the load. `set_var` is `unsafe` in edition 2024
+/// because *any* concurrent environment access from another thread is a data
+/// race, and cargo runs tests in parallel threads where `tempfile::tempdir()`
+/// alone reads `TMPDIR` - so the old safety note ("no other test touches this
+/// key") was not the contract being relied on.
 #[test]
-fn rendered_config_loads_through_config_load_when_env_var_is_set() {
-    let preset = presets::preset("openrouter").expect("openrouter");
+fn rendered_config_loads_through_config_load() {
+    let preset = presets::preset("local").expect("local");
     let body = config_file::render(preset, "m", "http://e/v1");
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("drep.toml");
     std::fs::write(&path, body).expect("write");
 
-    // The variable is required to be set during the test; `config::load`
-    // expands `${VAR}` and reports unset variables. Restore afterwards so a
-    // later test does not see a value that drep itself never set.
-    //
-    // SAFETY: `set_var` and `remove_var` are `unsafe` in edition 2024 because
-    // any other thread reading the environment concurrently is a data race.
-    // No other test reads or writes `OPENROUTER_API_KEY`, so the window is
-    // closed.
-    unsafe {
-        std::env::set_var("OPENROUTER_API_KEY", "sk-test-key");
-    }
     let loaded = crate::config::load(&path).expect("config loads");
-    unsafe {
-        std::env::remove_var("OPENROUTER_API_KEY");
-    }
 
     assert_eq!(loaded.llm.len(), 1);
     let primary = *loaded.providers().first().expect("a provider is written");
     assert_eq!(primary.model.as_deref(), Some("m"));
+    assert_eq!(primary.endpoint.as_deref(), Some("http://e/v1"));
+}
+
+/// A preset with a key writes the variable's *name*, never a secret, and the
+/// file it produces is still valid TOML.
+///
+/// Asserted on the rendered text rather than through `config::load`, which
+/// would need the variable exported - see the note on the test above.
+#[test]
+fn render_names_the_api_key_env_var_rather_than_the_secret() {
+    let preset = presets::preset("openrouter").expect("openrouter");
+    let body = config_file::render(preset, "m", "http://e/v1");
+
+    assert!(
+        body.contains(r#"api_key = "${OPENROUTER_API_KEY}""#),
+        "the file is meant to be committed, so it names the variable: {body:?}"
+    );
+    let value: toml::Value = toml::from_str(&body).expect("the rendered file parses");
+    let entry = &value.get("llm").and_then(|v| v.as_array()).expect("array")[0];
+    assert_eq!(
+        entry.get("api_key").and_then(|v| v.as_str()),
+        Some("${OPENROUTER_API_KEY}"),
+        "unexpanded in the file itself; `config::load` is what substitutes it"
+    );
 }
 
 #[test]

@@ -34,12 +34,17 @@
 //!
 //! ## The cache key moves with the provider
 //!
-//! The key is computed from the model, so it is computed **inside** the loop,
-//! once per provider tried. Keying provider 1 and then letting provider 2
-//! serve the answer would file that answer under a key it did not come from,
-//! and a later run with provider 1 healthy would get a hit that never came
-//! from provider 1. [`Served::key`] is the key of the provider that actually
-//! answered; the caller stores under that key or not at all.
+//! The key is computed from the provider's *endpoint and* model, so it is
+//! computed **inside** the loop, once per provider tried. Keying provider 1 and
+//! then letting provider 2 serve the answer would file that answer under a key
+//! it did not come from, and a later run with provider 1 healthy would get a
+//! hit that never came from provider 1. [`Served::key`] is the key of the
+//! provider that actually answered; the caller stores under that key or not at
+//! all.
+//!
+//! The endpoint is in the key because a model name is not an identity: one open
+//! model served locally and from a cloud provider is the canonical failover
+//! pair, and both name it the same thing.
 
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -138,6 +143,23 @@ impl Provider {
 
     fn record_served(&self) {
         self.served.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// This provider's cache key for one prompt.
+    ///
+    /// The single definition of "which key belongs to which provider". It lives
+    /// here rather than at the call site so a test cannot compute the key a
+    /// different way than production does - which is exactly how the endpoint
+    /// went missing from it: the tests spelled out `model` and `temperature` by
+    /// hand and agreed with the bug.
+    pub fn cache_key(&self, cache: &Cache, system_prompt: &str, user_content: &str) -> CacheKey {
+        cache.key(
+            system_prompt,
+            user_content,
+            self.endpoint(),
+            self.model(),
+            self.client.temperature(),
+        )
     }
 }
 
@@ -326,12 +348,7 @@ async fn try_provider(
     // The key is computed here, from *this* provider's model, and the `Served`
     // carries it back so the caller cannot file the answer under a different
     // provider's key.
-    let key = cache.key(
-        system_prompt,
-        user_content,
-        provider.model(),
-        provider.client.temperature(),
-    );
+    let key = provider.cache_key(cache, system_prompt, user_content);
     if let Some(value) = cache.get(&key) {
         provider.record_served();
         return ProviderOutcome::Served(Served {

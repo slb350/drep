@@ -238,3 +238,58 @@ async fn provider_uses_names_the_providers_that_answered_and_no_others() {
     assert_eq!(uses[0].model, "model-b");
     assert_eq!(uses[0].files, 1);
 }
+
+/// The blank line before the failure block is a *separator*, so it appears only
+/// when there is a findings block above it to separate from.
+///
+/// Emitted unconditionally, it made every clean-but-unanalyzed run — the shape
+/// of a commit blocked by a dead endpoint, so the common failure — open with a
+/// stray empty line.
+#[test]
+fn the_failure_block_is_not_preceded_by_a_blank_line_when_there_are_no_findings() {
+    let outcome = outcome_failing(vec![(
+        "src/lib.rs",
+        FailureReason::Transport {
+            status: None,
+            message: "refused".to_owned(),
+        },
+    )]);
+    let text = rendered(&outcome, OutputFormat::Text);
+    assert!(
+        text.starts_with("1 file(s) could not be analyzed:"),
+        "the report must open with the failure block, not a blank line: {text:?}"
+    );
+}
+
+/// With findings present, the separator is there.
+///
+/// The discriminating half: a renderer that never emitted the blank line would
+/// pass the test above and run the failure block straight into the last
+/// finding.
+#[test]
+fn the_failure_block_is_preceded_by_a_blank_line_when_findings_were_printed() {
+    use crate::analysis::findings::{Finding, Severity};
+
+    let mut outcome = outcome_failing(vec![(
+        "src/lib.rs",
+        FailureReason::Transport {
+            status: None,
+            message: "refused".to_owned(),
+        },
+    )]);
+    outcome.tool_findings = vec![Finding {
+        kind: "style".to_owned(),
+        severity: Severity::Error,
+        file_path: "src/other.rs".to_owned(),
+        line: 1,
+        column: None,
+        message: "m".to_owned(),
+        suggestion: None,
+    }];
+
+    let text = rendered(&outcome, OutputFormat::Text);
+    assert!(
+        text.contains("\n\n1 file(s) could not be analyzed:"),
+        "the two blocks must be separated: {text:?}"
+    );
+}

@@ -25,13 +25,21 @@
 //!
 //! ## Key composition
 //!
-//! `blake3` over the four inputs, each length-prefixed with an 8-byte
+//! `blake3` over the five inputs, each length-prefixed with an 8-byte
 //! big-endian length. Length prefixing rules out the
 //! `key("ab", "c", ...)` vs `key("a", "bc", ...)` collision that a separator
 //! byte cannot guarantee once `content` or `system_prompt` is allowed to
 //! contain that byte. `temperature` is formatted with a fixed number of
 //! decimals so `0.2` and `0.20` hash to the same key (they are the same
 //! value).
+//!
+//! **The endpoint is part of the key, not just the model.** A model name is
+//! not a globally unique identity: the canonical failover pair is one open
+//! model served from a local runtime and from a cloud provider, which name it
+//! identically. Keyed on the model alone, the fallback's answer lands where the
+//! head would look for its own - so a later run with the head restored is
+//! served a response it never produced, which is the exact defect the
+//! per-provider key exists to prevent.
 //!
 //! ## Defaults
 //!
@@ -43,7 +51,7 @@ use std::time::{Duration, SystemTime};
 use serde_json::Value;
 use thiserror::Error;
 
-/// A cache key: the blake3 hex digest of the four key inputs.
+/// A cache key: the blake3 hex digest of the five key inputs.
 ///
 /// The inner `String` is exactly 64 lower-case ASCII hex characters because
 /// `blake3::Hash::to_hex` always emits 64 hex chars. Tests rely on this to
@@ -90,7 +98,7 @@ pub enum CacheError {
 }
 
 /// The cache: a directory tree of one JSON file per entry, keyed by blake3
-/// digest of the four prompt inputs.
+/// digest of the five prompt inputs.
 ///
 /// Built once per process and shared across the analyzer; every method takes
 /// `&self` so `Cache` can live behind an `Arc` if a future caller needs it.
@@ -124,7 +132,8 @@ impl Cache {
         PathBuf::from(".drep-cache")
     }
 
-    /// Compute the key for `(system_prompt, content, model, temperature)`.
+    /// Compute the key for
+    /// `(system_prompt, content, endpoint, model, temperature)`.
     ///
     /// Deliberately does NOT consult `self`: the key is content-only, so two
     /// `Cache` instances at different roots produce the same key for the
@@ -134,12 +143,14 @@ impl Cache {
         &self,
         system_prompt: &str,
         content: &str,
+        endpoint: &str,
         model: &str,
         temperature: f32,
     ) -> CacheKey {
         let mut hasher = blake3::Hasher::new();
         write_field(&mut hasher, system_prompt.as_bytes());
         write_field(&mut hasher, content.as_bytes());
+        write_field(&mut hasher, endpoint.as_bytes());
         write_field(&mut hasher, model.as_bytes());
         // Six decimal places is finer than the resolution of `f32` itself
         // (~7 decimal digits of precision), so two `f32` values that

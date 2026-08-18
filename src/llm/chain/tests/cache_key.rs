@@ -31,8 +31,8 @@ async fn the_returned_key_belongs_to_the_provider_that_answered() {
         .await
         .expect("provider 2 answers");
 
-    let key_a = cache.key(SYSTEM, CONTENT, "model-a", 0.2);
-    let key_b = cache.key(SYSTEM, CONTENT, "model-b", 0.2);
+    let key_a = chain.providers()[0].cache_key(&cache, SYSTEM, CONTENT);
+    let key_b = chain.providers()[1].cache_key(&cache, SYSTEM, CONTENT);
     assert_ne!(key_a, key_b, "the two models must key differently");
     assert_eq!(
         served.key, key_b,
@@ -108,7 +108,10 @@ async fn a_cache_hit_on_the_head_asks_nobody() {
 
     let planted = serde_json::from_str::<serde_json::Value>(GOOD_JSON).expect("fixture parses");
     cache
-        .put(&cache.key(SYSTEM, CONTENT, "model-a", 0.2), &planted)
+        .put(
+            &chain.providers()[0].cache_key(&cache, SYSTEM, CONTENT),
+            &planted,
+        )
         .expect("cache write");
 
     let served = chain
@@ -138,7 +141,10 @@ async fn a_cache_hit_on_the_fallback_is_found_after_the_head_fails() {
 
     let planted = serde_json::from_str::<serde_json::Value>(GOOD_JSON).expect("fixture parses");
     cache
-        .put(&cache.key(SYSTEM, CONTENT, "model-b", 0.2), &planted)
+        .put(
+            &chain.providers()[1].cache_key(&cache, SYSTEM, CONTENT),
+            &planted,
+        )
         .expect("cache write");
 
     let served = chain
@@ -152,5 +158,63 @@ async fn a_cache_hit_on_the_fallback_is_found_after_the_head_fails() {
         request_count(&tail).await,
         0,
         "the fallback's cached answer must be found before a request is made"
+    );
+}
+
+/// Two providers running the *same model* at different endpoints do not share
+/// a cache entry.
+///
+/// The sibling tests above all use distinct model names, which is what let this
+/// through: the key was built from the model and the temperature alone, so a
+/// local llama.cpp and a cloud endpoint both serving `qwen3-30b-a3b` - the
+/// canonical failover pair, one open model in two places - produced the *same*
+/// key. The fallback's answer was then filed where the head would look for its
+/// own, and a later run with the head restored got a hit it never produced.
+/// Same defect as keying on the head; invisible to a test that varies the
+/// model.
+#[tokio::test]
+async fn two_endpoints_serving_the_same_model_do_not_share_a_cache_entry() {
+    let (cache, _dir) = temp_cache();
+    const MODEL: &str = "qwen3-30b-a3b";
+
+    // Run one: the head is down, the fallback answers, the caller stores it.
+    let fallback_key = {
+        let dead = server_failing_with(500).await;
+        let healthy = server_returning_json().await;
+        let chain = fast_retry_chain(&[cfg_for(&dead, MODEL, 1), cfg_for(&healthy, MODEL, 1)]);
+        let served = chain
+            .complete_json(SYSTEM, CONTENT, &cache)
+            .await
+            .expect("the fallback answers");
+        assert_eq!(served.provider, 1);
+        cache
+            .put(&served.key, &json!({"issues": [], "summary": "clean"}))
+            .expect("cache write");
+        served.key
+    };
+
+    // Run two: the head is back. It shares the model name, so a key built from
+    // the model alone would hit the fallback's entry.
+    let revived = server_returning_json().await;
+    let spare = server_returning_json().await;
+    let chain = fast_retry_chain(&[cfg_for(&revived, MODEL, 1), cfg_for(&spare, MODEL, 1)]);
+    let served = chain
+        .complete_json(SYSTEM, CONTENT, &cache)
+        .await
+        .expect("the restored head answers");
+
+    assert_eq!(served.provider, 0, "the restored head serves the file");
+    assert_ne!(
+        served.key, fallback_key,
+        "two endpoints must key differently even when they name the same model"
+    );
+    assert!(
+        !served.from_cache,
+        "the head has no entry of its own - the stored one was the fallback's"
+    );
+    assert_eq!(
+        request_count(&revived).await,
+        1,
+        "the restored head must actually be contacted"
     );
 }

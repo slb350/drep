@@ -72,9 +72,37 @@ disabled entries `(disabled - skipped)` and states which of three situations
 the config is in: nothing enabled, one provider and no fallback, or N tried in
 order with the 401/403 exception named.
 
-**Testing: 412 passing** (up from 366), clippy-clean, mutation-clean on the
-staged diff (85 mutants: 38 caught, 47 unviable, 0 missed) and on
-`src/llm/chain.rs` swept whole.
+**Found by drep's own pre-push gate, reviewing this commit.** The cache key was
+built from the model and temperature but *not* the endpoint, so two providers
+running the same model at different endpoints shared an entry — one open model
+served locally and from a cloud provider, which is the canonical failover pair.
+The fallback's answer was filed where the head would look for its own, and a
+later run with the head restored was served a response it never produced: the
+exact defect the per-provider key exists to prevent. Every cache-key test passed
+because they all used distinct model names, so the keys differed for the wrong
+reason. Composition moved onto `Provider::cache_key`, so a test cannot spell the
+key a different way than production does — spelling it out by hand is what made
+the tests agree with the bug.
+
+The same review pass also fixed: `max_concurrent = 0` building a permit-less
+semaphore that hangs every request forever (now rejected at load, naming the
+block); `${VAR}` expansion and field validation running over *disabled*
+providers, so parking the cloud entry refused to load the file when its key was
+not exported; `doctor` reporting the pre-2.0 single-table `[llm]` shape as
+"declares no `[[llm]]` provider" and pointing the user at `drep init`, which
+would refuse to overwrite the file; a stray leading blank line before the
+"could not be analyzed" block on runs with no findings; a present-but-non-string
+`category` or `suggestion` in an LLM response being silently accepted (and
+cached) rather than marking the file unanalyzed, unlike `severity` and
+`message`; `doctor` warning that a *parked* provider's unset `${VAR}` would
+break analysis, which after the expansion fix it no longer does — the same
+doctor-disagrees-with-check failure its old narrower scanner produced, in the
+opposite direction; and an `unsafe` `set_var` in an `init` test whose safety
+note relied on the wrong contract — the round trip now uses a preset that needs no key, and
+the `${VAR}` half is asserted on the rendered text.
+
+**Testing: 431 passing** (up from 366), clippy-clean, rustfmt-clean, and
+mutation-clean on the staged diff and on `src/llm/chain.rs` swept whole.
 
 - 21 tests in `src/llm/chain/tests/` across construction, failover policy,
   cache-key movement and demotion.

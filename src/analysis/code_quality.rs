@@ -302,7 +302,14 @@ fn parse_response(
             // otherwise-valid array should still let the well-formed records
             // through. The failure class is "we do not fully understand the
             // response", not "every record is wrong".
-            IssueOutcome::Malformed(detail) => malformed_reason = Some(detail),
+            // First reason wins, matching `union_failures`: the reasons are not
+            // meaningfully combinable, and the last-writer version reported
+            // whichever malformed record happened to sit at the end of the
+            // array rather than the one that first told us the response was
+            // not understood.
+            IssueOutcome::Malformed(detail) => {
+                malformed_reason.get_or_insert(detail);
+            }
         }
     }
 
@@ -371,20 +378,27 @@ fn parse_issue(issue: &Value, payload: &payload::Payload, file_path: &str) -> Is
         return IssueOutcome::Malformed("missing or non-string `message`".to_owned());
     };
 
-    let kind = issue
-        .get("category")
-        .and_then(Value::as_str)
-        .unwrap_or("unknown")
-        .to_owned();
+    // `category` is optional, but a *present* non-string one is malformed, not
+    // a missing one. `.get().and_then(as_str).unwrap_or("unknown")` collapses
+    // the two, so `"category": 7` was reported as the finding kind "unknown" -
+    // a response we demonstrably did not understand, recorded as understood and
+    // then cached for the whole TTL. Same rule `severity` and `message` follow.
+    let kind = match issue.get("category") {
+        None => "unknown".to_owned(),
+        Some(Value::String(text)) => text.clone(),
+        Some(_) => return IssueOutcome::Malformed("non-string `category`".to_owned()),
+    };
     let message = message.to_owned();
 
-    // `suggestion` is optional. Absent or empty → `None`, not
-    // `Some("")`: an empty suggestion is not a suggestion.
-    let suggestion = issue
-        .get("suggestion")
-        .and_then(Value::as_str)
-        .filter(|s| !s.is_empty())
-        .map(str::to_owned);
+    // `suggestion` is optional on the same terms. Absent or empty → `None`, not
+    // `Some("")`: an empty suggestion is not a suggestion. A present non-string
+    // one is malformed rather than silently absent.
+    let suggestion = match issue.get("suggestion") {
+        None => None,
+        Some(Value::String(text)) if text.is_empty() => None,
+        Some(Value::String(text)) => Some(text.clone()),
+        Some(_) => return IssueOutcome::Malformed("non-string `suggestion`".to_owned()),
+    };
 
     // Membership is checked LAST, after the record's shape.
     //

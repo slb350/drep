@@ -88,8 +88,12 @@ fn render_text<W: Write>(out: &mut W, outcome: &CheckOutcome) -> Result<()> {
     }
 
     if !outcome.failures.is_empty() {
-        // Blank separator between the findings block and the failure block.
-        writeln!(out)?;
+        // Blank separator *between* the two blocks - so only when there is a
+        // findings block above it. Emitting it unconditionally made every
+        // clean-but-unanalyzed run open with a stray empty line.
+        if !by_position.is_empty() {
+            writeln!(out)?;
+        }
         writeln!(
             out,
             "{} file(s) could not be analyzed:",
