@@ -74,17 +74,17 @@ cargo only `.rs`.
 | Rust | Ported from | Notes |
 |---|---|---|
 | `src/main.rs` | `cli.py` | clap entry point |
-| `src/cli/check.rs` | `cli_workflows.py::_run_check` | Exit codes 0/1/2 |
+| `src/cli/check/` | `cli_workflows.py::_run_check` | Exit codes 0/1/2; `input`/`deterministic`/`render` |
 | `src/cli/lint_docs.rs` | `cli.py::lint_docs` | |
-| `src/cli/doctor.rs` | `cli_doctor.py` | Language/tool detection |
-| `src/cli/init.rs` | `cli_init_hooks.py` + init-llm | Writes hooks + config |
+| `src/cli/doctor.rs` (tests in `doctor/`) | `cli_doctor.py` | Language/tool detection |
+| `src/cli/init/` | `cli_init_hooks.py` + init-llm | `presets`/`config_file`/`hooks`; writes native git hooks |
 | `src/languages/spec.rs` | `languages/base.py` | `ToolSpec`, `LanguageSupport`, registry |
 | `src/languages/definitions.rs` | `languages/definitions.py` | The language table |
-| `src/languages/runner.rs` | `languages/runner.py` | Tool resolution + execution |
-| `src/languages/parsers/` | `languages/runner.py` parsers | json / tsc / lines output formats |
+| `src/languages/runner/` | `languages/runner.py` | Tool resolution + execution, and the parsers |
+| `src/languages/runner/parsers.rs` | `languages/runner.py` parsers | json / tsc / lines / position / cargo |
 | `src/files/mod.rs` | `core/file_targets.py` | `ignore` crate for the walk |
 | `src/diff/mod.rs` | `pr_review/diff_parser.py` + `llm/git_utils.py` | `--staged` and `--diff <ref>`; shells out to git |
-| `src/llm/client.rs` | `llm/client.py` | Thin over `open-agent-sdk` |
+| `src/llm/client/` | `llm/client.py` | Thin over `open-agent-sdk` |
 | `src/llm/cache.rs` | `llm/cache.py` | Content-addressed, keyed on hunks |
 | `src/llm/concurrency.rs` | `rate_limiter.py` + `circuit_breaker.py` | Deliberately simplified |
 | `src/llm/json_parsing.rs` | `llm/json_parsing.py` | Tolerant JSON extraction |
@@ -150,6 +150,30 @@ repo:
   `git push` whose hook analyzes files will read half-written ones.
 - **Never pipe its output through `tail`**; that buffers until EOF, so a hung run
   looks identical to a quiet one. Redirect to a file and poll.
+- **Run the real binary against this repository before believing the phase is
+  done.** See "Ground truth is not optional" below; it is the step that found
+  the two most serious defects of the rewrite so far.
+
+### Ground truth is not optional
+
+Phase 5b's suite was green at 353 tests, clippy-clean and mutation-clean. drep
+gating its own push then found two defects the suite could not reach, one of
+them four phases old.
+
+**`cargo clippy` rejects file arguments**, so the deterministic half for Rust
+had never run since Phase 1. The parser tests feed captured clippy output
+straight to `parse_output`, and the `run_tool` tests use stub executables that
+accept any argv. Neither can say whether the *real* binary accepts the argv
+drep builds.
+
+**An empty LLM response was classified as a deterministic parse failure** and
+therefore never retried. wiremock returns exactly what it is told, so it cannot
+represent a provider that *intermittently* returns nothing — which is precisely
+the failure mode.
+
+The pattern generalises: a test double answers the question you designed it to
+answer. Anything about how a real external program behaves — its argument
+grammar, its exit codes, its bad days — is only observable by running it.
 
 ## Phases
 
@@ -303,7 +327,7 @@ In 2.0 (**landed in Phase 3a**):
 **Landed 2026-08-17** as 3a (config, client, JSON extraction) and 3b (cache,
 concurrency). Requires open-agent-sdk **0.7.0**. See CHANGELOG for the full note.
 
-### Phase 4 — Analysis and exit codes
+### Phase 4 — Analysis and exit codes ✅
 Split into 4a and 4b: together they exceed the size where a single delegated
 handoff stays reliable, and 4a is fully offline while 4b is not.
 
@@ -332,20 +356,19 @@ Two rules for 4b that are decisions, not ports:
   record (unknown severity, missing field, a line beyond `u32`) is different: it
   makes the file unanalyzed, because we cannot know what it said.
 
-**Open for Phase 5:** `failed_files` is a `BTreeSet<PathBuf>`, so transport
-failure, truncation and a malformed record all collapse to the same entry while
-`LlmError` kept them distinct. Exit code 2 does not need the reason, but
-`--format json`'s `unanalyzed` field and the human-readable line may; decide
-there, because `BTreeMap<PathBuf, FailureReason>` is free now and a breaking
-change later.
+**Decided in Phase 5 (5a and 5b):** `failed_files` became
+`BTreeMap<PathBuf, FailureReason>`, and `--format json`'s `unanalyzed` entries
+carry a stable `kind` tag plus a numeric `status` for HTTP failures. Exit code
+2 never needed the reason; failover does, and it must not have to match on
+prose to get it.
 
-### Phase 5 — CLI assembly
+### Phase 5 — CLI assembly (5a ✅, 5b ✅, 5c next)
 Split three ways. 5a is where every subsystem built in isolation meets, and the
 first phase whose mistakes are user-visible rather than internal.
 
-**Phase 5a — `check` end to end.** Input resolution for all three modes, both
-analysis layers, the union of their failure sets, gating, exit 0/1/2, and
-`--format text|json`.
+**Phase 5a ✅ — `check` end to end. Landed 2026-08-17.** Input resolution for
+all three modes, both analysis layers, the union of their failure sets, gating,
+exit 0/1/2, and `--format text|json`.
 
 **Phase 5b ✅ — `doctor` and `init`. Landed 2026-08-17.** Ports of
 `cli_doctor.py` (112 LOC) and `cli_init_hooks.py` (206 LOC) plus the `init-llm`
@@ -417,9 +440,27 @@ every commit, because exit 2 is a hard stop by design. The reversal is recorded
 here rather than slipped in, so the next person weighing "should drep grow
 resilience machinery" sees the bar it had to clear.
 
-Constraints, in order of how much they cost:
+#### What 5b already put in place
 
-- **Only transport failures fail over** - the SDK's retryable set (408, 429,
+Start from these rather than re-deriving them:
+
+- **`Config.llm` is `Vec<LlmConfig>`, parsed from `[[llm]]`.** `config::load`
+  rejects an empty list (`ConfigError::NoProviders`); `Config::primary()`
+  returns the head. `drep init` writes this shape, so the file format does not
+  change under a file drep already wrote — which was the whole reason it landed
+  a phase early.
+- **`FailureReason::Transport { status: Option<u16>, message }`** carries the
+  HTTP code as a *number*, and `--format json`'s `unanalyzed` entries expose it
+  as `status` beside a stable `kind` tag. Failover can branch on it without
+  matching on prose. The tag table lives in `cli::check::render`, not on the
+  type.
+- **`LlmClient::complete_json` already splits retry by failure class.**
+  Transport (including an empty body) retries with backoff inside the SDK;
+  a non-empty unparseable body fails the file immediately.
+
+#### Constraints, in order of how much they cost
+
+- **Only transport failures fail over** — the SDK's retryable set (408, 429,
   5xx, timeout, connection). A 401/403 must not: that is misconfiguration, and
   falling back masks it. Truncation is deliberately excluded to start: a
   different model might not truncate, but it doubles cost exactly when
@@ -428,11 +469,42 @@ Constraints, in order of how much they cost:
   from the model before the call. If provider 1 is keyed and provider 2 serves
   the response, the answer is cached under a key it did not come from, and a
   later run with provider 1 up gets a hit that never came from provider 1.
-- **The config shape is `[[llm]]`, an ordered list.** This is why 5b must write
-  `[[llm]]` with a single entry from day one - `drep init` writes that file, and
-  landing the single-provider shape first would break the file init just wrote.
 - **The run reports which provider served it.** A silent fallback from a local
   endpoint to a paid API is a cost surprise, not a feature.
+
+#### Decisions 5c has to make (open)
+
+- **Does an empty response fail over, or only retry?** It is now
+  `Transport { status: None }` after the SDK exhausts its retries, so it is
+  *eligible*. The argument for failing over: a provider returning nothing
+  repeatedly is as unusable as one that is down. Against: it already cost
+  several retries, and a second provider doubles that spend. `status: None`
+  distinguishes it from an HTTP error, so the choice is expressible either way.
+- **What does `enabled` mean on an ordered list?** It is a single-provider-era
+  field. `primary()` is `first()`, not "first enabled", so a user who sets
+  `enabled = false` on their local entry intending to fall through to the cloud
+  entry below gets `NotConfigured` instead. Either `primary()`/failover skips
+  disabled entries, or `enabled` is rejected on a non-head entry, or it goes
+  away in favour of "presence in the list means enabled". Deciding it now is
+  cheap; deciding it later means changing a file `drep init` has written.
+- **`doctor` should say which providers are inert.** It lists every `[[llm]]`
+  entry today, without noting that only the first is consulted. Once failover
+  exists the list becomes truthful — but until it does, a user who hand-writes
+  a fallback gets no failover and no warning.
+
+#### Where the tests will not help
+
+Both defects found after 5b's suite went green were invisible to it for
+structural reasons, and failover has the same shape of risk:
+
+- wiremock returns exactly what it is told, so it cannot show you a provider
+  that *intermittently* returns nothing — which is how the retry-class bug
+  survived. Failover's interesting cases are all "provider A behaves badly in a
+  way that is not reproducible on demand".
+- A test that mounts a dead provider A and a healthy provider B proves the loop
+  advances. It does not prove the cache key advanced with it. Assert on the
+  **key**, or on a second run with provider A restored, or the most expensive
+  bug in this phase ships green.
 
 ### Phase 6 — `lint-docs`
 Port the markdown checks including `_fence_mask`. No LLM, fast, runs on every
@@ -485,6 +557,15 @@ Each needs a test in the Rust suite.
 - `unavailable` is **not a pass**. A missing tool is a distinct outcome.
 - Honour `diagnostics_stream`. `go vet` writes to **stderr**; reading stdout
   alone reports every Go file clean.
+- **A tool that does not take file arguments is invoked bare, and its output
+  narrowed afterwards** (`ToolSpec::accepts_files`). `cargo clippy` checks a
+  *crate* and rejects a path outright, so appending files made every Rust run
+  fail — the deterministic half for Rust did not run at all from Phase 1 until
+  drep gating its own push exposed it. Narrowing matters as much as the
+  invocation: a whole-crate run reports pre-existing issues in untouched code,
+  which a commit gate cannot act on. **Stub-based `run_tool` tests cannot see
+  this class of bug** — a stub accepts any argv. Only the real binary can say
+  whether it accepts the one drep builds.
 - Unparseable tool output is **`unavailable`, not zero findings**. Output we
   cannot read means we do not know whether the file is clean, and guessing
   "clean" is the failure the whole module exists to prevent. The one exception
@@ -509,6 +590,15 @@ Each needs a test in the Rust suite.
 - `max_retries` is a **total attempt count with a floor of 1**. Config permits
   0, and a naive `0..max_retries` loop skips the request entirely and then
   reports a bogus "no exception captured".
+- **An empty response body is a transport failure and retries; a non-empty
+  unparseable one does not.** Both were one non-retrying `Ok(None)` until
+  drep's own gated push failed 7 of 49 files and an immediate re-run of one
+  succeeded — so "the model returned nothing" is provider flakiness, not a
+  property of the prompt. Zero output tokens cost nothing to produce, so
+  retrying is nearly free; re-sending a prompt whose answer was prose buys the
+  same prose for a full reasoning call. Assert the **request count**, not just
+  the classification: labelling the empty body correctly while still refusing
+  to retry passes every other check.
 
 **Diff parsing and the LLM payload**
 - The file a hunk belongs to comes from the **`+++ b/<path>` line**, never from
@@ -575,4 +665,6 @@ machinery. Revisit only if a real workload demands it.
   fixture repository, with no Python installed in the Go and Rust cases.
 - Exit codes 0/1/2 are correct, including the unreachable-endpoint case.
 - `cargo clippy -- -D warnings` and `cargo fmt --check` clean.
+- `drep check` runs green over drep's own source, with **zero** files
+  unanalyzed — the deterministic tools actually executing, not merely resolving.
 - Python removed from the repository.
