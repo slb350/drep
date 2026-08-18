@@ -7,6 +7,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Rust rewrite - 2026-08-18 - `cargo clippy` never actually ran
+
+Found by pushing. The 2.0 gate blocked its own first real push with exit 2 and
+49 files reported `ToolUnavailable`:
+
+```
+src/config.rs: clippy could not run: clippy exited 1 without producing
+diagnostics: error: unexpected argument 'src/analysis/code_quality.rs' found
+```
+
+`cargo clippy` checks a **crate**. It does not take file paths, and rejects one
+outright. `run_tool` appends the file list to every tool's argv, so every
+clippy invocation since Phase 1 has failed - meaning **the deterministic half
+for Rust has never run**, on any repository, for the entire rewrite.
+
+The contract worked exactly as designed: an unavailable tool is not a pass, so
+this surfaced as exit 2 rather than as 49 files quietly reported clean. That is
+the whole reason `ToolStatus::Unavailable` exists, and it is why the bug was
+loud when it finally ran instead of silent forever.
+
+Nothing in 353 tests caught it. The parser tests feed captured clippy output to
+`parse_output` directly, and the `run_tool` tests use stub executables that
+accept anything - both correct as far as they go, and both blind to whether the
+real binary accepts the argv drep builds. Only running drep against its own
+source found it.
+
+**Fix:** `ToolSpec::accepts_files`, false for clippy alone. A tool that does not
+take files is invoked bare, and its findings are then **narrowed to the files
+being checked** - a whole-crate run otherwise reports pre-existing issues in
+untouched code, which a commit gate cannot act on and the author cannot fix.
+
+Verified against the real binary, not fixtures: a `clippy::len_zero` injected
+into `src/files/mod.rs` is reported at the right file, line and column when
+that file is checked, and checking `src/lib.rs` instead reports zero tool
+findings - no leakage from the crate-wide run.
+
+Also from that run, two findings the LLM raised on drep's own diff and which
+were correct: `PAYLOAD_MAX_BYTES`' doc claimed it was "enforced **here**" in
+`payload.rs` when `code_quality.rs` enforces it, and `AnalysisResult::merge`
+had the first-writer-wins union written out longhand next to the
+`union_failures` helper that states it.
+
+
 ### Rust rewrite - 2026-08-17 - Phase 5b: `drep doctor` and `drep init`
 
 Both commands land, and this repository's own pre-push gate now runs the 2.0

@@ -21,6 +21,7 @@ async fn run_tool_returns_skipped_when_no_config_file_present() {
         config_files: &["pyproject.toml"],
         output_format: "json",
         diagnostics_stream: "stdout",
+        ..ToolSpec::default()
     };
     let dir = TempDir::new().unwrap();
     let outcome = run_tool(&spec, dir.path(), &[]).await;
@@ -36,6 +37,7 @@ async fn run_tool_returns_unavailable_when_binary_cannot_be_found() {
         config_files: &["any"],
         output_format: "json",
         diagnostics_stream: "stdout",
+        ..ToolSpec::default()
     };
     let dir = TempDir::new().unwrap();
     std::fs::write(dir.path().join("any"), "").unwrap();
@@ -65,6 +67,7 @@ async fn run_tool_reads_stderr_when_diagnostics_stream_is_stderr() {
         config_files: &["marker"],
         output_format: "json",
         diagnostics_stream: "stderr",
+        ..ToolSpec::default()
     };
     std::fs::write(dir.path().join("marker"), "").unwrap();
 
@@ -101,6 +104,7 @@ async fn run_tool_reports_unavailable_for_unparseable_output_not_empty_ok() {
         config_files: &["marker"],
         output_format: "json",
         diagnostics_stream: "stdout",
+        ..ToolSpec::default()
     };
     std::fs::write(dir.path().join("marker"), "").unwrap();
 
@@ -140,6 +144,7 @@ async fn a_silent_non_zero_exit_is_unavailable_not_a_clean_pass() {
         config_files: &["pyproject.toml"],
         output_format: "lines",
         diagnostics_stream: "stdout",
+        ..ToolSpec::default()
     };
 
     let outcome = run_tool(&spec, dir.path(), &["a.py".to_owned()]).await;
@@ -180,6 +185,7 @@ async fn a_relative_root_still_finds_the_repo_local_tool() {
         config_files: &["pyproject.toml"],
         output_format: "lines",
         diagnostics_stream: "stdout",
+        ..ToolSpec::default()
     };
 
     let outcome = run_tool(&spec, &relative, &[]).await;
@@ -196,4 +202,137 @@ fn pathdiff_relative(from: &std::path::Path, to: &std::path::Path) -> std::path:
     to.strip_prefix(from)
         .map(std::path::Path::to_path_buf)
         .unwrap_or_else(|_| to.to_path_buf())
+}
+
+/// A tool declaring `accepts_files: false` is invoked with **no** file
+/// arguments.
+///
+/// `cargo clippy` checks a crate and rejects a path argument outright with
+/// "unexpected argument", so appending files made every Rust run fail. drep
+/// reported that honestly as `Unavailable` rather than as a clean file - which
+/// is why it surfaced as exit 2 on every Rust repository instead of as silence
+/// - but the effect was that the deterministic half for Rust never ran at all.
+/// The stub records its argv so the absence is asserted directly.
+#[tokio::test]
+async fn a_whole_project_tool_is_invoked_without_file_arguments() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path();
+    std::fs::write(root.join("marker"), "").expect("config file");
+
+    let log = root.join("argv.log");
+    let stub = format!(
+        "#!/bin/sh\nfor a in \"$@\"; do printf '%s\\n' \"$a\" >> {}; done\nprintf '[]\\n'\n",
+        log.to_string_lossy()
+    );
+    let tool = root.join("wholeproject");
+    std::fs::write(&tool, stub).expect("write stub");
+    crate::test_support::make_executable(&tool);
+
+    let spec = ToolSpec {
+        name: "wholeproject",
+        command: &["wholeproject", "--flag"],
+        local_paths: &["wholeproject"],
+        config_files: &["marker"],
+        output_format: "lines",
+        accepts_files: false,
+        ..ToolSpec::default()
+    };
+
+    let outcome = run_tool(&spec, root, &["a.rs".to_owned(), "b.rs".to_owned()]).await;
+    assert_eq!(outcome.status, ToolStatus::Ok, "detail: {}", outcome.detail);
+
+    let recorded: Vec<String> = std::fs::read_to_string(&log)
+        .unwrap_or_default()
+        .lines()
+        .map(str::to_owned)
+        .collect();
+    assert_eq!(
+        recorded,
+        vec!["--flag"],
+        "the declared flags are passed and the files are not"
+    );
+}
+
+/// A whole-project tool's findings are narrowed to the files being checked.
+///
+/// It reports on the entire crate, so without the filter a commit gate would
+/// block on pre-existing issues in code the commit never touched - unfixable
+/// by the author, and every commit would fail until the whole crate was clean.
+/// The `./` prefix on one requested path is deliberate: the dash-guard adds it,
+/// and the tool reports paths without it.
+#[tokio::test]
+async fn a_whole_project_tools_findings_are_narrowed_to_the_requested_files() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path();
+    std::fs::write(root.join("marker"), "").expect("config file");
+
+    // `lines` format: each line names a file the tool has an opinion about.
+    let stub = "#!/bin/sh\nprintf 'wanted.rs\\nuntouched.rs\\nalso_wanted.rs\\n'\n";
+    let tool = root.join("wholeproject");
+    std::fs::write(&tool, stub).expect("write stub");
+    crate::test_support::make_executable(&tool);
+
+    let spec = ToolSpec {
+        name: "wholeproject",
+        command: &["wholeproject"],
+        local_paths: &["wholeproject"],
+        config_files: &["marker"],
+        output_format: "lines",
+        accepts_files: false,
+        ..ToolSpec::default()
+    };
+
+    let outcome = run_tool(
+        &spec,
+        root,
+        &["wanted.rs".to_owned(), "./also_wanted.rs".to_owned()],
+    )
+    .await;
+    assert_eq!(outcome.status, ToolStatus::Ok, "detail: {}", outcome.detail);
+
+    let mut reported: Vec<&str> = outcome
+        .findings
+        .iter()
+        .map(|f| f.file_path.as_str())
+        .collect();
+    reported.sort_unstable();
+    assert_eq!(
+        reported,
+        vec!["also_wanted.rs", "wanted.rs"],
+        "untouched.rs was not asked about, so its finding must be dropped"
+    );
+}
+
+/// A tool that *does* accept files keeps every finding it reports.
+///
+/// The other half of the filter: applying it unconditionally would silently
+/// drop findings whenever a tool reported a path in a different but equivalent
+/// form, so the narrowing must be scoped to the tools that need it.
+#[tokio::test]
+async fn a_file_taking_tools_findings_are_not_filtered() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path();
+    std::fs::write(root.join("marker"), "").expect("config file");
+
+    let stub = "#!/bin/sh\nprintf 'somewhere/else.rs\\n'\n";
+    let tool = root.join("perfile");
+    std::fs::write(&tool, stub).expect("write stub");
+    crate::test_support::make_executable(&tool);
+
+    let spec = ToolSpec {
+        name: "perfile",
+        command: &["perfile"],
+        local_paths: &["perfile"],
+        config_files: &["marker"],
+        output_format: "lines",
+        ..ToolSpec::default()
+    };
+
+    let outcome = run_tool(&spec, root, &["asked.rs".to_owned()]).await;
+    assert_eq!(outcome.status, ToolStatus::Ok, "detail: {}", outcome.detail);
+    assert_eq!(
+        outcome.findings.len(),
+        1,
+        "a per-file tool only reports on what it was given, so nothing is dropped"
+    );
 }

@@ -109,6 +109,7 @@ fn tool_status_unavailable_when_configured_but_binary_missing() {
         config_files: &["pyproject.toml"],
         output_format: "json",
         diagnostics_stream: "stdout",
+        ..ToolSpec::default()
     };
     let outcome = tool_status(&spec, dir.path());
     assert_eq!(outcome.status, ToolStatus::Unavailable);
@@ -148,6 +149,7 @@ async fn a_filename_that_looks_like_a_flag_is_passed_as_a_path() {
         config_files: &["pyproject.toml"],
         output_format: "lines",
         diagnostics_stream: "stdout",
+        ..ToolSpec::default()
     };
 
     let _ = run_tool(&spec, dir.path(), &["--fix".to_owned()]).await;

@@ -180,6 +180,36 @@ mod tests {
         assert_eq!(definitions::GO_VET.diagnostics_stream, "stderr");
     }
 
+    /// `cargo clippy` is the one registered tool that cannot take file
+    /// arguments, and every other one can.
+    ///
+    /// Pinned explicitly because the failure is invisible in unit tests: with
+    /// `accepts_files: true`, clippy is invoked as `cargo clippy ... a.rs` and
+    /// exits 1 with "unexpected argument", so drep reports every Rust file
+    /// `Unavailable` and exits 2 on any Rust repository. Nothing in the suite
+    /// noticed - it took running drep against its own source to find it, and a
+    /// well-meant "why is this field false?" edit would put it straight back.
+    #[test]
+    fn clippy_is_the_only_tool_that_cannot_take_file_arguments() {
+        assert!(
+            !definitions::CLIPPY.accepts_files,
+            "cargo clippy checks a crate; a path argument is rejected outright"
+        );
+        for spec in [
+            &definitions::RUFF,
+            &definitions::ESLINT,
+            &definitions::TSC,
+            &definitions::GOFMT,
+            &definitions::GO_VET,
+        ] {
+            assert!(
+                spec.accepts_files,
+                "{} is invoked with the files it should check",
+                spec.name
+            );
+        }
+    }
+
     #[test]
     fn all_languages_returns_every_registered_language() {
         let langs = all_languages();

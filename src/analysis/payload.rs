@@ -22,12 +22,17 @@ use crate::languages::spec::LanguageSupport;
 
 /// The largest payload drep will send to the model, in bytes.
 ///
-/// Enforced **here**, on the rendered text, rather than on one branch of input
-/// resolution. It used to live in `cli::check` and was consulted only in paths
-/// mode, so a newly-added 5 MB file reached the LLM whole through `--staged`
-/// or `--diff` - the two modes a commit gate actually runs in. The ceiling
-/// belongs where the payload is built, because that is the one place every
-/// input mode passes through.
+/// Declared here, beside the thing it measures, and **enforced by
+/// [`crate::analysis::code_quality::CodeQualityAnalyzer::analyze_file`]** on
+/// the text `render` returns - `render` itself has no size opinion and no way
+/// to report one, since it returns `Option<Payload>` and `None` already means
+/// "no hunks".
+///
+/// It used to live in `cli::check` and was consulted only in paths mode, so a
+/// newly-added 5 MB file reached the model whole through `--staged` or
+/// `--diff`, the two modes a commit gate actually runs in. The check belongs
+/// on the rendered payload because that is the one thing every input mode
+/// produces.
 ///
 /// A payload over the ceiling is a
 /// [`crate::analysis::result::FailureReason::PayloadTooLarge`] failure, never a

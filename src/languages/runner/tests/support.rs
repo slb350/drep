@@ -18,6 +18,7 @@ pub(crate) fn ruff_like_spec() -> ToolSpec {
         config_files: &["pyproject.toml"],
         output_format: "json",
         diagnostics_stream: "stdout",
+        ..ToolSpec::default()
     }
 }
 
@@ -29,6 +30,7 @@ pub(crate) fn gofmt_like_spec() -> ToolSpec {
         config_files: &["go.mod"],
         output_format: "lines",
         diagnostics_stream: "stdout",
+        ..ToolSpec::default()
     }
 }
 
@@ -40,6 +42,7 @@ pub(crate) fn go_vet_like_spec() -> ToolSpec {
         config_files: &["go.mod"],
         output_format: "position",
         diagnostics_stream: "stderr",
+        ..ToolSpec::default()
     }
 }
 
@@ -51,6 +54,7 @@ pub(crate) fn tsc_like_spec() -> ToolSpec {
         config_files: &["tsconfig.json"],
         output_format: "tsc",
         diagnostics_stream: "stdout",
+        ..ToolSpec::default()
     }
 }
 
@@ -62,6 +66,7 @@ pub(crate) fn clippy_like_spec() -> ToolSpec {
         config_files: &["Cargo.toml"],
         output_format: "cargo",
         diagnostics_stream: "stdout",
+        ..ToolSpec::default()
     }
 }
 

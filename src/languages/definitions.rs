@@ -17,6 +17,7 @@ pub static RUFF: ToolSpec = ToolSpec {
     config_files: &["pyproject.toml", "ruff.toml", ".ruff.toml"],
     output_format: "json",
     diagnostics_stream: "stdout",
+    accepts_files: true,
 };
 
 /// JavaScript deterministic checker.
@@ -37,6 +38,7 @@ pub static ESLINT: ToolSpec = ToolSpec {
     ],
     output_format: "json",
     diagnostics_stream: "stdout",
+    accepts_files: true,
 };
 
 /// TypeScript's compiler-as-checker. Streams diagnostics to stdout.
@@ -47,6 +49,7 @@ pub static TSC: ToolSpec = ToolSpec {
     config_files: &["tsconfig.json"],
     output_format: "tsc",
     diagnostics_stream: "stdout",
+    accepts_files: true,
 };
 
 /// Go formatting checker - lists files whose formatting drifts from `gofmt`'s.
@@ -60,6 +63,7 @@ pub static GOFMT: ToolSpec = ToolSpec {
     config_files: &["go.mod"],
     output_format: "lines",
     diagnostics_stream: "stdout",
+    accepts_files: true,
 };
 
 /// `go vet`. Streams diagnostics to stderr.
@@ -73,6 +77,7 @@ pub static GO_VET: ToolSpec = ToolSpec {
     config_files: &["go.mod"],
     output_format: "position",
     diagnostics_stream: "stderr",
+    accepts_files: true,
 };
 
 /// Rust linter - emits structured JSON via cargo's message-format.
@@ -83,6 +88,9 @@ pub static CLIPPY: ToolSpec = ToolSpec {
     config_files: &["Cargo.toml"],
     output_format: "cargo",
     diagnostics_stream: "stdout",
+    // `cargo clippy` checks a crate, not files: a path argument is rejected
+    // with "unexpected argument". See `ToolSpec::accepts_files`.
+    accepts_files: false,
 };
 
 /// Python language entry.

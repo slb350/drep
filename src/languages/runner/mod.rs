@@ -261,13 +261,25 @@ pub async fn run_tool(spec: &ToolSpec, root: &Path, files: &[String]) -> ToolOut
     // is the conventional guard but is not universally supported across
     // ruff/eslint/tsc/gofmt/go vet/clippy, whereas a `./` prefix is
     // unambiguous to any argument parser and leaves ordinary paths untouched.
-    argv.extend(files.iter().map(|f| {
-        if f.starts_with('-') {
-            format!("./{f}")
-        } else {
-            f.clone()
-        }
-    }));
+    // A whole-project tool is invoked bare. `cargo clippy` rejects a path
+    // argument outright ("unexpected argument"), so appending files made every
+    // Rust run fail - reported honestly as `Unavailable`, which is why it
+    // surfaced as exit 2 on every Rust repository rather than as wrong
+    // findings. Its output is narrowed back to `files` after parsing.
+    if spec.accepts_files {
+        // A repository can contain a file whose name begins with `-`, and every
+        // checker here would read `--fix` as an option rather than a path. `--`
+        // is the conventional guard but is not universally supported across
+        // ruff/eslint/tsc/gofmt/go vet/clippy, whereas a `./` prefix is
+        // unambiguous to any argument parser and leaves ordinary paths untouched.
+        argv.extend(files.iter().map(|f| {
+            if f.starts_with('-') {
+                format!("./{f}")
+            } else {
+                f.clone()
+            }
+        }));
+    }
 
     let mut command = Command::new(&argv[0]);
     command.args(&argv[1..]);
@@ -358,7 +370,7 @@ pub async fn run_tool(spec: &ToolSpec, root: &Path, files: &[String]) -> ToolOut
         Ok(findings) => ToolOutcome {
             tool: spec.name,
             status: ToolStatus::Ok,
-            findings,
+            findings: retain_requested(spec, findings, files),
             detail: truncate(other.trim(), 200),
         },
         Err(err) => ToolOutcome {
@@ -368,6 +380,34 @@ pub async fn run_tool(spec: &ToolSpec, root: &Path, files: &[String]) -> ToolOut
             detail: format!("{err}. other stream: {}", truncate(other.trim(), 200)),
         },
     }
+}
+
+/// Narrow a whole-project tool's findings to the files actually being checked.
+///
+/// A no-op for a tool that took the file list as arguments - it only reported
+/// on what it was given. For one that did not (`cargo clippy`), the output
+/// covers the entire crate, and a commit gate that blocked on pre-existing
+/// issues in untouched code would be unusable: the author cannot fix what they
+/// did not write, and every commit would fail until the whole crate was clean.
+///
+/// Paths are compared after stripping a leading `./`, because the tool reports
+/// them relative to the project root and the caller's list may carry the
+/// prefix the dash-guard adds.
+fn retain_requested(spec: &ToolSpec, findings: Vec<Finding>, files: &[String]) -> Vec<Finding> {
+    if spec.accepts_files {
+        return findings;
+    }
+    let wanted: std::collections::BTreeSet<&str> =
+        files.iter().map(|f| normalize_path(f)).collect();
+    findings
+        .into_iter()
+        .filter(|finding| wanted.contains(normalize_path(&finding.file_path)))
+        .collect()
+}
+
+/// A path with any leading `./` removed, for comparison.
+fn normalize_path(path: &str) -> &str {
+    path.strip_prefix("./").unwrap_or(path)
 }
 
 /// Truncate a string to at most `max` bytes, on a char boundary.

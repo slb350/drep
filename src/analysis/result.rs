@@ -189,9 +189,10 @@ impl AnalysisResult {
     /// one.
     pub fn merge(&mut self, other: AnalysisResult) {
         self.findings.extend(other.findings);
-        for (path, reason) in other.failed_files {
-            self.failed_files.entry(path).or_insert(reason);
-        }
+        // `union_failures` rather than the loop written out again: the
+        // first-writer-wins rule is one decision, and two copies of it are two
+        // places for it to change independently.
+        union_failures(&mut self.failed_files, other.failed_files);
         self.dropped_out_of_range = self
             .dropped_out_of_range
             .saturating_add(other.dropped_out_of_range);

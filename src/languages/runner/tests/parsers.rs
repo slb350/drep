@@ -76,6 +76,7 @@ fn json_parser_eslint_shape_two_messages_become_two_findings() {
         config_files: &[".eslintrc"],
         output_format: "json",
         diagnostics_stream: "stdout",
+        ..ToolSpec::default()
     };
     let input = r#"[{
         "filePath": "app.js",

@@ -49,6 +49,19 @@ pub struct ToolSpec {
     /// Which stream carries them. `go vet` writes to stderr, so reading only
     /// stdout would report every Go file clean.
     pub diagnostics_stream: &'static str,
+    /// Whether the tool accepts file paths as arguments.
+    ///
+    /// `cargo clippy` does not: it checks a *crate*, and a path argument is
+    /// rejected outright with "unexpected argument". Appending files to it
+    /// therefore made every run fail, so every Rust file came back
+    /// `Unavailable` and `drep check` exited 2 on any Rust repository - the
+    /// deterministic half for Rust never ran at all.
+    ///
+    /// A tool with `accepts_files: false` is invoked bare and reports on the
+    /// whole project, so its findings are filtered down to the files actually
+    /// being checked. Without that filter a commit gate would block on
+    /// pre-existing issues in code the commit never touched.
+    pub accepts_files: bool,
 }
 
 impl Default for ToolSpec {
@@ -60,6 +73,7 @@ impl Default for ToolSpec {
             config_files: &[],
             output_format: "json",
             diagnostics_stream: "stdout",
+            accepts_files: true,
         }
     }
 }
