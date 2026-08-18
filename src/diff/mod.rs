@@ -183,7 +183,20 @@ async fn staged_diff(root: &Path, mode: &str) -> Result<String, GitError> {
 /// The three-dot spec is built once for the same reason as `staged_diff`: the
 /// merge-base semantics are a decision, and `changed_since`/`hunks_since` must
 /// not be able to drift apart on it.
+///
+/// A `git_ref` that begins with `-` is rejected before any git invocation.
+/// Without this guard, `drep check --diff --output=/tmp/x` would reach git
+/// as a flag — `--output=/tmp/x` is parsed by `git diff` as an option, not
+/// a ref. Passing `--` does not help: after `--`, git treats arguments as
+/// *paths*, and `--diff -- this/file` is "diff versus the path `this/file`"
+/// rather than "diff versus the ref `--`".
 async fn since_diff(root: &Path, git_ref: &str, mode: &str) -> Result<String, GitError> {
+    if git_ref.starts_with('-') {
+        return Err(GitError::NonZero {
+            code: None,
+            stderr: format!("ref `{git_ref}` looks like a flag; refusing to pass it to git"),
+        });
+    }
     let ref_b = if has_head(root).await {
         "HEAD"
     } else {

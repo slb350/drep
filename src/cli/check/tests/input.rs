@@ -1,0 +1,360 @@
+//! Input resolution: criteria 4-8.
+//!
+//! Five things the input layer owns end-to-end:
+//!
+//! - Paths mode produces a single whole-file hunk that covers every line
+//!   of the file (criterion 4). Whole-file mode is what makes
+//!   `drep check lib.py` see the file the way `drep check --diff main` does:
+//!   by line number.
+//! - A file drep declined to read is a `FailureReason`, not a silent skip.
+//!   Both shapes (oversize, non-UTF-8) are pinned here.
+//! - A bad ref under `--diff` is a hard error. "No files changed" and "I
+//!   could not ask git" must remain distinct.
+//! - A ref that starts with `-` is rejected before any git invocation.
+//!   Without the guard, `drep check --diff --something` would reach git as
+//!   a flag, and `--` would not save it - git treats arguments after `--`
+//!   as paths, not refs.
+//!
+//! The tests build a `TempDir` and call `input::resolve` directly, so the
+//! assertion can reach the `Work` value rather than only its rendered
+//! downstream effect.
+
+use std::path::PathBuf;
+
+use crate::analysis::result::FailureReason;
+use crate::cli::OutputFormat;
+use crate::cli::check::CheckArgs;
+use crate::cli::check::WHOLE_FILE_MAX_BYTES;
+use crate::cli::check::input::resolve;
+
+/// Build a `CheckArgs` for paths mode. Defaults `format = Text`, no
+/// `--fail-on`, no `--diff`/`--staged`.
+fn paths_args(paths: Vec<PathBuf>) -> CheckArgs {
+    CheckArgs {
+        paths,
+        staged: false,
+        diff: None,
+        format: OutputFormat::Text,
+        fail_on: None,
+    }
+}
+
+/// Build a `CheckArgs` for `--diff <ref>` mode.
+fn diff_args(ref_: &str) -> CheckArgs {
+    CheckArgs {
+        paths: Vec::new(),
+        staged: false,
+        diff: Some(ref_.to_owned()),
+        format: OutputFormat::Text,
+        fail_on: None,
+    }
+}
+
+/// Criterion 4: paths mode reads a real `.py` file and yields one whole-file
+/// hunk covering every line.
+///
+/// "Every line" is the load-bearing half. A whole-file hunk that drops the
+/// last line (or splits the file into per-line hunks) would change what the
+/// LLM sees and where its findings land. Asserting the line count of the
+/// hunk is what makes the whole-file contract testable.
+#[tokio::test]
+async fn paths_mode_yields_one_whole_file_hunk_covering_every_line() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let body = "a = 1\nb = 2\nc = 3\nd = 4\ne = 5\n";
+    std::fs::write(dir.path().join("lib.py"), body).expect("write lib.py");
+
+    let args = paths_args(vec![dir.path().join("lib.py")]);
+    let work = resolve(&args, dir.path()).await.expect("paths resolve");
+
+    assert!(
+        work.read_failures.is_empty(),
+        "a readable .py file must not land in read_failures, got {:?}",
+        work.read_failures
+    );
+    assert_eq!(
+        work.by_file.len(),
+        1,
+        "one file must yield one entry in by_file"
+    );
+    let hunks = &work.by_file[0];
+    assert_eq!(
+        hunks.len(),
+        1,
+        "whole-file mode must produce exactly one hunk per file"
+    );
+    let hunk = &hunks[0];
+    assert_eq!(hunk.file_path, dir.path().join("lib.py"));
+    assert_eq!(
+        hunk.lines.len(),
+        5,
+        "every line of the file must appear in the hunk (got {})",
+        hunk.lines.len()
+    );
+    assert_eq!(hunk.new_start, 1, "whole-file hunk starts at line 1");
+    assert_eq!(
+        hunk.new_count, 5,
+        "whole-file hunk declares a line count matching its content"
+    );
+}
+
+/// Criterion 5: a file larger than `WHOLE_FILE_MAX_BYTES` lands in
+/// `read_failures` as `TooLarge` **and** contributes no findings.
+///
+/// Asserting only the failure would also hold for an implementation that
+/// skipped the file and separately recorded the reason; asserting only the
+/// absence from `by_file` would also hold for an implementation that
+/// silently skipped and recorded nothing. Both halves in one test is what
+/// makes "we declined to analyze" observable end-to-end.
+#[tokio::test]
+async fn oversized_file_lands_in_failures_and_is_not_in_by_file() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    // One byte over the limit. The size check is `bytes > limit`, so 1 over
+    // is the smallest observable boundary - which makes a regression that
+    // flips to `>=` (or off-by-ones the limit) visible here.
+    let size = (WHOLE_FILE_MAX_BYTES + 1) as usize;
+    let body = vec![b'x'; size];
+    std::fs::write(dir.path().join("big.py"), &body).expect("write big.py");
+
+    let args = paths_args(vec![dir.path().join("big.py")]);
+    let work = resolve(&args, dir.path()).await.expect("paths resolve");
+
+    assert!(
+        work.by_file.is_empty(),
+        "an oversize file must not enter by_file, got {} entries",
+        work.by_file.len()
+    );
+    let reason = work
+        .read_failures
+        .get(&dir.path().join("big.py"))
+        .expect("oversize file must appear in read_failures");
+    match reason {
+        FailureReason::TooLarge { bytes, limit } => {
+            assert_eq!(*bytes, size as u64);
+            assert_eq!(*limit, WHOLE_FILE_MAX_BYTES);
+        }
+        other => panic!("expected TooLarge, got {other:?}"),
+    }
+}
+
+/// Criterion 6: a file whose bytes are not valid UTF-8 lands in
+/// `read_failures` as `Unreadable`.
+///
+/// The implementation reads with `std::fs::read_to_string`, which fails on
+/// any byte that is not valid UTF-8. A binary blob slipped into the file
+/// list is the realistic case (a config globbed in by mistake, a symlink to
+/// `/dev/urandom`); the gate must not report it as analyzed.
+#[tokio::test]
+async fn non_utf8_file_lands_in_failures_as_unreadable() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let bytes = [0xFFu8, 0xFE, 0xFD, 0x80, 0x81];
+    std::fs::write(dir.path().join("bad.py"), bytes).expect("write bad.py");
+
+    let args = paths_args(vec![dir.path().join("bad.py")]);
+    let work = resolve(&args, dir.path()).await.expect("paths resolve");
+
+    assert!(
+        work.by_file.is_empty(),
+        "a non-UTF-8 file must not enter by_file"
+    );
+    let reason = work
+        .read_failures
+        .get(&dir.path().join("bad.py"))
+        .expect("non-UTF-8 file must appear in read_failures");
+    assert!(
+        matches!(reason, FailureReason::Unreadable(_)),
+        "expected Unreadable, got {reason:?}"
+    );
+}
+
+/// Criterion 7: `--diff <ref>` against a ref that does not exist returns
+/// `Err`, not an empty clean run.
+///
+/// A bare `TempDir` would also yield `Err` (git refuses because the
+/// directory is not a repository), but for a different reason. To pin
+/// "ref does not exist" specifically we init a repo with one commit so
+/// the resolver reaches the actual ref lookup.
+#[tokio::test]
+async fn diff_against_nonexistent_ref_returns_err() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    init_repo_with_commit(dir.path());
+
+    let args = diff_args("definitely-not-a-real-ref-xyz");
+    let result = resolve(&args, dir.path()).await;
+    assert!(
+        result.is_err(),
+        "an unknown ref must return Err, got Ok({:?})",
+        result.map(|w| (w.by_file.len(), w.read_failures.len()))
+    );
+}
+
+/// Criterion 8: `--diff --something` is rejected before git runs. The error
+/// must mention the ref, so the test cannot pass by failing for an
+/// unrelated reason (git absent, repo missing, etc.).
+#[tokio::test]
+async fn diff_ref_starting_with_dash_is_rejected_before_git() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    // Intentionally no `init_repo_with_commit` here: the guard fires before
+    // git is ever invoked. If the guard regressed, the test would then
+    // fail for a *different* reason (no git repo) rather than the one
+    // being pinned - and the assertion on the message would still hold.
+
+    let args = diff_args("--output=/tmp/whatever");
+    let result = resolve(&args, dir.path()).await;
+    let err = match result {
+        Ok(_) => panic!("a dash-prefixed ref must be rejected, got Ok(_)"),
+        Err(e) => e,
+    };
+    let msg = format!("{err:#}");
+    assert!(
+        msg.contains("--output=/tmp/whatever"),
+        "error must name the rejected ref, got {msg:?}"
+    );
+}
+
+/// `git init` + one commit, so `--diff <something>` reaches the ref
+/// resolution step instead of failing on "not a git repository".
+///
+/// Runs git via the process API. Failure to spawn git fails the test; a
+/// clean exit with the expected file on disk is what subsequent assertions
+/// rest on.
+fn init_repo_with_commit(root: &std::path::Path) {
+    use std::process::Command;
+
+    let run = |args: &[&str]| {
+        let out = Command::new("git")
+            .args(args)
+            .current_dir(root)
+            .output()
+            .expect("git spawns");
+        assert!(
+            out.status.success(),
+            "git {args:?} failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    };
+
+    run(&["init", "--quiet"]);
+    run(&["config", "user.email", "test@example.com"]);
+    run(&["config", "user.name", "test"]);
+    std::fs::write(root.join("seed.txt"), "seed\n").expect("seed");
+    run(&["add", "seed.txt"]);
+    run(&["commit", "--quiet", "-m", "init"]);
+}
+
+/// A file of exactly `WHOLE_FILE_MAX_BYTES` is accepted; one byte more is not.
+///
+/// Pins the boundary itself. `>` and `>=` both pass a test that only uses a
+/// file far over the limit, so the comparison was free to drift by one.
+#[tokio::test]
+async fn a_file_exactly_at_the_size_limit_is_accepted_and_one_byte_over_is_not() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let limit = crate::cli::check::WHOLE_FILE_MAX_BYTES as usize;
+
+    let exact = dir.path().join("exact.py");
+    std::fs::write(&exact, "a".repeat(limit)).expect("write exact");
+    let over = dir.path().join("over.py");
+    std::fs::write(&over, "a".repeat(limit + 1)).expect("write over");
+
+    let args = paths_args(vec![exact.clone(), over.clone()]);
+    let work = crate::cli::check::input::resolve(&args, dir.path())
+        .await
+        .expect("resolve");
+
+    assert!(
+        !work.read_failures.contains_key(&exact),
+        "a file exactly at the limit must be accepted, failures: {:?}",
+        work.read_failures.keys().collect::<Vec<_>>()
+    );
+    assert!(
+        work.read_failures.contains_key(&over),
+        "one byte over the limit must fail, failures: {:?}",
+        work.read_failures.keys().collect::<Vec<_>>()
+    );
+}
+
+/// Bare `drep check` — no paths, no `--staged`, no `--diff` — analyzes the
+/// files under `root`.
+///
+/// The empty-paths case used to return the root path *unexpanded*, i.e. a
+/// directory. `metadata` succeeded on it, the size gate passed, and
+/// `read_to_string` then failed with "Is a directory" - so the plainest
+/// invocation of the primary command reported the repo root as unreadable and
+/// exited 2 having analyzed nothing. Nothing covered it: `src/cli/mod.rs`'s
+/// parse tests even dropped `["drep", "check"]` from their list.
+#[tokio::test]
+async fn bare_check_with_no_paths_expands_the_root_instead_of_reading_a_directory() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::write(dir.path().join("one.py"), "a = 1\n").expect("one.py");
+    std::fs::create_dir_all(dir.path().join("pkg")).expect("mkdir");
+    std::fs::write(dir.path().join("pkg/two.py"), "b = 2\n").expect("two.py");
+
+    let args = paths_args(Vec::new());
+    let work = resolve(&args, dir.path()).await.expect("bare resolve");
+
+    assert!(
+        work.read_failures.is_empty(),
+        "the root directory must be walked, not read as a file, got {:?}",
+        work.read_failures
+    );
+    assert_eq!(
+        work.by_file.len(),
+        2,
+        "both .py files under root must be analyzed, got {:?}",
+        work.by_file
+            .iter()
+            .filter_map(|h| h.first().map(|h| h.file_path.clone()))
+            .collect::<Vec<_>>()
+    );
+}
+
+/// A path the user named explicitly that does not exist is a failure, not a
+/// clean run.
+///
+/// `files::expand_paths` silently skips missing paths - a contract inherited
+/// from 1.x's `scan`, where a stale argument was not worth failing over. Behind
+/// a gate whose whole thesis is that unanalyzed is never clean, it is:
+/// `drep check typo.rs` would otherwise resolve to zero targets and print
+/// "No issues found."
+#[tokio::test]
+async fn an_explicitly_named_missing_path_is_a_failure_not_a_clean_run() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let missing = dir.path().join("typo.py");
+
+    let args = paths_args(vec![missing.clone()]);
+    let work = resolve(&args, dir.path()).await.expect("resolve");
+
+    assert!(
+        work.by_file.is_empty(),
+        "nothing to analyze, got {:?}",
+        work.by_file.len()
+    );
+    assert!(
+        work.read_failures.contains_key(&missing),
+        "a named path that does not exist must reach the gate as a failure, got {:?}",
+        work.read_failures
+    );
+}
+
+/// A failure reason reads as one sentence, not two stacked prefixes.
+///
+/// The constructor embedded "could not read: {err}" while `one_line()` adds
+/// "file could not be read: ", producing
+/// `file could not be read: could not read: Is a directory (os error 21)`.
+/// The reason owns the sentence; the constructor passes the raw error.
+#[tokio::test]
+async fn an_unreadable_file_reports_one_prefix_not_two() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let bad = dir.path().join("bad.py");
+    std::fs::write(&bad, [0xFFu8, 0xFE, 0xFD]).expect("write bad bytes");
+
+    let args = paths_args(vec![bad.clone()]);
+    let work = resolve(&args, dir.path()).await.expect("resolve");
+
+    let reason = work.read_failures.get(&bad).expect("bad.py must fail");
+    let line = reason.to_string();
+    assert_eq!(
+        line.matches("could not").count(),
+        1,
+        "the reason must read as one sentence, got: {line}"
+    );
+}

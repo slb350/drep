@@ -347,6 +347,12 @@ first phase whose mistakes are user-visible rather than internal.
 analysis layers, the union of their failure sets, gating, exit 0/1/2, and
 `--format text|json`.
 
+**Known gap carried into 5b:** `WHOLE_FILE_MAX_BYTES` is enforced only in
+paths mode, at `input.rs`. `--staged` and `--diff` never consult it, so a
+newly-added 5 MB file reaches the LLM whole through `staged_hunks`, and
+`payload::render` has no size guard of its own. The ceiling belongs where the
+payload is built, not on one branch of input resolution.
+
 **Phase 5b — `doctor` and `init`.** Near-mechanical ports of `cli_doctor.py`
 (112 LOC) and `cli_init_hooks.py` (206 LOC) plus the `init-llm` presets.
 

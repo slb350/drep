@@ -1,19 +1,31 @@
 //! `result::AnalysisResult` — criteria 5-7.
 
-use std::collections::BTreeSet;
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use crate::analysis::findings::{Finding, Severity};
-use crate::analysis::result::AnalysisResult;
+use crate::analysis::result::{AnalysisResult, FailureReason};
 
 /// Criterion 5: `merge` unions `failed_files`. Two results that each name
-/// the same file merge to a set of size 1, not 2.
+/// the same file merge to a map of size 1, not 2.
 #[test]
 fn merge_unions_failed_files() {
     let mut a = AnalysisResult::default();
-    a.failed_files.insert(PathBuf::from("src/lib.rs"));
+    a.failed_files.insert(
+        PathBuf::from("src/lib.rs"),
+        FailureReason::Transport {
+            status: Some(500),
+            message: "boom".to_owned(),
+        },
+    );
     let mut b = AnalysisResult::default();
-    b.failed_files.insert(PathBuf::from("src/lib.rs"));
+    b.failed_files.insert(
+        PathBuf::from("src/lib.rs"),
+        FailureReason::Transport {
+            status: Some(500),
+            message: "boom".to_owned(),
+        },
+    );
 
     a.merge(b);
 
@@ -24,7 +36,7 @@ fn merge_unions_failed_files() {
         a.failed_files
     );
     assert!(
-        a.failed_files.contains(&PathBuf::from("src/lib.rs")),
+        a.failed_files.contains_key(&PathBuf::from("src/lib.rs")),
         "the merged file must still be present, got {:?}",
         a.failed_files
     );
@@ -91,23 +103,26 @@ fn has_failures_reflects_failed_files() {
         "a default result has no failures, got true"
     );
 
-    result.failed_files.insert(PathBuf::from("src/lib.rs"));
+    result.failed_files.insert(
+        PathBuf::from("src/lib.rs"),
+        FailureReason::Transport {
+            status: None,
+            message: "x".to_owned(),
+        },
+    );
     assert!(
         result.has_failures(),
         "adding a file must flip has_failures to true"
     );
 }
 
-/// The BTreeSet field is what makes merging safe; `failed_files` is
-/// declared as such so the merge test above is the contract. This pins
-/// that the field is not accidentally a `Vec` or `HashSet` — a `Vec`
-/// would silently break the union semantics and a `HashSet` would survive
-/// but make test reproducibility harder.
+/// The `failed_files` field is what makes merging safe; the type is
+/// declared as `BTreeMap<PathBuf, FailureReason>` so the merge test above
+/// is the contract. This pins that the field is not accidentally a `Vec`
+/// or a `HashSet` — a `Vec` would silently break the union semantics and a
+/// `HashSet` would survive but make test reproducibility harder.
 #[test]
-fn failed_files_is_a_btreeset() {
+fn failed_files_is_a_btreemap() {
     let result = AnalysisResult::default();
-    // The field is private-by-name; we test the public type via
-    // construction. `BTreeSet<PathBuf>` is `Ord` and `Eq`, so
-    // `default()` produces an empty set with the right element type.
-    let _set: BTreeSet<PathBuf> = result.failed_files;
+    let _: BTreeMap<PathBuf, FailureReason> = result.failed_files;
 }

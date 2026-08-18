@@ -90,8 +90,17 @@ pub enum LlmError {
     /// Transport failure after the SDK exhausted its retries. The endpoint
     /// was unreachable, timed out, or returned a retryable HTTP error too
     /// many times. The file went unanalyzed.
-    #[error("LLM transport failed: {0}")]
-    Transport(String),
+    ///
+    /// `status` is the HTTP code when the SDK surfaced one (via
+    /// `open_agent::Error::status_code`); `None` for spawn/timeouts, which
+    /// never have one. Keeping the code as a number rather than only inside
+    /// the message is what lets a caller branch on the value — a 429 is
+    /// meaningfully different from a 500.
+    #[error("LLM transport failed{}: {message}", status.map(|c| format!(" (HTTP {c})")).unwrap_or_default())]
+    Transport {
+        status: Option<u16>,
+        message: String,
+    },
 
     /// A response arrived but no JSON could be extracted. Deterministic: do
     /// NOT retry; the same prompt truncates the same way.
@@ -208,7 +217,15 @@ impl LlmClient {
             Ok(None) => Err(LlmError::Unparseable(
                 "response contained no parseable JSON".to_string(),
             )),
-            Err(e) => Err(LlmError::Transport(format!("{e}"))),
+            Err(e) => {
+                // The SDK exposes the status code separately (via
+                // `status_code`); reading it before formatting means the
+                // number survives as a number, and a later caller can
+                // branch on it rather than parsing the message.
+                let status = e.status_code();
+                let message = format!("{e}");
+                Err(LlmError::Transport { status, message })
+            }
         }
     }
 

@@ -176,7 +176,9 @@ async fn unknown_severity_marks_the_file_unanalyzed() {
         result.findings
     );
     assert!(
-        result.failed_files.contains(&PathBuf::from("src/lib.py")),
+        result
+            .failed_files
+            .contains_key(&PathBuf::from("src/lib.py")),
         "unknown severity must mark the file unanalyzed, got {:?}",
         result.failed_files
     );
@@ -206,7 +208,9 @@ async fn missing_required_field_marks_the_file_unanalyzed() {
 
     assert!(result.findings.is_empty());
     assert!(
-        result.failed_files.contains(&PathBuf::from("src/lib.py")),
+        result
+            .failed_files
+            .contains_key(&PathBuf::from("src/lib.py")),
         "missing field must mark the file unanalyzed, got {:?}",
         result.failed_files
     );
@@ -245,7 +249,9 @@ async fn transport_failure_marks_the_file_failed() {
         result.findings
     );
     assert!(
-        result.failed_files.contains(&PathBuf::from("src/lib.py")),
+        result
+            .failed_files
+            .contains_key(&PathBuf::from("src/lib.py")),
         "transport failure must mark the file failed, got {:?}",
         result.failed_files
     );
@@ -272,7 +278,9 @@ async fn missing_issues_field_marks_the_file_failed() {
         result.findings
     );
     assert!(
-        result.failed_files.contains(&PathBuf::from("src/lib.py")),
+        result
+            .failed_files
+            .contains_key(&PathBuf::from("src/lib.py")),
         "missing `issues` must mark the file failed, got {:?}",
         result.failed_files
     );
@@ -306,7 +314,9 @@ async fn line_beyond_u32_marks_the_file_unanalyzed() {
         result.findings
     );
     assert!(
-        result.failed_files.contains(&PathBuf::from("src/lib.py")),
+        result
+            .failed_files
+            .contains_key(&PathBuf::from("src/lib.py")),
         "a line beyond u32 must mark the file unanalyzed, got {:?}",
         result.failed_files
     );
@@ -373,7 +383,9 @@ async fn an_out_of_range_record_with_a_bad_severity_still_fails_the_file() {
 
     assert!(result.findings.is_empty());
     assert!(
-        result.failed_files.contains(&PathBuf::from("src/lib.py")),
+        result
+            .failed_files
+            .contains_key(&PathBuf::from("src/lib.py")),
         "shape is checked before membership, so the bad severity wins, got {:?}",
         result.failed_files
     );

@@ -42,7 +42,9 @@ async fn truncated_response_yields_partial_findings_and_marks_failed() {
         "truncated response must yield at least one finding, got none"
     );
     assert!(
-        result.failed_files.contains(&PathBuf::from("src/lib.py")),
+        result
+            .failed_files
+            .contains_key(&PathBuf::from("src/lib.py")),
         "truncated response must mark the file failed, got {:?}",
         result.failed_files
     );

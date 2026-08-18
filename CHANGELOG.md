@@ -7,6 +7,69 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Landed - 2026-08-17 — Phase 5a: `drep check` end to end
+
+`src/cli/check/{mod,input,deterministic,render}.rs` plus 27 acceptance tests.
+`failed_files` became `BTreeMap<PathBuf, FailureReason>` and
+`LlmError::Transport` now carries the HTTP status as a number, so a 429 or 500
+reaches the user instead of being discarded at `Err(_)`.
+
+Three correctness bugs, all found by review rather than by the suite:
+
+- **Bare `drep check` could not succeed.** With no paths the root path was
+  returned *unexpanded* — a directory. `metadata` succeeded, the size gate
+  passed, and `read_to_string` then failed with "Is a directory", so the
+  plainest invocation of the primary command reported the repo root as
+  unreadable and exited 2 having analyzed nothing. Both branches go through
+  `expand_paths` now. Nothing covered it; `src/cli/mod.rs`'s parse tests had
+  even dropped `["drep", "check"]` from their list.
+- **`render` computed its own exit code** and ignored `--fail-on`, so a run
+  with an LLM finding and no `--fail-on` exited 0 while the JSON reported
+  `"exit": 1`. The gate is the only source of the verdict, and `exit` is now a
+  field on `CheckOutcome` so the two cannot be paired wrongly. Found by
+  `cargo mutants`, not by the hand-written break-tests: criterion 23 only
+  exercised a failure run, where every way of computing the exit agrees on 2.
+- **An explicitly named path that does not exist read as clean.**
+  `expand_paths` silently skips missing paths — a deliberate contract
+  inherited from 1.x `scan`. Behind a gate whose thesis is that unanalyzed is
+  never clean, `drep check typo.rs` printing "No issues found." is the same
+  category as a file too large to send.
+
+From the `/simplify` pass, beyond the above:
+
+- The deterministic and LLM layers now run under `tokio::join!`. They share no
+  data, and the tool leg is otherwise pure added latency — a warm
+  `cargo clippy` on this repo is ~3.5 s while the LLM leg is multi-second
+  regardless.
+- Two discarded `git` queries per run deleted: `staged_files`/`changed_since`
+  were called only as an error probe, and the hunk calls that follow go through
+  the same helpers with the same `has_head` probe and the same dash-guard.
+  ~37 ms of fixed startup latency on every hook run.
+- `plan_tasks` keyed a map on the language *name* and then re-found the
+  language by scanning `all_languages()` — the CLI re-deriving identity from a
+  string that `languages/` owns, with an unreachable `else { continue }` that
+  would have dropped a whole language's batch. Its map values were cloned
+  `Vec<Vec<Hunk>>` — a deep copy of every line of every file — read only for
+  the file path that was already in hand.
+- `union_failures` states the failure-union rule once; it had been written
+  longhand at four sites, each re-explaining it.
+- `severity_name` in `render` was a second wire-name table beside
+  `Severity::as_str`, which exists precisely to stop that.
+- One `PATH_LOCK` for the crate. There were two, in different modules — and two
+  mutexes do not exclude each other, so the PATH-rewriting suites raced rather
+  than taking turns.
+- `run_with`, the cache seam added so tests could avoid the developer's real
+  `~/Library/Caches`, had zero callers; the in-process tests now use it.
+
+Testing:
+- 282 passing, 27 added
+- 12 break-tests on the contract rules; `cargo mutants` 75 mutants, 0 missed
+- Two findings surfaced by the delegated test-writing itself: the LLM cache is
+  process-global, so a stale entry from one test satisfied another and made an
+  unreachable-endpoint test exit 0; and a `MockServer` returned from a
+  `block_on` block is dropped at the closing brace, freeing the port before a
+  subprocess connects.
+
 ### Landed - 2026-08-17 — Phase 4b review-gate fixes
 
 The pre-push gate (drep 1.x reviewing drep 2.0) blocked the Phase 4b push with

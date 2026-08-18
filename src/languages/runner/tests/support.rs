@@ -6,14 +6,8 @@
 //! If you add a file here, declare it in this directory's `mod.rs`.
 
 use std::path::Path;
-use std::sync::Mutex;
 
 use crate::languages::spec::ToolSpec;
-
-// Serialize the PATH-mutating tests. They prepend a temp directory to
-// PATH to make a fake binary resolvable, which would race if two ran in
-// parallel.
-pub(crate) static PATH_LOCK: Mutex<()> = Mutex::new(());
 
 /// A minimal ruff-shaped spec for parser tests, avoiding the real
 /// `definitions::RUFF` so the parser logic can be exercised without

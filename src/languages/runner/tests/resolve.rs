@@ -30,7 +30,7 @@ fn repo_local_executable_is_preferred_over_path() {
 
 #[test]
 fn non_executable_repo_local_path_falls_through_to_path() {
-    let _guard = PATH_LOCK.lock().unwrap();
+    let _guard = crate::test_support::PATH_LOCK.lock().unwrap();
     let dir = TempDir::new().unwrap();
     // exists, but not executable - must be skipped, not picked.
     std::fs::write(dir.path().join("mytool"), "not executable").unwrap();

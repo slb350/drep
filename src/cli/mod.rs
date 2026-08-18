@@ -52,9 +52,9 @@ pub enum OutputFormat {
 }
 
 /// Dispatch a parsed command.
-pub fn run(cli: Cli) -> Result<Exit> {
+pub async fn run(cli: Cli) -> Result<Exit> {
     match cli.command {
-        Command::Check(_) => unimplemented("check", "phase 5"),
+        Command::Check(args) => check::run(&args, std::path::Path::new(".")).await,
         Command::LintDocs(_) => unimplemented("lint-docs", "phase 6"),
         Command::Doctor => unimplemented("doctor", "phase 5"),
         Command::Init => unimplemented("init", "phase 5"),
@@ -125,16 +125,15 @@ mod tests {
         assert!(Cli::try_parse_from(["drep", "check", "--fail-on", "critical"]).is_err());
     }
 
-    #[test]
-    fn unimplemented_commands_error_rather_than_exiting_clean() {
+    #[tokio::test]
+    async fn unimplemented_commands_error_rather_than_exiting_clean() {
         for argv in [
-            vec!["drep", "check"],
             vec!["drep", "lint-docs"],
             vec!["drep", "doctor"],
             vec!["drep", "init"],
         ] {
             let cli = Cli::try_parse_from(argv).unwrap();
-            assert!(run(cli).is_err());
+            assert!(run(cli).await.is_err());
         }
     }
 }

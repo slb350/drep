@@ -89,6 +89,29 @@ impl std::fmt::Display for ToolOutputError {
 
 impl std::error::Error for ToolOutputError {}
 
+/// Whether a path is a regular file that the OS will execute.
+///
+/// One function with the `cfg` inside its body, not two cfg-gated
+/// definitions. Two definitions means the inactive one is unreachable on
+/// this platform, so every mutation of it survives by construction and
+/// shows up as an untestable finding in `cargo mutants`. This way the
+/// mutation lands in code the tests actually run.
+fn is_executable(path: &Path) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        match path.metadata() {
+            Ok(meta) => meta.is_file() && meta.permissions().mode() & 0o111 != 0,
+            Err(_) => false,
+        }
+    }
+    // Windows has no executable bit; existence is the only signal there is.
+    #[cfg(not(unix))]
+    {
+        path.is_file()
+    }
+}
+
 /// Find the executable for a tool, preferring the project's own copy.
 ///
 /// Repo-local first so a project is checked by the version its CI runs -
@@ -99,27 +122,6 @@ impl std::error::Error for ToolOutputError {}
 /// half-installed shims on `PATH` would otherwise block a tool that
 /// happens to be on PATH under the same name.
 pub fn resolve_tool(spec: &ToolSpec, root: &Path) -> Option<PathBuf> {
-    // One function with the `cfg` inside its body, not two cfg-gated
-    // definitions. Two definitions means the inactive one is unreachable on
-    // this platform, so every mutation of it survives by construction and
-    // shows up as an untestable finding in `cargo mutants`. This way the
-    // mutation lands in code the tests actually run.
-    fn is_executable(path: &Path) -> bool {
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            match path.metadata() {
-                Ok(meta) => meta.is_file() && meta.permissions().mode() & 0o111 != 0,
-                Err(_) => false,
-            }
-        }
-        // Windows has no executable bit; existence is the only signal there is.
-        #[cfg(not(unix))]
-        {
-            path.is_file()
-        }
-    }
-
     for relative in spec.local_paths {
         let candidate = root.join(relative);
         if is_executable(&candidate) {
@@ -132,11 +134,18 @@ pub fn resolve_tool(spec: &ToolSpec, root: &Path) -> Option<PathBuf> {
 
 /// Look up `command` on PATH, mirroring `shutil.which` from the Python
 /// reference (which `std::process::Command` does not expose directly).
+///
+/// Crucially checks executability, not just existence: a half-installed
+/// shim on PATH that is not executable would otherwise be reported as `Ok`
+/// by `tool_status` only to fail when `run_tool` actually executed it.
+/// Using the same `is_executable` helper the repo-local branch uses keeps
+/// the two paths consistent — a path that passes one is rejected by the
+/// other is the bug this guard exists to prevent.
 fn which_first(command: &str) -> Option<String> {
     let path = std::env::var_os("PATH")?;
     for dir in std::env::split_paths(&path) {
         let candidate = dir.join(command);
-        if candidate.is_file() {
+        if is_executable(&candidate) {
             return Some(candidate.to_string_lossy().into_owned());
         }
     }

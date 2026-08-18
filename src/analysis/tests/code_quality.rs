@@ -7,12 +7,12 @@
 //! returned `AnalysisResult` and the mock's request count where the
 //! criterion depends on the call actually happening (or not).
 
-use std::collections::BTreeSet;
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use wiremock::MockServer;
 
-use crate::analysis::result::AnalysisResult;
+use crate::analysis::result::{AnalysisResult, FailureReason};
 
 use crate::diff::hunks::{Hunk, HunkLine};
 
@@ -113,11 +113,13 @@ async fn clean_response_yields_no_findings_and_no_failures() {
     );
 }
 
-/// The `failed_files` field is a `BTreeSet` so the merge union is
-/// correct. Pinning the type here rules out a refactor that swaps it
-/// for a `Vec` and silently breaks the union semantics.
+/// The `failed_files` field is a `BTreeMap<PathBuf, FailureReason>` so the
+/// merge union is correct and the reason survives the boundary. Pinning the
+/// type here rules out a refactor that swaps it for a `Vec` and silently
+/// breaks the union semantics (or for a `BTreeSet<PathBuf>` and throws the
+/// reason away).
 #[test]
-fn failed_files_is_a_btreeset_in_the_returned_result() {
+fn failed_files_is_a_btreemap_in_the_returned_result() {
     let result = AnalysisResult::default();
-    let _: BTreeSet<PathBuf> = result.failed_files;
+    let _: BTreeMap<PathBuf, FailureReason> = result.failed_files;
 }

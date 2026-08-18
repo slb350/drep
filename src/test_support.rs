@@ -104,3 +104,12 @@ pub(crate) async fn mount_sse(server: &MockServer, template: ResponseTemplate) {
         .mount(server)
         .await;
 }
+
+/// Serialises every test that rewrites the process `PATH`.
+///
+/// Crate-wide, and that is the point: a second `Mutex` in another test module
+/// does not exclude this one, so two suites prepending their own temp
+/// directory to `PATH` would race rather than take turns. There was briefly
+/// one here and one in `cli::check::tests::resolution`, which is the failure
+/// mode the lock exists to prevent.
+pub(crate) static PATH_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());

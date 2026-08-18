@@ -112,7 +112,7 @@ async fn persistent_500_yields_transport_after_retrying() {
         .await
         .expect_err("500 must error");
     assert!(
-        matches!(err, LlmError::Transport(_)),
+        matches!(err, LlmError::Transport { .. }),
         "persistent 500 must be Transport, got {err:?}"
     );
 
@@ -145,7 +145,7 @@ async fn error_400_is_not_retried() {
         .await
         .expect_err("400 must error");
     assert!(
-        matches!(err, LlmError::Transport(_)),
+        matches!(err, LlmError::Transport { .. }),
         "non-retryable error must still surface as Transport, got {err:?}"
     );
 

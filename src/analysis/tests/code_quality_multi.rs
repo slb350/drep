@@ -5,7 +5,6 @@
 //! approaches were tried and neither discriminates — see the note on that
 //! test.
 
-use std::collections::BTreeSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -81,12 +80,10 @@ async fn analyze_files_merges_findings_and_unions_failures() {
         "every file's finding must reach the merged result"
     );
 
-    let failed: BTreeSet<PathBuf> = result.failed_files.clone();
+    let failed: Vec<PathBuf> = result.failed_files.keys().cloned().collect();
     assert_eq!(
         failed,
-        [PathBuf::from("src/a.py"), PathBuf::from("src/b.py")]
-            .into_iter()
-            .collect::<BTreeSet<_>>(),
+        vec![PathBuf::from("src/a.py"), PathBuf::from("src/b.py")],
         "exactly the two failing files, by identity - a blanket insert would \
          also name src/c.py"
     );

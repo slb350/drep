@@ -20,7 +20,8 @@
 //!    truncation permanent for the whole TTL, and this layer does not know
 //!    about `--fail-on` (a caller deciding otherwise would make
 //!    `failed_files` depend on a CLI flag, which is the wrong layering).
-//! 8. `Err(LlmError::*)` → no findings, file in `failed_files`.
+//! 8. `Err(LlmError::*)` → no findings, file in `failed_files` with the
+//!    specific LLM layer that failed.
 //!
 //! The five rules around out-of-range lines, missing fields, unknown
 //! severities, and `issues` itself being absent are at the boundary between
@@ -36,7 +37,7 @@ use serde_json::Value;
 use crate::analysis::findings::{Finding, LlmSeverity};
 use crate::analysis::payload;
 use crate::analysis::prompt::build_analysis_prompt;
-use crate::analysis::result::AnalysisResult;
+use crate::analysis::result::{AnalysisResult, FailureReason};
 use crate::config::LlmConfig;
 use crate::diff::hunks::Hunk;
 use crate::languages;
@@ -155,10 +156,14 @@ impl CodeQualityAnalyzer {
                 }
                 result
             }
-            // Rule 8: any LLM error → no findings, file in `failed_files`.
-            Err(_) => {
+            // Rule 8: any LLM error → no findings, file in `failed_files`
+            // with the specific reason. The detail is kept rather than
+            // discarded, so the CLI can render a line the user can act on.
+            Err(err) => {
                 let mut result = AnalysisResult::default();
-                result.failed_files.insert(first.file_path.clone());
+                result
+                    .failed_files
+                    .insert(first.file_path.clone(), LlmError::into_failure_reason(err));
                 result
             }
         }
@@ -177,6 +182,41 @@ impl CodeQualityAnalyzer {
             merged.merge(result);
         }
         merged
+    }
+}
+
+/// Map an `LlmError` to the failure reason the caller carries in
+/// `AnalysisResult::failed_files`.
+///
+/// Distinct from the parsing-path reasons because the LLM layer's failure
+/// modes are a different axis: a parse failure is a content problem, a
+/// transport failure is a connectivity problem. The shape is forced by the
+/// spec — `FailureReason::Transport` keeps the HTTP status as a number — so
+/// a caller can branch on `status` without re-parsing the message.
+fn into_failure_reason(err: LlmError) -> FailureReason {
+    match err {
+        LlmError::Transport { status, message } => FailureReason::Transport { status, message },
+        LlmError::Unparseable(message) => FailureReason::Unparseable(message),
+        // `NotConfigured` is a configuration failure at the LLM boundary —
+        // not a connectivity failure, but indistinguishable from one to the
+        // gate, which only cares whether the file was analyzed. Mapping to
+        // `Transport { status: None }` keeps the exit code 2 path uniform
+        // without inventing a new variant the JSON output would have to
+        // distinguish.
+        LlmError::NotConfigured(message) => FailureReason::Transport {
+            status: None,
+            message,
+        },
+    }
+}
+
+impl LlmError {
+    /// Translate into the [`FailureReason`] the analyzer carries.
+    ///
+    /// Public via the type so the CLI tests can pin the mapping without
+    /// reaching for the analyzer's private function.
+    pub fn into_failure_reason(self) -> FailureReason {
+        into_failure_reason(self)
     }
 }
 
@@ -208,12 +248,19 @@ fn parse_response(
     // Hoisted: every failure path below names the same file, and every
     // finding carries the same path string.
     let path_string = file_path.to_string_lossy().into_owned();
-    let mut file_failed = truncated;
+    let mut malformed_reason: Option<String> = if truncated {
+        Some("response was truncated".to_owned())
+    } else {
+        None
+    };
 
     // The response shape is `{"issues": [...], "summary": "..."}`. Anything
     // else is malformed, and the whole file is unanalyzed.
     let Some(issues) = value.get("issues").and_then(Value::as_array) else {
-        result.failed_files.insert(file_path.to_path_buf());
+        result.failed_files.insert(
+            file_path.to_path_buf(),
+            FailureReason::MalformedFinding("response has no `issues` array".to_owned()),
+        );
         return result;
     };
 
@@ -226,18 +273,23 @@ fn parse_response(
             // otherwise-valid array should still let the well-formed records
             // through. The failure class is "we do not fully understand the
             // response", not "every record is wrong".
-            IssueOutcome::Malformed => file_failed = true,
+            IssueOutcome::Malformed(detail) => malformed_reason = Some(detail),
         }
     }
 
-    if file_failed {
-        result.failed_files.insert(file_path.to_path_buf());
+    if let Some(detail) = malformed_reason {
+        let reason = if truncated {
+            FailureReason::Truncated
+        } else {
+            FailureReason::MalformedFinding(detail)
+        };
+        result.failed_files.insert(file_path.to_path_buf(), reason);
     }
     result
 }
 
 /// Parse one issue record into a [`Finding`], a drop, or a malformed
-/// marker.
+/// marker with a reason.
 ///
 /// The three outcomes are deliberately distinct:
 ///
@@ -256,39 +308,38 @@ fn parse_issue(issue: &Value, payload: &payload::Payload, file_path: &str) -> Is
     // `line` must be a positive integer. A missing field, a string,
     // a float, or a non-positive number are all malformed.
     let Some(line) = issue.get("line").and_then(Value::as_u64) else {
-        return IssueOutcome::Malformed;
+        return IssueOutcome::Malformed("missing or non-integer `line`".to_owned());
     };
     // `Value::as_u64` already rejects non-integers; the only
     // remaining "not a positive integer" case is zero. A line of
     // zero is a model artifact, not a real line.
     if line == 0 {
-        return IssueOutcome::Malformed;
+        return IssueOutcome::Malformed("`line` is zero".to_owned());
     }
     // A line beyond `u32` is a model artifact of exactly the same class as
     // a line of zero, and this module's whole thesis is that we do not guess.
     // Clamping to `u32::MAX` happened to land in `Dropped` because that value
     // is never in `valid_lines` - correct by accident, via a silent clamp.
     let Ok(line) = u32::try_from(line) else {
-        return IssueOutcome::Malformed;
+        return IssueOutcome::Malformed("`line` is beyond u32".to_owned());
     };
 
     // `severity` must be one of the levels the prompt asked for. Anything
     // else is malformed: we cannot map it to a `Severity`, and we do not
     // silently coerce. The vocabulary lives on `LlmSeverity` so the prompt
     // and this parser cannot list different levels.
-    let Some(severity) = issue
-        .get("severity")
-        .and_then(Value::as_str)
-        .and_then(|s| s.parse::<LlmSeverity>().ok())
-        .map(LlmSeverity::to_severity)
-    else {
-        return IssueOutcome::Malformed;
+    let Some(severity_str) = issue.get("severity").and_then(Value::as_str) else {
+        return IssueOutcome::Malformed("missing `severity`".to_owned());
     };
+    let Ok(severity) = severity_str.parse::<LlmSeverity>() else {
+        return IssueOutcome::Malformed(format!("unknown severity `{severity_str}`"));
+    };
+    let severity = severity.to_severity();
 
     // `message` is the only remaining required field. Missing or
     // non-string is malformed.
     let Some(message) = issue.get("message").and_then(Value::as_str) else {
-        return IssueOutcome::Malformed;
+        return IssueOutcome::Malformed("missing or non-string `message`".to_owned());
     };
 
     let kind = issue
@@ -341,6 +392,6 @@ enum IssueOutcome {
     Finding(Finding),
     /// A valid record whose line was not in `payload.valid_lines`.
     Dropped,
-    /// An unparseable record (unknown severity, missing field, etc.).
-    Malformed,
+    /// An unparseable record, with a reason naming what was wrong.
+    Malformed(String),
 }

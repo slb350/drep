@@ -8,19 +8,94 @@
 //! green-light a commit whenever the LLM endpoint was unreachable, which is
 //! worse than having no gate at all.
 //!
-//! `failed_files` is a [`BTreeSet`] rather than a `Vec` because two passes
+//! `failed_files` is a [`BTreeMap`] rather than a `Vec` because two passes
 //! over the same file set must UNION, never sum. Summing counts one
 //! unreachable endpoint twice, drifting the failure count up without any
-//! matching file to investigate.
+//! matching file to investigate. The map's value carries the reason so the
+//! caller can render something a user can act on, not just a path.
 //!
 //! `dropped_out_of_range` counts rather than silently drops out-of-range
 //! findings so that a model which consistently reports wrong lines is
 //! observable to the caller — not invisible.
 
-use std::collections::BTreeSet;
+use std::collections::BTreeMap;
+use std::fmt;
 use std::path::PathBuf;
 
 use crate::analysis::findings::Finding;
+
+/// Why one file went unanalyzed.
+///
+/// A bare set of paths cannot tell a dead endpoint from a rate limit from a
+/// truncated response, and the caller needs that to print something a user can
+/// act on. `LlmError` already carries the detail; it used to be discarded at
+/// the analyzer boundary.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FailureReason {
+    /// The endpoint was unreachable, or returned a retryable status too many
+    /// times. `status` is the HTTP code when there was one.
+    Transport {
+        status: Option<u16>,
+        message: String,
+    },
+    /// A response arrived and no JSON could be extracted from it.
+    Unparseable(String),
+    /// The response parsed only after closing unbalanced delimiters, so it is
+    /// a prefix of what the model meant to say.
+    Truncated,
+    /// A record in the response could not be understood - unknown severity,
+    /// missing field, unusable line number.
+    MalformedFinding(String),
+    /// A deterministic tool that should have run could not.
+    ToolUnavailable { tool: String, detail: String },
+    /// The file was too large to send whole.
+    TooLarge { bytes: u64, limit: u64 },
+    /// The file could not be read from disk.
+    Unreadable(String),
+}
+
+impl FailureReason {
+    /// A single line suitable for a terminal, derived from the variant.
+    ///
+    /// The HTTP status is rendered next to the message so a 429 is visible
+    /// without the user having to match the message against a status code
+    /// list. This is the load-bearing reason the `Transport` variant carries
+    /// the status as a number rather than only inside the string.
+    pub fn one_line(&self) -> String {
+        match self {
+            FailureReason::Transport {
+                status: Some(code),
+                message,
+            } => {
+                format!("LLM transport failed (HTTP {code}): {message}")
+            }
+            FailureReason::Transport {
+                status: None,
+                message,
+            } => {
+                format!("LLM transport failed: {message}")
+            }
+            FailureReason::Unparseable(message) => {
+                format!("LLM response was unparseable: {message}")
+            }
+            FailureReason::Truncated => "response was truncated".to_owned(),
+            FailureReason::MalformedFinding(detail) => format!("malformed finding: {detail}"),
+            FailureReason::ToolUnavailable { tool, detail } => {
+                format!("{tool} could not run: {detail}")
+            }
+            FailureReason::TooLarge { bytes, limit } => {
+                format!("file is too large ({bytes} bytes; limit is {limit})")
+            }
+            FailureReason::Unreadable(detail) => format!("file could not be read: {detail}"),
+        }
+    }
+}
+
+impl fmt::Display for FailureReason {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.one_line())
+    }
+}
 
 /// What one analysis pass produced.
 ///
@@ -32,14 +107,31 @@ use crate::analysis::findings::Finding;
 pub struct AnalysisResult {
     /// Findings the analyzer could attribute to a real line of code.
     pub findings: Vec<Finding>,
-    /// Files that could not be fully analyzed. A `BTreeSet` because two
-    /// passes over the same file set must UNION, never sum — summing counts
-    /// one unreachable endpoint twice.
-    pub failed_files: BTreeSet<PathBuf>,
+    /// Files that could not be fully analyzed, with the reason. A `BTreeMap`
+    /// because two passes over the same file set must UNION, never sum —
+    /// summing counts one unreachable endpoint twice.
+    pub failed_files: BTreeMap<PathBuf, FailureReason>,
     /// Findings discarded because their line was not in the payload's
     /// `valid_lines`. Counted rather than silently dropped, so the drop is
     /// observable.
     pub dropped_out_of_range: usize,
+}
+
+/// Fold `src` into `dst`, keeping the reason already present on a collision.
+///
+/// The one statement of the failure-union rule. It was written out longhand as
+/// `entry().or_insert()` at four sites - `merge` here plus three in the CLI -
+/// each with its own comment re-explaining it. The two analysis layers cover
+/// the same files, so the sets union rather than sum: one unreachable endpoint
+/// is one failure, not two. First-wins because the reasons cannot be
+/// meaningfully combined and the earlier layer saw the file first.
+pub fn union_failures(
+    dst: &mut BTreeMap<PathBuf, FailureReason>,
+    src: BTreeMap<PathBuf, FailureReason>,
+) {
+    for (path, reason) in src {
+        dst.entry(path).or_insert(reason);
+    }
 }
 
 impl AnalysisResult {
@@ -50,9 +142,18 @@ impl AnalysisResult {
     /// (code quality, docstrings, ...) and combine their results without
     /// losing the failure signal. Calling `merge` in a loop over per-file
     /// results inside `analyze_files` is the planned usage.
+    ///
+    /// On a key collision in `failed_files`, the **first** reason wins. A
+    /// file failing twice is still one failure, and the two reasons are not
+    /// meaningfully combinable - the first one is at least specific to the
+    /// file, while a hypothetical last-wins policy would let a later
+    /// analyzer overwrite a more informative first reason with a generic
+    /// one.
     pub fn merge(&mut self, other: AnalysisResult) {
         self.findings.extend(other.findings);
-        self.failed_files.extend(other.failed_files);
+        for (path, reason) in other.failed_files {
+            self.failed_files.entry(path).or_insert(reason);
+        }
         self.dropped_out_of_range = self
             .dropped_out_of_range
             .saturating_add(other.dropped_out_of_range);
@@ -66,5 +167,63 @@ impl AnalysisResult {
     /// the LLM endpoint goes down.
     pub fn has_failures(&self) -> bool {
         !self.failed_files.is_empty()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `merge` keeps the first reason on a key collision - the documented
+    /// first-writer-wins rule. A last-wins policy would silently overwrite
+    /// the more informative first reason with a generic later one.
+    #[test]
+    fn merge_keeps_first_reason_on_key_collision() {
+        let mut a = AnalysisResult::default();
+        a.failed_files.insert(
+            PathBuf::from("src/lib.rs"),
+            FailureReason::Transport {
+                status: Some(429),
+                message: "rate limited".to_owned(),
+            },
+        );
+
+        let mut b = AnalysisResult::default();
+        b.failed_files.insert(
+            PathBuf::from("src/lib.rs"),
+            FailureReason::Transport {
+                status: Some(500),
+                message: "internal".to_owned(),
+            },
+        );
+
+        a.merge(b);
+
+        assert_eq!(a.failed_files.len(), 1);
+        let reason = a.failed_files.get(&PathBuf::from("src/lib.rs")).unwrap();
+        assert_eq!(
+            reason,
+            &FailureReason::Transport {
+                status: Some(429),
+                message: "rate limited".to_owned(),
+            },
+            "first reason wins on collision"
+        );
+    }
+
+    /// A `Transport` failure with a status surfaces the code in the rendered
+    /// line. The whole point of keeping the status as a number is that it
+    /// reaches the user; this pins that the rendering preserves it.
+    #[test]
+    fn transport_render_includes_the_http_status() {
+        let reason = FailureReason::Transport {
+            status: Some(429),
+            message: "rate limited".to_owned(),
+        };
+        let rendered = reason.one_line();
+        assert!(
+            rendered.contains("429"),
+            "rendered line must contain 429, got {rendered:?}"
+        );
     }
 }
