@@ -7,6 +7,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Rust rewrite - 2026-08-18 - an empty LLM response is a transport failure
+
+The second thing drep's own gated push found. With clippy fixed, the push was
+blocked again - this time by 7 of 49 files reporting:
+
+```
+LLM response was unparseable: response contained no parseable JSON
+```
+
+Re-running one of those files immediately afterwards **succeeded**, with
+findings and exit 0. So the failure was never deterministic, and the retry
+taxonomy had a gap that Phase 3 stated confidently in the wrong direction:
+
+> An empty response body becomes `LlmError::Unparseable`, not an empty success
+> - "the model returned nothing" is a deterministic outcome for the same
+> prompt + max_tokens pair.
+
+It is not. `run_one_query` returned `Ok(None)` for two unrelated situations -
+a body we could not parse, and *no body at all* - and `Ok(None)` is precisely
+the path the retry layer must not retry. So provider flakiness was being
+classified as a deterministic parse failure and failed immediately, which is
+the same `finish_reason='error'` that blocked three consecutive pushes under
+1.x. Phase 3 split retry by failure class specifically to fix that, and then
+put the empty-response case on the wrong side of its own split.
+
+**An empty (or whitespace-only) body is now `open_agent::Error::stream`**,
+which the SDK classifies retryable. That is both accurate - the stream
+completed carrying no content - and nearly free, because a response with no
+output tokens cost nothing to produce. A **non-empty** body that yields no JSON
+still returns `Ok(None)` and still never retries: re-sending it buys the same
+prose for the price of a full reasoning call.
+
+The request count is what the tests assert. Classification alone is not enough
+- an implementation that labelled the empty body correctly and still refused to
+retry would pass without it.
+
+
 ### Rust rewrite - 2026-08-18 - `cargo clippy` never actually ran
 
 Found by pushing. The 2.0 gate blocked its own first real push with exit 2 and

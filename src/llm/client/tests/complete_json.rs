@@ -63,14 +63,21 @@ async fn prose_without_json_yields_unparseable() {
     );
 }
 
-/// Criterion 24: an empty 200 body yields `Unparseable`.
+/// An empty response body is **retried**, and surfaces as `Transport`.
 ///
-/// "Empty body" here means an SSE response whose payload is empty - not an
-/// HTTP 200 with no chunks at all. The SDK's stream completes successfully
-/// and emits no `ContentBlock::Text`, which the parser reports as no JSON.
-/// The contract: never an empty success.
+/// This test asserted the opposite until drep's own first gated push
+/// disproved it: 7 of 49 files came back with no parseable JSON, and
+/// re-running one immediately afterwards succeeded with findings. "The model
+/// returned nothing" is provider flakiness, not a deterministic property of
+/// the prompt - the same `finish_reason='error'` that blocked three
+/// consecutive pushes under 1.x, where a single `max_retries` governed both
+/// failure classes.
+///
+/// The request count is the load-bearing assertion. Without it, a
+/// implementation that classified the empty body correctly but still refused
+/// to retry would pass.
 #[tokio::test]
-async fn empty_body_yields_unparseable() {
+async fn an_empty_body_is_retried_and_becomes_transport() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/v1/chat/completions"))
@@ -78,15 +85,78 @@ async fn empty_body_yields_unparseable() {
         .mount(&server)
         .await;
 
-    let client = LlmClient::new(&cfg_for(&server, "m", 3)).expect("client");
-    let err = client
+    let cfg = cfg_for(&server, "m", 3);
+    let err = fast_retry_client(&cfg)
         .complete_json("sys", "user")
         .await
-        .expect_err("unparseable");
+        .expect_err("an endlessly empty response must fail the file");
+
+    assert!(
+        matches!(err, LlmError::Transport { .. }),
+        "an empty body is a transport failure, not a parse failure, got {err:?}"
+    );
+    assert!(
+        request_count(&server).await > 1,
+        "and it must have been retried; the endpoint saw only one request"
+    );
+}
+
+/// Whitespace-only counts as empty.
+///
+/// A provider that returns a lone newline has said nothing, and treating that
+/// as "unparseable prose" would put it back on the non-retrying path.
+#[tokio::test]
+async fn a_whitespace_only_body_is_treated_as_empty() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/chat/completions"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_raw(sse(&["\n  \n"]), "text/event-stream"),
+        )
+        .mount(&server)
+        .await;
+
+    let cfg = cfg_for(&server, "m", 3);
+    let err = fast_retry_client(&cfg)
+        .complete_json("sys", "user")
+        .await
+        .expect_err("whitespace is not an answer");
+
+    assert!(matches!(err, LlmError::Transport { .. }), "got {err:?}");
+    assert!(request_count(&server).await > 1, "must retry");
+}
+
+/// A **non-empty** unparseable body is NOT retried.
+///
+/// The other half of the split, and the reason the split exists: re-sending a
+/// prompt whose answer was prose costs a full reasoning call to receive the
+/// same prose. Only the request count can tell this apart from the empty case.
+#[tokio::test]
+async fn a_non_empty_unparseable_body_is_not_retried() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/chat/completions"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(
+            sse(&["I am afraid I cannot help with that."]),
+            "text/event-stream",
+        ))
+        .mount(&server)
+        .await;
+
+    let cfg = cfg_for(&server, "m", 3);
+    let err = fast_retry_client(&cfg)
+        .complete_json("sys", "user")
+        .await
+        .expect_err("prose is not JSON");
 
     assert!(
         matches!(err, LlmError::Unparseable(_)),
-        "empty body must be Unparseable, got {err:?}"
+        "prose is a deterministic parse failure, got {err:?}"
+    );
+    assert_eq!(
+        request_count(&server).await,
+        1,
+        "and re-asking would only buy the same prose again"
     );
 }
 

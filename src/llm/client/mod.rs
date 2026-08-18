@@ -166,10 +166,12 @@ impl LlmClient {
     /// Send one prompt and return the extracted JSON.
     ///
     /// Concatenates `ContentBlock::Text` blocks in arrival order; other block
-    /// variants are ignored. An empty response body becomes [`LlmError::Unparseable`],
-    /// not an empty success - "the model returned nothing" is a deterministic
-    /// outcome for the same prompt + max_tokens pair, and the caller must be
-    /// able to distinguish it from a clean parse.
+    /// variants are ignored. An empty response body is **retried** as a
+    /// transport failure and, if it keeps coming back empty, surfaces as
+    /// [`LlmError::Transport`] - see `run_one_query` for why "the model
+    /// returned nothing" is not the deterministic outcome it looks like. A
+    /// non-empty body that yields no JSON is [`LlmError::Unparseable`] and is
+    /// never retried.
     pub async fn complete_json(
         &self,
         system_prompt: &str,
@@ -231,10 +233,11 @@ impl LlmClient {
 
     /// One attempt: stream the response, concatenate text, parse.
     ///
-    /// Returns `Ok(None)` when the query succeeded but no JSON could be
-    /// extracted - this is the path the retry layer must NOT retry.
-    /// Returns `Err(SdkError)` for any transport-level failure, which the
-    /// retry layer *will* retry when the SDK classifies it as transient.
+    /// Returns `Ok(None)` when the query returned text we could not parse -
+    /// the path the retry layer must NOT retry, because the same prompt
+    /// produces the same unparseable answer. Returns `Err(SdkError)` for any
+    /// transport-level failure, *including an empty response*, which the retry
+    /// layer will retry when the SDK classifies it as transient.
     async fn run_one_query(
         &self,
         prompt: &str,
@@ -248,6 +251,32 @@ impl LlmClient {
                 text.push_str(&t.text);
             }
         }
+
+        // An empty body is a **transport** failure, not a parse failure.
+        //
+        // This distinction was learned the expensive way. Both cases used to
+        // return `Ok(None)` and become a non-retrying `Unparseable`, on the
+        // stated reasoning that "the model returned nothing" repeats
+        // deterministically for the same prompt. It does not: on drep's own
+        // first gated push, 7 of 49 files came back with no parseable JSON,
+        // and re-running one of them immediately afterwards succeeded with
+        // findings and exit 0. The provider had simply returned nothing that
+        // time - which is exactly the `finish_reason='error'` flakiness that
+        // blocked three consecutive pushes under 1.x.
+        //
+        // `Error::stream` is classified retryable by the SDK, which is both
+        // accurate (the stream completed carrying no content) and nearly free:
+        // a response with no output tokens cost nothing to produce, so asking
+        // again is cheap. A *non-empty* body we cannot parse still returns
+        // `Ok(None)` and still does not retry - that is the deterministic case
+        // the split was built for, and re-sending it burns a full reasoning
+        // call for the same answer.
+        if text.trim().is_empty() {
+            return Err(open_agent::Error::stream(
+                "the model returned an empty response",
+            ));
+        }
+
         Ok(extract_json(&text))
     }
 }
