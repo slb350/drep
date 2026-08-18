@@ -11,7 +11,9 @@ use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use crate::llm::client::{Extracted, LlmClient, LlmError};
-use crate::test_support::{cfg_for, fast_retry_client, request_count, sse};
+use crate::test_support::{
+    cfg_for, fast_retry_client, mount_sse, request_count, server_returning, sse,
+};
 
 /// Criterion 22: a 200 response with a fenced JSON body yields `Complete`.
 #[tokio::test]
@@ -126,13 +128,17 @@ async fn a_whitespace_only_body_is_treated_as_empty() {
     assert!(request_count(&server).await > 1, "must retry");
 }
 
-/// A **non-empty** unparseable body is NOT retried.
+/// A **non-empty** unparseable body stays `Unparseable` - it never becomes
+/// `Transport`, however many times it is asked for again.
 ///
-/// The other half of the split, and the reason the split exists: re-sending a
-/// prompt whose answer was prose costs a full reasoning call to receive the
-/// same prose. Only the request count can tell this apart from the empty case.
+/// This is the half of the split that still matters, and it is load-bearing
+/// further up: `Transport` fails over to the next provider *and* demotes this
+/// one for the rest of the run. A model that answered in prose has told us
+/// nothing about the endpoint, so neither is warranted. The request count is
+/// no longer the discriminator - both cases retry now - so the classification
+/// is what has to be asserted.
 #[tokio::test]
-async fn a_non_empty_unparseable_body_is_not_retried() {
+async fn a_non_empty_unparseable_body_stays_unparseable_rather_than_transport() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/v1/chat/completions"))
@@ -151,12 +157,13 @@ async fn a_non_empty_unparseable_body_is_not_retried() {
 
     assert!(
         matches!(err, LlmError::Unparseable(_)),
-        "prose is a deterministic parse failure, got {err:?}"
+        "prose says nothing about the endpoint, so it must not be classified \
+         as a transport failure, got {err:?}"
     );
     assert_eq!(
         request_count(&server).await,
-        1,
-        "and re-asking would only buy the same prose again"
+        crate::llm::client::NO_JSON_ATTEMPTS as usize,
+        "asked again, but a bounded number of times"
     );
 }
 
@@ -297,43 +304,6 @@ async fn zero_max_retries_still_performs_one_attempt() {
     );
 }
 
-/// Criterion 29: `Unparseable` is never retried.
-///
-/// The mock returns 200 with garbage. The SDK reports success (no
-/// transport error), the parser returns None, and the retry layer sees
-/// `Ok(None)` - so it stops. The mock must be called exactly once.
-#[tokio::test]
-async fn unparseable_is_never_retried() {
-    let server = MockServer::start().await;
-    Mock::given(method("POST"))
-        .and(path("/v1/chat/completions"))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .set_body_raw(sse(&["this is not JSON, sorry"]), "text/event-stream"),
-        )
-        .mount(&server)
-        .await;
-
-    let mut cfg = cfg_for(&server, "m", 3);
-    cfg.timeout_secs = 30;
-    let client = fast_retry_client(&cfg);
-
-    let err = client
-        .complete_json("sys", "user")
-        .await
-        .expect_err("garbage body must error");
-    assert!(
-        matches!(err, LlmError::Unparseable(_)),
-        "garbage body must be Unparseable, got {err:?}"
-    );
-
-    assert_eq!(
-        request_count(&server).await,
-        1,
-        "Unparseable must not retry; the same prompt truncates the same way"
-    );
-}
-
 /// Pins the SDK's retryable classification the test above depends on. If
 /// this changes upstream, criterion 26's "400 not retried" assertion
 /// silently becomes wrong - this test makes that drift visible.
@@ -346,5 +316,139 @@ fn sdk_classifies_400_as_non_retryable() {
     assert!(
         !is_retryable_error(&e400),
         "the SDK must keep 400 in the non-retryable class"
+    );
+}
+
+// ---- no JSON at all: retried, and reported with the body ----
+
+/// A response with no JSON is asked for again, and a second answer that
+/// parses is accepted.
+///
+/// The rule this replaced never retried, justified as "the same prompt
+/// truncates the same way" - but that is `Extracted::Truncated`, a different
+/// branch. A response with no JSON at all did not truncate an answer, it never
+/// produced one, and drep's own gated push failed on a *different* file each
+/// run with every failing file analyzing cleanly when asked again.
+#[tokio::test]
+async fn a_response_with_no_json_is_retried_and_a_later_answer_is_accepted() {
+    let server = MockServer::start().await;
+    // First call: prose, no JSON anywhere in it.
+    Mock::given(method("POST"))
+        .and(path("/v1/chat/completions"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(
+            sse(&["Let me take a look at this file..."]),
+            "text/event-stream",
+        ))
+        .up_to_n_times(1)
+        .mount(&server)
+        .await;
+    // Second call: a clean answer.
+    mount_sse(
+        &server,
+        ResponseTemplate::new(200).set_body_raw(sse(&[r#"{"issues": []}"#]), "text/event-stream"),
+    )
+    .await;
+
+    let client = fast_retry_client(&cfg_for(&server, "m", 1));
+    let extracted = client
+        .complete_json("sys", "content")
+        .await
+        .expect("the second attempt parses");
+
+    assert!(matches!(extracted, Extracted::Complete(_)));
+    assert_eq!(
+        request_count(&server).await,
+        2,
+        "the prose answer must have been asked again"
+    );
+}
+
+/// Retries are bounded, and the failure names what the model actually said.
+///
+/// The body used to be discarded behind the constant "response contained no
+/// parseable JSON", so every occurrence looked identical and there was no way
+/// to tell a refusal from a prose preamble from reasoning that leaked into the
+/// content channel.
+#[tokio::test]
+async fn a_persistently_unparseable_response_is_bounded_and_reports_the_body() {
+    let server = server_returning(&["I am afraid I cannot help with that."]).await;
+    let client = fast_retry_client(&cfg_for(&server, "m", 1));
+
+    let err = client
+        .complete_json("sys", "content")
+        .await
+        .expect_err("prose never parses");
+
+    match err {
+        LlmError::Unparseable(message) => {
+            assert!(
+                message.contains("I am afraid I cannot help"),
+                "the message must carry what came back, got {message:?}"
+            );
+        }
+        other => panic!("expected Unparseable, got {other:?}"),
+    }
+    assert_eq!(
+        request_count(&server).await,
+        crate::llm::client::NO_JSON_ATTEMPTS as usize,
+        "bounded: each attempt is a full reasoning call"
+    );
+}
+
+/// A truncated response is NOT retried.
+///
+/// The discriminating counterpart. Truncation is the genuinely deterministic
+/// case - the same prompt is cut at the same place - and it already yields a
+/// usable partial value, so asking again buys a second full-price call for the
+/// same answer. A rule that retried "anything that did not parse cleanly"
+/// would pass the two tests above and be wrong here.
+#[tokio::test]
+async fn a_truncated_response_is_not_retried() {
+    let server = server_returning(&[r#"{"issues": [{"line": 1,"#]).await;
+    let client = fast_retry_client(&cfg_for(&server, "m", 1));
+
+    let extracted = client
+        .complete_json("sys", "content")
+        .await
+        .expect("brace-balancing recovers a prefix");
+
+    assert!(
+        matches!(extracted, Extracted::Truncated(_)),
+        "got {extracted:?}"
+    );
+    assert_eq!(
+        request_count(&server).await,
+        1,
+        "a truncated answer is deterministic - asking again buys nothing"
+    );
+}
+
+/// A control character in the model's answer cannot reach the terminal.
+///
+/// The excerpt lands in a terminal report and in `--format json`. The text is
+/// model output, so an escape sequence in it would otherwise be interpreted by
+/// whatever is reading the report.
+#[tokio::test]
+async fn the_reported_body_is_stripped_of_control_characters() {
+    let server = server_returning(&["prose \u{1b}[31mred\u{1b}[0m and\nnewlines"]).await;
+    let client = fast_retry_client(&cfg_for(&server, "m", 1));
+
+    let err = client
+        .complete_json("sys", "content")
+        .await
+        .expect_err("prose never parses");
+    let message = err.to_string();
+
+    assert!(
+        !message.contains('\u{1b}'),
+        "an escape sequence must not survive into the report: {message:?}"
+    );
+    assert!(
+        !message.contains('\n'),
+        "the excerpt is one line: {message:?}"
+    );
+    assert!(
+        message.contains("red"),
+        "the text itself survives: {message}"
     );
 }

@@ -568,6 +568,48 @@ structural reasons, and failover has the same shape of risk:
   failed). A suite that survives those is worth having; one that only checks
   the returned value is not.
 
+### Correction to Phase 3's retry classification (2026-08-18)
+
+Phase 3 split LLM outcomes two ways — retry transport failures, never retry a
+parse failure — and Phase 5c's push showed the split had one case too few.
+
+The rule "a non-empty body that yields no JSON must never retry" was justified
+as *"the same prompt truncates the same way"*. But truncation is
+`Extracted::Truncated`, a **different branch**: brace-balancing recovers a
+prefix and returns it. A body with *no JSON at all* did not truncate an answer,
+it never produced one, and that does not repeat — three of four attempts at the
+Phase 5c push died on it, a different file each time, and every failing file
+analyzed cleanly when asked again on its own.
+
+There are three outcomes, not two:
+
+| response | classification | retried? | fails over? |
+|---|---|---|---|
+| empty | `Transport` | yes, by the SDK | yes |
+| no JSON at all | `Unparseable` | yes, `NO_JSON_ATTEMPTS` | **no** |
+| parsed after brace-balancing | `Truncated` | no | n/a |
+
+The no-JSON retry lives in `complete_json`, deliberately outside the SDK's
+retry layer. Handing it to the SDK by returning `Err` would retry correctly and
+then surface as `Transport` once attempts ran out — which fails over to the next
+provider *and* demotes this one for the whole run. A model that answered in
+prose has told us nothing about the endpoint.
+
+`LlmError::Unparseable` now carries a bounded, control-character-stripped
+excerpt of the body. It was a constant string, so every occurrence of this
+failure looked identical and there was no way to tell a refusal from a prose
+preamble from reasoning that leaked into the content channel.
+
+**Two things the SDK still hides, and they are why the excerpt exists.**
+`open-agent-sdk`'s `StreamAccumulator` consumes `finish_reason` internally and
+never surfaces it, so drep cannot distinguish `"stop"` from `"length"` — a
+response cut off at the token cap looks identical to a complete one.
+`OpenAIDelta` also deserializes only `role`/`content`/`tool_calls`, so the
+`reasoning` and `reasoning_content` fields that DeepSeek and OpenRouter stream
+are dropped as unknown fields. Both are fixable in the SDK (same author); until
+then the excerpt is what turns the next occurrence into a diagnosis instead of
+a guess.
+
 ### Phase 6 — `lint-docs`
 Port the markdown checks including `_fence_mask`. No LLM, fast, runs on every
 commit.

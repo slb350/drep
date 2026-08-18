@@ -7,6 +7,66 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Rust rewrite - 2026-08-18 - a response with no JSON is not the deterministic case
+
+Phase 3 split LLM outcomes two ways: retry transport failures, never retry a
+parse failure. It had one case too few, and the missing one cost three of the
+four attempts at pushing Phase 5c.
+
+The rule "a non-empty body that yields no JSON must never retry" was justified
+as *the same prompt truncates the same way*. But truncation is
+`Extracted::Truncated` - a different branch, where brace-balancing recovers a
+prefix and returns it. A body with **no JSON at all** did not truncate an
+answer, it never produced one, and that does not repeat: each push died on a
+different file, and every failing file analyzed cleanly when asked again on its
+own. The rule borrowed truncation's justification for a case truncation does
+not cover - the same shape of error as the empty-response bug fixed in
+`b20ef9f`, which sat one line away.
+
+Three outcomes now, not two: an **empty** body is `Transport` (retried by the
+SDK, may fail over); **no JSON at all** is `Unparseable`, retried up to
+`NO_JSON_ATTEMPTS` but never reclassified; a body that parsed only after
+brace-balancing is `Truncated` and never retried.
+
+**The no-JSON retry deliberately lives in `complete_json`, not in the SDK's
+retry layer.** Returning `Err` and letting the SDK retry would work and then
+surface as `Transport` once attempts ran out - which fails over to the next
+provider *and* demotes this one for the rest of the run. A model that answered
+in prose has told us nothing about the endpoint. The SDK's own retry still runs
+inside each pass, so transport failures stay with the layer that classifies
+them.
+
+**`LlmError::Unparseable` carries the body now.** It was the constant string
+"response contained no parseable JSON", so every occurrence looked identical
+and nothing could tell a refusal from a prose preamble from reasoning that
+leaked into the content channel. The excerpt is bounded to 200 characters and
+control characters are replaced - it is model output and it lands in a terminal.
+
+Two things `open-agent-sdk` still hides, found while diagnosing this and worth
+recording: `StreamAccumulator` consumes `finish_reason` internally and never
+surfaces it, so drep cannot tell `"stop"` from `"length"`; and `OpenAIDelta`
+deserializes only `role`/`content`/`tool_calls`, so the `reasoning` and
+`reasoning_content` fields DeepSeek and OpenRouter stream are dropped as unknown
+fields. Both are fixable in the SDK. Until then the excerpt is what turns the
+next occurrence into a diagnosis rather than a guess.
+
+**Testing: 439 passing**, clippy-clean, rustfmt-clean, mutation-clean including
+a full sweep of `src/llm/client/mod.rs`.
+
+- Two existing tests asserted the old rule. `a_non_empty_unparseable_body_is_not_retried`
+  became `..._stays_unparseable_rather_than_transport`: the request count no
+  longer discriminates, since both cases retry, so the *classification* is what
+  is pinned - and it is load-bearing, because `Transport` would fail over and
+  demote. `unparseable_is_never_retried` asserted the inverse of the new
+  contract and its coverage is now held by the bounded-retry test; it was
+  removed rather than inverted in place.
+- The mutation sweep surfaced a separate gap: `LlmClient::temperature` could be
+  replaced by a constant with every test still passing. It feeds
+  `Provider::cache_key` while the request reads the field directly, so two
+  providers differing only in temperature shared a cache entry - the same shape
+  as the missing endpoint, request going one place and the key naming another.
+
+
 ### Rust rewrite - 2026-08-18 - Phase 5c: multi-provider LLM failover
 
 `[[llm]]` becomes a real failover chain. `src/llm/chain.rs` tries each enabled

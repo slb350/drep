@@ -218,3 +218,31 @@ async fn two_endpoints_serving_the_same_model_do_not_share_a_cache_entry() {
         "the restored head must actually be contacted"
     );
 }
+
+/// Two providers differing only in `temperature` do not share a cache entry.
+///
+/// `Provider::cache_key` reads the temperature through `LlmClient::temperature`,
+/// while the request itself reads the field directly - so an accessor returning
+/// a constant would send the configured temperature and file the answer under a
+/// key naming a different one. That is the same shape as the missing endpoint:
+/// the request goes one place and the key names another, and every
+/// varies-the-model test passes throughout.
+#[tokio::test]
+async fn two_providers_differing_only_in_temperature_key_differently() {
+    let server = server_returning_json().await;
+    let (cache, _dir) = temp_cache();
+
+    let mut cool = cfg_for(&server, "same-model", 1);
+    cool.temperature = 0.0;
+    let mut warm = cfg_for(&server, "same-model", 1);
+    warm.temperature = 1.0;
+
+    let chain = fast_retry_chain(&[cool, warm]);
+    let key_cool = chain.providers()[0].cache_key(&cache, SYSTEM, CONTENT);
+    let key_warm = chain.providers()[1].cache_key(&cache, SYSTEM, CONTENT);
+
+    assert_ne!(
+        key_cool, key_warm,
+        "temperature changes the answer, so it must change the key"
+    );
+}

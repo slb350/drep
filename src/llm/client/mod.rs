@@ -213,9 +213,14 @@ impl LlmClient {
     /// variants are ignored. An empty response body is **retried** as a
     /// transport failure and, if it keeps coming back empty, surfaces as
     /// [`LlmError::Transport`] - see `run_one_query` for why "the model
-    /// returned nothing" is not the deterministic outcome it looks like. A
-    /// non-empty body that yields no JSON is [`LlmError::Unparseable`] and is
-    /// never retried.
+    /// returned nothing" is not the deterministic outcome it looks like.
+    ///
+    /// A non-empty body that yields **no JSON at all** is retried up to
+    /// [`NO_JSON_ATTEMPTS`] times and then becomes [`LlmError::Unparseable`],
+    /// carrying an excerpt of what actually came back. A body that parsed only
+    /// after brace-balancing ([`Extracted::Truncated`]) is returned
+    /// immediately and never retried - that is the genuinely deterministic
+    /// case, and the one the "never retry" rule was written for.
     pub async fn complete_json(
         &self,
         system_prompt: &str,
@@ -247,46 +252,58 @@ impl LlmClient {
 
         let prompt = user_content.to_string();
 
-        // The retry closure returns `Ok(Some(Extracted))` on a clean parse,
-        // `Ok(None)` on a successful query that produced no JSON, and
-        // `Err(SdkError)` on transport failure. The SDK retries only on
-        // `Err`, so unparseable responses do NOT retry - which is the
-        // discrimination the spec requires.
-        let result: open_agent::Result<Option<Extracted>> =
-            retry_with_backoff_conditional(self.retry_config.clone(), || {
-                self.run_one_query(&prompt, &options)
-            })
-            .await;
+        // The no-JSON retry is drep's own loop, deliberately *outside* the
+        // SDK's. Handing "no JSON" to the SDK by returning `Err` would work,
+        // but it would surface as `LlmError::Transport` once the attempts ran
+        // out - and `Transport` fails over to the next provider and demotes
+        // this one for the whole run. A model that answered in prose has told
+        // us nothing about the endpoint, so neither of those is right.
+        //
+        // The SDK's own retry still runs inside each pass, so a transport
+        // failure is handled by the layer that classifies it.
+        let mut last_body = String::new();
+        for _ in 0..NO_JSON_ATTEMPTS {
+            let result: open_agent::Result<Answer> =
+                retry_with_backoff_conditional(self.retry_config.clone(), || {
+                    self.run_one_query(&prompt, &options)
+                })
+                .await;
 
-        match result {
-            Ok(Some(extracted)) => Ok(extracted),
-            Ok(None) => Err(LlmError::Unparseable(
-                "response contained no parseable JSON".to_string(),
-            )),
-            Err(e) => {
-                // The SDK exposes the status code separately (via
-                // `status_code`); reading it before formatting means the
-                // number survives as a number, and a later caller can
-                // branch on it rather than parsing the message.
-                let status = e.status_code();
-                let message = format!("{e}");
-                Err(LlmError::Transport { status, message })
+            match result {
+                Ok(Answer::Parsed(extracted)) => return Ok(extracted),
+                Ok(Answer::NoJson(body)) => last_body = body,
+                Err(e) => {
+                    // The SDK exposes the status code separately (via
+                    // `status_code`); reading it before formatting means the
+                    // number survives as a number, and a later caller can
+                    // branch on it rather than parsing the message.
+                    let status = e.status_code();
+                    let message = format!("{e}");
+                    return Err(LlmError::Transport { status, message });
+                }
             }
         }
+
+        Err(LlmError::Unparseable(format!(
+            "no JSON in the response after {NO_JSON_ATTEMPTS} attempts; \
+             the model answered: {}",
+            excerpt(&last_body)
+        )))
     }
 
     /// One attempt: stream the response, concatenate text, parse.
     ///
-    /// Returns `Ok(None)` when the query returned text we could not parse -
-    /// the path the retry layer must NOT retry, because the same prompt
-    /// produces the same unparseable answer. Returns `Err(SdkError)` for any
-    /// transport-level failure, *including an empty response*, which the retry
-    /// layer will retry when the SDK classifies it as transient.
+    /// Returns [`Answer::NoJson`] carrying the raw text when the query
+    /// produced something we could not parse at all - the SDK's retry layer
+    /// sees `Ok` and stops, leaving the decision to `complete_json`. Returns
+    /// `Err(SdkError)` for any transport-level failure, *including an empty
+    /// response*, which the retry layer will retry when the SDK classifies it
+    /// as transient.
     async fn run_one_query(
         &self,
         prompt: &str,
         options: &AgentOptions,
-    ) -> open_agent::Result<Option<Extracted>> {
+    ) -> open_agent::Result<Answer> {
         let mut stream = query(prompt, options).await?;
         let mut text = String::new();
         while let Some(block) = stream.next().await {
@@ -321,8 +338,79 @@ impl LlmClient {
             ));
         }
 
-        Ok(extract_json(&text))
+        Ok(match extract_json(&text) {
+            Some(extracted) => Answer::Parsed(extracted),
+            // The text is carried out rather than dropped. It was discarded
+            // behind the constant "response contained no parseable JSON",
+            // which made every occurrence of this failure look identical and
+            // left no way to tell a refusal from a prose preamble from
+            // reasoning that leaked into the content channel.
+            None => Answer::NoJson(text),
+        })
     }
+}
+
+/// What one query produced, before the retry decision.
+///
+/// `NoJson` carries the body so the failure can be diagnosed and so
+/// `complete_json` can decide whether to ask again. The SDK's retry layer
+/// treats both variants as success and stops, which is what keeps the
+/// no-JSON decision here rather than inside it.
+enum Answer {
+    Parsed(Extracted),
+    NoJson(String),
+}
+
+/// How many times a response carrying no JSON at all is asked for again.
+///
+/// Not the same question as the SDK's transport retry, and deliberately a
+/// small number: each attempt is a full reasoning call. The rule this replaced
+/// never retried, justified as "the same prompt truncates the same way" - but
+/// that is [`Extracted::Truncated`], a different branch. A response with *no
+/// JSON at all* did not truncate an answer, it never produced one, and in
+/// practice it does not repeat: drep's own gated push failed on a different
+/// file each run, and each failing file analyzed cleanly when asked again.
+///
+/// Two attempts, so one retry. The evidence is that a single retry clears it,
+/// and a model that answers in prose twice is not going to be talked round on
+/// the third try.
+pub const NO_JSON_ATTEMPTS: u32 = 2;
+
+/// A one-line, bounded, control-character-free excerpt of a model response.
+///
+/// Bounded because a reasoning model can return kilobytes and this lands in a
+/// terminal and in `--format json`. Control characters are replaced rather
+/// than passed through: the text is model output, and an escape sequence in it
+/// would otherwise be interpreted by the terminal reading the report.
+fn excerpt(body: &str) -> String {
+    const MAX_CHARS: usize = 200;
+    let cleaned: String = body
+        .chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .collect();
+    let mut out = String::with_capacity(MAX_CHARS);
+    let mut last_was_space = false;
+    for c in cleaned.trim().chars() {
+        if out.chars().count() >= MAX_CHARS {
+            out.push('…');
+            break;
+        }
+        if c == ' ' {
+            if last_was_space {
+                continue;
+            }
+            last_was_space = true;
+        } else {
+            last_was_space = false;
+        }
+        out.push(c);
+    }
+    if out.is_empty() {
+        // Unreachable in practice - an empty body is a transport failure long
+        // before this - but a quoted empty string reads as a bug in drep.
+        return "<nothing>".to_owned();
+    }
+    out
 }
 
 #[cfg(test)]
