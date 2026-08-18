@@ -47,22 +47,6 @@ fn run_drep(dir: &Path, args: &[&str]) -> std::process::Output {
         .expect("drep spawns")
 }
 
-/// Write a `drep.toml` pointing at `server`. Single point of contact so
-/// every test gets the same LLM block.
-fn write_drep_toml(dir: &Path, server: &MockServer) {
-    let body = format!(
-        r#"[llm]
-enabled = true
-endpoint = "{uri}/v1"
-model = "m"
-api_key = "not-needed"
-max_retries = 1
-"#,
-        uri = server.uri()
-    );
-    std::fs::write(dir.join("drep.toml"), body).expect("drep.toml");
-}
-
 /// Mount one SSE response on `server` with `body` as the JSON payload.
 async fn mount_llm(server: &MockServer, body: &str) {
     mount_sse(
@@ -96,7 +80,7 @@ fn text_output_for_a_known_finding_is_exactly_the_expected_string() {
             r#"{"issues":[{"line":1,"severity":"critical","category":"bug","message":"test message","suggestion":"fix it"}]}"#,
         )
         .await;
-        write_drep_toml(dir.path(), &server);
+        crate::test_support::write_drep_toml(dir.path(), &format!("{}/v1", server.uri()));
         std::fs::write(dir.path().join("lib.py"), "x = 1\n").expect("lib.py");
         (dir, server)
     });
@@ -138,7 +122,7 @@ fn clean_run_text_output_is_exactly_no_issues_found() {
         let dir = tempfile::tempdir().expect("tempdir");
         let server = MockServer::start().await;
         mount_llm(&server, r#"{"issues":[]}"#).await;
-        write_drep_toml(dir.path(), &server);
+        crate::test_support::write_drep_toml(dir.path(), &format!("{}/v1", server.uri()));
         std::fs::write(dir.path().join("lib.py"), "x = 1\n").expect("lib.py");
         (dir, server)
     });
@@ -179,7 +163,7 @@ fn json_clean_run_has_unanalyzed_key_present_as_empty_array() {
         let dir = tempfile::tempdir().expect("tempdir");
         let server = MockServer::start().await;
         mount_llm(&server, r#"{"issues":[]}"#).await;
-        write_drep_toml(dir.path(), &server);
+        crate::test_support::write_drep_toml(dir.path(), &format!("{}/v1", server.uri()));
         std::fs::write(dir.path().join("lib.py"), "x = 1\n").expect("lib.py");
         (dir, server)
     });
@@ -230,7 +214,7 @@ fn json_findings_distinguish_tool_from_llm_via_source_field() {
             r#"{"issues":[{"line":2,"severity":"high","category":"perf","message":"llm-msg","suggestion":""}]}"#,
         )
         .await;
-        write_drep_toml(dir.path(), &server);
+        crate::test_support::write_drep_toml(dir.path(), &format!("{}/v1", server.uri()));
 
         // Configure ruff and plant a fake binary that emits one finding.
         std::fs::write(dir.path().join("pyproject.toml"), "").expect("pyproject");
@@ -295,7 +279,7 @@ fn json_exit_matches_returned_exit_code_on_a_run_with_failures() {
         let dir = tempfile::tempdir().expect("tempdir");
         let server = MockServer::start().await;
         mount_llm(&server, r#"{"issues":[]}"#).await;
-        write_drep_toml(dir.path(), &server);
+        crate::test_support::write_drep_toml(dir.path(), &format!("{}/v1", server.uri()));
         // Bad bytes for the input layer to refuse. The file would be
         // sent to the LLM if it were UTF-8, but `std::fs::read_to_string`
         // rejects it and the orchestrator records `Unreadable`.
@@ -347,7 +331,7 @@ fn json_exit_matches_the_gate_when_an_llm_finding_does_not_block() {
             r#"{"issues":[{"line":1,"severity":"high","category":"bug","message":"m"}],"summary":""}"#,
         )
         .await;
-        write_drep_toml(dir.path(), &server);
+        crate::test_support::write_drep_toml(dir.path(), &format!("{}/v1", server.uri()));
         std::fs::write(dir.path().join("only.py"), "x = 1\n").expect("only.py");
         (dir, server)
     });

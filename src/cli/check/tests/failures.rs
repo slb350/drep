@@ -142,19 +142,15 @@ fn three_failure_shapes_are_distinct_and_each_one_renders() {
 /// The documented tunables are what the docs say they are.
 ///
 /// A change-detector by design, and the only thing that can observe them:
-/// `WHOLE_FILE_MAX_BYTES` and the cache limits are inputs to behaviour no
+/// The cache limits are inputs to behaviour no
 /// assertion can otherwise reach, so `cargo mutants` can rewrite `256 * 1024`
 /// to `256 + 1024` with every other test still green. They are documented
 /// numbers with a stated rationale, so a silent change to one should be
 /// visible rather than free.
 #[test]
-fn documented_size_and_cache_limits_hold_their_stated_values() {
-    use crate::cli::check::{CACHE_MAX_BYTES, CACHE_TTL_DAYS, WHOLE_FILE_MAX_BYTES};
+fn documented_cache_limits_hold_their_stated_values() {
+    use crate::cli::check::{CACHE_MAX_BYTES, CACHE_TTL_DAYS};
 
-    assert_eq!(
-        WHOLE_FILE_MAX_BYTES, 262_144,
-        "256 KiB, per its doc comment"
-    );
     assert_eq!(CACHE_TTL_DAYS, 30);
     assert_eq!(CACHE_MAX_BYTES, 268_435_456, "256 MiB, per its doc comment");
 }

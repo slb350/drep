@@ -2,6 +2,7 @@
 
 use std::collections::BTreeSet;
 use std::path::Path;
+use std::sync::LazyLock;
 
 pub mod definitions;
 pub mod runner;
@@ -17,12 +18,58 @@ use spec::LanguageSupport;
 ///
 /// Case-insensitive, matching the rest of drep's file-target policy.
 pub fn detect(path: &Path) -> Option<&'static LanguageSupport> {
-    let ext = path.extension()?.to_str()?.to_lowercase();
-    let dotted = format!(".{ext}");
-    ALL_LANGUAGES
-        .iter()
-        .copied()
-        .find(|lang| lang.extensions.contains(&dotted.as_str()))
+    detect_index(path).map(|index| ALL_LANGUAGES[index])
+}
+
+/// The index of the language owning `path` within [`ALL_LANGUAGES`].
+///
+/// The index *is* the language's identity, which is what [`group_by_language`]
+/// needs; recovering it afterwards by comparing pointers meant scanning the
+/// table twice for an answer the first scan already had.
+fn detect_index(path: &Path) -> Option<usize> {
+    let ext = path.extension()?.to_str()?;
+    // No allocation: the table's extensions are ASCII literals that all begin
+    // with a dot, so `[1..]` is the bare suffix and `eq_ignore_ascii_case` does
+    // the case folding that `to_lowercase()` used to do into two throwaway
+    // `String`s per call - on a function called once per walked file.
+    ALL_LANGUAGES.iter().position(|lang| {
+        lang.extensions
+            .iter()
+            .any(|known| known[1..].eq_ignore_ascii_case(ext))
+    })
+}
+
+/// Bucket `paths` by the language that owns them.
+///
+/// The single answer to "which languages are present here, and with which
+/// files". Both `drep check`'s deterministic layer (which needs the batch per
+/// tool) and `drep doctor` (which needs the counts) ask it, so neither
+/// re-derives language identity from a path — and neither can disagree with
+/// the other about what this repository contains, which is the specific thing
+/// `doctor` exists to report truthfully.
+///
+/// Paths that no registered language claims are dropped: drep has no opinion
+/// on a file type it does not analyze. The result is ordered by
+/// `ALL_LANGUAGES`' registration order rather than by name, so output is
+/// stable across runs and reads in the order the language table is written.
+///
+/// Borrows rather than owns. The caller already holds the paths, and every
+/// consumer converts them again for its own use - to argv strings in the tool
+/// runner, to counts in `doctor` - so cloning into the buckets was a copy that
+/// nothing read.
+pub fn group_by_language<'a>(paths: &[&'a Path]) -> Vec<(&'static LanguageSupport, Vec<&'a Path>)> {
+    let mut buckets: Vec<Vec<&'a Path>> = vec![Vec::new(); ALL_LANGUAGES.len()];
+    for path in paths {
+        if let Some(index) = detect_index(path) {
+            buckets[index].push(path);
+        }
+    }
+    buckets
+        .into_iter()
+        .enumerate()
+        .filter(|(_, files)| !files.is_empty())
+        .map(|(index, files)| (ALL_LANGUAGES[index], files))
+        .collect()
 }
 
 /// Every registered language, in registration order.
@@ -36,7 +83,16 @@ pub fn all_languages() -> &'static [&'static LanguageSupport] {
 /// scan target set. Duplicates collapse: JavaScript and TypeScript both own
 /// `.ts`-adjacent extensions, so a hand-written list here would silently need
 /// to track them.
-pub fn source_extensions() -> Vec<&'static str> {
+pub fn source_extensions() -> &'static [&'static str] {
+    &SOURCE_EXTENSIONS
+}
+
+/// Computed once. `files::is_scan_target` calls `source_extensions()` for
+/// **every entry the tree walk touches**, not just the matches, and this used
+/// to build a fresh `BTreeSet` plus a fresh `Vec` on each of those calls - tens
+/// of thousands of allocations per run to answer a question whose answer is
+/// fixed at compile time.
+static SOURCE_EXTENSIONS: LazyLock<Vec<&'static str>> = LazyLock::new(|| {
     let mut seen = BTreeSet::new();
     let mut out = Vec::new();
     for lang in ALL_LANGUAGES {
@@ -47,13 +103,18 @@ pub fn source_extensions() -> Vec<&'static str> {
         }
     }
     out
-}
+});
 
 /// Every dependency/build directory any registered language creates.
 ///
 /// Same deduplication discipline as `source_extensions`: each `LanguageSupport`
 /// declares its own vendored directories, and the set is built once.
-pub fn vendored_dirs() -> Vec<&'static str> {
+pub fn vendored_dirs() -> &'static [&'static str] {
+    &VENDORED_DIRS
+}
+
+/// Computed once, for the same reason as [`SOURCE_EXTENSIONS`].
+static VENDORED_DIRS: LazyLock<Vec<&'static str>> = LazyLock::new(|| {
     let mut seen = BTreeSet::new();
     let mut out = Vec::new();
     for lang in ALL_LANGUAGES {
@@ -64,7 +125,7 @@ pub fn vendored_dirs() -> Vec<&'static str> {
         }
     }
     out
-}
+});
 
 #[cfg(test)]
 mod tests {
@@ -143,6 +204,56 @@ mod tests {
         assert!(
             !exts.contains(&".md"),
             "markdown is documentation, not a registered language: {exts:?}"
+        );
+    }
+
+    /// Buckets come back in registration order, not alphabetical order, and
+    /// each holds exactly its own files.
+    ///
+    /// Order is asserted because it is what makes `doctor`'s output stable
+    /// across runs; a `BTreeMap` keyed on name would sort go before python and
+    /// silently change the report.
+    #[test]
+    fn group_by_language_buckets_in_registration_order() {
+        let paths = [
+            Path::new("main.go"),
+            Path::new("a.py"),
+            Path::new("lib.rs"),
+            Path::new("b.py"),
+        ];
+        let grouped = group_by_language(&paths);
+        let names: Vec<&str> = grouped.iter().map(|(lang, _)| lang.name).collect();
+        assert_eq!(
+            names,
+            vec!["python", "go", "rust"],
+            "registration order (python, javascript, typescript, go, rust), \
+             not alphabetical and not first-seen"
+        );
+        assert_eq!(
+            grouped[0].1,
+            vec![Path::new("a.py"), Path::new("b.py")],
+            "files land in their own bucket, in the order given"
+        );
+    }
+
+    /// A language with no matching files never appears, and an unrecognised
+    /// extension is dropped rather than bucketed anywhere.
+    #[test]
+    fn group_by_language_omits_empty_buckets_and_unknown_extensions() {
+        let grouped = group_by_language(&[Path::new("notes.md"), Path::new("data.xyz")]);
+        assert!(
+            grouped.is_empty(),
+            "no registered language claims these, so there is nothing to report: {:?}",
+            grouped.iter().map(|(l, _)| l.name).collect::<Vec<_>>()
+        );
+
+        let grouped = group_by_language(&[Path::new("a.py"), Path::new("notes.md")]);
+        assert_eq!(grouped.len(), 1, "only python is present");
+        assert_eq!(grouped[0].0.name, "python");
+        assert_eq!(
+            grouped[0].1,
+            vec![Path::new("a.py")],
+            "the markdown file is dropped, not attached to python"
         );
     }
 

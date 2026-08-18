@@ -51,7 +51,7 @@ fn extension_in(path: &Path, targets_with_dots: &[&str]) -> bool {
 /// would mean an LLM "language check" against prose, which is not what the
 /// doc-specialist does.
 pub fn is_scan_target(path: &Path) -> bool {
-    extension_in(path, &languages::source_extensions()) || is_markdown(path)
+    extension_in(path, languages::source_extensions()) || is_markdown(path)
 }
 
 /// Python source file. Kept distinct from `is_scan_target` because the

@@ -108,6 +108,24 @@ impl CodeQualityAnalyzer {
             return AnalysisResult::default();
         };
 
+        // The size ceiling is enforced on the *rendered payload*, so it holds
+        // for every input mode. Checking the file size during paths-mode input
+        // resolution - as this used to, and still does as a pre-filter - left
+        // `--staged` and `--diff` unguarded, which are the two modes a commit
+        // gate actually runs in: a newly-added 5 MB file reached the model
+        // whole. Too large is a *failure*, not a skip; a file drep declined to
+        // analyze is not clean.
+        let rendered = payload.text.len() as u64;
+        if rendered > payload::PAYLOAD_MAX_BYTES {
+            return AnalysisResult::failed(
+                first.file_path.clone(),
+                FailureReason::PayloadTooLarge {
+                    bytes: rendered,
+                    limit: payload::PAYLOAD_MAX_BYTES,
+                },
+            );
+        }
+
         let system_prompt = build_analysis_prompt(language);
         let cache_key = self.cache.key(
             &system_prompt,
@@ -160,11 +178,7 @@ impl CodeQualityAnalyzer {
             // with the specific reason. The detail is kept rather than
             // discarded, so the CLI can render a line the user can act on.
             Err(err) => {
-                let mut result = AnalysisResult::default();
-                result
-                    .failed_files
-                    .insert(first.file_path.clone(), LlmError::into_failure_reason(err));
-                result
+                AnalysisResult::failed(first.file_path.clone(), LlmError::into_failure_reason(err))
             }
         }
     }

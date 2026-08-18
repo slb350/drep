@@ -7,6 +7,85 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Rust rewrite - 2026-08-17 - Phase 5b groundwork: config shape, size ceiling, failure detail
+
+The three cross-cutting changes `doctor` and `init` need to exist on top of.
+`drep check` behaviour is unchanged except where noted.
+
+**`[[llm]]` is an array of tables.** `Config.llm` is a `Vec<LlmConfig>` and
+`load` rejects a file that declares no provider (`ConfigError::NoProviders`) -
+the LLM layer is mandatory in 2.x, so a provider-less file can never produce a
+passing run, and the earliest place to say so is the place that read the file.
+Only `Config::primary()` (the head of the list) is consulted today; the shape
+lands now because `drep init` writes this file and Phase 5c must not change the
+format underneath a file drep itself wrote. The temperature error carries the
+offending provider's index, which with one provider is trivially 0 and with
+three is the only way to know which one is wrong.
+
+The discriminating test is that the old single-table `[llm]` is now a **parse
+error**. Without it, a suite full of `[[llm]]` fixtures passes just as well
+against a `Config` that still holds one `LlmConfig`, because TOML would feed it
+the first table.
+
+**The size ceiling moved to where the payload is built, and split in two.**
+`WHOLE_FILE_MAX_BYTES` was consulted only during paths-mode input resolution,
+so `--staged` and `--diff` - the two modes a commit gate actually runs in -
+never saw it, and a newly-added 5 MB file reached the model whole. There are now
+two constants because there were always two questions:
+
+- `analysis::payload::PAYLOAD_MAX_BYTES` (256 KiB) is checked against the
+  **rendered payload**, in `code_quality::analyze_file`, which every input mode
+  passes through. This is the authority on "too large to analyze".
+- `cli::check::input::READ_MAX_BYTES` (8 MiB) guards `read_to_string` against a
+  pathological file in paths mode. Nothing more.
+
+They were one constant, and that is what made the reported number wrong: `bytes`
+held the file's size on one path and the rendered payload's on the other, so
+`file is too large (330102 bytes)` could name a file `ls` reports as 261900.
+`FailureReason::TooLarge` is likewise split into `FileTooLarge` and
+`PayloadTooLarge`, each naming what it measured. A `const` assertion, not a
+test, pins that the read guard never sits below the payload ceiling - it is a
+property of two literals, so it fails the build.
+
+The comment justifying the retained pre-read filter asserted the wrong
+direction: that the filter can never *accept* something the payload check
+rejects. It can, and routinely does - a payload adds a header plus ten bytes of
+gutter per line. The property that matters is the converse, that it never
+*rejects* a file whose payload would have fit, and that is what the comment now
+says.
+
+**An oversize file is still linted.** Dropping it from `Work::by_file` also
+removed it from the deterministic layer, so `drep check big.py` reported no ruff
+findings for it while `drep check --staged` on the same file reported them. A
+file too large for the model still has a path, and ruff reads the file itself,
+so `Work::lint_only` carries it to the tool runner. It remains a failure - the
+LLM never saw it - but its linters run.
+
+**`--format json`'s `unanalyzed` entries carry structure.** Each is now
+`{file, kind, status?, reason}`. `kind` is a stable tag and `status` is the HTTP
+code as a number, present only when there was one, so its presence is itself the
+signal. The reason it is worth the field: Phase 5c fails over on a 429 and must
+*not* on a 401, and that decision cannot be made by matching on English. The
+tag table lives in `cli::check::render`, which already owns the wire shape and
+declines to `Serialize` `Finding` for the same reason; `FailureReason::status()`
+stays on the type because it returns data rather than presentation.
+
+**Also:** `languages::group_by_language` extracted so `check` and `doctor`
+cannot disagree about what a repository contains; it borrows rather than clones,
+and indexes `ALL_LANGUAGES` rather than recovering the language by pointer
+comparison. `source_extensions()`/`vendored_dirs()` are `LazyLock` statics -
+`files::is_scan_target` calls the first for **every entry the tree walk
+touches**, and it was rebuilding a `BTreeSet` each time. `detect` no longer
+allocates two `String`s per call. `AnalysisResult::failed(path, reason)`
+replaces four hand-assembled copies of the one shape where forgetting the insert
+reports an unanalyzed file as clean. `config.rs` split its tests into
+`src/config/tests/` by topic (it had passed the 600-line limit).
+
+10 new tests (298 total), zero clippy, zero missed mutants. Four review agents
+found 30 issues across reuse/simplification/efficiency/altitude; the size-ceiling
+disagreement was found independently by three of them.
+
+
 ### Note - 2026-08-17 — Phase 5a pushed with `--no-verify`
 
 Four commits (`824b17f`, `8b8c959`, `76ec4e4`, `9562871`) were pushed with the

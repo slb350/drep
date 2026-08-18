@@ -18,7 +18,10 @@
 //! invariants and the exit-code precedence are pinned against.
 
 mod deterministic;
-mod input;
+// `pub(crate)` for `READ_MAX_BYTES` alone: the guard's relationship to
+// `analysis::payload::PAYLOAD_MAX_BYTES` is load-bearing (it must never sit
+// below it), and the assertion pinning that has to see both constants.
+pub(crate) mod input;
 mod render;
 
 use std::collections::BTreeMap;
@@ -108,14 +111,6 @@ pub struct CheckOutcome {
     pub exit: Exit,
 }
 
-/// The ceiling at which a file read off disk is still accepted whole.
-///
-/// 256 KiB matches the payload layer's "one chunk" feel and is small enough
-/// that a synthetic whole-file hunk never bloats the LLM request on a
-/// realistic project. Files above this become `FailureReason::TooLarge`
-/// rather than a silent skip - a file drep declined to analyze is not clean.
-pub const WHOLE_FILE_MAX_BYTES: u64 = 256 * 1024;
-
 /// One `check` invocation: resolve input, run both layers, gate, render, return
 /// `Exit`.
 ///
@@ -154,6 +149,16 @@ pub(crate) async fn run_with(args: &CheckArgs, root: &Path, cache: Cache) -> Res
     let config_path = root.join(config::default_config_path());
     let config = config::load(&config_path)
         .with_context(|| format!("could not load {}", config_path.display()))?;
+    // `load` rejects an empty provider list, so this cannot fail today. It is
+    // an `ok_or_else` rather than an index because `Config` is constructible
+    // without going through `load`, and a panic inside the commit gate is a
+    // worse failure than a message naming the file. The error is `load`'s own
+    // rather than a second sentence written here: two hand-written copies of
+    // "no provider configured" drift, and the copy that lived here had already
+    // lost the actionable "run `drep init`" half.
+    let llm_config = config
+        .primary()
+        .ok_or_else(|| config::ConfigError::NoProviders(config_path.clone()))?;
 
     // Resolved *after* the config, because a missing config is fatal and
     // resolution is not free: in `--staged` mode it spawns git, and in paths
@@ -178,7 +183,7 @@ pub(crate) async fn run_with(args: &CheckArgs, root: &Path, cache: Cache) -> Res
     // multi-second regardless, so joining hides essentially all of it.
     let (deterministic_result, llm_result) = tokio::join!(
         deterministic::run(&work, root),
-        run_llm(&work, &config.llm, cache),
+        run_llm(&work, llm_config, cache),
     );
     let (tool_findings, tool_failures) = deterministic_result;
     let (llm_findings, llm_failures) = llm_result?;

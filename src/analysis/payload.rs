@@ -20,6 +20,26 @@ use std::fmt::Write as _;
 use crate::diff::hunks::Hunk;
 use crate::languages::spec::LanguageSupport;
 
+/// The largest payload drep will send to the model, in bytes.
+///
+/// Enforced **here**, on the rendered text, rather than on one branch of input
+/// resolution. It used to live in `cli::check` and was consulted only in paths
+/// mode, so a newly-added 5 MB file reached the LLM whole through `--staged`
+/// or `--diff` - the two modes a commit gate actually runs in. The ceiling
+/// belongs where the payload is built, because that is the one place every
+/// input mode passes through.
+///
+/// A payload over the ceiling is a
+/// [`crate::analysis::result::FailureReason::PayloadTooLarge`] failure, never a
+/// skip: 1.x returned an empty finding list for anything over 32k chars, which
+/// under this codebase's contract is the banned move - a file drep declined to
+/// analyze is not clean.
+///
+/// `u64` rather than `usize` so it compares directly against the byte counts
+/// `FailureReason` carries; only one site measures a `str` length, and that one
+/// casts.
+pub const PAYLOAD_MAX_BYTES: u64 = 256 * 1024;
+
 /// A rendered payload plus the file line numbers it legitimately covers.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Payload {

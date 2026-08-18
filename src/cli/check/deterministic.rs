@@ -27,7 +27,7 @@ use crate::analysis::result::{FailureReason, union_failures};
 use crate::cli::check::input::Work;
 use crate::languages;
 use crate::languages::runner::{self};
-use crate::languages::spec::{LanguageSupport, ToolSpec};
+use crate::languages::spec::ToolSpec;
 
 /// Run every configured deterministic tool against the work set and return
 /// its findings.
@@ -73,35 +73,30 @@ async fn run_one(task: PlannedTask, root: &Path) -> (runner::ToolOutcome, Vec<St
 /// tool that appears in two languages' specs is run twice, once per
 /// language, so the bins are disjoint.
 fn plan_tasks(work: &Work) -> Vec<PlannedTask> {
-    // The language comes straight from `detect` and is carried in the value.
-    // Keying on the name and then re-finding the language with a linear scan
-    // over `all_languages()` meant the CLI re-deriving language identity from
-    // a string, which `languages/` owns - and it left an `else { continue }`
-    // arm unreachable by construction, so nothing could ever test it.
+    // The bucketing itself is `languages::group_by_language`, so `doctor` and
+    // `check` cannot disagree about which languages a repository contains -
+    // doctor's whole job is to predict what check will do. What stays here is
+    // only the part specific to this layer: reading one path per file out of
+    // its hunks, and fanning each bucket out across that language's tools.
     //
-    // The value holds path strings, not hunks. It used to hold cloned
-    // `Vec<Vec<Hunk>>` - a deep copy of every line of every file in the work
-    // set - purely so the file path could be read back out of the first hunk
-    // afterwards. The path was already in hand at the point of the clone.
-    let mut by_lang: BTreeMap<&'static str, (&'static LanguageSupport, Vec<String>)> =
-        BTreeMap::new();
-    for hunks in &work.by_file {
-        let Some(hunk) = hunks.first() else {
-            continue;
-        };
-        let Some(language) = languages::detect(&hunk.file_path) else {
-            continue;
-        };
-        by_lang
-            .entry(language.name)
-            .or_insert_with(|| (language, Vec::new()))
-            .1
-            .push(hunk.file_path.to_string_lossy().into_owned());
-    }
+    // `lint_only` is folded in alongside. A file too large for the LLM still
+    // has a path, and these tools read the file themselves - excluding it
+    // would silence ruff on a file purely because the model could not read it.
+    let paths: Vec<&Path> = work
+        .by_file
+        .iter()
+        .filter_map(|hunks| hunks.first())
+        .map(|hunk| hunk.file_path.as_path())
+        .chain(work.lint_only.iter().map(PathBuf::as_path))
+        .collect();
 
-    by_lang
-        .into_values()
+    languages::group_by_language(&paths)
+        .into_iter()
         .flat_map(|(language, files)| {
+            let files: Vec<String> = files
+                .into_iter()
+                .map(|p| p.to_string_lossy().into_owned())
+                .collect();
             language.tools.iter().map(move |spec| PlannedTask {
                 spec,
                 files: files.clone(),

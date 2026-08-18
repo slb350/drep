@@ -20,10 +20,32 @@ use std::path::{Path, PathBuf};
 use anyhow::Result;
 
 use crate::analysis::result::FailureReason;
-use crate::cli::check::{CheckArgs, WHOLE_FILE_MAX_BYTES};
+use crate::cli::check::CheckArgs;
 use crate::diff;
 use crate::diff::hunks::Hunk;
 use crate::files;
+
+/// The largest file drep will read into memory in paths mode.
+///
+/// Deliberately generous and deliberately *not*
+/// [`crate::analysis::payload::PAYLOAD_MAX_BYTES`]: this guards against an
+/// `OutOfMemory` on a pathological file, while the payload ceiling guards the
+/// size of the request sent to the model. They were the same constant, which
+/// made a file's reported size depend on which code path measured it.
+///
+/// Any value at or above the payload ceiling is safe, because a payload is
+/// never smaller than the file it renders. 8 MiB is far enough above it that
+/// this guard effectively only fires on files nobody meant to review, leaving
+/// the payload check as the single authority on "too large to analyze".
+pub const READ_MAX_BYTES: u64 = 8 * 1024 * 1024;
+
+/// The read guard must never sit below the payload ceiling.
+///
+/// If it did, paths mode would reject a file whose rendered payload would have
+/// been accepted, and the two checks would disagree about the same file. A
+/// `const` assertion rather than a test: this is a property of the two
+/// literals, so it should fail the build, not a test run.
+const _: () = assert!(READ_MAX_BYTES >= crate::analysis::payload::PAYLOAD_MAX_BYTES);
 
 /// The work set for one `check` run: every file drep will consider, the
 /// hunks per file, and the files that could not be read for one of the
@@ -37,8 +59,18 @@ pub struct Work {
     /// Either way the JSON output is stable across runs.
     pub by_file: Vec<Vec<Hunk>>,
     /// Files that could not be read off disk or were rejected by the
-    /// size gate. Unioned into the orchestrator's failure map.
+    /// read guard. Unioned into the orchestrator's failure map.
     pub read_failures: BTreeMap<PathBuf, FailureReason>,
+    /// Files drep knows about but holds no content for.
+    ///
+    /// A file too large to read still has a path, and ruff/clippy/go vet take
+    /// paths - they read the file themselves. Dropping it from `by_file`
+    /// therefore silenced the deterministic layer as a side effect of an LLM
+    /// size limit: `drep check big.py` reported no ruff findings for it, while
+    /// `drep check --staged` on the same file reported them, because the diff
+    /// modes never consulted the read guard. The file is still a failure (the
+    /// LLM never saw it), but its linters keep running.
+    pub lint_only: Vec<PathBuf>,
 }
 
 /// Resolve `args` against `root` into a [`Work`].
@@ -66,6 +98,7 @@ pub async fn resolve(args: &CheckArgs, root: &Path) -> Result<Work> {
     Ok(Work {
         by_file: group_by_file(hunks),
         read_failures: BTreeMap::new(),
+        lint_only: Vec::new(),
     })
 }
 
@@ -77,6 +110,7 @@ fn resolve_paths(paths: &[PathBuf], root: &Path) -> Result<Work> {
     let targets = resolve_paths_targets(paths, root);
     let mut by_file: Vec<Vec<Hunk>> = Vec::new();
     let mut read_failures: BTreeMap<PathBuf, FailureReason> = BTreeMap::new();
+    let mut lint_only: Vec<PathBuf> = Vec::new();
 
     // `expand_paths` silently skips a path that does not exist - a deliberate
     // contract inherited from 1.x's `scan`, where a stale argument was not
@@ -101,14 +135,31 @@ fn resolve_paths(paths: &[PathBuf], root: &Path) -> Result<Work> {
                 continue;
             }
         };
-        if bytes > WHOLE_FILE_MAX_BYTES {
+        // An I/O guard, not the model's ceiling. Its job is to stop
+        // `read_to_string` pulling a pathological file into memory whole; the
+        // authoritative size decision is made on the *rendered payload* in
+        // `analysis::code_quality`, which every input mode passes through.
+        //
+        // The invariant that matters runs one way only: because a payload
+        // contains its file's content verbatim, this guard can never *reject*
+        // a file whose payload would have been accepted. It can and does
+        // accept files the payload check then rejects - a 200 KB file renders
+        // to more than 200 KB once the header and the ten-byte gutter per line
+        // are added - and that is fine, because the number the user is shown
+        // then comes from the check that actually measured it. An earlier
+        // version of this comment claimed the opposite direction, which is
+        // what hid the fact that the two checks were measuring different
+        // things under one constant.
+        if bytes > READ_MAX_BYTES {
             read_failures.insert(
-                path,
-                FailureReason::TooLarge {
+                path.clone(),
+                FailureReason::FileTooLarge {
                     bytes,
-                    limit: WHOLE_FILE_MAX_BYTES,
+                    limit: READ_MAX_BYTES,
                 },
             );
+            // Still linted: see `Work::lint_only`.
+            lint_only.push(path);
             continue;
         }
         let content = match std::fs::read_to_string(&path) {
@@ -123,6 +174,7 @@ fn resolve_paths(paths: &[PathBuf], root: &Path) -> Result<Work> {
     Ok(Work {
         by_file,
         read_failures,
+        lint_only,
     })
 }
 

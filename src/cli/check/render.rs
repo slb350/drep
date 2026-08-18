@@ -10,18 +10,23 @@
 //! - **JSON**: one object, pretty-printed, with `findings`, `unanalyzed`,
 //!   and `exit`. The `unanalyzed` field is **always present** — even when
 //!   empty — so a consumer can distinguish "no failures" from "this build
-//!   of drep does not report them".
+//!   of drep does not report them". Each entry carries a machine-readable
+//!   `kind` (and `status` for HTTP failures) beside the human `reason`, so a
+//!   consumer never has to parse prose to tell a rate limit from a dead
+//!   endpoint.
 //!
 //! The CLI does not `serde::Serialize` `Finding`; the wire shape is owned
 //! here so the core type stays free of `serde` derives it doesn't need.
 
 use std::collections::BTreeMap;
 use std::io::Write;
+use std::path::Path;
 
 use anyhow::Result;
 use serde_json::json;
 
 use crate::analysis::findings::Finding;
+use crate::analysis::result::FailureReason;
 use crate::cli::OutputFormat;
 use crate::cli::check::CheckOutcome;
 
@@ -132,12 +137,7 @@ fn render_json<W: Write>(out: &mut W, outcome: &CheckOutcome) -> Result<()> {
     let unanalyzed: Vec<_> = outcome
         .failures
         .iter()
-        .map(|(path, reason)| {
-            json!({
-                "file": path.to_string_lossy(),
-                "reason": reason.one_line(),
-            })
-        })
+        .map(|(path, reason)| unanalyzed_json(path, reason))
         .collect();
 
     // The gate's verdict, passed in - never recomputed. A second exit
@@ -152,6 +152,51 @@ fn render_json<W: Write>(out: &mut W, outcome: &CheckOutcome) -> Result<()> {
     serde_json::to_writer_pretty(&mut *out, &payload)?;
     writeln!(out)?;
     Ok(())
+}
+
+/// The stable machine tag for a failure, as it appears in JSON.
+///
+/// Here rather than on `FailureReason` because this module already owns the
+/// wire shape - it declines to `Serialize` `Finding` for the same reason, so
+/// that the core types stay free of a JSON contract they do not otherwise
+/// need. A caller in the crate branches on the enum, which is exhaustive and
+/// compiler-checked; only a caller reading the JSON needs a string.
+///
+/// Deliberately not derived from the variant names: a rename inside the crate
+/// must not silently change the published tag.
+fn failure_kind(reason: &FailureReason) -> &'static str {
+    match reason {
+        FailureReason::Transport { .. } => "transport",
+        FailureReason::Unparseable(_) => "unparseable",
+        FailureReason::Truncated => "truncated",
+        FailureReason::MalformedFinding(_) => "malformed_finding",
+        FailureReason::ToolUnavailable { .. } => "tool_unavailable",
+        FailureReason::FileTooLarge { .. } => "file_too_large",
+        FailureReason::PayloadTooLarge { .. } => "payload_too_large",
+        FailureReason::Unreadable(_) => "unreadable",
+    }
+}
+
+/// One entry in the JSON `unanalyzed` array.
+///
+/// Three keys, deliberately: `kind` is the stable machine tag, `reason` is the
+/// same human line the text format prints, and `status` appears only when the
+/// failure carried an HTTP code. The reason used to be the *only* key, which
+/// meant a consumer wanting to tell a rate limit from a dead endpoint had to
+/// pattern-match English — and phase 5c's failover has to make exactly that
+/// distinction, because a 429 should fail over and a 401 must not.
+///
+/// `status` is omitted rather than emitted as `null` so its presence is itself
+/// the signal that the failure was an HTTP one.
+fn unanalyzed_json(path: &Path, reason: &FailureReason) -> serde_json::Value {
+    let mut obj = serde_json::Map::new();
+    obj.insert("file".to_owned(), json!(path.to_string_lossy()));
+    obj.insert("kind".to_owned(), json!(failure_kind(reason)));
+    if let Some(status) = reason.status() {
+        obj.insert("status".to_owned(), json!(status));
+    }
+    obj.insert("reason".to_owned(), json!(reason.one_line()));
+    serde_json::Value::Object(obj)
 }
 
 /// One entry in the JSON `findings` array.

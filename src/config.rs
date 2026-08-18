@@ -3,7 +3,8 @@
 //! One file per repository, conventionally `drep.toml` at the root. The shape
 //! is deliberate: every field has a documented default, so a partial file
 //! works. Missing keys are not an error - the section just inherits the
-//! default.
+//! default. Providers are declared as `[[llm]]`, an ordered array of tables,
+//! even while only the first entry is consulted.
 //!
 //! The two things this module owns that are not obvious from the field list:
 //!
@@ -26,13 +27,31 @@ use toml::Value;
 
 /// The whole configuration tree, rooted at the file.
 ///
-/// Sections are added as the surface widens. `#[serde(default)]` means a file
-/// with an empty body deserializes successfully - the user opted into "all
-/// defaults" by writing the file.
+/// `llm` is an **array of tables** (`[[llm]]`), not a single `[llm]` section,
+/// and it is that shape from the day `drep init` first wrote one. Multi-provider
+/// failover is a later phase, but the file format cannot change underneath a
+/// file drep itself wrote - so the list arrives first with exactly one entry in
+/// it, and failover later fills the tail rather than rewriting the head.
+///
+/// `#[serde(default)]` means a file with an empty body deserializes
+/// successfully; [`validate`] is what then rejects it, because a config
+/// declaring no provider cannot run the mandatory LLM layer.
 #[derive(Debug, Default, Deserialize)]
 #[serde(default)]
 pub struct Config {
-    pub llm: LlmConfig,
+    pub llm: Vec<LlmConfig>,
+}
+
+impl Config {
+    /// The provider requests go to first.
+    ///
+    /// `Option` rather than an indexing method that cannot fail: [`load`]
+    /// rejects an empty list, but `Config` is also constructible directly (in
+    /// tests, and by any later caller), and a panic inside the commit gate is
+    /// a worse failure than an error message.
+    pub fn primary(&self) -> Option<&LlmConfig> {
+        self.llm.first()
+    }
 }
 
 /// LLM section.
@@ -84,8 +103,14 @@ pub enum ConfigError {
     #[error("environment variable `{0}` is not set (referenced by `{1}`)")]
     EnvVarUnset(String, String),
 
-    #[error("temperature {0} is outside the allowed range 0.0..=2.0")]
-    Temperature(f32),
+    #[error("[[llm]] #{0}: temperature {1} is outside the allowed range 0.0..=2.0")]
+    Temperature(usize, f32),
+
+    #[error(
+        "{0} declares no `[[llm]]` provider; drep 2.x has no deterministic-only mode. \
+         Run `drep init` to write one."
+    )]
+    NoProviders(PathBuf),
 }
 
 /// The conventional config file location: `drep.toml` in the current directory.
@@ -125,15 +150,28 @@ pub fn load(path: &Path) -> Result<Config, ConfigError> {
         ConfigError::Parse(path.to_path_buf(), err.message().to_owned())
     })?;
 
-    validate(&config)?;
+    validate(&config, path)?;
     Ok(config)
 }
 
-/// Validate fields that serde cannot enforce from the type alone.
-fn validate(config: &Config) -> Result<(), ConfigError> {
-    let t = config.llm.temperature;
-    if !(0.0..=2.0).contains(&t) {
-        return Err(ConfigError::Temperature(t));
+/// Validate what serde cannot enforce from the type alone.
+///
+/// An empty provider list is rejected here rather than tolerated and caught
+/// later at the LLM boundary: the LLM layer is mandatory in 2.x, so a config
+/// naming no provider is a file that can never produce a passing run, and the
+/// earliest place to say so is the place that read the file.
+///
+/// The index is carried into the temperature error because with several
+/// providers "temperature 3.0 is out of range" does not say *which* one.
+fn validate(config: &Config, path: &Path) -> Result<(), ConfigError> {
+    if config.llm.is_empty() {
+        return Err(ConfigError::NoProviders(path.to_path_buf()));
+    }
+    for (index, llm) in config.llm.iter().enumerate() {
+        let t = llm.temperature;
+        if !(0.0..=2.0).contains(&t) {
+            return Err(ConfigError::Temperature(index, t));
+        }
     }
     Ok(())
 }
@@ -207,260 +245,4 @@ fn expand_string(s: &str, source: &Path) -> Result<String, ConfigError> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use std::fs;
-
-    /// `expand_env_in` walks arrays as well as tables.
-    ///
-    /// No field in `LlmConfig` is an array today, so this cannot be reached
-    /// through `load()` — which is exactly why the array arm survived
-    /// mutation testing. It is still load-bearing: the walk exists so a future
-    /// array-valued field inherits `${VAR}` expansion without anyone
-    /// remembering to opt in, and a silently-skipped arm would break that
-    /// promise the moment such a field is added.
-    #[test]
-    fn env_expansion_descends_into_arrays() {
-        // SAFETY: single-threaded test process; no other thread reads env here.
-        unsafe { env::set_var("DREP_ARRAY_PROBE", "expanded") };
-
-        let mut tree: Value = toml::from_str(
-            r#"
-values = ["${DREP_ARRAY_PROBE}", "literal"]
-nested = { inner = ["${DREP_ARRAY_PROBE}"] }
-"#,
-        )
-        .expect("fixture parses");
-
-        expand_env_in(&mut tree, Path::new("probe.toml")).expect("expansion succeeds");
-
-        let values = tree["values"].as_array().expect("array");
-        assert_eq!(values[0].as_str(), Some("expanded"));
-        assert_eq!(values[1].as_str(), Some("literal"));
-
-        let inner = tree["nested"]["inner"].as_array().expect("nested array");
-        assert_eq!(
-            inner[0].as_str(),
-            Some("expanded"),
-            "arrays nested inside tables must expand too"
-        );
-    }
-
-    /// Write `body` to a fresh `drep.toml`-shaped path in `temp`.
-    fn write_config(temp: &tempfile::TempDir, body: &str) -> PathBuf {
-        let path = temp.path().join("drep.toml");
-        fs::write(&path, body).expect("write config");
-        path
-    }
-
-    #[test]
-    fn full_toml_round_trips_into_config_with_every_field_correct() {
-        let temp = tempfile::tempdir().expect("tempdir");
-        let path = write_config(
-            &temp,
-            r#"
-[llm]
-enabled = true
-endpoint = "http://localhost:11434/v1"
-model = "qwen3:8b"
-api_key = "literal-secret"
-temperature = 0.7
-max_tokens = 4096
-timeout_secs = 120
-max_retries = 5
-max_concurrent = 8
-"#,
-        );
-
-        let config = load(&path).expect("load");
-        let llm = &config.llm;
-        assert!(llm.enabled);
-        assert_eq!(llm.endpoint.as_deref(), Some("http://localhost:11434/v1"));
-        assert_eq!(llm.model.as_deref(), Some("qwen3:8b"));
-        assert_eq!(llm.api_key.as_deref(), Some("literal-secret"));
-        assert!((llm.temperature - 0.7).abs() < f32::EPSILON);
-        assert_eq!(llm.max_tokens, Some(4096));
-        assert_eq!(llm.timeout_secs, 120);
-        assert_eq!(llm.max_retries, 5);
-        assert_eq!(llm.max_concurrent, 8);
-    }
-
-    #[test]
-    fn partial_file_uses_documented_defaults_and_max_tokens_is_none() {
-        let temp = tempfile::tempdir().expect("tempdir");
-        let path = write_config(
-            &temp,
-            r#"
-[llm]
-enabled = true
-model = "qwen3:8b"
-"#,
-        );
-
-        let config = load(&path).expect("load");
-        let llm = &config.llm;
-        assert!(llm.enabled);
-        assert_eq!(llm.model.as_deref(), Some("qwen3:8b"));
-        assert!(llm.endpoint.is_none());
-        assert!(llm.api_key.is_none());
-        assert!((llm.temperature - 0.2).abs() < f32::EPSILON, "default 0.2");
-        assert_eq!(llm.max_tokens, None, "absent max_tokens is None, not 0");
-        assert_eq!(llm.timeout_secs, 60, "default timeout");
-        assert_eq!(llm.max_retries, 3, "default max_retries");
-        assert_eq!(llm.max_concurrent, 3, "default max_concurrent");
-    }
-
-    #[test]
-    fn temperature_outside_range_is_rejected() {
-        for bad in ["-0.1", "2.5", "100.0"] {
-            let temp = tempfile::tempdir().expect("tempdir");
-            let path = write_config(
-                &temp,
-                &format!(
-                    r#"
-[llm]
-temperature = {bad}
-"#
-                ),
-            );
-            let err = load(&path).expect_err("should reject");
-            assert!(
-                matches!(err, ConfigError::Temperature(_)),
-                "expected Temperature error, got {err:?} for value {bad}"
-            );
-        }
-    }
-
-    #[test]
-    fn env_var_in_api_key_expands_from_environment() {
-        let temp = tempfile::tempdir().expect("tempdir");
-        let path = write_config(
-            &temp,
-            r#"
-[llm]
-api_key = "${DREP_TEST_API_KEY_VAR}"
-"#,
-        );
-
-        // Use a name unique to this test so a parallel run or a leaked env
-        // var from elsewhere cannot poison the assertion.
-        let var = "DREP_TEST_API_KEY_VAR";
-        // SAFETY: the test is single-threaded at this point and the var name
-        // is unique to this test. We restore on either branch to keep the
-        // surrounding tests deterministic.
-        let previous = env::var(var).ok();
-        // SAFETY: see above.
-        unsafe {
-            env::set_var(var, "expanded-secret-value");
-        }
-        let result = load(&path);
-        if let Some(prev) = previous {
-            unsafe {
-                env::set_var(var, prev);
-            }
-        } else {
-            unsafe {
-                env::remove_var(var);
-            }
-        }
-
-        let config = result.expect("load");
-        assert_eq!(config.llm.api_key.as_deref(), Some("expanded-secret-value"));
-    }
-
-    #[test]
-    fn env_var_with_unset_variable_is_an_error_not_an_empty_string() {
-        let temp = tempfile::tempdir().expect("tempdir");
-        let path = write_config(
-            &temp,
-            r#"
-[llm]
-api_key = "${DREP_DEFINITELY_NOT_SET_VAR_XYZ_123}"
-"#,
-        );
-
-        // Make sure no other test or shell leaked the variable.
-        let previous = env::var("DREP_DEFINITELY_NOT_SET_VAR_XYZ_123").ok();
-        unsafe {
-            env::remove_var("DREP_DEFINITELY_NOT_SET_VAR_XYZ_123");
-        }
-        let result = load(&path);
-        if let Some(prev) = previous {
-            unsafe {
-                env::set_var("DREP_DEFINITELY_NOT_SET_VAR_XYZ_123", prev);
-            }
-        }
-
-        let err = result.expect_err("unset variable must fail");
-        match err {
-            ConfigError::EnvVarUnset(name, _) => {
-                assert_eq!(name, "DREP_DEFINITELY_NOT_SET_VAR_XYZ_123");
-            }
-            other => panic!("expected EnvVarUnset, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn literal_api_key_passes_through_unchanged() {
-        let temp = tempfile::tempdir().expect("tempdir");
-        let path = write_config(
-            &temp,
-            r#"
-[llm]
-api_key = "this-is-not-a-template"
-"#,
-        );
-
-        let config = load(&path).expect("load");
-        assert_eq!(
-            config.llm.api_key.as_deref(),
-            Some("this-is-not-a-template")
-        );
-    }
-
-    #[test]
-    fn literal_dollar_not_followed_by_brace_is_preserved() {
-        // The expansion rule is `${VAR}` exactly. A bare `$5` or `$HOME`
-        // (without braces) must survive so filenames and shell syntax stay
-        // intact.
-        let temp = tempfile::tempdir().expect("tempdir");
-        let path = write_config(
-            &temp,
-            r#"
-[llm]
-endpoint = "http://host/$1/path"
-"#,
-        );
-
-        let config = load(&path).expect("load");
-        assert_eq!(config.llm.endpoint.as_deref(), Some("http://host/$1/path"));
-    }
-
-    #[test]
-    fn missing_file_path_is_an_error() {
-        let temp = tempfile::tempdir().expect("tempdir");
-        let missing = temp.path().join("does_not_exist.toml");
-        let err = load(&missing).expect_err("missing file must error");
-        assert!(
-            matches!(err, ConfigError::Io(_, _)),
-            "expected Io error, got {err:?}"
-        );
-    }
-
-    #[test]
-    fn max_tokens_absent_yields_none_and_present_yields_some() {
-        let temp = tempfile::tempdir().expect("tempdir");
-        let absent = write_config(&temp, "[llm]\nmodel = \"x\"\n");
-        let config = load(&absent).expect("load");
-        assert_eq!(config.llm.max_tokens, None);
-
-        let present = write_config(&temp, "[llm]\nmax_tokens = 8192\n");
-        let config = load(&present).expect("load");
-        assert_eq!(config.llm.max_tokens, Some(8192));
-    }
-
-    #[test]
-    fn default_config_path_is_drep_toml_in_cwd() {
-        assert_eq!(default_config_path(), PathBuf::from("drep.toml"));
-    }
-}
+mod tests;

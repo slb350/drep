@@ -48,8 +48,18 @@ pub enum FailureReason {
     MalformedFinding(String),
     /// A deterministic tool that should have run could not.
     ToolUnavailable { tool: String, detail: String },
-    /// The file was too large to send whole.
-    TooLarge { bytes: u64, limit: u64 },
+    /// The file on disk exceeded the read guard, so drep never read it.
+    ///
+    /// Distinct from [`Self::PayloadTooLarge`] because the two measure
+    /// different things: this is the file's own size, checked before any I/O,
+    /// and that one is the size of the text the model would have been sent.
+    /// They were one variant sharing one limit, which meant `bytes` held the
+    /// file size on one code path and the rendered-payload size on another -
+    /// so "file is too large (330102 bytes)" could name a file that `ls`
+    /// reports as 261900 bytes.
+    FileTooLarge { bytes: u64, limit: u64 },
+    /// The rendered LLM payload exceeded the ceiling. See [`Self::FileTooLarge`].
+    PayloadTooLarge { bytes: u64, limit: u64 },
     /// The file could not be read from disk.
     Unreadable(String),
 }
@@ -83,10 +93,25 @@ impl FailureReason {
             FailureReason::ToolUnavailable { tool, detail } => {
                 format!("{tool} could not run: {detail}")
             }
-            FailureReason::TooLarge { bytes, limit } => {
-                format!("file is too large ({bytes} bytes; limit is {limit})")
+            FailureReason::FileTooLarge { bytes, limit } => {
+                format!("file is too large to read ({bytes} bytes; limit is {limit})")
+            }
+            FailureReason::PayloadTooLarge { bytes, limit } => {
+                format!("the code sent for review is too large ({bytes} bytes; limit is {limit})")
             }
             FailureReason::Unreadable(detail) => format!("file could not be read: {detail}"),
+        }
+    }
+
+    /// The HTTP status, when the failure had one.
+    ///
+    /// Only `Transport` ever carries one. Exposed as a number rather than
+    /// left inside the message because a caller has to distinguish a 429 from
+    /// a 401 - the message is prose and prose gets reworded.
+    pub fn status(&self) -> Option<u16> {
+        match self {
+            FailureReason::Transport { status, .. } => *status,
+            _ => None,
         }
     }
 }
@@ -135,6 +160,19 @@ pub fn union_failures(
 }
 
 impl AnalysisResult {
+    /// One file, one failure, no findings.
+    ///
+    /// The shape was hand-assembled at four call sites - `default()`, insert,
+    /// return - each of which independently had to know that `findings` and
+    /// `dropped_out_of_range` stay at their defaults. Forgetting the insert at
+    /// any one of them reports an unanalyzed file as clean, which is the single
+    /// failure this whole type exists to prevent, so it gets a constructor.
+    pub fn failed(path: PathBuf, reason: FailureReason) -> Self {
+        let mut result = Self::default();
+        result.failed_files.insert(path, reason);
+        result
+    }
+
     /// Fold `other` into `self`: findings concatenate, `failed_files`
     /// unions, `dropped_out_of_range` sums.
     ///

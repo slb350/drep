@@ -128,3 +128,26 @@ pub(crate) fn make_executable(path: &std::path::Path) {
     #[cfg(not(unix))]
     let _ = path;
 }
+
+/// Write a `drep.toml` under `dir` pointing at `endpoint`.
+///
+/// The on-disk config shape stated once. It was written out longhand in three
+/// places across two test modules, so the `[llm]` → `[[llm]]` array-of-tables
+/// change had to be made three times — and a missed one surfaces not as a
+/// failed assertion but as an opaque `ConfigError::Parse` from a test that
+/// looks unrelated.
+///
+/// `max_retries = 1` so a test pointed at a dead endpoint fails on the first
+/// attempt rather than paying the SDK's backoff schedule.
+pub(crate) fn write_drep_toml(dir: &std::path::Path, endpoint: &str) {
+    let body = format!(
+        r#"[[llm]]
+enabled = true
+endpoint = "{endpoint}"
+model = "m"
+api_key = "not-needed"
+max_retries = 1
+"#
+    );
+    std::fs::write(dir.join("drep.toml"), body).expect("drep.toml");
+}

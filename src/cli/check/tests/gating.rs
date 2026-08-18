@@ -42,21 +42,6 @@ async fn setup_mock(body: &str) -> (tempfile::TempDir, MockServer) {
     (dir, server)
 }
 
-/// Write a `drep.toml` pointing at `server` and a fresh per-process cache.
-fn write_drep_toml(dir: &Path, server: &MockServer) {
-    let body = format!(
-        r#"[llm]
-enabled = true
-endpoint = "{uri}/v1"
-model = "m"
-api_key = "not-needed"
-max_retries = 1
-"#,
-        uri = server.uri()
-    );
-    std::fs::write(dir.join("drep.toml"), body).expect("drep.toml");
-}
-
 /// Build a `CheckArgs` for paths mode with an optional gating threshold.
 fn args(paths: Vec<std::path::PathBuf>, fail_on: Option<Severity>) -> CheckArgs {
     CheckArgs {
@@ -118,7 +103,7 @@ fn run_drep(dir: &Path, args: &[&str]) -> std::process::Output {
 #[tokio::test]
 async fn clean_run_returns_clean() {
     let (dir, server) = setup_mock(r#"{"issues": []}"#).await;
-    write_drep_toml(dir.path(), &server);
+    crate::test_support::write_drep_toml(dir.path(), &format!("{}/v1", server.uri()));
     std::fs::write(dir.path().join("lib.py"), "x = 1\n").expect("lib.py");
 
     let exit = run_paths(dir.path().join("lib.py"), dir.path()).await;
@@ -136,7 +121,7 @@ async fn clean_run_returns_clean() {
 #[tokio::test]
 async fn tool_finding_blocks_with_no_fail_on() {
     let (dir, server) = setup_mock(r#"{"issues": []}"#).await;
-    write_drep_toml(dir.path(), &server);
+    crate::test_support::write_drep_toml(dir.path(), &format!("{}/v1", server.uri()));
 
     // Fake `ruff` that emits one finding. We use `printf '%s'` (no trailing
     // newline) so the JSON parser sees exactly one element.
@@ -190,7 +175,7 @@ fn llm_finding_does_not_block_without_fail_on_but_renders() {
                 .set_body_raw(sse(&[body]), "text/event-stream"),
         )
         .await;
-        write_drep_toml(dir.path(), &server);
+        crate::test_support::write_drep_toml(dir.path(), &format!("{}/v1", server.uri()));
         std::fs::write(dir.path().join("lib.py"), "x = 1\n").expect("lib.py");
         (dir, server)
     });
@@ -225,7 +210,7 @@ async fn llm_finding_at_error_blocks_under_fail_on_error() {
         r#"{"issues":[{"line":1,"severity":"critical","category":"bug","message":"bad"}]}"#,
     )
     .await;
-    write_drep_toml(dir.path(), &server);
+    crate::test_support::write_drep_toml(dir.path(), &format!("{}/v1", server.uri()));
     std::fs::write(dir.path().join("lib.py"), "x = 1\n").expect("lib.py");
 
     let args = CheckArgs {
@@ -257,7 +242,7 @@ async fn llm_finding_at_warning_does_not_block_under_fail_on_error() {
         r#"{"issues":[{"line":1,"severity":"medium","category":"style","message":"meh"}]}"#,
     )
     .await;
-    write_drep_toml(dir.path(), &server);
+    crate::test_support::write_drep_toml(dir.path(), &format!("{}/v1", server.uri()));
     std::fs::write(dir.path().join("lib.py"), "x = 1\n").expect("lib.py");
 
     let args = CheckArgs {
@@ -289,7 +274,7 @@ async fn llm_finding_at_warning_does_not_block_under_fail_on_error() {
 #[tokio::test]
 async fn failure_outranks_finding() {
     let (dir, server) = setup_mock(r#"{"issues": []}"#).await;
-    write_drep_toml(dir.path(), &server);
+    crate::test_support::write_drep_toml(dir.path(), &format!("{}/v1", server.uri()));
 
     // One file produces a tool finding.
     let bin = dir.path().join("venv/bin/ruff");
@@ -340,14 +325,7 @@ fn unreachable_endpoint_exits_2_and_does_not_print_clean() {
     // Use a port that nothing is listening on. 1 is privileged and the OS
     // rejects the connect immediately, which keeps the test fast.
     let dir = tempfile::tempdir().expect("tempdir");
-    let cfg = r#"[llm]
-enabled = true
-endpoint = "http://127.0.0.1:1/v1"
-model = "m"
-api_key = "not-needed"
-max_retries = 1
-"#;
-    std::fs::write(dir.path().join("drep.toml"), cfg).expect("drep.toml");
+    crate::test_support::write_drep_toml(dir.path(), "http://127.0.0.1:1/v1");
     std::fs::write(dir.path().join("lib.py"), "x = 1\n").expect("lib.py");
 
     let output = run_drep(dir.path(), &["check", "lib.py"]);

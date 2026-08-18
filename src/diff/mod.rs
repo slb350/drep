@@ -103,7 +103,12 @@ async fn has_head(root: &Path) -> bool {
 /// wrapped itself, but `staged_files`, `changed_since` and `has_head` called
 /// this bare, so a hung git blocked the gate indefinitely. `kill_on_drop` only
 /// helps when the future is dropped, which nothing was doing.
-async fn run_git(root: &Path, args: &[&str]) -> Result<String, GitError> {
+///
+/// `pub(crate)` because it is the *only* place drep spawns git. `cli::init`
+/// asks git where the hooks directory is and what `core.hooksPath` holds, and
+/// a second spawn helper there would be a second place for the timeout, the
+/// stdin-null and the non-zero handling to drift.
+pub(crate) async fn run_git(root: &Path, args: &[&str]) -> Result<String, GitError> {
     let mut command = Command::new("git");
     command
         .args(args)

@@ -3,7 +3,7 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-use crate::analysis::payload::render;
+use crate::analysis::payload::{PAYLOAD_MAX_BYTES, render};
 use crate::diff::hunks::{Hunk, HunkLine};
 use crate::languages;
 use crate::languages::spec::LanguageSupport;
@@ -263,4 +263,24 @@ fn whole_file_uses_the_whole_file_scope_sentence_diff_uses_marked_lines() {
         "diff payload must use the marked-lines scope sentence, got:\n{}",
         diff_payload.text
     );
+}
+
+/// The documented ceilings are what the docs say they are.
+///
+/// A change-detector by design, and the only thing that can observe them: a
+/// limit is an input to behaviour no other assertion reaches, so `cargo
+/// mutants` can rewrite `256 * 1024` to `256 + 1024` with every other test
+/// still green. Both numbers carry a stated rationale, and the *relationship*
+/// between them is load-bearing - the read guard must never sit below the
+/// payload ceiling, or paths mode would reject a file whose payload would have
+/// fit.
+#[test]
+fn the_documented_size_ceilings_hold_their_stated_values() {
+    use crate::cli::check::input::READ_MAX_BYTES;
+
+    assert_eq!(PAYLOAD_MAX_BYTES, 262_144, "256 KiB, per its doc comment");
+    assert_eq!(READ_MAX_BYTES, 8_388_608, "8 MiB, per its doc comment");
+    // The ordering between them is asserted at compile time in
+    // `cli::check::input`; clippy rejects it here because both are consts, and
+    // a build failure is a better home for the invariant than a test anyway.
 }

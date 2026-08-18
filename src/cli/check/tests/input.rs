@@ -24,7 +24,7 @@ use std::path::PathBuf;
 use crate::analysis::result::FailureReason;
 use crate::cli::OutputFormat;
 use crate::cli::check::CheckArgs;
-use crate::cli::check::WHOLE_FILE_MAX_BYTES;
+use crate::cli::check::input::READ_MAX_BYTES;
 use crate::cli::check::input::resolve;
 
 /// Build a `CheckArgs` for paths mode. Defaults `format = Text`, no
@@ -97,23 +97,22 @@ async fn paths_mode_yields_one_whole_file_hunk_covering_every_line() {
     );
 }
 
-/// Criterion 5: a file larger than `WHOLE_FILE_MAX_BYTES` lands in
-/// `read_failures` as `TooLarge` **and** contributes no findings.
+/// Criterion 5: a file larger than `READ_MAX_BYTES` lands in `read_failures`
+/// as `FileTooLarge`, contributes no hunks, and **is still linted**.
 ///
-/// Asserting only the failure would also hold for an implementation that
-/// skipped the file and separately recorded the reason; asserting only the
-/// absence from `by_file` would also hold for an implementation that
-/// silently skipped and recorded nothing. Both halves in one test is what
-/// makes "we declined to analyze" observable end-to-end.
+/// Three assertions because each alone admits a wrong implementation: the
+/// failure alone also holds for something that skipped the file and separately
+/// recorded a reason; the `by_file` absence alone also holds for something
+/// that skipped silently. The `lint_only` half is the one that was missing —
+/// dropping the path entirely meant an LLM size limit silently switched ruff
+/// off for that file, while the same file under `--staged` was still linted.
 #[tokio::test]
-async fn oversized_file_lands_in_failures_and_is_not_in_by_file() {
+async fn oversized_file_fails_is_not_in_by_file_and_is_still_linted() {
     let dir = tempfile::tempdir().expect("tempdir");
-    // One byte over the limit. The size check is `bytes > limit`, so 1 over
-    // is the smallest observable boundary - which makes a regression that
-    // flips to `>=` (or off-by-ones the limit) visible here.
-    let size = (WHOLE_FILE_MAX_BYTES + 1) as usize;
-    let body = vec![b'x'; size];
-    std::fs::write(dir.path().join("big.py"), &body).expect("write big.py");
+    // One byte over. The check is `bytes > limit`, so one over is the smallest
+    // observable boundary - a regression to `>=` shows up here.
+    let size = (READ_MAX_BYTES + 1) as usize;
+    std::fs::write(dir.path().join("big.py"), vec![b'x'; size]).expect("write big.py");
 
     let args = paths_args(vec![dir.path().join("big.py")]);
     let work = resolve(&args, dir.path()).await.expect("paths resolve");
@@ -123,16 +122,22 @@ async fn oversized_file_lands_in_failures_and_is_not_in_by_file() {
         "an oversize file must not enter by_file, got {} entries",
         work.by_file.len()
     );
+    assert_eq!(
+        work.lint_only,
+        vec![dir.path().join("big.py")],
+        "too large for the model is not too large for ruff; the path must \
+         still reach the deterministic layer"
+    );
     let reason = work
         .read_failures
         .get(&dir.path().join("big.py"))
         .expect("oversize file must appear in read_failures");
     match reason {
-        FailureReason::TooLarge { bytes, limit } => {
+        FailureReason::FileTooLarge { bytes, limit } => {
             assert_eq!(*bytes, size as u64);
-            assert_eq!(*limit, WHOLE_FILE_MAX_BYTES);
+            assert_eq!(*limit, READ_MAX_BYTES);
         }
-        other => panic!("expected TooLarge, got {other:?}"),
+        other => panic!("expected FileTooLarge, got {other:?}"),
     }
 }
 
@@ -241,14 +246,14 @@ fn init_repo_with_commit(root: &std::path::Path) {
     run(&["commit", "--quiet", "-m", "init"]);
 }
 
-/// A file of exactly `WHOLE_FILE_MAX_BYTES` is accepted; one byte more is not.
+/// A file of exactly `READ_MAX_BYTES` is accepted; one byte more is not.
 ///
 /// Pins the boundary itself. `>` and `>=` both pass a test that only uses a
 /// file far over the limit, so the comparison was free to drift by one.
 #[tokio::test]
 async fn a_file_exactly_at_the_size_limit_is_accepted_and_one_byte_over_is_not() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let limit = crate::cli::check::WHOLE_FILE_MAX_BYTES as usize;
+    let limit = READ_MAX_BYTES as usize;
 
     let exact = dir.path().join("exact.py");
     std::fs::write(&exact, "a".repeat(limit)).expect("write exact");

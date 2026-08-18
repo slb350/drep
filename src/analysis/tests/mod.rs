@@ -8,6 +8,7 @@
 mod code_quality;
 mod code_quality_failures;
 mod code_quality_multi;
+mod code_quality_oversize;
 mod code_quality_truncation;
 mod payload;
 mod prompt;

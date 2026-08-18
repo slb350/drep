@@ -347,14 +347,21 @@ first phase whose mistakes are user-visible rather than internal.
 analysis layers, the union of their failure sets, gating, exit 0/1/2, and
 `--format text|json`.
 
-**Known gap carried into 5b:** `WHOLE_FILE_MAX_BYTES` is enforced only in
-paths mode, at `input.rs`. `--staged` and `--diff` never consult it, so a
-newly-added 5 MB file reaches the LLM whole through `staged_hunks`, and
-`payload::render` has no size guard of its own. The ceiling belongs where the
-payload is built, not on one branch of input resolution.
+**Phase 5b — `doctor` and `init`.** Ports of `cli_doctor.py` (112 LOC) and
+`cli_init_hooks.py` (206 LOC) plus the `init-llm` presets. Also carries the two
+gaps left open by 5a: the size ceiling now lives on the rendered payload
+(`PAYLOAD_MAX_BYTES`), separate from the paths-mode read guard
+(`READ_MAX_BYTES`), and `--format json`'s `unanalyzed` entries carry a machine
+tag and HTTP status rather than only prose. See the CHANGELOG.
 
-**Phase 5b — `doctor` and `init`.** Near-mechanical ports of `cli_doctor.py`
-(112 LOC) and `cli_init_hooks.py` (206 LOC) plus the `init-llm` presets.
+`drep init` writes **native git hooks**, not a `.pre-commit-config.yaml` entry.
+2.0 is a single binary with no Python runtime, so requiring the `pre-commit`
+framework to install a hook is a dependency the rewrite exists to shed. The two
+hard-won parts of the 1.x installer carry over unchanged: the hooks directory
+comes from `git rev-parse --git-common-dir` (in a linked worktree or a submodule
+`.git` is a *file*, so `$REPO/.git/hooks` does not exist and the hook silently
+never runs), and a `core.hooksPath` set anywhere means git ignores `.git/hooks`
+entirely, so a chainer in that directory is what keeps a repo-local hook alive.
 
 **Phase 5c — multi-provider LLM failover.** See below; deliberately last,
 because it changes the cache-key layer.
@@ -416,6 +423,15 @@ Constraints, in order of how much they cost:
 ### Phase 6 — `lint-docs`
 Port the markdown checks including `_fence_mask`. No LLM, fast, runs on every
 commit.
+
+**Carries one gap from 5a/5b.** `files::is_scan_target` accepts `.md`, but no
+language claims it, so `drep check README.md` reads the file, finds no
+deterministic tool and no LLM language, and prints "No issues found." That is
+the banned move — a file drep declined to analyze reported as clean — applied to
+a path the user named explicitly. The same distinction `resolve_paths` already
+draws for a non-existent argument applies here: a *walk* that finds no
+analyzable file is legitimately empty, an explicitly-named one is not. Giving
+`.md` a real home here is the fix; until then it is a known hole.
 
 ### Phase 7 — Distribution
 `cargo-dist` 0.32 (repo active as of 2026-08-17) generates the release
