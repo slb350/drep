@@ -98,10 +98,13 @@ cached) rather than marking the file unanalyzed, unlike `severity` and
 break analysis, which after the expansion fix it no longer does — the same
 doctor-disagrees-with-check failure its old narrower scanner produced, in the
 opposite direction; and an `unsafe` `set_var` in an `init` test whose safety
-note relied on the wrong contract — the round trip now uses a preset that needs no key, and
+note relied on the wrong contract; and `LlmConfig` deriving `Debug` with the
+API key in the clear - `Config` derives `Debug` and holds these, so any `{:?}`
+on a loaded config leaked the credential `LlmClient` already hand-writes `Debug`
+to redact — the round trip now uses a preset that needs no key, and
 the `${VAR}` half is asserted on the rendered text.
 
-**Testing: 431 passing** (up from 366), clippy-clean, rustfmt-clean, and
+**Testing: 432 passing** (up from 366), clippy-clean, rustfmt-clean, and
 mutation-clean on the staged diff and on `src/llm/chain.rs` swept whole.
 
 - 21 tests in `src/llm/chain/tests/` across construction, failover policy,

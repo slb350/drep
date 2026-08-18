@@ -120,3 +120,36 @@ fn max_tokens_absent_yields_none_and_present_yields_some() {
 fn default_config_path_is_drep_toml_in_cwd() {
     assert_eq!(default_config_path(), PathBuf::from("drep.toml"));
 }
+
+/// A `Debug`-printed config redacts the API key.
+///
+/// `Config` derives `Debug` and holds these, so any `{:?}`, `dbg!` or tracing
+/// line touching a loaded config would otherwise emit a live credential.
+/// `LlmClient` already hand-writes `Debug` for exactly this reason - the config
+/// it is *built from* held the same secret in the clear.
+#[test]
+fn debug_redacts_the_api_key() {
+    let cfg = LlmConfig {
+        api_key: Some("sk-a-real-looking-secret".to_owned()),
+        model: Some("m".to_owned()),
+        ..LlmConfig::default()
+    };
+
+    let printed = format!("{cfg:?}");
+    assert!(
+        !printed.contains("sk-a-real-looking-secret"),
+        "the key must never reach a log: {printed}"
+    );
+    assert!(
+        printed.contains("<redacted>"),
+        "and its presence must still be visible: {printed}"
+    );
+    // The rest of the struct is still useful for debugging.
+    assert!(printed.contains("\"m\""), "got {printed}");
+
+    let absent = LlmConfig::default();
+    assert!(
+        format!("{absent:?}").contains("None"),
+        "an absent key reads as absent, not as redacted"
+    );
+}

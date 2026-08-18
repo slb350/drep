@@ -73,7 +73,7 @@ impl Config {
 /// entry and no failover. A partial entry that names no endpoint is still
 /// rejected, by `LlmClient::new`, with a message about the endpoint rather
 /// than about a switch the user never touched.
-#[derive(Debug, Deserialize)]
+#[derive(Deserialize)]
 #[serde(default)]
 pub struct LlmConfig {
     pub enabled: bool,
@@ -85,6 +85,35 @@ pub struct LlmConfig {
     pub timeout_secs: u64,
     pub max_retries: u32,
     pub max_concurrent: usize,
+}
+
+/// Hand-written so the API key cannot reach a log.
+///
+/// A derived `Debug` prints every field, so any `{:?}`, `dbg!` or tracing line
+/// touching a `Config` - which derives `Debug` and holds these - would emit a
+/// live credential. `LlmClient` already redacts for exactly this reason; the
+/// config the client is built *from* held the same secret in the clear.
+impl std::fmt::Debug for LlmConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LlmConfig")
+            .field("enabled", &self.enabled)
+            .field("endpoint", &self.endpoint)
+            .field("model", &self.model)
+            .field(
+                "api_key",
+                &self
+                    .api_key
+                    .as_ref()
+                    .map(|_| "<redacted>")
+                    .unwrap_or("None"),
+            )
+            .field("temperature", &self.temperature)
+            .field("max_tokens", &self.max_tokens)
+            .field("timeout_secs", &self.timeout_secs)
+            .field("max_retries", &self.max_retries)
+            .field("max_concurrent", &self.max_concurrent)
+            .finish()
+    }
 }
 
 impl Default for LlmConfig {

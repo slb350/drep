@@ -67,7 +67,7 @@ async fn mount_llm(server: &MockServer, body: &str) {
 /// suggestion, drops the source prefix, or flips the field order.
 #[test]
 fn text_output_for_a_known_finding_is_exactly_the_expected_string() {
-    let runtime = tokio::runtime::Builder::new_current_thread()
+    let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
         .unwrap();
@@ -109,7 +109,7 @@ fn text_output_for_a_known_finding_is_exactly_the_expected_string() {
 /// The byte-exactness is what a downstream consumer can rely on.
 #[test]
 fn clean_run_text_output_is_exactly_no_issues_found() {
-    let runtime = tokio::runtime::Builder::new_current_thread()
+    let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
         .unwrap();
@@ -154,7 +154,7 @@ fn clean_run_text_output_is_exactly_no_issues_found() {
 /// eyes.
 #[test]
 fn json_clean_run_has_unanalyzed_key_present_as_empty_array() {
-    let runtime = tokio::runtime::Builder::new_current_thread()
+    let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
         .unwrap();
@@ -201,7 +201,7 @@ fn json_clean_run_has_unanalyzed_key_present_as_empty_array() {
 /// LLM produces an LLM finding at `lib.py:2`.
 #[test]
 fn json_findings_distinguish_tool_from_llm_via_source_field() {
-    let runtime = tokio::runtime::Builder::new_current_thread()
+    let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
         .unwrap();
@@ -270,7 +270,7 @@ fn json_findings_distinguish_tool_from_llm_via_source_field() {
 /// (exit 2). The JSON must report the same `2`.
 #[test]
 fn json_exit_matches_returned_exit_code_on_a_run_with_failures() {
-    let runtime = tokio::runtime::Builder::new_current_thread()
+    let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
         .unwrap();
@@ -317,7 +317,7 @@ fn json_exit_matches_returned_exit_code_on_a_run_with_failures() {
 /// verdict.
 #[test]
 fn json_exit_matches_the_gate_when_an_llm_finding_does_not_block() {
-    let runtime = tokio::runtime::Builder::new_current_thread()
+    let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
         .unwrap();

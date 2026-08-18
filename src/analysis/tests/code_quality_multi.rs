@@ -78,7 +78,12 @@ async fn analyze_files_merges_findings_and_unions_failures() {
         "every file's finding must reach the merged result"
     );
 
-    let failed: Vec<PathBuf> = result.failed_files.keys().cloned().collect();
+    // Sorted, though `failed_files` is a `BTreeMap` and already yields sorted
+    // keys. The assertion is about *which* files failed, not about the map's
+    // iteration order, and sorting keeps it that way if the container ever
+    // changes underneath it.
+    let mut failed: Vec<PathBuf> = result.failed_files.keys().cloned().collect();
+    failed.sort();
     assert_eq!(
         failed,
         vec![PathBuf::from("src/a.py"), PathBuf::from("src/b.py")],

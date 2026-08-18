@@ -161,7 +161,7 @@ fn llm_finding_does_not_block_without_fail_on_but_renders() {
     // Subprocess so the test can capture stdout. The mock is mounted on a
     // wiremock server inside this process; the spawned binary hits it
     // over HTTP exactly as production would.
-    let runtime = tokio::runtime::Builder::new_current_thread()
+    let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
         .expect("runtime");
