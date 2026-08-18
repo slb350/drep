@@ -17,18 +17,17 @@ sites. Plus two tests of mine that did not discriminate — one accepting
 `"max_tokens": null` where the contract said absent, one using `Error::api`
 instead of `Error::api_status`.
 
-## Still open — deferred deliberately
+## Both deferred items were fixed in Phase 5a
 
-**`diff/mod.rs:169` — a `git_ref` beginning with `--` is parsed by git as an
-option.** `drep check --diff --output=/tmp/x` reaches git as a flag. Fix: pass
-`--` before the revision, or reject refs starting with `-`. Low risk today
-because the ref comes from a hook script, not a web form, but it is a one-line
-fix worth doing in Phase 5 when the CLI is wired up.
+**`git_ref` beginning with `-`** is rejected in `since_diff` before the spec is
+built. Passing `--` does not work here: after `--`, git treats arguments as
+*paths*, not revisions.
 
-**`runner/mod.rs:139` — `which_first` checks `is_file()`, not executability.**
-Contradicts the repo-local path check, so `tool_status` can report `Ok` for a
-PATH entry `run_tool` then cannot execute. Reuse the `is_executable` helper that
-already exists a few lines above.
+**`which_first` executability** now shares the module-scope `is_executable`
+with the repo-local branch, so `tool_status` cannot report `Ok` for something
+`run_tool` then fails to execute. Pinned by
+`path_lookup_skips_non_executable_then_returns_it_when_executable`, which
+asserts both halves — a resolver that always failed would fail the second.
 
 ## Judged not worth acting on now
 
