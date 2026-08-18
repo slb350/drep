@@ -17,9 +17,9 @@
 
 use std::path::Path;
 
-use crate::languages::runner::resolve_tool;
+use crate::languages::runner::resolve_tool_in;
 use crate::languages::spec::ToolSpec;
-use crate::test_support::{PathGuard, make_executable};
+use crate::test_support::make_executable;
 
 /// Criterion 24: the PATH lookup rejects a non-executable PATH entry
 /// and accepts the same file once the executable bit is set.
@@ -29,8 +29,6 @@ use crate::test_support::{PathGuard, make_executable};
 /// bit would fail the first.
 #[test]
 fn path_lookup_skips_non_executable_then_returns_it_when_executable() {
-    let _guard = crate::test_support::lock_path();
-
     let dir = tempfile::tempdir().expect("tempdir");
     let tool = dir.path().join("mytool");
     std::fs::write(&tool, "#!/bin/sh\necho ok\n").expect("write tool");
@@ -44,24 +42,24 @@ fn path_lookup_skips_non_executable_then_returns_it_when_executable() {
         ..ToolSpec::default()
     };
 
-    // With no executable bit, the file exists on PATH but the lookup
-    // must skip it. Using a fresh, isolated PATH keeps the test from
-    // accidentally hitting a real `mytool` shipped by the system.
-    let path_guard = PathGuard::set(dir.path());
+    // The PATH value is handed in rather than written to the process
+    // environment. `std::env::set_var` is `unsafe` in edition 2024 because a
+    // concurrent reader is a data race, and this suite runs beside tests that
+    // spawn `git` - which reads `PATH` to find it. A test-local mutex cannot
+    // fix that: it excludes tests that take the same mutex, not every reader
+    // in the process.
+    let path = std::env::join_paths([dir.path()]).expect("a single dir joins");
+    let root = Path::new("/nonexistent-root-for-test");
+
     assert!(
-        resolve_tool(&spec, Path::new("/nonexistent-root-for-test")).is_none(),
+        resolve_tool_in(&spec, root, Some(path.as_os_str())).is_none(),
         "a non-executable PATH entry must be skipped"
     );
 
     make_executable(&tool);
-    let resolved = resolve_tool(&spec, Path::new("/nonexistent-root-for-test"));
     assert_eq!(
-        resolved.as_deref(),
+        resolve_tool_in(&spec, root, Some(path.as_os_str())).as_deref(),
         Some(tool.as_path()),
         "after chmod +x, the lookup must return the same file"
     );
-
-    // Drop `path_guard` first to restore PATH, then release the mutex.
-    drop(path_guard);
-    drop(_guard);
 }

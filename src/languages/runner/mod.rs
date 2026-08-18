@@ -122,6 +122,16 @@ fn is_executable(path: &Path) -> bool {
 /// half-installed shims on `PATH` would otherwise block a tool that
 /// happens to be on PATH under the same name.
 pub fn resolve_tool(spec: &ToolSpec, root: &Path) -> Option<PathBuf> {
+    resolve_tool_in(spec, root, std::env::var_os("PATH").as_deref())
+}
+
+/// `resolve_tool`, against an explicit `PATH` value. See [`which_first_in`]
+/// for why this seam exists.
+pub(crate) fn resolve_tool_in(
+    spec: &ToolSpec,
+    root: &Path,
+    path: Option<&std::ffi::OsStr>,
+) -> Option<PathBuf> {
     for relative in spec.local_paths {
         let candidate = root.join(relative);
         if is_executable(&candidate) {
@@ -134,7 +144,7 @@ pub fn resolve_tool(spec: &ToolSpec, root: &Path) -> Option<PathBuf> {
     // panic here would take the whole gate down rather than reporting the
     // tool unavailable.
     let name = spec.command.first()?;
-    which_first(name).map(PathBuf::from)
+    which_first_in(name, path?).map(PathBuf::from)
 }
 
 /// Look up `command` on PATH, mirroring `shutil.which` from the Python
@@ -146,9 +156,17 @@ pub fn resolve_tool(spec: &ToolSpec, root: &Path) -> Option<PathBuf> {
 /// Using the same `is_executable` helper the repo-local branch uses keeps
 /// the two paths consistent — a path that passes one is rejected by the
 /// other is the bug this guard exists to prevent.
-fn which_first(command: &str) -> Option<String> {
-    let path = std::env::var_os("PATH")?;
-    for dir in std::env::split_paths(&path) {
+/// `which_first`, against an explicit `PATH` value.
+///
+/// Split out so tests can exercise PATH lookup without mutating the process
+/// environment. `std::env::set_var` is `unsafe` in edition 2024 because any
+/// other thread reading the environment concurrently is a data race - and
+/// these tests run beside ones that spawn `git`, which reads `PATH` to find
+/// it. A test-local mutex cannot fix that: it excludes other tests that take
+/// the same mutex, not every reader in the process. Passing the value in
+/// removes the shared mutable state instead of guarding it.
+fn which_first_in(command: &str, path: &std::ffi::OsStr) -> Option<String> {
+    for dir in std::env::split_paths(path) {
         let candidate = dir.join(command);
         if is_executable(&candidate) {
             return Some(candidate.to_string_lossy().into_owned());
@@ -229,6 +247,19 @@ pub async fn run_tool(spec: &ToolSpec, root: &Path, files: &[String]) -> ToolOut
         };
     };
 
+    // Absolutised before spawning. `resolve_tool` returns `root.join(relative)`
+    // for a repo-local hit, and the child gets `current_dir(root)` below - so a
+    // relative `root` like "repo" produced "repo/node_modules/.bin/eslint"
+    // resolved *from* "repo", i.e. "repo/repo/node_modules/...". It works today
+    // only because the CLI passes "." and the tests pass absolute temp dirs.
+    let executable = if executable.is_relative() {
+        std::env::current_dir()
+            .map(|cwd| cwd.join(&executable))
+            .unwrap_or(executable)
+    } else {
+        executable
+    };
+
     let mut argv: Vec<String> = Vec::with_capacity(spec.command.len() + files.len());
     argv.push(executable.to_string_lossy().into_owned());
     argv.extend(spec.command[1..].iter().map(|s| (*s).to_owned()));
@@ -287,9 +318,14 @@ pub async fn run_tool(spec: &ToolSpec, root: &Path, files: &[String]) -> ToolOut
         }
     };
 
-    // The exit code is irrelevant: ruff/eslint/clippy exit non-zero when
-    // they find issues, and that is the success path. The only question is
-    // whether the diagnostics stream parsed.
+    // The exit code alone is not a verdict: ruff/eslint/clippy exit non-zero
+    // *because* they found issues, and that is the success path. But it is not
+    // irrelevant either. A tool that exits non-zero having produced no
+    // diagnostics at all did not run - a bad config, a crash, a bad
+    // invocation - and reporting that as `Ok` with zero findings is precisely
+    // the "unavailable is not a pass" failure this module exists to prevent.
+    // So the rule is the conjunction: non-zero AND nothing on the diagnostics
+    // stream.
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
     let (diagnostics, other) = if spec.diagnostics_stream == "stderr" {
@@ -304,6 +340,28 @@ pub async fn run_tool(spec: &ToolSpec, root: &Path, files: &[String]) -> ToolOut
         files.first().map(String::as_str).unwrap_or(""),
     );
     match parse_result {
+        Ok(findings)
+            if findings.is_empty() && !output.status.success() && diagnostics.trim().is_empty() =>
+        {
+            // Exited non-zero, said nothing on the stream we read for
+            // diagnostics, and produced no findings. Whatever it did, it did
+            // not check the files. The other stream usually carries the real
+            // error, so it becomes the detail.
+            ToolOutcome {
+                tool: spec.name,
+                status: ToolStatus::Unavailable,
+                findings: Vec::new(),
+                detail: format!(
+                    "{} exited {} without producing diagnostics: {}",
+                    spec.name,
+                    output
+                        .status
+                        .code()
+                        .map_or("by signal".to_owned(), |c| c.to_string()),
+                    truncate(other.trim(), 200)
+                ),
+            }
+        }
         Ok(findings) => ToolOutcome {
             tool: spec.name,
             status: ToolStatus::Ok,

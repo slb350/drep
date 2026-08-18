@@ -40,6 +40,13 @@ use crate::llm::concurrency::Limiter;
 // thing from each side and have to be kept in agreement; a fourth input mode
 // would mean editing every existing one, and missing a single edit silently
 // permits an illegal combination.
+// Deliberately NOT `.required(true)`. Bare `drep check` is a supported
+// invocation meaning "the whole tree": `input::resolve` expands `root` through
+// `files::expand_paths`, exactly as an explicit `.` would. Requiring one of the
+// three would turn the plainest invocation into a usage error. Pinned by
+// `bare_check_with_no_paths_expands_the_root_instead_of_reading_a_directory`,
+// which exists because an earlier version passed the root through as a *file*
+// and exited 2 without analyzing anything.
 #[command(group(ArgGroup::new("input").args(["paths", "staged", "diff"]).multiple(false)))]
 pub struct CheckArgs {
     /// Files or directories to check. Duplicates and overlaps are collapsed,

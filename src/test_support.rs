@@ -109,27 +109,6 @@ pub(crate) async fn mount_sse(server: &MockServer, template: ResponseTemplate) {
         .await;
 }
 
-/// Serialises every test that rewrites the process `PATH`.
-///
-/// Crate-wide, and that is the point: a second `Mutex` in another test module
-/// does not exclude this one, so two suites prepending their own temp
-/// directory to `PATH` would race rather than take turns. There was briefly
-/// one here and one in `cli::check::tests::resolution`, which is the failure
-/// mode the lock exists to prevent.
-pub(crate) static PATH_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
-/// Take [`PATH_LOCK`], ignoring poisoning.
-///
-/// A test that panics while holding the lock poisons it, and every later
-/// `.lock().unwrap()` then panics on the poison rather than on its own
-/// assertion - turning one real failure into a cascade that hides it. The
-/// guarded data is `()`, so there is no invariant for poisoning to protect.
-pub(crate) fn lock_path() -> std::sync::MutexGuard<'static, ()> {
-    PATH_LOCK
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-}
-
 /// Mark a file executable on unix; a no-op elsewhere.
 ///
 /// Crate-wide because five copies of this existed across four test modules,
@@ -148,45 +127,4 @@ pub(crate) fn make_executable(path: &std::path::Path) {
     }
     #[cfg(not(unix))]
     let _ = path;
-}
-
-/// Prepend `dir` to `PATH` for the guard's lifetime, restoring it on drop.
-///
-/// **Prepends rather than replaces.** Replacing `PATH` outright made the fake
-/// binary resolvable but also made `git` unresolvable, and `PATH_LOCK` does
-/// not help: it excludes other *PATH-rewriting* tests, not the git-shelling
-/// ones running concurrently in the same process. Two `diff` tests failed that
-/// way. Prepending gives the fake directory priority, which is all these tests
-/// need, and leaves everything else on `PATH` findable.
-///
-/// Callers must still hold [`lock_path`]: `PATH` is process-global, so two
-/// tests rewriting it concurrently would see each other's value.
-pub(crate) struct PathGuard {
-    original: Option<std::ffi::OsString>,
-}
-
-impl PathGuard {
-    pub(crate) fn set(path: &std::path::Path) -> Self {
-        let original = std::env::var_os("PATH");
-        let existing = original.clone().unwrap_or_default();
-        let mut dirs = vec![path.to_path_buf()];
-        dirs.extend(std::env::split_paths(&existing));
-        let joined = std::env::join_paths(dirs).expect("the directories join");
-        // SAFETY: the caller holds `PATH_LOCK`, so no other test reads or
-        // writes PATH while this guard is alive.
-        unsafe { std::env::set_var("PATH", joined) };
-        Self { original }
-    }
-}
-
-impl Drop for PathGuard {
-    fn drop(&mut self) {
-        // SAFETY: see `set`.
-        unsafe {
-            match self.original.take() {
-                Some(prev) => std::env::set_var("PATH", prev),
-                None => std::env::remove_var("PATH"),
-            }
-        }
-    }
 }

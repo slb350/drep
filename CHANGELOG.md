@@ -7,6 +7,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Landed - 2026-08-17 — Phase 5a review-gate, round two
+
+The gate blocked again with six `error`-severity findings. Four were real, and
+the two most serious were in `languages/runner`, untouched since Phase 1:
+
+- **`run_tool` ignored the exit status entirely.** A comment asserted the code
+  was "irrelevant" because ruff and clippy exit non-zero *when they find
+  issues* — true, but it misses the other case. A tool that exits non-zero
+  having produced no diagnostics at all did not run: bad config, crash, bad
+  invocation. That was reported as `Ok` with zero findings, which is exactly
+  the "unavailable is not a pass" failure the module exists to prevent. The
+  rule is now the conjunction: non-zero **and** an empty diagnostics stream.
+- **A relative `root` made the child resolve its executable twice.**
+  `resolve_tool` returns `root.join(relative)` and the child is spawned with
+  `current_dir(root)`, so a root of `repo` produced
+  `repo/repo/node_modules/.bin/eslint`. It worked only because the CLI passes
+  `"."` and every test passed an absolute temp dir. The path is absolutised
+  before spawning.
+
+- **The `unsafe` env mutation in the test suite was unsound.** `PathGuard`'s
+  SAFETY comment claimed `PATH_LOCK` prevented concurrent access; it does not —
+  a mutex excludes tests that *take* it, not every reader in the process, and
+  these tests run beside ones that spawn `git`, which reads `PATH`. Rather than
+  document the race, the shared mutable state is gone: `resolve_tool_in` and
+  `which_first_in` take the `PATH` value as a parameter, so the tests pass a
+  synthetic value and never touch the environment. `PathGuard`, `PATH_LOCK` and
+  `lock_path` are deleted, and with them the last `unsafe` block in the test
+  support.
+
+Declined: `ArgGroup` lacking `required(true)` — bare `drep check` meaning "the
+whole tree" is deliberate, and the reasoning is now a comment on the group so
+it stops being re-flagged. `matches!` moving its scrutinee — a `_` pattern
+binds nothing, so nothing moves; the code compiles. Wiremock's server not being
+polled after `block_on` returns — the subprocess tests assert on
+LLM-derived findings and pass consistently, so the server is serving.
+
+Worth recording: the first draft of the exit-status test passed for the wrong
+reason. With a `json` spec, empty stdout is not valid JSON, so it reached
+`Unavailable` through the *parse-failure* path without exercising the new rule
+at all. It uses a `lines` spec now, where empty input is legitimately zero
+findings — and disabling the guard makes it fail, which is the check that
+caught it.
+
+Testing:
+- 286 passing, 2 added
+- `cargo mutants` 0 missed
+
 ### Landed - 2026-08-17 — Phase 5a review-gate fixes
 
 The pre-push gate blocked Phase 5a with exit 2 and 53 advisories. Exit 2 was

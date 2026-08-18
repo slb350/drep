@@ -111,3 +111,89 @@ async fn run_tool_reports_unavailable_for_unparseable_output_not_empty_ok() {
         "unparseable must not be reported as zero findings"
     );
 }
+
+/// A tool that exits non-zero having produced no diagnostics is `Unavailable`,
+/// not a clean `Ok`.
+///
+/// The exit code alone is not a verdict - ruff and clippy exit non-zero
+/// *because* they found issues - but a non-zero exit with nothing on the
+/// diagnostics stream means the tool did not run: bad config, crash, bad
+/// invocation. Reporting that as `Ok` with zero findings is the
+/// "unavailable is not a pass" failure this module exists to prevent.
+#[tokio::test]
+async fn a_silent_non_zero_exit_is_unavailable_not_a_clean_pass() {
+    let dir = TempDir::new().unwrap();
+    let bin = dir.path().join("failtool");
+    std::fs::write(&bin, "#!/bin/sh\necho 'fatal: bad config' >&2\nexit 2\n").unwrap();
+    make_executable(&bin);
+    std::fs::write(dir.path().join("pyproject.toml"), "").unwrap();
+
+    // `lines`, not `json`. An empty stdout is not valid JSON, so a `json`
+    // spec reaches `Unavailable` through the *parse-failure* path and the test
+    // passes without ever exercising the exit-status rule - which is exactly
+    // what happened on the first draft. The `lines` parser accepts empty input
+    // as zero findings, so only the new rule can produce `Unavailable` here.
+    let spec = ToolSpec {
+        name: "failtool",
+        command: &["failtool"],
+        local_paths: &["failtool"],
+        config_files: &["pyproject.toml"],
+        output_format: "lines",
+        diagnostics_stream: "stdout",
+    };
+
+    let outcome = run_tool(&spec, dir.path(), &["a.py".to_owned()]).await;
+    assert_eq!(
+        outcome.status,
+        ToolStatus::Unavailable,
+        "a silent non-zero exit must not read as a clean pass, got {outcome:?}"
+    );
+    assert!(
+        outcome.detail.contains("fatal: bad config"),
+        "the other stream carries the real error and must reach the detail: {}",
+        outcome.detail
+    );
+}
+
+/// A relative `root` still resolves the repo-local tool.
+///
+/// `resolve_tool` returns `root.join(relative)`, and the child is spawned with
+/// `current_dir(root)` - so a relative root made the child resolve the
+/// executable a second time, from inside root: `repo/repo/node_modules/...`.
+/// It worked only because the CLI passes "." and the tests pass absolute temp
+/// dirs.
+#[tokio::test]
+async fn a_relative_root_still_finds_the_repo_local_tool() {
+    let dir = TempDir::new().unwrap();
+    let cwd = std::env::current_dir().expect("cwd");
+    let relative = pathdiff_relative(&cwd, dir.path());
+
+    let bin = dir.path().join("mytool");
+    std::fs::write(&bin, "#!/bin/sh\nexit 0\n").unwrap();
+    make_executable(&bin);
+    std::fs::write(dir.path().join("pyproject.toml"), "").unwrap();
+
+    let spec = ToolSpec {
+        name: "mytool",
+        command: &["mytool"],
+        local_paths: &["mytool"],
+        config_files: &["pyproject.toml"],
+        output_format: "lines",
+        diagnostics_stream: "stdout",
+    };
+
+    let outcome = run_tool(&spec, &relative, &[]).await;
+    assert_ne!(
+        outcome.status,
+        ToolStatus::Unavailable,
+        "a relative root must still spawn the repo-local tool, got {outcome:?}"
+    );
+}
+
+/// A path for `to` expressed relative to `from`, when `to` is absolute and
+/// shares no prefix worth trimming: falls back to the absolute path.
+fn pathdiff_relative(from: &std::path::Path, to: &std::path::Path) -> std::path::PathBuf {
+    to.strip_prefix(from)
+        .map(std::path::Path::to_path_buf)
+        .unwrap_or_else(|_| to.to_path_buf())
+}

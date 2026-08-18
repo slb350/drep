@@ -10,7 +10,6 @@ use tempfile::TempDir;
 use super::support::*;
 use crate::languages::runner::*;
 use crate::languages::spec::ToolSpec;
-use crate::test_support::PathGuard;
 
 // ---- resolve_tool ----
 
@@ -40,18 +39,17 @@ fn repo_local_executable_is_preferred_over_path() {
 /// installed.
 #[test]
 fn non_executable_repo_local_path_falls_through_to_path() {
-    let _guard = crate::test_support::lock_path();
     let dir = TempDir::new().unwrap();
 
     // Repo-local hit that exists but is not executable: must be skipped.
     std::fs::write(dir.path().join("mytool"), "not executable").unwrap();
 
-    // The same name, executable, on PATH. Resolution must reach it.
+    // The same name, executable, on the PATH we hand in. Resolution must
+    // reach it rather than stopping at the non-executable local hit.
     let path_dir = TempDir::new().unwrap();
     let on_path = path_dir.path().join("mytool");
     std::fs::write(&on_path, "#!/bin/sh\nexit 0\n").unwrap();
     make_executable(&on_path);
-    let _path = PathGuard::set(path_dir.path());
 
     let spec = ToolSpec {
         local_paths: &["mytool"],
@@ -59,8 +57,9 @@ fn non_executable_repo_local_path_falls_through_to_path() {
         ..ToolSpec::default()
     };
 
+    let path = std::env::join_paths([path_dir.path()]).expect("joins");
     assert_eq!(
-        resolve_tool(&spec, dir.path()),
+        resolve_tool_in(&spec, dir.path(), Some(path.as_os_str())),
         Some(on_path),
         "the non-executable local hit must be skipped and PATH consulted"
     );
@@ -141,10 +140,8 @@ fn passed_is_false_only_for_unavailable() {
 /// ruff/eslint/tsc/gofmt/go vet/clippy while `./` is unambiguous to any
 /// argument parser.
 ///
-/// Resolves the fake tool through `local_paths`, not `PATH`. `PathGuard`
-/// *replaces* `PATH` for its lifetime, and only tests that take `PATH_LOCK`
-/// are excluded by it - so a concurrent test shelling out to `git` would stop
-/// finding it. Repo-local resolution needs no global state at all.
+/// Resolves the fake tool through `local_paths`, so it touches no global
+/// state at all.
 #[tokio::test]
 async fn a_filename_that_looks_like_a_flag_is_passed_as_a_path() {
     let dir = tempfile::tempdir().expect("tempdir");
