@@ -7,6 +7,102 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Rust rewrite - 2026-08-17 - Phase 5b: `drep doctor` and `drep init`
+
+Both commands land, and this repository's own pre-push gate now runs the 2.0
+binary against `drep.toml` instead of 1.x against `config.yaml`.
+
+**`drep doctor`** answers "what will drep actually do here": languages present
+with file counts, every configured tool's status straight from
+`runner::tool_status` (so it cannot claim "ready" for a tool `check` will skip),
+and the LLM configuration. It never fails - diagnosis is not a gate - and a
+closed pipe (`drep doctor | head`) is the reader's choice rather than an error.
+
+Two decisions worth recording:
+
+- **The provider display reads the raw parsed file, not `config::load`.** A
+  fresh clone with the API key not yet exported is exactly when the report is
+  most useful, and `load` fails outright on an unset `${VAR}`. `load` is still
+  consulted, but only to surface problems the raw pass cannot see.
+- **A repo with no recognised source files still gets the LLM section.** The
+  first spec returned early there, which answered "is my model configured?"
+  with silence in the repository most likely to be asking.
+
+**`drep init`** writes `drep.toml` from a named provider preset and installs
+**native git hooks** - not a `.pre-commit-config.yaml` entry. 2.0 is a single
+binary with no Python runtime, so requiring the `pre-commit` framework to
+install a hook is a dependency the rewrite exists to shed. The two hard-won
+parts of the 1.x installer carry over unchanged: the hooks directory comes from
+`git rev-parse --git-common-dir` (in a linked worktree `.git` is a *file*, so
+`$REPO/.git/hooks` does not exist and the hook silently never runs), and a set
+`core.hooksPath` makes git ignore `.git/hooks` entirely, so a chainer in that
+directory is what keeps a repo-local hook alive.
+
+Presets carry **no `max_tokens`**. The Python sets 100,000 for reasoning models
+to stop them truncating; 2.0 sends no cap at all, so a preset setting one would
+reintroduce exactly the coupling Phase 3a removed.
+
+**`check --diff` gained `--tip`**, and it is not cosmetic. `--diff <base>`
+resolves to `git diff <base>...HEAD`, and git can push a ref that is not the
+checked-out one - `git push origin feature:feature` from another branch, or
+`git push --all`. The hook read the pushed oid from stdin and used it only for
+the deletion check, so the content actually reviewed was always `HEAD`: the
+pushed branch went through unseen while a different branch was reviewed in its
+place. The hook now names the pushed oid as the tip.
+
+Three more defects in that hook, all found by review rather than by tests:
+
+- The fallback for a branch that is new upstream was the **root commit**, so a
+  first push in a mature repo sent the entire history to a reasoning model.
+  The search is now bounded, and stops at `<remote>/HEAD`, `<remote>/main`,
+  `<remote>/master`, or 50 commits back.
+- `origin` was hardcoded, ignoring the remote git passes as `$1`.
+- Multi-ref pushes took the *last* exit code, so a ref that merely had findings
+  (1) downgraded an earlier ref that went unanalyzed (2). Highest wins now.
+
+**`doctor`'s `${VAR}` scanner disagreed with `config`'s substituter.** Doctor
+matched `[A-Z_][A-Z0-9_]*` while `expand_string` substitutes anything between
+`${` and `}` - so `api_key = "${openrouter_key}"` produced no warning, and
+because doctor suppresses `EnvVarUnset` believing it already reported it, the
+user was told a config was fine that `drep check` refuses to load. One scanner
+now serves both (`config::env_var_refs_in`), over the *parsed* tree, so a
+`${VAR}` inside a comment no longer raises a false alarm either.
+
+**`config_file::render` could emit unparseable TOML.** The escaper handled `\`
+and `"` only; TOML also forbids literal control characters in a basic string,
+so an endpoint pasted from a CRLF file wrote a `drep.toml` nothing could read -
+and `write` then refused to replace it without `--force`.
+
+Smaller, all from the same review pass: `--force` over a hand-written hook now
+keeps a `.drep-backup` copy rather than destroying it (the error message from
+`config_file::write` steers users straight into that flag); hooks are written
+via a temp file and renamed, because a truncated-but-executable hook exits 0
+and waves every push through; `set_executable` ORs `0o111` rather than `0o755`,
+which was widening the mode of files in a shared directory; a `git config`
+failure is no longer indistinguishable from "unset", which would have skipped
+the chainer while `core.hooksPath` was in fact set; `--hooks none` does no
+filesystem or git work at all; a tool shared by two languages (eslint) is named
+once in the missing list rather than twice; and the dead `EMPTY_TREE` fallback
+in `since_diff` is gone - a three-dot spec needs two commits, so it could only
+ever turn "no commits yet" into git's opaque "Invalid symmetric difference
+expression".
+
+63 tests added (349 total), zero clippy, zero missed mutants over 89 mutants.
+
+**On the verification.** The delegated implementation passed its own 50 tests,
+`cargo clippy` and `cargo fmt` before review. Four review agents then found 30+
+issues, of which the load-bearing ones were invisible to the test suite by
+construction: a test asserting `!ready || line.contains("configured")` (which
+fails on any machine that has `tsc`, and is vacuous on one that does not), a
+unit test that re-declared the implementation's regex and therefore tested the
+`regex` crate, and three `write_llm_section` branches with no fixture at all.
+Breaking the implementation by hand found more: `--git-common-dir` →
+`--git-dir` passed every existing test, because the two differ only in a linked
+worktree - the exact invariant the port carried forward. The suite also
+inherited the developer's global `core.hooksPath`, so `install` was reaching
+into `~/.git-hooks` during test runs.
+
+
 ### Rust rewrite - 2026-08-17 - Phase 5b groundwork: config shape, size ceiling, failure detail
 
 The three cross-cutting changes `doctor` and `init` need to exist on top of.

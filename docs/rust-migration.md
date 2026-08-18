@@ -347,12 +347,12 @@ first phase whose mistakes are user-visible rather than internal.
 analysis layers, the union of their failure sets, gating, exit 0/1/2, and
 `--format text|json`.
 
-**Phase 5b — `doctor` and `init`.** Ports of `cli_doctor.py` (112 LOC) and
-`cli_init_hooks.py` (206 LOC) plus the `init-llm` presets. Also carries the two
-gaps left open by 5a: the size ceiling now lives on the rendered payload
-(`PAYLOAD_MAX_BYTES`), separate from the paths-mode read guard
-(`READ_MAX_BYTES`), and `--format json`'s `unanalyzed` entries carry a machine
-tag and HTTP status rather than only prose. See the CHANGELOG.
+**Phase 5b ✅ — `doctor` and `init`. Landed 2026-08-17.** Ports of
+`cli_doctor.py` (112 LOC) and `cli_init_hooks.py` (206 LOC) plus the `init-llm`
+presets. Also closed the two gaps left open by 5a: the size ceiling now lives
+on the rendered payload (`PAYLOAD_MAX_BYTES`), separate from the paths-mode
+read guard (`READ_MAX_BYTES`), and `--format json`'s `unanalyzed` entries carry
+a machine tag and HTTP status rather than only prose. See the CHANGELOG.
 
 `drep init` writes **native git hooks**, not a `.pre-commit-config.yaml` entry.
 2.0 is a single binary with no Python runtime, so requiring the `pre-commit`
@@ -393,6 +393,20 @@ Also due here, both deferred from Phase 3: a `git_ref` beginning with `--`
 reaches git as a flag (now one site, `since_diff`), and `which_first` checks
 `is_file()` rather than executability - which matters precisely because
 `doctor` is the command that displays tool status.
+
+**Decisions taken in 5b that later phases inherit:**
+
+- **`drep check` accepts `--tip`, and the pre-push hook uses it.** `--diff
+  <base>` means `git diff <base>...HEAD`, but git can push a ref that is not
+  the checked-out one, so a hook that omits the tip reviews the wrong branch
+  and lets the pushed one through unseen. Any future caller diffing on behalf
+  of something other than the working checkout must name the tip.
+- **A base search in a hook is bounded.** The "branch is new upstream" fallback
+  stops at `<remote>/HEAD`, `<remote>/main`, `<remote>/master` or 50 commits.
+  Falling back to the root commit sends an entire history to a reasoning model.
+- **`config::env_var_refs_in` is the only definition of "a `${VAR}`
+  reference".** `doctor` had its own, narrower one, which meant it reported a
+  config as fine that `check` refused to load.
 
 ### Phase 5c — multi-provider failover (a deliberate reversal)
 

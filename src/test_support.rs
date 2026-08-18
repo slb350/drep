@@ -151,3 +151,96 @@ max_retries = 1
     );
     std::fs::write(dir.join("drep.toml"), body).expect("drep.toml");
 }
+
+/// A `git` command scoped to `dir` and nothing else.
+///
+/// The environment scrubbing matters more than it looks. These tests run under
+/// `cargo test`, but also under `cargo mutants`, and under drep's own
+/// pre-commit hook - and git exports `GIT_DIR`, `GIT_WORK_TREE` and
+/// `GIT_INDEX_FILE` to every hook it runs. A child `git` then inherits them and
+/// operates on the *outer* repository instead of the `TempDir` the test built,
+/// which surfaced as `fatal: .git/index: index file open failed: Not a
+/// directory` from `git worktree add` - a relative `GIT_INDEX_FILE` resolved
+/// against the wrong directory. `crate::diff::run_git` scrubs the same set for
+/// the same reason.
+pub(crate) fn git(dir: &std::path::Path) -> std::process::Command {
+    let mut command = std::process::Command::new("git");
+    command
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .env_remove("GIT_COMMON_DIR")
+        .env_remove("GIT_INDEX_FILE")
+        .current_dir(dir);
+    command
+}
+
+/// Initialise a git repository under `dir`, isolated from the developer's
+/// global git configuration.
+///
+/// Three copies of this existed across the `init` test files, already diverging
+/// (one asserted the `git config` calls succeeded, two discarded the result).
+///
+/// `core.hooksPath` is the load-bearing one. Without neutralising it, a
+/// globally-set value - which this machine has - leaks into every test, so
+/// `hooks::install` reaches into the developer's real shared hooks directory
+/// and takes a different code path than it would on a machine without the
+/// setting. An empty value reads back as present-but-blank, which drep treats
+/// as unset; the tests that actually exercise the chainer set their own.
+pub(crate) fn git_init(dir: &std::path::Path) {
+    let output = git(dir)
+        .args(["init", "--initial-branch=main"])
+        .output()
+        .expect("git init must run");
+    assert!(
+        output.status.success(),
+        "git init failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    for (key, value) in [
+        ("user.email", "test@example.com"),
+        ("user.name", "test"),
+        ("core.hooksPath", ""),
+        // A developer with commit signing on and no key available would
+        // otherwise fail every test here for reasons unrelated to drep.
+        ("commit.gpgsign", "false"),
+    ] {
+        let status = git(dir)
+            .args(["config", "--local", key, value])
+            .status()
+            .expect("git config must run");
+        assert!(status.success(), "git config {key} failed");
+    }
+}
+
+/// Assert `path` is executable, by the same predicate production uses.
+///
+/// Not a hand-rolled mode check: `languages::runner::is_executable` is what
+/// decides whether drep believes a tool or a hook will run, so a test with its
+/// own copy cannot detect a change to the definition it exists to protect.
+pub(crate) fn assert_executable(path: &std::path::Path) {
+    assert!(
+        crate::languages::runner::is_executable(path),
+        "{} must be executable - git ignores a non-executable hook silently",
+        path.display()
+    );
+}
+
+/// Clear the executable bits on `path`; a no-op where the platform has none.
+///
+/// The counterpart to [`make_executable`], for the tests that need to create
+/// the state git treats as "this hook does not exist". The `cfg` lives inside
+/// the body rather than gating two definitions, matching the rule in
+/// `languages::runner`.
+pub(crate) fn clear_executable(path: &std::path::Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = std::fs::metadata(path)
+            .expect("the file must exist before its mode is changed")
+            .permissions();
+        perms.set_mode(perms.mode() & !0o111);
+        std::fs::set_permissions(path, perms).expect("clearing the executable bit must succeed");
+    }
+    #[cfg(not(unix))]
+    let _ = path;
+}

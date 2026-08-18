@@ -65,6 +65,15 @@ pub struct CheckArgs {
     #[arg(long, value_name = "REF")]
     pub diff: Option<String>,
 
+    /// The commit to diff *to*. Defaults to `HEAD`. Only valid with `--diff`.
+    ///
+    /// A pre-push hook needs this: git can push a ref that is not the
+    /// checked-out one (`git push origin feature:feature` from another branch,
+    /// or `git push --all`), and diffing to `HEAD` there reviews a different
+    /// branch and lets the pushed code through unseen.
+    #[arg(long, value_name = "REF", requires = "diff")]
+    pub tip: Option<String>,
+
     #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
     pub format: OutputFormat,
 

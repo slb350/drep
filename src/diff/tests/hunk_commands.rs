@@ -155,3 +155,45 @@ async fn staged_hunks_requests_at_least_fifteen_context_lines() {
         "expected ≥15 context lines before the change (proving --unified=20), got {before_change}"
     );
 }
+
+/// `--diff` in a repo with no commits reports that plainly.
+///
+/// A three-dot spec is a symmetric difference between two *commits*; the empty
+/// tree is not one, so the fallback that used to live here could never produce
+/// a diff - it only turned "no commits yet" into git's opaque "Invalid
+/// symmetric difference expression". The message now names the situation and
+/// the way out.
+///
+/// The `--tip` half pins that an explicit tip is used verbatim rather than
+/// being replaced by any fallback: without it, ignoring `tip` would pass.
+#[tokio::test]
+async fn hunks_between_reports_plainly_when_the_repo_has_no_commits() {
+    let repo = GitRepo::init_no_commits().await;
+    let root = repo.root();
+
+    let err = crate::diff::hunks_between(root, EMPTY_TREE_SHA, None)
+        .await
+        .expect_err("there is no HEAD to diff to");
+    let rendered = format!("{err}");
+    assert!(
+        rendered.contains("no commits yet"),
+        "the message must name the situation, got: {rendered}"
+    );
+    assert!(
+        !rendered.contains("symmetric difference"),
+        "and must not leak git's version of it, got: {rendered}"
+    );
+
+    // An explicit tip skips the HEAD probe entirely, so this fails inside git
+    // rather than at the guard above.
+    let err = crate::diff::hunks_between(root, EMPTY_TREE_SHA, Some("HEAD"))
+        .await
+        .expect_err("HEAD is unborn");
+    assert!(
+        !format!("{err}").contains("no commits yet"),
+        "an explicit tip is used verbatim, so the guard must not fire"
+    );
+}
+
+/// The empty tree's well-known SHA, as git itself defines it.
+const EMPTY_TREE_SHA: &str = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";

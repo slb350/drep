@@ -79,12 +79,17 @@ impl std::error::Error for ToolOutputError {}
 
 /// Whether a path is a regular file that the OS will execute.
 ///
+/// `pub(crate)` because `cli::init` needs the same answer when it decides
+/// whether a git hook will actually run - git ignores a non-executable hook
+/// silently, which is the same class of failure this function was written for.
+/// Two definitions of "executable" that could disagree is exactly the bug.
+///
 /// One function with the `cfg` inside its body, not two cfg-gated
 /// definitions. Two definitions means the inactive one is unreachable on
 /// this platform, so every mutation of it survives by construction and
 /// shows up as an untestable finding in `cargo mutants`. This way the
 /// mutation lands in code the tests actually run.
-fn is_executable(path: &Path) -> bool {
+pub(crate) fn is_executable(path: &Path) -> bool {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;

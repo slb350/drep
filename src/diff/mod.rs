@@ -112,6 +112,22 @@ pub(crate) async fn run_git(root: &Path, args: &[&str]) -> Result<String, GitErr
     let mut command = Command::new("git");
     command
         .args(args)
+        // drep names the repository by path, and `current_dir(root)` is that
+        // statement. An inherited `GIT_DIR`/`GIT_WORK_TREE`/`GIT_COMMON_DIR`
+        // silently overrides it, so git answers about a *different* repository
+        // than the one asked about - and a relative `GIT_INDEX_FILE` resolves
+        // against the wrong directory entirely. Both happen in practice,
+        // because drep's whole job is running inside a git hook, where git
+        // exports all of them.
+        //
+        // Removing them makes `root` authoritative. It changes nothing in the
+        // ordinary case (git rediscovers the same repository from the working
+        // directory), and it is what stops the answers depending on who
+        // launched the process.
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .env_remove("GIT_COMMON_DIR")
+        .env_remove("GIT_INDEX_FILE")
         .current_dir(root)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -195,17 +211,45 @@ async fn staged_diff(root: &Path, mode: &str) -> Result<String, GitError> {
 /// a ref. Passing `--` does not help: after `--`, git treats arguments as
 /// *paths*, and `--diff -- this/file` is "diff versus the path `this/file`"
 /// rather than "diff versus the ref `--`".
-async fn since_diff(root: &Path, git_ref: &str, mode: &str) -> Result<String, GitError> {
-    if git_ref.starts_with('-') {
-        return Err(GitError::NonZero {
-            code: None,
-            stderr: format!("ref `{git_ref}` looks like a flag; refusing to pass it to git"),
-        });
+async fn since_diff(
+    root: &Path,
+    git_ref: &str,
+    tip: Option<&str>,
+    mode: &str,
+) -> Result<String, GitError> {
+    for candidate in [Some(git_ref), tip].into_iter().flatten() {
+        if candidate.starts_with('-') {
+            return Err(GitError::NonZero {
+                code: None,
+                stderr: format!("ref `{candidate}` looks like a flag; refusing to pass it to git"),
+            });
+        }
     }
-    let ref_b = if has_head(root).await {
-        "HEAD"
-    } else {
-        EMPTY_TREE
+    // An explicit tip names the commit the caller means, which is not always
+    // the checked-out one. The pre-push hook is the case that forced this:
+    // git can push a ref that is not HEAD (`git push origin feature:feature`
+    // from another branch, or `git push --all`), and diffing against HEAD
+    // there reviews the wrong branch entirely and green-lights the pushed one
+    // unseen - the exact "unanalyzed reported as clean" failure the gate
+    // exists to prevent.
+    // No `EMPTY_TREE` fallback here, unlike `staged_diff`. A three-dot spec is
+    // a *symmetric difference between two commits*, and the empty tree is a
+    // tree - git rejects `<ref>...4b825dc` with "Invalid symmetric difference
+    // expression" whatever `<ref>` is. So the fallback could never produce a
+    // diff; it only turned "this repo has no commits" into a confusing message
+    // about symmetric differences. A repo with an unborn HEAD also has no ref
+    // to diff *from*, so there is nothing to salvage - say so plainly.
+    let ref_b = match tip {
+        Some(tip) => tip,
+        None if has_head(root).await => "HEAD",
+        None => {
+            return Err(GitError::NonZero {
+                code: None,
+                stderr: "this repository has no commits yet, so there is nothing to \
+                         diff against; use --staged before the first commit"
+                    .to_owned(),
+            });
+        }
     };
     let spec = format!("{git_ref}...{ref_b}");
     run_git(root, &["diff", "--diff-filter=ACMR", mode, &spec]).await
@@ -227,7 +271,7 @@ const NAMES: &str = "--name-only";
 /// rather than an empty Vec — see the module docs.
 pub async fn changed_since(root: &Path, git_ref: &str) -> Result<Vec<PathBuf>, GitError> {
     Ok(filter_scan_targets(
-        &since_diff(root, git_ref, NAMES).await?,
+        &since_diff(root, git_ref, None, NAMES).await?,
     ))
 }
 
@@ -274,8 +318,23 @@ fn scan_target_hunks(diff_text: &str) -> Vec<Hunk> {
 /// this branch. `CONTEXT_LINES` of context is requested so the model has
 /// enough surrounding code to judge each change.
 pub async fn hunks_since(root: &Path, git_ref: &str) -> Result<Vec<Hunk>, GitError> {
+    hunks_between(root, git_ref, None).await
+}
+
+/// Hunks between `git_ref` and an explicit `tip`, or `HEAD` when `tip` is
+/// `None`.
+///
+/// The tip exists for the pre-push hook. git hands a hook the ref being
+/// pushed, which need not be the checked-out branch, and reviewing `HEAD`
+/// instead means the pushed code is never seen - so the hook passes the ref's
+/// own oid here.
+pub async fn hunks_between(
+    root: &Path,
+    git_ref: &str,
+    tip: Option<&str>,
+) -> Result<Vec<Hunk>, GitError> {
     Ok(scan_target_hunks(
-        &since_diff(root, git_ref, &unified()).await?,
+        &since_diff(root, git_ref, tip, &unified()).await?,
     ))
 }
 

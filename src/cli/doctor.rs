@@ -1,0 +1,306 @@
+//! `drep doctor` - report what drep can actually do in this repository.
+//!
+//! Adoption question, not a debugging one. Before trusting drep as a gate, a
+//! user wants to know the real coverage here: which languages are present,
+//! which of their own tools will actually run, and whether the LLM half is
+//! configured.
+//!
+//! **`doctor` never fails.** It always returns `Ok(Exit::Clean)`; it is
+//! diagnosis, and `drep check` is the gate. A pre-push hook pointing at a
+//! half-configured machine is still better than one pointing at nothing - and
+//! the user who wants the actual gate has `drep check` for that.
+//!
+//! All output goes through a `&mut dyn std::io::Write` so the command is
+//! testable without spawning a subprocess. The tests call [`run_to`] directly
+//! against a captured buffer.
+
+use std::io::Write;
+use std::path::{Path, PathBuf};
+
+use anyhow::Result;
+use clap::Args;
+
+use crate::Exit;
+use crate::config;
+use crate::files;
+use crate::languages;
+
+/// The header underline, exactly 60 characters wide. `write!` cannot express
+/// the count cleanly, and the spec pins the exact width: a `=`-string of any
+/// other length fails A2.
+const HEADER_RULE: &str = "============================================================";
+
+#[derive(Debug, Args)]
+pub struct DoctorArgs {
+    /// Repository or directory to report on.
+    #[arg(value_name = "PATH", default_value = ".")]
+    pub path: PathBuf,
+
+    /// Config file to report on. Defaults to `drep.toml` under PATH.
+    #[arg(long, value_name = "FILE")]
+    pub config: Option<PathBuf>,
+}
+
+/// Run the command, writing to stdout. Always returns `Ok(Exit::Clean)` -
+/// `doctor` is diagnosis, not a gate.
+pub fn run(args: &DoctorArgs) -> Result<Exit> {
+    let mut out = std::io::stdout().lock();
+    match run_to(&mut out, args) {
+        Ok(exit) => Ok(exit),
+        // `drep doctor | head -5` closes the pipe under us. That is the
+        // reader's choice, not a diagnostic failure, and turning it into exit 2
+        // would contradict this command's one contract.
+        Err(err) if is_broken_pipe(&err) => Ok(Exit::Clean),
+        Err(err) => Err(err),
+    }
+}
+
+/// Whether `err` is the reader having closed the pipe.
+pub(crate) fn is_broken_pipe(err: &anyhow::Error) -> bool {
+    err.downcast_ref::<std::io::Error>()
+        .is_some_and(|io| io.kind() == std::io::ErrorKind::BrokenPipe)
+}
+
+/// `run`, writing to an arbitrary sink so tests can capture the report.
+pub fn run_to<W: Write>(out: &mut W, args: &DoctorArgs) -> Result<Exit> {
+    // `canonicalize` can fail (the path does not exist, or a parent is
+    // unreadable). An unreadable path is still worth reporting on - the user
+    // has typed something and wants to know what drep sees - so fall back to
+    // the path as given rather than erroring out.
+    let root = args
+        .path
+        .canonicalize()
+        .unwrap_or_else(|_| args.path.clone());
+
+    writeln!(out, "drep in {}", root.display())?;
+    writeln!(out, "{HEADER_RULE}")?;
+
+    let files = files::expand_paths(std::slice::from_ref(&root), files::is_scan_target);
+    let file_refs: Vec<&Path> = files.iter().map(PathBuf::as_path).collect();
+    let buckets = languages::group_by_language(&file_refs);
+
+    if buckets.is_empty() {
+        writeln!(out)?;
+        writeln!(out, "No source files drep recognises were found here.")?;
+        // The LLM section still prints. "Is my model configured?" is the
+        // question a new user most needs answered, and a docs-only repo - or
+        // one whose languages drep does not register - is exactly where they
+        // are most likely to be asking it. Returning here answered it with
+        // silence.
+        write_llm_section(out, args, &root)?;
+        return Ok(Exit::Clean);
+    }
+
+    write_languages_section(out, &buckets)?;
+    // The missing list falls out of the same pass that printed the tool
+    // lines. Recomputing it afterwards meant asking `tool_status` twice per
+    // tool - each call stats the config files and walks PATH - and, worse,
+    // left room for the summary to disagree with the lines above it.
+    let missing = write_tools_section(out, &buckets, &root)?;
+    write_llm_section(out, args, &root)?;
+
+    // Deliberately last, after the LLM block: the user reads their coverage
+    // report before being told what is wrong with it.
+    if let Some(line) = missing_tools_line(&missing) {
+        writeln!(out)?;
+        writeln!(out, "{line}")?;
+    }
+
+    Ok(Exit::Clean)
+}
+
+/// Build the trailing "configured tool(s) are missing" line, or `None` when
+/// there is nothing to report.
+///
+/// Extracted so A4 can pin the rendering independently of the runner's
+/// availability on a particular developer machine.
+fn missing_tools_line(missing: &[&str]) -> Option<String> {
+    if missing.is_empty() {
+        return None;
+    }
+    Some(format!(
+        "{} configured tool(s) are missing: {}. drep exits 2 rather than reporting those files clean.",
+        missing.len(),
+        missing.join(", "),
+    ))
+}
+
+/// `Languages found:` block, one line per detected language.
+fn write_languages_section<W: Write>(
+    out: &mut W,
+    buckets: &[(&'static languages::spec::LanguageSupport, Vec<&Path>)],
+) -> Result<()> {
+    writeln!(out)?;
+    writeln!(out, "Languages found:")?;
+    for (language, paths) in buckets {
+        writeln!(out, "  {}: {} file(s)", language.display_name, paths.len())?;
+    }
+    Ok(())
+}
+
+/// `Deterministic checks (these gate):` block. Tool status comes from
+/// `runner::tool_status` so `doctor` cannot disagree with `check` about
+/// whether a tool will run.
+///
+/// Returns the names of the tools that were `Unavailable`, so the trailing
+/// summary is built from the same statuses that were printed rather than from
+/// a second round of `tool_status` calls.
+fn write_tools_section<W: Write>(
+    out: &mut W,
+    buckets: &[(&'static languages::spec::LanguageSupport, Vec<&Path>)],
+    root: &Path,
+) -> Result<Vec<&'static str>> {
+    writeln!(out)?;
+    writeln!(out, "Deterministic checks (these gate):")?;
+    let mut missing: Vec<&'static str> = Vec::new();
+    for (language, _) in buckets {
+        if language.tools.is_empty() {
+            writeln!(out, "  {}: no tools wired up yet", language.display_name)?;
+            continue;
+        }
+        for spec in language.tools {
+            let outcome = languages::runner::tool_status(spec, root);
+            writeln!(out, "  {}: {}", spec.name, outcome.detail)?;
+            // `Skipped` is the project exercising a choice, not a problem.
+            // Rendering it as one trains users to ignore the report.
+            if matches!(outcome.status, languages::runner::ToolStatus::Unavailable)
+                && !missing.contains(&spec.name)
+            {
+                // Deduplicated: `eslint` belongs to both JavaScript and
+                // TypeScript, so a repo with both and no eslint binary
+                // otherwise reported "2 configured tool(s) are missing:
+                // eslint, eslint" - a count that overstates the problem and a
+                // list that reads like a bug.
+                missing.push(spec.name);
+            }
+        }
+    }
+    Ok(missing)
+}
+
+/// `LLM analysis (required):` block.
+///
+/// Display path is the *raw* file, not `config::load`: a fresh clone is
+/// exactly when the report is most useful, and `load` fails on an unset
+/// referenced variable. `load` is consulted only to surface problems that are
+/// not the unset variable.
+fn write_llm_section<W: Write>(out: &mut W, args: &DoctorArgs, root: &Path) -> Result<()> {
+    writeln!(out)?;
+    writeln!(out, "LLM analysis (required):")?;
+
+    let config_path: PathBuf = match &args.config {
+        Some(p) => p.clone(),
+        None => root.join(config::default_config_path()),
+    };
+
+    let raw = match std::fs::read_to_string(&config_path) {
+        Ok(raw) => raw,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            writeln!(
+                out,
+                "  No config file at {} - `drep check` cannot run. Run `drep init`.",
+                config_path.display()
+            )?;
+            return Ok(());
+        }
+        Err(err) => {
+            writeln!(out, "  {} could not be read: {err}", config_path.display())?;
+            return Ok(());
+        }
+    };
+
+    let value: toml::Value = match toml::from_str(&raw) {
+        Ok(v) => v,
+        Err(err) => {
+            writeln!(
+                out,
+                "  {} could not be parsed: {}",
+                config_path.display(),
+                err.message()
+            )?;
+            return Ok(());
+        }
+    };
+
+    let providers = value
+        .get("llm")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+
+    if providers.is_empty() {
+        writeln!(
+            out,
+            "  {} declares no `[[llm]]` provider. Run `drep init`.",
+            config_path.display()
+        )?;
+        return Ok(());
+    }
+
+    // Print providers verbatim from the raw file: model and endpoint come out
+    // unexpanded, so `${VAR}` shows as `${VAR}` rather than being swallowed by
+    // the variable-not-set error.
+    for (index, entry) in providers.iter().enumerate() {
+        let model = entry
+            .get("model")
+            .and_then(|v| v.as_str())
+            .unwrap_or("(no model set)");
+        let endpoint = entry
+            .get("endpoint")
+            .and_then(|v| v.as_str())
+            .unwrap_or("(no endpoint set)");
+        writeln!(out, "  {}. {} at {}", index + 1, model, endpoint)?;
+    }
+
+    // Unset environment variables, deduped in first-seen order.
+    //
+    // Over the *parsed* tree, using `config`'s own scanner. Doctor had its own
+    // regex - `\$\{([A-Z_][A-Z0-9_]*)\}` - which is narrower than what
+    // `config::load` actually substitutes, so `${openrouter_key}` produced no
+    // warning here while `load` still failed on it. And since the branch below
+    // suppresses `EnvVarUnset` on the grounds it was "already reported", the
+    // user got a clean-looking report for a config `drep check` refuses to
+    // load. Scanning the parsed tree rather than the file text also stops a
+    // `${VAR}` inside a comment raising a false alarm.
+    for name in unset_env_vars(&value) {
+        writeln!(
+            out,
+            "  {name} is NOT set - LLM analysis will fail until you export it."
+        )?;
+    }
+
+    // Surface other load failures. `EnvVarUnset` is already reported above;
+    // repeating it reads as two separate problems.
+    match config::load(&config_path) {
+        Ok(_) => {}
+        Err(config::ConfigError::EnvVarUnset(_, _)) => {}
+        Err(err) => {
+            writeln!(out, "  {} will not load: {err}", config_path.display())?;
+        }
+    }
+
+    Ok(())
+}
+
+/// Every variable the config references that is not set, in first-seen order.
+///
+/// The *reference* grammar is `config::env_var_refs_in`, shared with the
+/// substituter so the two cannot disagree; all this adds is the "and it is not
+/// set" filter.
+fn unset_env_vars(value: &toml::Value) -> Vec<String> {
+    config::env_var_refs_in(value)
+        .into_iter()
+        .filter(|name| std::env::var(name).is_err())
+        .collect()
+}
+
+#[cfg(test)]
+mod unit_tests;
+
+/// Acceptance tests live in their own directory under `tests/`, declared
+/// from this module. The directory has its own `mod.rs` so the files there
+/// are reachable by name - a Rust file no `mod` declaration reaches is never
+/// compiled, and a test file that is never compiled looks exactly like a
+/// passing one.
+#[cfg(test)]
+mod tests;

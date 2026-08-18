@@ -1,0 +1,321 @@
+//! B16: the pre-push hook body actually invokes `drep check --diff <oid>`.
+//!
+//! This is the only criterion that proves the shell in the hook is correct
+//! rather than merely present. The test runs the hook under `sh` with a
+//! stub `drep` on PATH (set on the *child* process only, never on the test
+//! process) and asserts the recorded arguments.
+
+use std::path::{Path, PathBuf};
+use std::process::Command;
+
+use crate::cli::init::hooks::hook_body;
+
+/// All-zero oid, as git sends for a ref that does not exist on the far side.
+const ZEROS: &str = "0000000000000000000000000000000000000000";
+
+/// The ordinary case: the branch exists upstream, so git sends its current
+/// remote oid and that is exactly what `--diff` should receive.
+#[test]
+fn pre_push_hook_invokes_drep_check_diff_with_the_remote_oid() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    crate::test_support::git_init(dir.path());
+
+    let local_oid = "1111111111111111111111111111111111111111";
+    let remote_oid = "2222222222222222222222222222222222222222";
+    let stdin = format!("refs/heads/x {local_oid} refs/heads/x {remote_oid}\n");
+    // `false`: this path never shells out to git, so withholding the real PATH
+    // proves it - if the implementation grew a git call here, the hook would
+    // fail and this test would catch it.
+    let recorded = run_pre_push(dir.path(), &stdin, false);
+
+    assert_eq!(
+        recorded,
+        vec!["check", "--diff", remote_oid, "--tip", local_oid],
+        "the remote oid is the base, and the *pushed* oid is the tip - not HEAD"
+    );
+}
+
+/// Write the stub `drep` and the hook, run the hook with `stdin`, and return
+/// the arguments the stub recorded.
+///
+/// `PATH` is set on the **child** only. Mutating the test process's
+/// environment is `unsafe` in edition 2024 and races every other test in the
+/// binary - several of which spawn `git`, which reads `PATH` to find itself.
+fn run_pre_push(dir: &Path, stdin: &str, include_real_path: bool) -> Vec<String> {
+    let (status, recorded) = run_pre_push_status(dir, stdin, include_real_path, 0);
+    assert_eq!(
+        status,
+        Some(0),
+        "hook should succeed; recorded: {recorded:?}"
+    );
+    recorded
+}
+
+/// `run_pre_push`, keeping the hook's exit status and letting the stub `drep`
+/// exit with `stub_exit`.
+///
+/// The status is the whole point of a pre-push hook - it is what aborts the
+/// push - and the original harness asserted success unconditionally, so no
+/// test could observe it. A hook body of `drep check … || true; exit 0` passed
+/// every test in this file.
+fn run_pre_push_status(
+    dir: &Path,
+    stdin: &str,
+    include_real_path: bool,
+    stub_exit: i32,
+) -> (Option<i32>, Vec<String>) {
+    let bin_dir = dir.join("bin");
+    std::fs::create_dir_all(&bin_dir).expect("bin dir");
+    let args_log = dir.join("args.log");
+    let stub = format!(
+        "#!/bin/sh\nfor a in \"$@\"; do printf '%s\\n' \"$a\" >> {}; done\nexit {stub_exit}\n",
+        args_log.to_string_lossy()
+    );
+    let stub_path = bin_dir.join("drep");
+    std::fs::write(&stub_path, stub).expect("write stub");
+    crate::test_support::make_executable(&stub_path);
+
+    let hook_path = dir.join("pre-push");
+    std::fs::write(&hook_path, hook_body("pre-push").expect("known")).expect("write hook");
+    crate::test_support::make_executable(&hook_path);
+
+    // The zero-oid branch shells out to `git`, so that case needs the real
+    // PATH as well as the stub directory.
+    let mut entries: Vec<PathBuf> = vec![bin_dir.clone()];
+    if include_real_path {
+        if let Some(existing) = std::env::var_os("PATH") {
+            entries.extend(std::env::split_paths(&existing));
+        }
+    }
+    let path = std::env::join_paths(entries).expect("join paths");
+
+    let mut child = Command::new("/bin/sh")
+        .arg(&hook_path)
+        .env("PATH", &path)
+        .current_dir(dir)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("spawn hook");
+    use std::io::Write;
+    child
+        .stdin
+        .take()
+        .expect("stdin")
+        .write_all(stdin.as_bytes())
+        .expect("write stdin");
+    let result = child.wait_with_output().expect("wait hook");
+    let recorded: Vec<String> = std::fs::read_to_string(&args_log)
+        .unwrap_or_default()
+        .lines()
+        .map(str::to_owned)
+        .collect();
+    (result.status.code(), recorded)
+}
+
+/// A branch that does not exist upstream yet sends an all-zero remote oid.
+/// The hook must fall back to a real base rather than passing the zeros
+/// through as a git ref.
+///
+/// This is the common case for the *first* push of a branch, and the path the
+/// happy-path test above never reaches. Passing `0000...` to
+/// `drep check --diff` would make git fail to resolve the ref, and the hook
+/// would abort every first push.
+#[test]
+fn a_new_branch_falls_back_to_a_real_base_rather_than_the_zero_oid() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    crate::test_support::git_init(dir.path());
+
+    std::fs::write(dir.path().join("seed.txt"), "seed\n").expect("seed");
+    for args in [
+        vec!["add", "seed.txt"],
+        vec!["commit", "--quiet", "-m", "root"],
+    ] {
+        let status = crate::test_support::git(dir.path())
+            .args(&args)
+            .status()
+            .expect("git");
+        assert!(status.success(), "git {args:?} failed");
+    }
+    let head = String::from_utf8(
+        crate::test_support::git(dir.path())
+            .args(["rev-parse", "HEAD"])
+            .output()
+            .expect("rev-parse")
+            .stdout,
+    )
+    .expect("utf8");
+    let head = head.trim().to_owned();
+
+    let stdin = format!("refs/heads/x {head} refs/heads/x {ZEROS}\n");
+    let recorded = run_pre_push(dir.path(), &stdin, true);
+
+    assert_eq!(
+        recorded.first().map(String::as_str),
+        Some("check"),
+        "recorded: {recorded:?}"
+    );
+    assert_eq!(recorded.get(1).map(String::as_str), Some("--diff"));
+    assert_eq!(
+        recorded.get(3).map(String::as_str),
+        Some("--tip"),
+        "recorded: {recorded:?}"
+    );
+    assert_eq!(
+        recorded.get(4).map(String::as_str),
+        Some(head.as_str()),
+        "the tip is the ref being pushed"
+    );
+    let base = recorded.get(2).expect("a base ref");
+    assert_ne!(
+        base, ZEROS,
+        "the all-zero oid must never be passed through as a git ref"
+    );
+    assert!(
+        !base.is_empty(),
+        "the fallback must produce a base, got an empty ref"
+    );
+    // With no `origin/HEAD` in a fresh repo the fallback is the root commit,
+    // which for a single-commit repo is HEAD itself.
+    assert_eq!(base, &head, "recorded: {recorded:?}");
+}
+
+/// A branch *deletion* sends an all-zero local oid. There is no content to
+/// review, so the hook must not call drep at all - passing a deleted ref to
+/// `--diff` would fail the push for a change that removes code.
+#[test]
+fn a_branch_deletion_does_not_invoke_drep() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    crate::test_support::git_init(dir.path());
+
+    let stdin = format!("(delete) {ZEROS} refs/heads/x 3333333333333333333333333333333333333333\n");
+    let recorded = run_pre_push(dir.path(), &stdin, true);
+
+    assert!(
+        recorded.is_empty(),
+        "a deletion has nothing to review; drep must not run. recorded: {recorded:?}"
+    );
+}
+
+/// The hook's exit status is drep's, so a failing check aborts the push.
+///
+/// This is the hook's entire reason for existing, and nothing observed it: a
+/// body ending `drep check … || true` then `exit 0` passed every other test
+/// here. Both exit codes are checked because they mean different things
+/// downstream - 1 is "found issues", 2 is "could not analyze".
+#[test]
+fn a_failing_check_aborts_the_push() {
+    for expected in [1, 2] {
+        let dir = tempfile::tempdir().expect("tempdir");
+        crate::test_support::git_init(dir.path());
+        let stdin = "refs/heads/x 1111111111111111111111111111111111111111 refs/heads/x \
+                     2222222222222222222222222222222222222222\n";
+        let (status, recorded) = run_pre_push_status(dir.path(), stdin, false, expected);
+        assert_eq!(
+            status,
+            Some(expected),
+            "drep exited {expected}, so the hook must too; recorded: {recorded:?}"
+        );
+    }
+}
+
+/// With several refs, the **highest** exit code wins, not the last.
+///
+/// 2 means "could not analyze" and 1 means "analyzed, found issues"; a later
+/// ref that merely had findings must not downgrade an earlier ref that went
+/// unanalyzed. Last-writer-wins is the natural way to write this loop and is
+/// wrong, so the ordering here puts the 2 first.
+#[test]
+fn the_highest_exit_code_across_refs_wins() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    crate::test_support::git_init(dir.path());
+
+    // A stub that exits 2 for the first ref and 1 for the second, driven off a
+    // counter file so the ordering is the one described above.
+    let bin_dir = dir.path().join("bin");
+    std::fs::create_dir_all(&bin_dir).expect("bin dir");
+    let counter = dir.path().join("count");
+    let stub = format!(
+        "#!/bin/sh\nif [ -f {c} ]; then exit 1; else : > {c}; exit 2; fi\n",
+        c = counter.to_string_lossy()
+    );
+    let stub_path = bin_dir.join("drep");
+    std::fs::write(&stub_path, stub).expect("write stub");
+    crate::test_support::make_executable(&stub_path);
+
+    let hook_path = dir.path().join("pre-push");
+    std::fs::write(&hook_path, hook_body("pre-push").expect("known")).expect("write hook");
+    crate::test_support::make_executable(&hook_path);
+
+    let stdin = "refs/heads/a 1111111111111111111111111111111111111111 refs/heads/a \
+                 2222222222222222222222222222222222222222\n\
+                 refs/heads/b 3333333333333333333333333333333333333333 refs/heads/b \
+                 4444444444444444444444444444444444444444\n";
+
+    let path = std::env::join_paths([bin_dir.as_path()]).expect("join paths");
+    let mut child = Command::new("/bin/sh")
+        .arg(&hook_path)
+        .env("PATH", &path)
+        .current_dir(dir.path())
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("spawn hook");
+    use std::io::Write;
+    child
+        .stdin
+        .take()
+        .expect("stdin")
+        .write_all(stdin.as_bytes())
+        .expect("write stdin");
+    let result = child.wait_with_output().expect("wait");
+
+    assert!(
+        counter.exists(),
+        "both refs must be processed, so the loop must read every line"
+    );
+    assert_eq!(
+        result.status.code(),
+        Some(2),
+        "exit 2 (could not analyze) must not be downgraded to 1 by a later ref"
+    );
+}
+
+/// `drep` missing from `PATH` blocks rather than letting the push through.
+///
+/// GUI git clients run hooks with a minimal `PATH` that typically excludes
+/// `~/.cargo/bin`, so this is a routine situation rather than a broken
+/// install - and the honest behaviour is to block with an explanation.
+#[test]
+fn a_missing_drep_binary_blocks_the_push_with_an_explanation() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    crate::test_support::git_init(dir.path());
+    let hook_path = dir.path().join("pre-push");
+    std::fs::write(&hook_path, hook_body("pre-push").expect("known")).expect("write hook");
+    crate::test_support::make_executable(&hook_path);
+
+    // An empty PATH: no stub, no real drep.
+    let empty = dir.path().join("empty-bin");
+    std::fs::create_dir_all(&empty).expect("empty bin");
+    let path = std::env::join_paths([empty.as_path()]).expect("join paths");
+    let output = Command::new("/bin/sh")
+        .arg(&hook_path)
+        .env("PATH", &path)
+        .current_dir(dir.path())
+        .stdin(std::process::Stdio::null())
+        .output()
+        .expect("run hook");
+
+    assert_ne!(
+        output.status.code(),
+        Some(0),
+        "a missing drep must not silently pass the push"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("not found on PATH"),
+        "and it must say why; stderr: {stderr}"
+    );
+}

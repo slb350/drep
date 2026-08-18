@@ -25,9 +25,9 @@ fn help_succeeds() {
 #[test]
 fn unimplemented_command_exits_unanalyzed_not_clean() {
     // The failure a commit gate must never have: exiting 0 without analyzing.
-    for command in ["check", "lint-docs", "doctor", "init"] {
-        drep().arg(command).assert().code(2);
-    }
+    // `doctor` and `init` landed in Phase 5b; only `lint-docs` is still
+    // unimplemented. `check` is tested by the real analysis path.
+    drep().arg("lint-docs").assert().code(2);
 }
 
 #[test]

@@ -48,6 +48,7 @@ fn args(paths: Vec<std::path::PathBuf>, fail_on: Option<Severity>) -> CheckArgs 
         paths,
         staged: false,
         diff: None,
+        tip: None,
         format: OutputFormat::Text,
         fail_on,
     }
@@ -217,6 +218,7 @@ async fn llm_finding_at_error_blocks_under_fail_on_error() {
         paths: vec![dir.path().join("lib.py")],
         staged: false,
         diff: None,
+        tip: None,
         format: OutputFormat::Text,
         fail_on: Some(Severity::Error),
     };
@@ -249,6 +251,7 @@ async fn llm_finding_at_warning_does_not_block_under_fail_on_error() {
         paths: vec![dir.path().join("lib.py")],
         staged: false,
         diff: None,
+        tip: None,
         format: OutputFormat::Text,
         fail_on: Some(Severity::Error),
     };
@@ -297,6 +300,7 @@ async fn failure_outranks_finding() {
         paths: vec![dir.path().join("src/lib.py"), dir.path().join("src/bad.py")],
         staged: false,
         diff: None,
+        tip: None,
         format: OutputFormat::Text,
         fail_on: None,
     };

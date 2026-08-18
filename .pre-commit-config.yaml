@@ -83,24 +83,30 @@ repos:
       # money per file (deepseek-v4-pro ~3.5min and ~$0.16 a file), which is
       # fine once per push and intolerable on every commit.
       #
-      # No --fail-on: deterministic tool findings (ruff, eslint, go vet) block
-      # on their own, and the LLM's findings inform. Passing --fail-on error
-      # here opted the LLM back into gating and blocked a push with 18
-      # "blocking" findings that were model opinions, not tool output.
+      # **The 2.0 binary, not ./venv/bin/drep.** 1.x sets `max_retries: 1` with
+      # a comment that a length failure repeats deterministically - true, and it
+      # silently disabled retry for *transport* errors too. That blocked three
+      # consecutive pushes during Phase 5a on `finish_reason='error'` in files
+      # the change never touched (see CHANGELOG, 98a5096). 2.0 splits the two:
+      # transport retries with backoff, truncation fails the file immediately.
+      # It reads drep.toml rather than config.yaml.
+      #
+      # `cargo build --release` is deliberately not run here - the hook uses
+      # whatever binary is at target/release/drep, and `cargo-clippy` above
+      # already fails the commit if the tree does not compile.
+      #
+      # No --fail-on: deterministic tool findings (ruff, clippy) block on their
+      # own, and the LLM's findings inform. Passing --fail-on error here opted
+      # the LLM back into gating and blocked a push with 18 "blocking" findings
+      # that were model opinions, not tool output.
       #
       # Filenames come from pre-commit, which at the pre-push stage resolves
       # them to the files the outgoing commits actually touch. `--staged` would
       # be wrong here: nothing is staged at push time, so it would analyze
       # nothing and pass silently.
-      #
-      # types_or includes rust: drep 1.x already registers Rust (clippy, gated
-      # on Cargo.toml), and the 2.0 port is now the code most worth reviewing.
-      # Leaving this python-only would have shipped the entire rewrite without
-      # it ever passing through the gate it exists to provide - drep 1.x
-      # reviewing drep 2.0 is the point.
       - id: drep-check
         name: drep check (LLM code quality)
-        entry: ./venv/bin/drep check
+        entry: ./target/release/drep check
         language: system
         types_or: [python, rust]
         stages: [pre-push]

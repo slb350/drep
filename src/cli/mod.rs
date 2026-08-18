@@ -8,6 +8,8 @@
 //! and its behaviour stay together as the later phases fill them in.
 
 pub mod check;
+pub mod doctor;
+pub mod init;
 pub mod lint_docs;
 
 use anyhow::Result;
@@ -15,6 +17,8 @@ use clap::{Parser, Subcommand, ValueEnum};
 
 use crate::Exit;
 use check::CheckArgs;
+use doctor::DoctorArgs;
+use init::InitArgs;
 use lint_docs::LintDocsArgs;
 
 #[derive(Debug, Parser)]
@@ -36,9 +40,9 @@ pub enum Command {
     /// Lint markdown. Rule-based only - no LLM, no network.
     LintDocs(LintDocsArgs),
     /// Report which languages and tools drep can see in this repository.
-    Doctor,
+    Doctor(DoctorArgs),
     /// Write the git hooks and LLM endpoint configuration.
-    Init,
+    Init(InitArgs),
 }
 
 /// How findings are rendered.
@@ -56,8 +60,8 @@ pub async fn run(cli: Cli) -> Result<Exit> {
     match cli.command {
         Command::Check(args) => check::run(&args, std::path::Path::new(".")).await,
         Command::LintDocs(_) => unimplemented("lint-docs", "phase 6"),
-        Command::Doctor => unimplemented("doctor", "phase 5"),
-        Command::Init => unimplemented("init", "phase 5"),
+        Command::Doctor(args) => doctor::run(&args),
+        Command::Init(args) => init::run(&args).await,
     }
 }
 
@@ -127,13 +131,10 @@ mod tests {
 
     #[tokio::test]
     async fn unimplemented_commands_error_rather_than_exiting_clean() {
-        for argv in [
-            vec!["drep", "lint-docs"],
-            vec!["drep", "doctor"],
-            vec!["drep", "init"],
-        ] {
-            let cli = Cli::try_parse_from(argv).unwrap();
-            assert!(run(cli).await.is_err());
-        }
+        // `doctor` and `init` landed in Phase 5b; only `lint-docs` is still
+        // unimplemented. A test that lumps all three together would fail
+        // every time a phase ships.
+        let cli = Cli::try_parse_from(["drep", "lint-docs"]).unwrap();
+        assert!(run(cli).await.is_err());
     }
 }

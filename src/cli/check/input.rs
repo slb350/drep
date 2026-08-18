@@ -91,7 +91,7 @@ pub async fn resolve(args: &CheckArgs, root: &Path) -> Result<Work> {
     let hunks = if args.staged {
         diff::staged_hunks(root).await?
     } else if let Some(git_ref) = args.diff.as_deref() {
-        diff::hunks_since(root, git_ref).await?
+        diff::hunks_between(root, git_ref, args.tip.as_deref()).await?
     } else {
         return resolve_paths(&args.paths, root);
     };

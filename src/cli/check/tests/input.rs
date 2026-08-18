@@ -34,6 +34,7 @@ fn paths_args(paths: Vec<PathBuf>) -> CheckArgs {
         paths,
         staged: false,
         diff: None,
+        tip: None,
         format: OutputFormat::Text,
         fail_on: None,
     }
@@ -45,6 +46,7 @@ fn diff_args(ref_: &str) -> CheckArgs {
         paths: Vec::new(),
         staged: false,
         diff: Some(ref_.to_owned()),
+        tip: None,
         format: OutputFormat::Text,
         fail_on: None,
     }
