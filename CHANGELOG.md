@@ -101,10 +101,16 @@ opposite direction; and an `unsafe` `set_var` in an `init` test whose safety
 note relied on the wrong contract; and `LlmConfig` deriving `Debug` with the
 API key in the clear - `Config` derives `Debug` and holds these, so any `{:?}`
 on a loaded config leaked the credential `LlmClient` already hand-writes `Debug`
-to redact — the round trip now uses a preset that needs no key, and
+to redact; `is_sticky` treating *every* transport failure as endpoint-level,
+so a single oversized payload drawing a 400 demoted the provider and — since a
+400 does not fail over — stopped the chain for every later file without ever
+reaching the configured fallback; and `Cache::evict_if_needed` walking any
+directory under the cache root while its own comment claimed it descended only
+into two-hex-char shards, so the module's one destructive path could delete
+files a user had placed there — the round trip now uses a preset that needs no key, and
 the `${VAR}` half is asserted on the rendered text.
 
-**Testing: 432 passing** (up from 366), clippy-clean, rustfmt-clean, and
+**Testing: 435 passing** (up from 366), clippy-clean, rustfmt-clean, and
 mutation-clean on the staged diff and on `src/llm/chain.rs` swept whole.
 
 - 21 tests in `src/llm/chain/tests/` across construction, failover policy,

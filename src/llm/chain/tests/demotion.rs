@@ -4,7 +4,7 @@
 //! files. Without demotion each file pays the SDK's full retry schedule
 //! against a socket nobody is listening on, for a verdict already known.
 
-use super::support::{SYSTEM, server_returning_json, server_returning_prose};
+use super::support::{CONTENT, SYSTEM, server_returning_json, server_returning_prose};
 use crate::test_support::{
     cfg_for, fast_retry_chain, request_count, server_failing_with, temp_cache,
 };
@@ -193,4 +193,58 @@ async fn a_file_waiting_on_the_limiter_is_skipped_once_the_provider_goes_down() 
         "the second file waited on the head's only permit and must be skipped, \
          not sent, once the first file demoted it"
     );
+}
+
+/// A request-level 4xx does not demote the provider.
+///
+/// The dangerous combination is "remembered" *and* "does not fail over": a
+/// later file then skips the provider, replays the stored reason, and stops the
+/// chain without contacting anyone. Applied to a 400 - which a single oversized
+/// or malformed payload can produce - one bad file blocks analysis of every
+/// file after it, and the configured fallback is never tried. A 400 is about
+/// the request, not the endpoint.
+#[tokio::test]
+async fn a_request_level_4xx_does_not_demote_the_provider() {
+    let picky = server_failing_with(400).await;
+    let healthy = server_returning_json().await;
+    let (cache, _dir) = temp_cache();
+    let chain = fast_retry_chain(&[cfg_for(&picky, "a", 1), cfg_for(&healthy, "b", 1)]);
+
+    chain
+        .complete_json(SYSTEM, "file one", &cache)
+        .await
+        .expect_err("the 400 fails this file");
+    assert!(
+        !chain.providers()[0].is_down(),
+        "a 400 is about the request, not the endpoint"
+    );
+
+    chain
+        .complete_json(SYSTEM, "file two", &cache)
+        .await
+        .expect_err("and this one is judged on its own merits");
+    assert_eq!(
+        request_count(&picky).await,
+        2,
+        "the second file must be offered to the head, not stopped by the first file's 400"
+    );
+}
+
+/// A 400 at the head still does not fail over.
+///
+/// The other half: making a request-level failure non-sticky must not turn it
+/// into one that advances the chain. A second provider cannot fix a malformed
+/// request, and paying for one would hide it.
+#[tokio::test]
+async fn a_request_level_4xx_still_does_not_reach_the_fallback() {
+    let picky = server_failing_with(400).await;
+    let healthy = server_returning_json().await;
+    let (cache, _dir) = temp_cache();
+    let chain = fast_retry_chain(&[cfg_for(&picky, "a", 1), cfg_for(&healthy, "b", 1)]);
+
+    chain
+        .complete_json(SYSTEM, CONTENT, &cache)
+        .await
+        .expect_err("the 400 fails the file");
+    assert_eq!(request_count(&healthy).await, 0);
 }

@@ -15,10 +15,13 @@
 //!   401 or 403 must **not**: that is misconfiguration, and quietly asking a
 //!   second provider masks it. An unparseable-but-non-empty response must not
 //!   either — it is deterministic, so a retry anywhere buys nothing.
-//! - [`is_sticky`] — is the failure remembered for the rest of the run? Any
-//!   *endpoint-level* failure is, which is a wider set: a stale API key returns
-//!   401 for every file, and re-handshaking forty-nine times to be told so
-//!   again is pure wall-clock on a commit gate that is going to exit 2 anyway.
+//! - [`is_sticky`] — is the failure remembered for the rest of the run? Every
+//!   failure that advances the chain, plus the two that are a property of the
+//!   connection rather than the request: a stale API key returns 401 for every
+//!   file, and re-handshaking forty-nine times to be told so again is pure
+//!   wall-clock on a commit gate that is going to exit 2 anyway. A *request*
+//!   -level 4xx is deliberately excluded - remembering one would let a single
+//!   oversized payload stop the chain for every later file.
 //!
 //! Conflating the two is what makes a chain either mask a bad key or re-ask a
 //! dead endpoint once per file. A remembered failure is then replayed through
@@ -430,17 +433,38 @@ fn should_failover(err: &LlmError) -> bool {
 /// the chain, but it is still a property of the endpoint rather than of this
 /// file: every file in the run will get the same answer, so ask once.
 fn is_sticky(err: &LlmError) -> bool {
-    match err {
-        // Endpoint-level: unreachable, timed out, rate limited, 5xx, or a
-        // credential the endpoint rejects.
-        LlmError::Transport { .. } => true,
-        // Content-dependent: *this* payload produced an unparseable answer.
-        // The next file's might not, so the provider is not written off.
-        LlmError::Unparseable(_) => false,
-        // Unreachable in practice - `new` rejects a misconfigured entry before
-        // any request is made - and not an endpoint property in any case.
-        LlmError::NotConfigured(_) => false,
-    }
+    // Remember a failure only when remembering it cannot change a later file's
+    // outcome. Two ways that holds:
+    //
+    // - The chain advances past this provider anyway, so skipping it costs the
+    //   later file nothing it was not already going to pay.
+    // - It is a credential the endpoint rejects, which it will reject for every
+    //   request regardless of payload.
+    //
+    // The combination to avoid is "remembered" *and* "does not fail over": a
+    // later file skips the provider, replays the stored reason, and stops the
+    // chain without contacting anyone. `Transport { .. } => true` had exactly
+    // that shape for a request-level 4xx - one oversized payload drawing a 400
+    // demoted the provider, and every file after it stopped there without ever
+    // reaching the configured fallback. One bad file poisoned the run.
+    should_failover(err) || is_auth_failure(err)
+}
+
+/// Whether the endpoint rejected the credential rather than the request.
+///
+/// 401 and 403 are the two statuses that are a property of the *connection* and
+/// not of what was sent, so they are the only non-failover failures worth
+/// remembering: a stale key answers the same way for every file, and
+/// re-handshaking once per file is pure wall-clock on a gate that will exit 2
+/// regardless.
+fn is_auth_failure(err: &LlmError) -> bool {
+    matches!(
+        err,
+        LlmError::Transport {
+            status: Some(401 | 403),
+            ..
+        }
+    )
 }
 
 /// The retryable HTTP statuses.

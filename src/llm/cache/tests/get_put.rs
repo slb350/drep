@@ -4,6 +4,7 @@
 //! trip, miss on absent, miss on corrupt, miss on unreadable, shard
 //! creation, shard coexistence, and overwrite.
 
+#[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 

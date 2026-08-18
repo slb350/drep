@@ -257,15 +257,24 @@ impl Cache {
         let shards = std::fs::read_dir(&self.root).map_err(CacheError::Walk)?;
         for shard in shards {
             let shard = shard.map_err(CacheError::Walk)?;
-            // Only descend into the two-hex-char directories. Anything else
-            // (stray files the user dropped in the cache root) is ignored so
-            // a misplaced `cache.json` cannot trick the walker into
-            // returning it as an entry.
+            // Only descend into the two-hex-char directories. Anything else -
+            // a stray file the user dropped in the cache root, or a directory
+            // that is not one of ours - is ignored, so nothing outside the
+            // layout this module writes can be evicted.
+            //
+            // The name check is load-bearing, not decorative. `is_dir()` alone
+            // was what the code did while this comment claimed otherwise, which
+            // meant `evict_if_needed` - the one destructive path here - would
+            // happily delete files out of *any* directory someone had placed
+            // under the cache root.
             let file_type = match shard.file_type() {
                 Ok(ft) => ft,
                 Err(_) => continue,
             };
             if !file_type.is_dir() {
+                continue;
+            }
+            if !is_shard_name(&shard.file_name()) {
                 continue;
             }
             let shard_path = shard.path();
@@ -314,6 +323,21 @@ struct CacheEntry {
     path: PathBuf,
     mtime: SystemTime,
     size: u64,
+}
+
+/// Whether `name` is one of this module's shard directories.
+///
+/// Exactly two lower-case hex characters, which is what [`Cache::entry_path`]
+/// produces from a blake3 digest. Written against the same alphabet rather than
+/// a looser "two characters" check, so a directory named `ab` is a shard and
+/// one named `zz` or `AB` is not.
+fn is_shard_name(name: &std::ffi::OsStr) -> bool {
+    name.to_str().is_some_and(|name| {
+        name.len() == 2
+            && name
+                .bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    })
 }
 
 /// Write a length-prefixed field to the hasher.

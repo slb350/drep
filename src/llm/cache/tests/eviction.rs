@@ -150,3 +150,43 @@ fn evict_if_needed_is_a_no_op_when_already_under_limit() {
         "the entry must survive a no-op eviction"
     );
 }
+
+/// Eviction never touches a directory that is not one of ours.
+///
+/// `evict_if_needed` is the only destructive path in this module, and it walks
+/// whatever sits under the cache root. Checking `is_dir()` alone - while the
+/// comment claimed the walk was restricted to two-hex-char shards - meant a
+/// directory a user had placed under the root had its files deleted to make
+/// room. The size accounting must ignore it too, or a foreign directory's bytes
+/// push real entries out.
+#[test]
+fn eviction_ignores_directories_that_are_not_shards() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let root = temp.path().to_path_buf();
+    // A tiny ceiling, so eviction definitely runs.
+    let cache = Cache::new(root.clone(), 30, 1);
+
+    // A real entry, so the cache has something of its own to evict.
+    let key = cache.key("sys", "content", "http://e/v1", "model", 0.2);
+    cache.put(&key, &serde_json::json!({"a": 1})).expect("put");
+
+    // Two things that are not shards: a stray file in the root, and a
+    // directory whose name is not two hex characters.
+    let stray_file = root.join("notes.txt");
+    std::fs::write(&stray_file, b"do not delete me").expect("stray file");
+    let foreign_dir = root.join("zz");
+    std::fs::create_dir_all(&foreign_dir).expect("foreign dir");
+    let foreign_file = foreign_dir.join("important.bin");
+    std::fs::write(&foreign_file, vec![0u8; 4096]).expect("foreign file");
+
+    cache.evict_if_needed().expect("eviction runs");
+
+    assert!(
+        foreign_file.exists(),
+        "a directory that is not a shard must not be walked, let alone emptied"
+    );
+    assert!(
+        stray_file.exists(),
+        "a stray file in the root is not an entry"
+    );
+}
