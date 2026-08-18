@@ -85,7 +85,12 @@ impl std::fmt::Debug for LlmClient {
 /// (the spec's split: parse failures are deterministic, transport failures
 /// are not). Phase 4 will read this distinction to drive the gating exit
 /// code.
-#[derive(Debug, Error)]
+///
+/// `Clone` because the provider chain records the reason a provider went down
+/// and hands a copy to every later file that skips it. The variants are three
+/// owned `String`s and an `Option<u16>`; there is nothing here a clone can get
+/// wrong.
+#[derive(Debug, Clone, Error)]
 pub enum LlmError {
     /// Transport failure after the SDK exhausted its retries. The endpoint
     /// was unreachable, timed out, or returned a retryable HTTP error too
@@ -114,7 +119,46 @@ pub enum LlmError {
     NotConfigured(String),
 }
 
+impl LlmError {
+    /// The HTTP status, when the failure carried one.
+    ///
+    /// Only `Transport` ever does. It exists so the tests that pin the
+    /// failover policy can name a status rather than substring-match the
+    /// message - the message is prose and prose gets reworded. `should_failover`
+    /// itself matches the variant, because it also has to distinguish
+    /// `Unparseable` from a status-less transport failure, which a bare
+    /// `Option<u16>` cannot.
+    pub fn status(&self) -> Option<u16> {
+        match self {
+            LlmError::Transport { status, .. } => *status,
+            LlmError::Unparseable(_) | LlmError::NotConfigured(_) => None,
+        }
+    }
+}
+
 impl LlmClient {
+    /// The model this client asks for.
+    ///
+    /// An accessor rather than a second copy on the caller: the cache key is
+    /// computed from the model, and a struct holding its own `model` string is
+    /// exactly what lets a request go to one model while the key names
+    /// another.
+    pub fn model(&self) -> &str {
+        &self.model
+    }
+
+    /// The base URL this client talks to. For display - `doctor` and the
+    /// failover report name the endpoint a provider used.
+    pub fn endpoint(&self) -> &str {
+        &self.base_url
+    }
+
+    /// The sampling temperature. Part of the cache key, for the same reason
+    /// [`Self::model`] is.
+    pub fn temperature(&self) -> f32 {
+        self.temperature
+    }
+
     /// Build a client from a validated `LlmConfig`.
     ///
     /// Returns [`LlmError::NotConfigured`] when the config does not name an

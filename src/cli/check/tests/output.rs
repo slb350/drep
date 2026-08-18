@@ -372,8 +372,6 @@ fn json_exit_matches_the_gate_when_an_llm_finding_does_not_block() {
 fn each_suggestion_follows_its_own_finding() {
     use crate::analysis::findings::{Finding, Severity};
     use crate::cli::OutputFormat;
-    use crate::cli::check::{CheckOutcome, render};
-    use std::collections::BTreeMap;
 
     let finding = |line: u32, message: &str, suggestion: &str| Finding {
         kind: "bug".to_owned(),
@@ -385,19 +383,11 @@ fn each_suggestion_follows_its_own_finding() {
         suggestion: Some(suggestion.to_owned()),
     };
 
-    let outcome = CheckOutcome {
-        tool_findings: vec![
-            finding(1, "first", "fix one"),
-            finding(2, "second", "fix two"),
-        ],
-        llm_findings: Vec::new(),
-        failures: BTreeMap::new(),
-        exit: crate::Exit::FoundIssues,
-    };
-
-    let mut buf: Vec<u8> = Vec::new();
-    render::render_to(&mut buf, &outcome, OutputFormat::Text).expect("render");
-    let text = String::from_utf8(buf).expect("utf8");
+    let outcome = super::support::outcome_with_tool_findings(vec![
+        finding(1, "first", "fix one"),
+        finding(2, "second", "fix two"),
+    ]);
+    let text = super::support::rendered(&outcome, OutputFormat::Text);
 
     let lines: Vec<&str> = text.lines().collect();
     assert_eq!(

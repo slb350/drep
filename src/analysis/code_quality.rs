@@ -37,50 +37,47 @@ use serde_json::Value;
 use crate::analysis::findings::{Finding, LlmSeverity};
 use crate::analysis::payload;
 use crate::analysis::prompt::build_analysis_prompt;
-use crate::analysis::result::{AnalysisResult, FailureReason};
-use crate::config::LlmConfig;
+use crate::analysis::result::{AnalysisResult, FailureReason, ProviderFailure};
 use crate::diff::hunks::Hunk;
 use crate::languages;
 use crate::llm::cache::Cache;
-use crate::llm::client::{LlmClient, LlmError};
-use crate::llm::concurrency::Limiter;
+use crate::llm::chain::{ChainError, ProviderChain};
+use crate::llm::client::LlmError;
 use crate::llm::json_parsing::Extracted;
 
 /// The code-quality analyzer.
 ///
-/// Built once per process. The `cache` and the `limiter` are both passed in
-/// rather than constructed here: they are process-wide resources, and a
-/// limiter built per analyzer would stop capping the moment a second
-/// analyzer existed - two of them would put `2 * max_concurrent` requests in
-/// flight against one endpoint.
+/// Built once per process. The `chain` and the `cache` are both passed in
+/// rather than constructed here: they are process-wide resources. The chain in
+/// particular carries the concurrency limiter for each provider *and* the
+/// record of which providers have been demoted, so a second chain would both
+/// double the in-flight requests against one endpoint and re-discover a dead
+/// provider the first one already knew about.
 ///
 /// The model and temperature are **not** duplicated onto this struct. They
-/// are the request parameters `LlmClient` already validated and owns, its
-/// fields are `pub(crate)` and so readable from here, and a second copy is
-/// exactly what lets a request go to one model while the cache key names
-/// another.
+/// belong to the provider that ends up answering, which is not known until the
+/// chain has run, and a second copy is exactly what lets a request go to one
+/// model while the cache key names another.
 pub struct CodeQualityAnalyzer {
-    pub(crate) client: LlmClient,
+    pub(crate) chain: ProviderChain,
     pub(crate) cache: Cache,
-    pub(crate) limiter: Limiter,
 }
 
 impl CodeQualityAnalyzer {
-    /// Build from config, a shared cache and a shared limiter.
+    /// Build from a provider chain and a shared cache.
     ///
-    /// Both are parameters rather than constructed here so one process has
-    /// one of each. `cache` additionally makes the key independent of the
-    /// `Cache` root (see [`Cache::key`]).
-    ///
-    /// Returns the same [`LlmError::NotConfigured`] as `LlmClient::new`: a
-    /// disabled or misconfigured LLM is fatal at construction so the gate
-    /// fails fast rather than silently skipping analysis.
-    pub fn new(cfg: &LlmConfig, cache: Cache, limiter: Limiter) -> Result<Self, LlmError> {
-        Ok(Self {
-            client: LlmClient::new(cfg)?,
-            cache,
-            limiter,
-        })
+    /// Infallible: `ProviderChain::new` has already rejected an empty or
+    /// misconfigured chain, so there is nothing left for this to validate.
+    /// `cache` is a parameter rather than constructed here so the key stays
+    /// independent of the `Cache` root (see [`Cache::key`]) and a test can
+    /// point it at a `TempDir`.
+    pub fn new(chain: ProviderChain, cache: Cache) -> Self {
+        Self { chain, cache }
+    }
+
+    /// The provider chain, for a caller reporting which providers served.
+    pub fn chain(&self) -> &ProviderChain {
+        &self.chain
     }
 
     /// Analyze one file's hunks.
@@ -127,37 +124,23 @@ impl CodeQualityAnalyzer {
         }
 
         let system_prompt = build_analysis_prompt(language);
-        let cache_key = self.cache.key(
-            &system_prompt,
-            &payload.text,
-            &self.client.model,
-            self.client.temperature,
-        );
 
-        // Rule 4: cache first. A hit is parsed exactly as a `Complete`
-        // response would be, and the duplicate is silent — the caller's
-        // view is identical to a fresh request.
-        if let Some(cached) = self.cache.get(&cache_key) {
-            return parse_response(&payload, &first.file_path, &Extracted::Complete(cached));
-        }
-
-        // Rule 5: concurrency. Acquire a slot before the LLM call and
-        // hold it for the duration. A cache hit must not acquire a slot:
-        // the slot represents in-flight HTTP work, and a cache read is
-        // not in-flight.
-        let _guard = self.limiter.acquire().await;
-        let result = self
-            .client
-            .complete_json(&system_prompt, &payload.text)
-            .await;
-
-        match result {
+        // Rules 4, 5 and the failover loop all live in the chain: the cache is
+        // consulted per provider (a hit costs no concurrency slot, because the
+        // slot represents in-flight HTTP work), and the key comes back naming
+        // whoever answered. Computing a key here would be computing it for a
+        // provider that may not be the one that serves the file.
+        match self
+            .chain
+            .complete_json(&system_prompt, &payload.text, &self.cache)
+            .await
+        {
             // Rule 6: complete → parse, store in the cache.
             // Rules 6 and 7 in one arm. Both never-cache rules live in the
             // `if let` below rather than being split across two arms, where
             // the `Complete` arm's guard could only ever be true.
-            Ok(extracted) => {
-                let result = parse_response(&payload, &first.file_path, &extracted);
+            Ok(served) => {
+                let result = parse_response(&payload, &first.file_path, &served.extracted);
                 // Cache only a `Complete` response we fully understood. A
                 // truncated one is a prefix, and a body can be valid JSON and
                 // still schema-invalid - a missing `issues` array, a record
@@ -165,21 +148,25 @@ impl CodeQualityAnalyzer {
                 // failure. Caching either replays it for the whole TTL
                 // instead of letting the next run ask again.
                 //
+                // `served.key`, never a key computed here: the entry must be
+                // filed under the model that produced it, or a later run with
+                // the head restored gets a hit that never came from the head.
+                //
                 // The write itself is best-effort: a cache failure is a
                 // diagnostic, not a failure of the analysis.
-                if let Extracted::Complete(value) = &extracted
+                if let Extracted::Complete(value) = &served.extracted
+                    && !served.from_cache
                     && result.failed_files.is_empty()
                 {
-                    let _ = self.cache.put(&cache_key, value);
+                    let _ = self.cache.put(&served.key, value);
                 }
                 result
             }
-            // Rule 8: any LLM error → no findings, file in `failed_files`
-            // with the specific reason. The detail is kept rather than
-            // discarded, so the CLI can render a line the user can act on.
-            Err(err) => {
-                AnalysisResult::failed(first.file_path.clone(), LlmError::into_failure_reason(err))
-            }
+            // Rule 8: no provider produced an answer → no findings, file in
+            // `failed_files` with every provider's reason. The detail is kept
+            // rather than discarded, so the CLI can render a line the user can
+            // act on.
+            Err(err) => AnalysisResult::failed(first.file_path.clone(), chain_failure_reason(err)),
         }
     }
 
@@ -224,14 +211,37 @@ fn into_failure_reason(err: LlmError) -> FailureReason {
     }
 }
 
-impl LlmError {
-    /// Translate into the [`FailureReason`] the analyzer carries.
-    ///
-    /// Public via the type so the CLI tests can pin the mapping without
-    /// reaching for the analyzer's private function.
-    pub fn into_failure_reason(self) -> FailureReason {
-        into_failure_reason(self)
+/// Map a whole-chain failure to the reason the caller carries.
+///
+/// **A one-provider chain collapses to that provider's own reason.** That keeps
+/// a single-provider config - what `drep init` writes - reporting exactly what
+/// it reported before failover existed, down to the JSON `kind`.
+///
+/// The trigger is the chain's *length*, not the number of providers that
+/// failed. Those differ precisely where it matters: a two-provider chain
+/// stopped at the head by a 401 produces one attempt, and collapsing it would
+/// discard the provider index and the model name just as the user is asking
+/// "I configured a fallback - why didn't it run?".
+fn chain_failure_reason(err: ChainError) -> FailureReason {
+    let mut attempts = err.attempts;
+    if err.chain_len == 1 {
+        // `pop` rather than indexing: it moves the attempt out, so the error
+        // string is not cloned on the overwhelmingly common path. The chain
+        // guarantees at least one attempt.
+        let only = attempts.pop().expect("a chain always reports one attempt");
+        return into_failure_reason(only.error);
     }
+    FailureReason::ChainFailed(
+        attempts
+            .into_iter()
+            .map(|attempt| ProviderFailure {
+                provider: attempt.provider,
+                model: attempt.model,
+                reason: into_failure_reason(attempt.error),
+                skipped: attempt.skipped,
+            })
+            .collect(),
+    )
 }
 
 /// Turn an `Extracted` value into an [`AnalysisResult`].

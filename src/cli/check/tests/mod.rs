@@ -7,9 +7,11 @@
 //! declaration reaches is never compiled, and cargo will not warn about it.
 
 mod deterministic;
+mod failover_report;
 mod failures;
 mod gating;
 mod input;
 mod output;
 mod resolution;
+pub(super) mod support;
 mod unanalyzed_json;

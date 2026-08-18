@@ -14,24 +14,20 @@ use crate::analysis::code_quality::CodeQualityAnalyzer;
 use crate::config::LlmConfig;
 use crate::diff::hunks::{Hunk, HunkLine};
 use crate::llm::cache::Cache;
-use crate::llm::concurrency::Limiter;
-use crate::test_support::{cfg_for, fast_retry_client};
+use crate::llm::chain::ProviderChain;
+use crate::test_support::{cfg_for, fast_retry_chain, temp_cache};
 
-/// Build an analyzer through the production `CodeQualityAnalyzer::new`, then
-/// swap in a fast-retry client.
+/// Build a single-provider analyzer whose backoff delays are shrunk.
 ///
-/// Going through `new` is the point. An earlier version assembled the struct
-/// by literal, which meant it restated `new`'s cache-key derivation by hand -
-/// so a change to how the key is built would leave these tests passing against
-/// a key production never generates. The limiter comes from `cfg.max_concurrent`
-/// exactly as it does in production, so a test wanting serial execution sets
-/// that field rather than reaching for a second constructor.
+/// Going through the production constructors is the point. An earlier version
+/// assembled the struct by literal, which meant it restated the cache-key
+/// derivation by hand - so a change to how the key is built would leave these
+/// tests passing against a key production never generates. The per-provider
+/// limiter comes from `cfg.max_concurrent` exactly as it does in production, so
+/// a test wanting serial execution sets that field rather than reaching for a
+/// second constructor.
 pub(crate) fn analyzer_with_fast_retry(cfg: &LlmConfig, cache: Cache) -> CodeQualityAnalyzer {
-    let limiter = Limiter::new(cfg.max_concurrent);
-    let mut analyzer =
-        CodeQualityAnalyzer::new(cfg, cache, limiter).expect("analyzer builds from a valid config");
-    analyzer.client = fast_retry_client(cfg);
-    analyzer
+    CodeQualityAnalyzer::new(fast_retry_chain(std::slice::from_ref(cfg)), cache)
 }
 
 /// A `Hunk` carrying one Python file with one added line at a known position.
@@ -76,11 +72,9 @@ pub(crate) fn hunks_for_python_at_two_lines() -> Vec<Hunk> {
 /// The `TempDir` is returned so the caller keeps it alive: dropping it would
 /// delete the cache mid-test.
 pub(crate) fn analyzer_for(server: &MockServer) -> (CodeQualityAnalyzer, TempDir) {
-    let dir = TempDir::new().expect("temp dir");
-    let cache = Cache::new(dir.path().to_path_buf(), 30, 1024 * 1024);
+    let (cache, dir) = temp_cache();
     let cfg = cfg_for(server, "m", 3);
-    let limiter = Limiter::new(cfg.max_concurrent);
-    let analyzer = CodeQualityAnalyzer::new(&cfg, cache, limiter)
-        .expect("analyzer builds from a valid config");
+    let chain = ProviderChain::new(&[&cfg]).expect("chain builds from a valid config");
+    let analyzer = CodeQualityAnalyzer::new(chain, cache);
     (analyzer, dir)
 }

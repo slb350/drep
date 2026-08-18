@@ -32,11 +32,11 @@ use clap::builder::{PossibleValuesParser, TypedValueParser};
 use clap::{ArgGroup, Args};
 
 use crate::analysis::findings::{Finding, Severity};
-use crate::analysis::result::{FailureReason, union_failures};
+use crate::analysis::result::{AnalysisResult, FailureReason, union_failures};
 use crate::cli::OutputFormat;
 use crate::config::{self, LlmConfig};
 use crate::llm::cache::Cache;
-use crate::llm::concurrency::Limiter;
+use crate::llm::chain::ProviderChain;
 
 #[derive(Debug, Args)]
 // One rule, stated once. Paired `conflicts_with_all` attributes say the same
@@ -111,6 +111,13 @@ pub struct CheckOutcome {
     /// same files, so the CLI unions them; on a key collision the first
     /// reason wins, matching `AnalysisResult::merge`.
     pub failures: BTreeMap<PathBuf, FailureReason>,
+    /// Which providers answered, and for how many files.
+    ///
+    /// Empty when the LLM layer produced nothing at all. Only providers that
+    /// served at least one file appear, in chain order, so a run that never
+    /// left the head is one entry - and a run that did fall through says so
+    /// rather than leaving a silent switch from a local model to a paid one.
+    pub provider_uses: Vec<ProviderUse>,
     /// The gate's verdict for this run.
     ///
     /// On the outcome rather than passed alongside it: `render` used to take
@@ -118,6 +125,19 @@ pub struct CheckOutcome {
     /// did, because `render` computed its own and ignored `--fail-on`. A field
     /// set once by `run` makes the mismatch unrepresentable.
     pub exit: Exit,
+}
+
+/// One provider's share of a run.
+///
+/// The endpoint is carried, not just the model, because "gpt-5.6-sol" does not
+/// tell a user whether they paid for it - two entries can name the same model
+/// at a local proxy and at the vendor.
+pub struct ProviderUse {
+    /// Zero-based position in the chain. Rendered one-based.
+    pub index: usize,
+    pub model: String,
+    pub endpoint: String,
+    pub files: usize,
 }
 
 /// One `check` invocation: resolve input, run both layers, gate, render, return
@@ -158,16 +178,18 @@ pub(crate) async fn run_with(args: &CheckArgs, root: &Path, cache: Cache) -> Res
     let config_path = root.join(config::default_config_path());
     let config = config::load(&config_path)
         .with_context(|| format!("could not load {}", config_path.display()))?;
-    // `load` rejects an empty provider list, so this cannot fail today. It is
-    // an `ok_or_else` rather than an index because `Config` is constructible
-    // without going through `load`, and a panic inside the commit gate is a
-    // worse failure than a message naming the file. The error is `load`'s own
-    // rather than a second sentence written here: two hand-written copies of
-    // "no provider configured" drift, and the copy that lived here had already
+    // The whole enabled chain, not just its head: `providers()` is the
+    // failover order, and `load` has already rejected a config with none.
+    // The `is_empty` guard stays because `Config` is constructible without
+    // going through `load`, and a panic inside the commit gate is a worse
+    // failure than a message naming the file. The error is `load`'s own rather
+    // than a second sentence written here: two hand-written copies of "no
+    // provider configured" drift, and the copy that lived here had already
     // lost the actionable "run `drep init`" half.
-    let llm_config = config
-        .primary()
-        .ok_or_else(|| config::ConfigError::NoProviders(config_path.clone()))?;
+    let providers = config.providers();
+    if providers.is_empty() {
+        return Err(config::ConfigError::NoProviders(config_path.clone()).into());
+    }
 
     // Resolved *after* the config, because a missing config is fatal and
     // resolution is not free: in `--staged` mode it spawns git, and in paths
@@ -192,20 +214,21 @@ pub(crate) async fn run_with(args: &CheckArgs, root: &Path, cache: Cache) -> Res
     // multi-second regardless, so joining hides essentially all of it.
     let (deterministic_result, llm_result) = tokio::join!(
         deterministic::run(&work, root),
-        run_llm(&work, llm_config, cache),
+        run_llm(&work, &providers, cache),
     );
     let (tool_findings, tool_failures) = deterministic_result;
-    let (llm_findings, llm_failures) = llm_result?;
+    let (llm_result, provider_uses) = llm_result?;
 
     // Union order is the reporting priority: a file that could not be read
     // keeps that reason over a later layer's view of the same path.
     union_failures(&mut failures, tool_failures);
-    union_failures(&mut failures, llm_failures);
+    union_failures(&mut failures, llm_result.failed_files);
 
     let mut outcome = CheckOutcome {
         tool_findings,
-        llm_findings,
+        llm_findings: llm_result.findings,
         failures,
+        provider_uses,
         exit: Exit::Clean,
     };
     outcome.exit = gate(&outcome, args.fail_on);
@@ -244,23 +267,49 @@ fn any_blocking_tool_finding(findings: &[Finding]) -> bool {
     !findings.is_empty()
 }
 
-/// Run the LLM layer and union its failures into `failures`.
+/// Run the LLM layer.
 ///
-/// Returns the LLM findings. The analyzer is built from the loaded config,
-/// the standard cache, and a limiter sized by `max_concurrent`. A failure to
-/// build the analyzer (no LLM configured) is propagated as `Err` - the gate
-/// is LLM-only and there is no deterministic-only fallback.
+/// Returns the LLM findings, its failures, and which providers served. The
+/// analyzer is built from the whole enabled provider chain, so a transport
+/// failure at the head falls through to the next entry; each provider carries
+/// its own concurrency limiter, sized by its own `max_concurrent`. A failure
+/// to build the chain (a misconfigured `[[llm]]` entry) is propagated as
+/// `Err` - the gate is LLM-only and there is no deterministic-only fallback.
 async fn run_llm(
     work: &input::Work,
-    cfg: &LlmConfig,
+    cfgs: &[&LlmConfig],
     cache: Cache,
-) -> Result<(Vec<Finding>, BTreeMap<PathBuf, FailureReason>)> {
-    let limiter = Limiter::new(cfg.max_concurrent);
-    let analyzer = crate::analysis::code_quality::CodeQualityAnalyzer::new(cfg, cache, limiter)
-        .map_err(|e| anyhow!("could not build LLM analyzer: {e}"))?;
+) -> Result<(AnalysisResult, Vec<ProviderUse>)> {
+    let chain =
+        ProviderChain::new(cfgs).map_err(|e| anyhow!("could not build LLM analyzer: {e}"))?;
+    let analyzer = crate::analysis::code_quality::CodeQualityAnalyzer::new(chain, cache);
 
     let result = analyzer.analyze_files(&work.by_file).await;
-    Ok((result.findings, result.failed_files))
+    let uses = provider_uses(analyzer.chain());
+    Ok((result, uses))
+}
+
+/// Who answered, and for how many files.
+///
+/// Read off the chain, which counted as it went - the counts never leave the
+/// object that produced them, so they cannot drift from the demotion state
+/// sitting beside them, and `AnalysisResult` needs no per-provider field whose
+/// merge rule would be the one exception to its union-not-sum invariant.
+/// Providers that served nothing are omitted: the report answers "who reviewed
+/// this code", and an untouched fallback did not.
+fn provider_uses(chain: &ProviderChain) -> Vec<ProviderUse> {
+    chain
+        .providers()
+        .iter()
+        .enumerate()
+        .filter(|(_, provider)| provider.served() > 0)
+        .map(|(index, provider)| ProviderUse {
+            index,
+            model: provider.model().to_owned(),
+            endpoint: provider.endpoint().to_owned(),
+            files: provider.served(),
+        })
+        .collect()
 }
 
 /// The crate's `Exit` re-exported so `cli::check::run` returns the same

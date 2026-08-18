@@ -8,35 +8,40 @@
 //! misconfiguration). So each entry now carries a stable `kind` tag, and an
 //! HTTP `status` when there was one.
 
-use std::collections::BTreeMap;
-use std::path::PathBuf;
-
 use serde_json::Value;
 
-use crate::Exit;
-use crate::analysis::result::FailureReason;
-use crate::cli::OutputFormat;
-use crate::cli::check::{CheckOutcome, render};
+use super::support::{outcome_failing, rendered_json};
+use crate::analysis::result::{FailureReason, ProviderFailure};
 
 /// Render `failures` as JSON and hand back the parsed `unanalyzed` array.
 fn unanalyzed_for(failures: Vec<(&str, FailureReason)>) -> Vec<Value> {
-    let map: BTreeMap<PathBuf, FailureReason> = failures
-        .into_iter()
-        .map(|(path, reason)| (PathBuf::from(path), reason))
-        .collect();
-    let outcome = CheckOutcome {
-        tool_findings: Vec::new(),
-        llm_findings: Vec::new(),
-        failures: map,
-        exit: Exit::Unanalyzed,
-    };
-    let mut buf: Vec<u8> = Vec::new();
-    render::render_to(&mut buf, &outcome, OutputFormat::Json).expect("render");
-    let parsed: Value = serde_json::from_slice(&buf).expect("valid JSON");
+    let parsed = rendered_json(&outcome_failing(failures));
     parsed["unanalyzed"]
         .as_array()
         .expect("unanalyzed is an array")
         .clone()
+}
+
+/// The tag each variant is expected to render, restated here independently of
+/// production.
+///
+/// Written as an **exhaustive match** on purpose. The sample list below is
+/// hand-written, and a new `FailureReason` variant added without a sample would
+/// otherwise slip through with no tag test at all - which is exactly what
+/// happened when `AllProviders` arrived and this file kept passing. Adding a
+/// variant now fails to compile here, in the file holding the list.
+fn expected_kind(reason: &FailureReason) -> &'static str {
+    match reason {
+        FailureReason::Transport { .. } => "transport",
+        FailureReason::Unparseable(_) => "unparseable",
+        FailureReason::Truncated => "truncated",
+        FailureReason::MalformedFinding(_) => "malformed_finding",
+        FailureReason::ToolUnavailable { .. } => "tool_unavailable",
+        FailureReason::FileTooLarge { .. } => "file_too_large",
+        FailureReason::PayloadTooLarge { .. } => "payload_too_large",
+        FailureReason::Unreadable(_) => "unreadable",
+        FailureReason::ChainFailed(_) => "chain_failed",
+    }
 }
 
 /// Every `FailureReason` variant renders a distinct `kind`.
@@ -46,43 +51,35 @@ fn unanalyzed_for(failures: Vec<(&str, FailureReason)>) -> Vec<Value> {
 /// information exactly where the JSON format is supposed to be adding it.
 #[test]
 fn each_failure_variant_renders_its_own_kind_tag() {
-    let cases: Vec<(FailureReason, &str)> = vec![
-        (
-            FailureReason::Transport {
-                status: Some(500),
-                message: "boom".to_owned(),
+    let cases: Vec<FailureReason> = vec![
+        FailureReason::Transport {
+            status: Some(500),
+            message: "boom".to_owned(),
+        },
+        FailureReason::Unparseable("no json".to_owned()),
+        FailureReason::Truncated,
+        FailureReason::MalformedFinding("bad severity".to_owned()),
+        FailureReason::ToolUnavailable {
+            tool: "ruff".to_owned(),
+            detail: "not found".to_owned(),
+        },
+        FailureReason::FileTooLarge { bytes: 1, limit: 0 },
+        FailureReason::PayloadTooLarge { bytes: 1, limit: 0 },
+        FailureReason::Unreadable("eperm".to_owned()),
+        FailureReason::ChainFailed(vec![ProviderFailure {
+            provider: 0,
+            model: "m".to_owned(),
+            reason: FailureReason::Transport {
+                status: None,
+                message: "refused".to_owned(),
             },
-            "transport",
-        ),
-        (
-            FailureReason::Unparseable("no json".to_owned()),
-            "unparseable",
-        ),
-        (FailureReason::Truncated, "truncated"),
-        (
-            FailureReason::MalformedFinding("bad severity".to_owned()),
-            "malformed_finding",
-        ),
-        (
-            FailureReason::ToolUnavailable {
-                tool: "ruff".to_owned(),
-                detail: "not found".to_owned(),
-            },
-            "tool_unavailable",
-        ),
-        (
-            FailureReason::FileTooLarge { bytes: 1, limit: 0 },
-            "file_too_large",
-        ),
-        (
-            FailureReason::PayloadTooLarge { bytes: 1, limit: 0 },
-            "payload_too_large",
-        ),
-        (FailureReason::Unreadable("eperm".to_owned()), "unreadable"),
+            skipped: false,
+        }]),
     ];
 
     let mut seen: Vec<&str> = Vec::new();
-    for (reason, expected) in cases {
+    for reason in cases {
+        let expected = expected_kind(&reason);
         let entries = unanalyzed_for(vec![("src/a.rs", reason.clone())]);
         assert_eq!(entries.len(), 1);
         assert_eq!(

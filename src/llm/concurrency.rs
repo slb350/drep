@@ -35,7 +35,7 @@ use tokio::sync::{Semaphore, SemaphorePermit};
 ///
 /// Cheap to clone (the semaphore is wrapped in an `Arc`); typically built
 /// once per process and shared across the analyzer.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Limiter {
     semaphore: Arc<Semaphore>,
 }

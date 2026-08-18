@@ -362,7 +362,7 @@ carry a stable `kind` tag plus a numeric `status` for HTTP failures. Exit code
 2 never needed the reason; failover does, and it must not have to match on
 prose to get it.
 
-### Phase 5 — CLI assembly (5a ✅, 5b ✅, 5c next)
+### Phase 5 — CLI assembly (5a ✅, 5b ✅, 5c ✅)
 Split three ways. 5a is where every subsystem built in isolation meets, and the
 first phase whose mistakes are user-visible rather than internal.
 
@@ -386,8 +386,8 @@ comes from `git rev-parse --git-common-dir` (in a linked worktree or a submodule
 never runs), and a `core.hooksPath` set anywhere means git ignores `.git/hooks`
 entirely, so a chainer in that directory is what keeps a repo-local hook alive.
 
-**Phase 5c — multi-provider LLM failover.** See below; deliberately last,
-because it changes the cache-key layer.
+**Phase 5c ✅ — multi-provider LLM failover. Landed 2026-08-18.** See below;
+deliberately last, because it changes the cache-key layer.
 
 Decisions taken before 5a, so the spec does not have to re-litigate them:
 
@@ -431,80 +431,132 @@ reaches git as a flag (now one site, `since_diff`), and `which_first` checks
   reference".** `doctor` had its own, narrower one, which meant it reported a
   config as fine that `check` refused to load.
 
-### Phase 5c — multi-provider failover (a deliberate reversal)
+### Phase 5c ✅ — multi-provider failover (a deliberate reversal)
+
+Landed 2026-08-18. `src/llm/chain.rs` owns the loop; the analyzer calls it
+instead of `LlmClient` directly.
 
 This rewrite dropped the circuit breaker and the rate limiter as server-shaped
-complexity, and failover is the same category. It is taken anyway for a
+complexity, and failover is the same category. It was taken anyway for a
 specific failure that happens in practice: a local endpoint that is off blocks
 every commit, because exit 2 is a hard stop by design. The reversal is recorded
 here rather than slipped in, so the next person weighing "should drep grow
 resilience machinery" sees the bar it had to clear.
 
-#### What 5b already put in place
+#### The policy, as built
 
-Start from these rather than re-deriving them:
+- **Only transport failures fail over** — status-less failures (timeout,
+  refused connection, empty body) and the retryable statuses 408, 429 and 5xx.
+  A 401 or 403 stops the chain: that is misconfiguration, and falling back
+  masks it. Truncation is excluded — a different model might not truncate, but
+  it doubles cost exactly when responses are longest.
+- **Whether a failure is *remembered* is a separate question from whether it
+  advances the chain**, and the sticky set is wider. `is_sticky` covers every
+  endpoint-level failure including a 401: a stale key answers the same way for
+  every file, and forty-nine TLS handshakes to be told so again is pure
+  wall-clock on a gate that will exit 2 regardless. The remembered reason is
+  replayed through `should_failover`, so a demoted 401 still stops the chain —
+  otherwise every file after the first would skip the head and be served
+  happily by the fallback, which is the exact masking the 401 rule forbids.
+- **An empty response fails over.** It reaches the chain as
+  `Transport { status: None }` only after the SDK has already retried it, and a
+  provider that keeps answering with nothing is as unusable as one that is
+  down. It also produced zero output tokens, so the attempts it burned cost
+  almost nothing. This is the flakiness that failed 7 of 49 files on drep's own
+  first gated push.
+- **`enabled` is an opt-out, defaulting to `true`.** `Config::providers()` is
+  the chain: enabled entries, in file order. A disabled *head* falls through to
+  the entry below it rather than producing `NotConfigured`, which is what
+  parking the local model was always meant to do. A config where every entry is
+  disabled is rejected by `config::load` (`NoEnabledProviders`), the same rule
+  as an empty list. The default flipped from `false` because an opt-out that
+  defaults to "out" made declaring a provider do nothing until you also enabled
+  it — a user adding a fallback by copying the first block, minus its `enabled`
+  line, got a silently inert entry and no failover.
+- **Demotion is sticky for the run.** The first file that fails over marks that
+  provider down; later files skip it. The failure classes that fail over are
+  endpoint-level, not file-level, so with a dead endpoint and forty-nine files,
+  per-file retry pays the SDK's full backoff schedule forty-nine times for a
+  verdict already known. The reason a provider went down is kept, not just the
+  fact, because one transient 500 diverting the rest of a run to a paid
+  endpoint has to be visible.
+- **The demotion check runs twice: before the limiter and after it.** Files are
+  analyzed concurrently, so the check before the limiter only stops files that
+  had not started. Everything already queued passed it before the first failure
+  landed. Without the second look, sticky demotion saves nothing in the one
+  case it exists for; with it, the waste is bounded by `max_concurrent` rather
+  than by the file count.
+- **Each provider carries its own limiter.** `max_concurrent` is a per-`[[llm]]`
+  field, and the slot represents in-flight work against one endpoint. A single
+  shared limiter would apply the local model's generous budget to a
+  rate-limited cloud endpoint.
 
-- **`Config.llm` is `Vec<LlmConfig>`, parsed from `[[llm]]`.** `config::load`
-  rejects an empty list (`ConfigError::NoProviders`); `Config::primary()`
-  returns the head. `drep init` writes this shape, so the file format does not
-  change under a file drep already wrote — which was the whole reason it landed
-  a phase early.
-- **`FailureReason::Transport { status: Option<u16>, message }`** carries the
-  HTTP code as a *number*, and `--format json`'s `unanalyzed` entries expose it
-  as `status` beside a stable `kind` tag. Failover can branch on it without
-  matching on prose. The tag table lives in `cli::check::render`, not on the
-  type.
-- **`LlmClient::complete_json` already splits retry by failure class.**
-  Transport (including an empty body) retries with backoff inside the SDK;
-  a non-empty unparseable body fails the file immediately.
+#### The cache key moves with the provider
 
-#### Constraints, in order of how much they cost
+The key is computed from the model, so it is computed **inside** the loop, once
+per provider tried, and `Served::key` names whoever answered. Keying the head
+and letting the fallback serve would file that answer under a key it did not
+come from, and a later run with the head restored would get a hit that never
+came from the head. Pinned at two levels: `llm/chain/tests/cache_key.rs`
+asserts on the key itself and on a second run with the head restored, and
+`analysis/tests/code_quality_failover.rs` asserts the actual `cache.put`
+landed under the fallback's key and not the head's.
 
-- **Only transport failures fail over** — the SDK's retryable set (408, 429,
-  5xx, timeout, connection). A 401/403 must not: that is misconfiguration, and
-  falling back masks it. Truncation is deliberately excluded to start: a
-  different model might not truncate, but it doubles cost exactly when
-  responses are longest.
-- **The cache key must move inside the failover loop.** The key is computed
-  from the model before the call. If provider 1 is keyed and provider 2 serves
-  the response, the answer is cached under a key it did not come from, and a
-  later run with provider 1 up gets a hit that never came from provider 1.
-- **The run reports which provider served it.** A silent fallback from a local
-  endpoint to a paid API is a cost surprise, not a feature.
+#### Reporting
 
-#### Decisions 5c has to make (open)
+- **Text** prints nothing about providers on the happy path — a line on every
+  commit is noise. A run that fell through prints every provider that served,
+  with model, endpoint and file count, because a silent switch from a local
+  endpoint to a paid API is a cost surprise.
+- **JSON** always carries a `providers` array, even for a single-provider run:
+  a machine consumer has no noise problem, and an always-present field is what
+  distinguishes "no failover" from "this build does not report it".
+- **`FailureReason::ChainFailed`** carries every provider's reason, including
+  the ones skipped as already-down, under the line "no LLM provider analyzed
+  this file". Keeping only the last would hide a dead local endpoint behind the
+  fallback's 401; keeping only the first would hide the broken fallback. It is
+  phrased by what happened rather than by a count, because the list can be
+  shorter than the chain — a 401 at the head stops it, and the providers below
+  were deliberately never asked.
+- **A one-provider *chain* collapses to that provider's own reason.** A
+  single-provider config — what `drep init` writes — reports exactly what it
+  reported before failover existed, JSON `kind` included. The trigger is the
+  chain's length, not the attempt count: those differ precisely where the
+  structure is worth most, because a 401 at the head of a two-provider chain
+  yields one attempt, and collapsing it would discard the provider index and
+  the model name just as the user asks why the fallback did not run.
+- **`doctor` states the chain.** It bullets disabled entries `(disabled -
+  skipped)` and numbers only the live ones, so its `1.` is the same provider a
+  failure line calls `[1]` — numbering the file instead would make the two
+  disagree the moment anything above was parked (`ConfigError` does number the
+  file, and says "in file order" out loud for that reason). It then says which
+  of three situations the config is in: no enabled provider at all, one
+  provider and therefore no fallback, or N providers tried in order with the
+  401/403 exception named. "It falls through" without "except on a 401" is the
+  half that leads a user to expect a broken key to be routed around.
+- **The served counts live on the chain, not on `AnalysisResult`.** The chain
+  already knows who answered, is already shared for the process, and already
+  holds per-provider interior-mutable state beside it. Carrying the counts out
+  through the analysis result and rejoining them against the chain to recover
+  each model and endpoint cost `AnalysisResult` a field whose merge rule was
+  the one exception to its union-not-sum invariant.
 
-- **Does an empty response fail over, or only retry?** It is now
-  `Transport { status: None }` after the SDK exhausts its retries, so it is
-  *eligible*. The argument for failing over: a provider returning nothing
-  repeatedly is as unusable as one that is down. Against: it already cost
-  several retries, and a second provider doubles that spend. `status: None`
-  distinguishes it from an HTTP error, so the choice is expressible either way.
-- **What does `enabled` mean on an ordered list?** It is a single-provider-era
-  field. `primary()` is `first()`, not "first enabled", so a user who sets
-  `enabled = false` on their local entry intending to fall through to the cloud
-  entry below gets `NotConfigured` instead. Either `primary()`/failover skips
-  disabled entries, or `enabled` is rejected on a non-head entry, or it goes
-  away in favour of "presence in the list means enabled". Deciding it now is
-  cheap; deciding it later means changing a file `drep init` has written.
-- **`doctor` should say which providers are inert.** It lists every `[[llm]]`
-  entry today, without noting that only the first is consulted. Once failover
-  exists the list becomes truthful — but until it does, a user who hand-writes
-  a fallback gets no failover and no warning.
-
-#### Where the tests will not help
+#### What the tests could not do
 
 Both defects found after 5b's suite went green were invisible to it for
 structural reasons, and failover has the same shape of risk:
 
-- wiremock returns exactly what it is told, so it cannot show you a provider
+- wiremock returns exactly what it is told, so no test here shows a provider
   that *intermittently* returns nothing — which is how the retry-class bug
-  survived. Failover's interesting cases are all "provider A behaves badly in a
-  way that is not reproducible on demand".
+  survived, and which is the shape of every interesting failover case in
+  production. The classification is pinned by the deterministic cases instead.
 - A test that mounts a dead provider A and a healthy provider B proves the loop
-  advances. It does not prove the cache key advanced with it. Assert on the
-  **key**, or on a second run with provider A restored, or the most expensive
-  bug in this phase ships green.
+  advances and nothing else. Three deliberate sabotages were run against the
+  suite before it was trusted: keying on the head instead of the serving
+  provider (3 of 4 `cache_key` tests failed), failing over on every status (2
+  `failover` tests failed), and deleting demotion (all 4 `demotion` tests
+  failed). A suite that survives those is worth having; one that only checks
+  the returned value is not.
 
 ### Phase 6 — `lint-docs`
 Port the markdown checks including `_fence_mask`. No LLM, fast, runs on every

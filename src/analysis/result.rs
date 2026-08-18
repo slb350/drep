@@ -62,6 +62,46 @@ pub enum FailureReason {
     PayloadTooLarge { bytes: u64, limit: u64 },
     /// The file could not be read from disk.
     Unreadable(String),
+    /// A failover chain produced no answer, with what each provider
+    /// contributed.
+    ///
+    /// Only produced for a chain of **two or more** providers. A one-provider
+    /// config - what `drep init` writes, and what almost every run uses -
+    /// collapses to that provider's own reason, so it reports exactly what it
+    /// did before failover existed, JSON `kind` included. The trigger is the
+    /// chain's length, not the number of providers that failed: a two-provider
+    /// chain stopped dead at the head by a 401 has one failure and is exactly
+    /// the case where "which provider, and why did my fallback not run" is the
+    /// user's live question.
+    ///
+    /// Keeping only the last reason would hide a dead local endpoint behind
+    /// the cloud fallback's 401; keeping only the first would hide the broken
+    /// fallback. A user fixing the run needs both.
+    ///
+    /// The list can be shorter than the chain - a 401 at the head stops it, and
+    /// the providers below were never consulted.
+    ChainFailed(Vec<ProviderFailure>),
+}
+
+/// One provider's contribution to a file that no provider could analyze.
+///
+/// `reason` is always an LLM-layer variant - `Transport` or `Unparseable`.
+/// That is a property of the only thing that builds these: the conversion runs
+/// over an `LlmError`, whose three variants map onto exactly those two, so a
+/// nested `ChainFailed` is not merely absent but unreachable.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderFailure {
+    /// Zero-based position in the chain. Rendered one-based, matching how
+    /// `doctor` numbers the same list.
+    pub provider: usize,
+    /// The model that provider asks for.
+    pub model: String,
+    /// Why it did not produce an answer.
+    pub reason: FailureReason,
+    /// True when the provider was already demoted and was not contacted for
+    /// this file. Worth reporting: a user needs to know the local endpoint has
+    /// been dead since the third file, not just that the fallback then failed.
+    pub skipped: bool,
 }
 
 impl FailureReason {
@@ -100,6 +140,14 @@ impl FailureReason {
                 format!("the code sent for review is too large ({bytes} bytes; limit is {limit})")
             }
             FailureReason::Unreadable(detail) => format!("file could not be read: {detail}"),
+            FailureReason::ChainFailed(failures) => {
+                let each: Vec<String> = failures.iter().map(ProviderFailure::one_line).collect();
+                // Phrased by what happened, not by a count. "All N providers
+                // failed" is wrong for the case that matters most - a chain
+                // stopped at the head by a 401 has one entry and more
+                // providers behind it that were deliberately not asked.
+                format!("no LLM provider analyzed this file: {}", each.join("; "))
+            }
         }
     }
 
@@ -111,8 +159,30 @@ impl FailureReason {
     pub fn status(&self) -> Option<u16> {
         match self {
             FailureReason::Transport { status, .. } => *status,
+            // Deliberately not "the first attempt's status". A chain failure
+            // has one status *per provider*, and flattening them to one number
+            // would tell a consumer a 401 was the whole story when a 500 came
+            // first. The JSON renderer exposes the per-provider list instead.
             _ => None,
         }
+    }
+}
+
+impl ProviderFailure {
+    /// One line naming the provider, its model, and what it said.
+    pub fn one_line(&self) -> String {
+        let skipped = if self.skipped {
+            " (already down earlier in this run)"
+        } else {
+            ""
+        };
+        format!(
+            "[{}] {}: {}{}",
+            self.provider + 1,
+            self.model,
+            self.reason.one_line(),
+            skipped
+        )
     }
 }
 

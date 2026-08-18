@@ -3,8 +3,9 @@
 //! One file per repository, conventionally `drep.toml` at the root. The shape
 //! is deliberate: every field has a documented default, so a partial file
 //! works. Missing keys are not an error - the section just inherits the
-//! default. Providers are declared as `[[llm]]`, an ordered array of tables,
-//! even while only the first entry is consulted.
+//! default. Providers are declared as `[[llm]]`, an ordered array of tables:
+//! a preference order, tried head first, each enabled entry a fallback for the
+//! one before it.
 //!
 //! The two things this module owns that are not obvious from the field list:
 //!
@@ -28,10 +29,10 @@ use toml::Value;
 /// The whole configuration tree, rooted at the file.
 ///
 /// `llm` is an **array of tables** (`[[llm]]`), not a single `[llm]` section,
-/// and it is that shape from the day `drep init` first wrote one. Multi-provider
-/// failover is a later phase, but the file format cannot change underneath a
-/// file drep itself wrote - so the list arrives first with exactly one entry in
-/// it, and failover later fills the tail rather than rewriting the head.
+/// and it is that shape from the day `drep init` first wrote one - a phase
+/// before failover could read it, precisely so the file format would not have
+/// to change underneath a file drep itself wrote. The list is a *preference
+/// order*: [`Self::providers`] is the failover chain.
 ///
 /// `#[serde(default)]` means a file with an empty body deserializes
 /// successfully; [`validate`] is what then rejects it, because a config
@@ -43,24 +44,35 @@ pub struct Config {
 }
 
 impl Config {
-    /// The provider requests go to first.
+    /// The failover chain: every enabled provider, in file order.
     ///
-    /// `Option` rather than an indexing method that cannot fail: [`load`]
-    /// rejects an empty list, but `Config` is also constructible directly (in
-    /// tests, and by any later caller), and a panic inside the commit gate is
-    /// a worse failure than an error message.
-    pub fn primary(&self) -> Option<&LlmConfig> {
-        self.llm.first()
+    /// The single definition of "which providers are in play". `enabled` is
+    /// an opt-*out*, so a disabled entry is skipped wherever it sits - a
+    /// disabled head falls through to the entry below it rather than
+    /// producing `NotConfigured`, which is what parking the local model was
+    /// always meant to do.
+    ///
+    /// A `Vec` rather than an iterator because every caller wants a length or
+    /// an index (the chain numbers its providers in error messages) and the
+    /// list is at most a handful of entries.
+    pub fn providers(&self) -> Vec<&LlmConfig> {
+        self.llm.iter().filter(|p| p.enabled).collect()
     }
 }
 
-/// LLM section.
+/// One provider in the failover chain.
 ///
 /// Field ordering matches the spec; every field has its documented default
-/// here so partial files work. `enabled` is the one a partial file would
-/// commonly set to `true` without configuring anything else, in which case
-/// `new()` rejects the resulting `LlmClient` with `NotConfigured` rather
-/// than guessing an endpoint.
+/// here so partial files work.
+///
+/// **`enabled` defaults to `true`** - it is an opt-*out*, the way to park one
+/// entry of an ordered list without deleting it. It defaulted to `false` while
+/// the list held exactly one consulted entry, which made declaring a provider
+/// do nothing until you also enabled it: a user who added a fallback by
+/// copying the first block minus its `enabled` line got a silently inert
+/// entry and no failover. A partial entry that names no endpoint is still
+/// rejected, by `LlmClient::new`, with a message about the endpoint rather
+/// than about a switch the user never touched.
 #[derive(Debug, Deserialize)]
 #[serde(default)]
 pub struct LlmConfig {
@@ -78,7 +90,7 @@ pub struct LlmConfig {
 impl Default for LlmConfig {
     fn default() -> Self {
         Self {
-            enabled: false,
+            enabled: true,
             endpoint: None,
             model: None,
             api_key: None,
@@ -103,14 +115,28 @@ pub enum ConfigError {
     #[error("environment variable `{0}` is not set (referenced by `{1}`)")]
     EnvVarUnset(String, String),
 
-    #[error("[[llm]] #{0}: temperature {1} is outside the allowed range 0.0..=2.0")]
-    Temperature(usize, f32),
+    /// The index is the zero-based position in the file; the message renders
+    /// it one-based, and says "in file order" because the *chain* numbers only
+    /// the enabled entries - with a disabled head the two differ, and
+    /// `[[llm]] #1` meaning different tables in the same file is worse than
+    /// either convention alone.
+    #[error(
+        "[[llm]] #{} in file order: temperature {temperature} is outside the allowed range 0.0..=2.0",
+        index + 1
+    )]
+    Temperature { index: usize, temperature: f32 },
 
     #[error(
         "{0} declares no `[[llm]]` provider; drep 2.x has no deterministic-only mode. \
          Run `drep init` to write one."
     )]
     NoProviders(PathBuf),
+
+    #[error(
+        "every `[[llm]]` provider in {0} has `enabled = false`; drep 2.x has no \
+         deterministic-only mode. Re-enable one, or run `drep init` to write another."
+    )]
+    NoEnabledProviders(PathBuf),
 }
 
 /// The conventional config file location: `drep.toml` in the current directory.
@@ -167,10 +193,19 @@ fn validate(config: &Config, path: &Path) -> Result<(), ConfigError> {
     if config.llm.is_empty() {
         return Err(ConfigError::NoProviders(path.to_path_buf()));
     }
+    // Distinct from `NoProviders` because the fix is different: one needs a
+    // provider written, the other needs one re-enabled. Both are caught here
+    // rather than at the LLM boundary so the message can name the file.
+    if config.providers().is_empty() {
+        return Err(ConfigError::NoEnabledProviders(path.to_path_buf()));
+    }
     for (index, llm) in config.llm.iter().enumerate() {
         let t = llm.temperature;
         if !(0.0..=2.0).contains(&t) {
-            return Err(ConfigError::Temperature(index, t));
+            return Err(ConfigError::Temperature {
+                index,
+                temperature: t,
+            });
         }
     }
     Ok(())

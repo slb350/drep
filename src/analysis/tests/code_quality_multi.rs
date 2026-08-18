@@ -9,19 +9,17 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use tempfile::TempDir;
 use wiremock::matchers::{body_string_contains, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use crate::analysis::code_quality::CodeQualityAnalyzer;
 use crate::analysis::prompt::build_analysis_prompt;
 use crate::languages::definitions::PYTHON;
-use crate::llm::cache::Cache;
-use crate::llm::concurrency::Limiter;
+use crate::llm::chain::ProviderChain;
 
 use super::support::analyzer_with_fast_retry;
 use super::support::{analyzer_for, python_hunk};
-use crate::test_support::{cfg_for, request_count, sse};
+use crate::test_support::{cfg_for, request_count, sse, temp_cache};
 
 /// Criterion 21: `analyze_files` merges findings across files and **unions**
 /// their failures.
@@ -125,12 +123,13 @@ async fn analyze_file_holds_a_limiter_slot_for_the_llm_call() {
         .mount(&server)
         .await;
 
-    let dir = TempDir::new().expect("temp dir");
-    let cache = Cache::new(dir.path().to_path_buf(), 30, 1024 * 1024);
+    let (cache, _dir) = temp_cache();
     let mut cfg = cfg_for(&server, "m", 1);
     cfg.max_concurrent = 1;
     let analyzer = analyzer_with_fast_retry(&cfg, cache);
-    let limiter = analyzer.limiter.clone();
+    // The limiter lives on the provider, not the analyzer: it is the budget
+    // for one endpoint, and a chain of two would have two of them.
+    let limiter = analyzer.chain().providers()[0].limiter().clone();
 
     // Four distinct files, so no two share a cache key and each one issues a
     // request that must take the permit.
@@ -191,14 +190,13 @@ async fn cache_hit_does_not_acquire_a_limiter_slot() {
         .mount(&server)
         .await;
 
-    let dir = TempDir::new().expect("temp dir");
-    let cache = Cache::new(dir.path().to_path_buf(), 30, 1024 * 1024);
+    let (cache, _dir) = temp_cache();
     let mut cfg = cfg_for(&server, "m", 1);
     // Exactly one permit, so the test can hold it and starve anything that
     // tries to acquire.
     cfg.max_concurrent = 1;
-    let limiter = Limiter::new(cfg.max_concurrent);
-    let analyzer = CodeQualityAnalyzer::new(&cfg, cache, limiter).expect("analyzer");
+    let chain = ProviderChain::new(&[&cfg]).expect("chain builds");
+    let analyzer = CodeQualityAnalyzer::new(chain, cache);
 
     let hunks = vec![python_hunk("src/lib.py", 100)];
     let first = analyzer.analyze_file(&hunks).await;
@@ -229,12 +227,9 @@ async fn cache_hit_does_not_acquire_a_limiter_slot() {
     //
     // Holding the sole permit is deterministic: if the cache path acquired, it
     // would wait here forever.
-    let held = analyzer.limiter.acquire().await;
-    assert_eq!(
-        analyzer.limiter.available(),
-        0,
-        "the test holds the only permit"
-    );
+    let limiter = analyzer.chain().providers()[0].limiter().clone();
+    let held = limiter.acquire().await;
+    assert_eq!(limiter.available(), 0, "the test holds the only permit");
     let third = tokio::time::timeout(
         std::time::Duration::from_secs(5),
         analyzer.analyze_file(&hunks),

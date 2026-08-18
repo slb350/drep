@@ -19,6 +19,8 @@ use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use crate::config::LlmConfig;
+use crate::llm::cache::Cache;
+use crate::llm::chain::ProviderChain;
 use crate::llm::client::LlmClient;
 
 /// A config pointing at `server`, with the LLM enabled.
@@ -100,6 +102,18 @@ pub(crate) async fn server_returning(parts: &[&str]) -> MockServer {
     server
 }
 
+/// Mount a response with `status` and an empty body, and hand back the server.
+///
+/// The counterpart to [`server_returning`], beside it rather than in each
+/// suite: it was written out twice, in the chain suite and the analysis suite,
+/// and the second copy had already lost the paragraph explaining what an empty
+/// body means to the SDK.
+pub(crate) async fn server_failing_with(status: u16) -> MockServer {
+    let server = MockServer::start().await;
+    mount_sse(&server, ResponseTemplate::new(status)).await;
+    server
+}
+
 /// Mount an arbitrary response template at the chat-completions endpoint.
 pub(crate) async fn mount_sse(server: &MockServer, template: ResponseTemplate) {
     Mock::given(method("POST"))
@@ -107,6 +121,37 @@ pub(crate) async fn mount_sse(server: &MockServer, template: ResponseTemplate) {
         .respond_with(template)
         .mount(server)
         .await;
+}
+
+/// Build a provider chain through the production `ProviderChain::new`, then
+/// shrink only the backoff delays so a chain test does not spend seconds
+/// asleep.
+///
+/// Like [`fast_retry_client`], it deliberately does **not** override
+/// `max_attempts`: that value comes from each entry's `max_retries` through
+/// the production path, and the failover tests depend on a provider actually
+/// exhausting its retries before the chain advances.
+pub(crate) fn fast_retry_chain(cfgs: &[LlmConfig]) -> ProviderChain {
+    let refs: Vec<&LlmConfig> = cfgs.iter().collect();
+    let mut chain = ProviderChain::new(&refs).expect("chain builds from valid configs");
+    for provider in &mut chain.providers {
+        provider.client.retry_config.initial_delay = Duration::from_millis(10);
+        provider.client.retry_config.max_delay = Duration::from_millis(50);
+        provider.client.retry_config.jitter_factor = 0.0;
+    }
+    chain
+}
+
+/// A cache rooted in a fresh `TempDir`.
+///
+/// The `TempDir` is returned so the caller keeps it alive - dropping it
+/// deletes the cache mid-test. Never `Cache::default_root()`: that is the
+/// developer's real cache directory, and an entry one test wrote once
+/// satisfied another, so an unreachable-endpoint test exited clean.
+pub(crate) fn temp_cache() -> (Cache, tempfile::TempDir) {
+    let dir = tempfile::TempDir::new().expect("temp dir");
+    let cache = Cache::new(dir.path().to_path_buf(), 30, 1024 * 1024);
+    (cache, dir)
 }
 
 /// Mark a file executable on unix; a no-op elsewhere.

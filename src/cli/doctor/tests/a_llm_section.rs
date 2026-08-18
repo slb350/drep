@@ -21,6 +21,13 @@ fn write_py(dir: &Path) {
     std::fs::write(dir.join("a.py"), "x = 1\n").expect("a.py");
 }
 
+/// Run `doctor` against `dir` and return what it printed.
+fn report_for(dir: &Path) -> String {
+    let mut out = Vec::new();
+    run_to(&mut out, &args(dir)).expect("run_to");
+    String::from_utf8(out).expect("utf8")
+}
+
 #[test]
 fn no_config_file_prints_the_unconfigured_message_and_still_prints_tools() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -174,5 +181,168 @@ fn explicit_config_flag_overrides_default_path() {
     assert!(
         rendered.contains("  1. x at http://x/v1"),
         "rendered:\n{rendered}"
+    );
+}
+
+/// A disabled provider is marked inert rather than listed as if it will run.
+///
+/// The listing was truthful when only the head was ever consulted only by
+/// accident - it said nothing about which entries were live. Now that the list
+/// is a real failover chain, an entry the chain will skip is the one thing this
+/// section can still misreport.
+#[test]
+fn a_disabled_provider_is_marked_as_skipped() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    std::fs::write(
+        temp.path().join("drep.toml"),
+        r#"
+[[llm]]
+enabled = false
+model = "local-model"
+endpoint = "http://localhost:1234/v1"
+
+[[llm]]
+model = "cloud-model"
+endpoint = "https://api.example/v1"
+"#,
+    )
+    .expect("write config");
+
+    let rendered = report_for(temp.path());
+    let local = rendered
+        .lines()
+        .find(|line| line.contains("local-model"))
+        .unwrap_or_else(|| panic!("the disabled entry must still be listed:\n{rendered}"));
+    assert!(
+        local.contains("disabled"),
+        "the disabled entry must say so; got {local:?}"
+    );
+    let cloud = rendered
+        .lines()
+        .find(|line| line.contains("cloud-model"))
+        .expect("the enabled entry is listed");
+    assert!(
+        !cloud.contains("disabled"),
+        "the enabled entry must not be marked skipped; got {cloud:?}"
+    );
+}
+
+/// With one provider, `doctor` says there is no fallback.
+///
+/// "Providers are tried in order" is true here and useless. The fact this user
+/// needs is that an unreachable endpoint means exit 2 with nothing to catch it.
+#[test]
+fn a_single_provider_is_reported_as_having_no_fallback() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    std::fs::write(
+        temp.path().join("drep.toml"),
+        "[[llm]]\nmodel = \"only\"\nendpoint = \"http://localhost:1234/v1\"\n",
+    )
+    .expect("write config");
+
+    let rendered = report_for(temp.path());
+    assert!(
+        rendered.contains("no fallback"),
+        "a lone provider must be reported as having no fallback:\n{rendered}"
+    );
+}
+
+/// With two enabled providers, `doctor` states the failover rule - including
+/// the exception, because "it falls through" without "except on a 401" is the
+/// half that leads a user to expect their broken key to be routed around.
+#[test]
+fn two_providers_are_reported_as_a_failover_chain_with_the_401_exception() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    std::fs::write(
+        temp.path().join("drep.toml"),
+        r#"
+[[llm]]
+model = "a"
+endpoint = "http://a/v1"
+
+[[llm]]
+model = "b"
+endpoint = "http://b/v1"
+"#,
+    )
+    .expect("write config");
+
+    let rendered = report_for(temp.path());
+    assert!(
+        rendered.contains("2 providers, tried in order"),
+        "the count and the order must be stated:\n{rendered}"
+    );
+    assert!(
+        rendered.contains("401"),
+        "the exception must be stated too:\n{rendered}"
+    );
+}
+
+/// Every provider disabled: the report says the gate cannot run at all.
+///
+/// `config::load` rejects this file, so `drep check` would fail with the same
+/// message - but `doctor` is the command a user runs to find out *why*, and it
+/// must not stop at listing two entries that look fine.
+#[test]
+fn an_all_disabled_config_is_reported_as_unable_to_run() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    std::fs::write(
+        temp.path().join("drep.toml"),
+        r#"
+[[llm]]
+enabled = false
+model = "a"
+
+[[llm]]
+enabled = false
+model = "b"
+"#,
+    )
+    .expect("write config");
+
+    let rendered = report_for(temp.path());
+    assert!(
+        rendered.contains("Every provider is disabled"),
+        "an all-disabled config must be called out:\n{rendered}"
+    );
+}
+
+/// The numbering is the chain position, not the position in the file.
+///
+/// `drep check` reports a failure as "[1] cloud-model", meaning the head of the
+/// chain. If this listing numbered the file instead, a parked entry above would
+/// make the same provider "2" here and "1" there - two numbering schemes for
+/// one list, and a user counting blocks in `drep.toml` to find the offender
+/// would land on the wrong one.
+#[test]
+fn providers_are_numbered_by_chain_position_not_file_position() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    std::fs::write(
+        temp.path().join("drep.toml"),
+        r#"
+[[llm]]
+enabled = false
+model = "parked"
+endpoint = "http://parked/v1"
+
+[[llm]]
+model = "leads-the-chain"
+endpoint = "http://live/v1"
+"#,
+    )
+    .expect("write config");
+
+    let rendered = report_for(temp.path());
+    assert!(
+        rendered.contains("1. leads-the-chain at http://live/v1"),
+        "the first ENABLED entry is number 1, whatever sits above it:\n{rendered}"
+    );
+    let parked = rendered
+        .lines()
+        .find(|line| line.contains("parked"))
+        .expect("the disabled entry is still listed");
+    assert!(
+        !parked.contains("1."),
+        "a disabled entry holds no position in the chain; got {parked:?}"
     );
 }

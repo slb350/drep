@@ -1,7 +1,16 @@
 # drep configuration, written by `drep init`.
 #
-# Providers are declared as `[[llm]]`, an ordered array of tables. Only the
-# first entry is consulted today; multi-provider failover fills the tail.
+# Providers are declared as `[[llm]]`, an ordered array of tables: a
+# preference order. Each one is tried in turn, and a transport failure -
+# unreachable, timed out, rate limited, 5xx, or an empty answer - falls
+# through to the next. A 401 or 403 does not: that is a broken key, and
+# failing over would hide it. Add a fallback by adding another block:
+#
+#     [[llm]]
+#     endpoint = "http://localhost:1234/v1"
+#     model = "qwen3-30b-a3b"
+#
+# Set `enabled = false` on a block to park it without deleting it.
 #
 # `api_key` names an environment variable rather than holding the secret, so
 # this file can be committed and the key cannot.

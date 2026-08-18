@@ -6,6 +6,7 @@
 //! directory's `mod.rs`.
 
 mod code_quality;
+mod code_quality_failover;
 mod code_quality_failures;
 mod code_quality_multi;
 mod code_quality_oversize;

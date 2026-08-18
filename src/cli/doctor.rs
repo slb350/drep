@@ -240,7 +240,23 @@ fn write_llm_section<W: Write>(out: &mut W, args: &DoctorArgs, root: &Path) -> R
     // Print providers verbatim from the raw file: model and endpoint come out
     // unexpanded, so `${VAR}` shows as `${VAR}` rather than being swallowed by
     // the variable-not-set error.
-    for (index, entry) in providers.iter().enumerate() {
+    //
+    // A disabled entry is called out rather than listed as if it were in play.
+    // Before failover existed this section listed every `[[llm]]` block without
+    // noting that only one was ever consulted; now that the list is a real
+    // failover chain, an inert entry is the one thing the listing can still get
+    // wrong - a user who parks their local model wants to see that the cloud
+    // entry below it is what will run, and a user who copied a block without
+    // its `enabled` line wants to see that it is not.
+    //
+    // The numbering is the **chain position**, not the position in the file, so
+    // a disabled entry gets a bullet rather than a number and the entries after
+    // it shift up. That is what makes it agree with `drep check`: a failure
+    // line reading "[1] cloud-model" has to name the same provider this listing
+    // calls 1, and numbering the file would make the two disagree the moment
+    // anything above was parked.
+    let mut enabled_count = 0usize;
+    for entry in &providers {
         let model = entry
             .get("model")
             .and_then(|v| v.as_str())
@@ -249,8 +265,14 @@ fn write_llm_section<W: Write>(out: &mut W, args: &DoctorArgs, root: &Path) -> R
             .get("endpoint")
             .and_then(|v| v.as_str())
             .unwrap_or("(no endpoint set)");
-        writeln!(out, "  {}. {} at {}", index + 1, model, endpoint)?;
+        if entry_is_enabled(entry) {
+            enabled_count += 1;
+            writeln!(out, "  {enabled_count}. {model} at {endpoint}")?;
+        } else {
+            writeln!(out, "  -  {model} at {endpoint} (disabled - skipped)")?;
+        }
     }
+    writeln!(out, "  {}", failover_line(enabled_count))?;
 
     // Unset environment variables, deduped in first-seen order.
     //
@@ -280,6 +302,38 @@ fn write_llm_section<W: Write>(out: &mut W, args: &DoctorArgs, root: &Path) -> R
     }
 
     Ok(())
+}
+
+/// Whether a raw `[[llm]]` table is in the failover chain.
+///
+/// The default comes from `LlmConfig::default()` rather than a literal `true`,
+/// so this cannot disagree with what `config::load` will actually decide. The
+/// raw table is read instead of the loaded config because `load` fails on an
+/// unset `${VAR}` - and a fresh clone with no key exported is exactly when this
+/// report is most useful.
+fn entry_is_enabled(entry: &toml::Value) -> bool {
+    entry
+        .get("enabled")
+        .and_then(toml::Value::as_bool)
+        .unwrap_or_else(|| config::LlmConfig::default().enabled)
+}
+
+/// What the chain will actually do, given how many providers are in it.
+///
+/// Three genuinely different situations, and saying "providers are tried in
+/// order" for a one-provider config would be true but useless - the thing that
+/// user needs to know is that there is no fallback at all.
+fn failover_line(enabled: usize) -> String {
+    match enabled {
+        0 => "Every provider is disabled - `drep check` cannot run. Re-enable one.".to_owned(),
+        1 => "One provider, so there is no fallback: if it is unreachable, `drep check` exits 2."
+            .to_owned(),
+        n => format!(
+            "{n} providers, tried in order: a transport failure falls through to the \
+             next. A 401 or 403 does not - that is misconfiguration, and failing \
+             over would hide it."
+        ),
+    }
 }
 
 /// Every variable the config references that is not set, in first-seen order.

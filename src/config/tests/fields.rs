@@ -80,7 +80,7 @@ temperature = {bad}
         );
         let err = load(&path).expect_err("should reject");
         assert!(
-            matches!(err, ConfigError::Temperature(_, _)),
+            matches!(err, ConfigError::Temperature { .. }),
             "expected Temperature error, got {err:?} for value {bad}"
         );
     }

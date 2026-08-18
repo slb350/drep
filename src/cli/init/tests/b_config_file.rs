@@ -82,7 +82,7 @@ fn rendered_config_loads_through_config_load_when_env_var_is_set() {
     }
 
     assert_eq!(loaded.llm.len(), 1);
-    let primary = loaded.primary().expect("primary present");
+    let primary = *loaded.providers().first().expect("a provider is written");
     assert_eq!(primary.model.as_deref(), Some("m"));
 }
 

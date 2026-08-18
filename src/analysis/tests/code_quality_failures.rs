@@ -9,17 +9,15 @@
 
 use std::path::PathBuf;
 
-use tempfile::TempDir;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use crate::analysis::findings::Severity;
 use crate::diff::hunks::Hunk;
-use crate::llm::cache::Cache;
 
 use super::support::analyzer_with_fast_retry;
 use super::support::{analyzer_for, hunks_for_python_at, hunks_for_python_at_two_lines};
-use crate::test_support::{cfg_for, mount_sse, request_count, server_returning, sse};
+use crate::test_support::{cfg_for, mount_sse, request_count, server_returning, sse, temp_cache};
 
 /// Criterion 11: a response with two issues yields two findings with the
 /// right `kind`/`line`/`message`/`suggestion`.
@@ -233,8 +231,7 @@ async fn transport_failure_marks_the_file_failed() {
         .mount(&server)
         .await;
 
-    let dir = TempDir::new().expect("temp dir");
-    let cache = Cache::new(dir.path().to_path_buf(), 30, 1024 * 1024);
+    let (cache, _dir) = temp_cache();
     let mut cfg = cfg_for(&server, "m", 1);
     cfg.timeout_secs = 30;
     // Build the analyzer with a fast-retry client so the test does not

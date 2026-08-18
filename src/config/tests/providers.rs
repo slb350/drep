@@ -72,19 +72,10 @@ endpoint = "http://c/v1"
         .collect();
     assert_eq!(models, vec!["first", "second", "third"]);
     assert_eq!(
-        config.primary().and_then(|p| p.model.as_deref()),
+        config.providers().first().and_then(|p| p.model.as_deref()),
         Some("first"),
-        "primary is the head of the list, not an arbitrary entry"
+        "the chain leads with the head of the list, not an arbitrary entry"
     );
-}
-
-/// `primary()` on a directly-constructed empty `Config` returns `None`
-/// rather than panicking. `load` cannot produce one, but `Config` is
-/// constructible, and a panic inside a commit gate is worse than an error.
-
-#[test]
-fn primary_of_an_empty_config_is_none() {
-    assert!(Config::default().primary().is_none());
 }
 
 /// The temperature error names *which* provider is out of range.
@@ -110,10 +101,127 @@ temperature = 2.5
     );
     let err = load(&path).expect_err("out-of-range temperature must fail");
     match err {
-        ConfigError::Temperature(index, value) => {
+        ConfigError::Temperature { index, temperature } => {
             assert_eq!(index, 1, "the second provider is the offender");
-            assert!((value - 2.5).abs() < f32::EPSILON);
+            assert!((temperature - 2.5).abs() < f32::EPSILON);
+            // Rendered one-based and labelled, so it cannot be confused with
+            // the chain's own one-based numbering of the enabled entries.
+            let rendered = ConfigError::Temperature { index, temperature }.to_string();
+            assert!(rendered.contains("#2 in file order"), "got {rendered:?}");
         }
         other => panic!("expected Temperature, got {other:?}"),
     }
+}
+
+/// `providers()` is the failover chain: enabled entries, in file order.
+///
+/// The discriminating case is a disabled entry in the *middle*. A filter that
+/// stopped at the first disabled entry, or one that only skipped a disabled
+/// head, both pass a two-entry fixture.
+#[test]
+fn providers_skips_disabled_entries_and_keeps_file_order() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let path = write_config(
+        &temp,
+        r#"
+[[llm]]
+model = "first"
+
+[[llm]]
+enabled = false
+model = "parked"
+
+[[llm]]
+model = "third"
+"#,
+    );
+
+    let config = load(&path).expect("load");
+    let models: Vec<&str> = config
+        .providers()
+        .iter()
+        .map(|p| p.model.as_deref().expect("model"))
+        .collect();
+    assert_eq!(
+        models,
+        vec!["first", "third"],
+        "a disabled entry is skipped, and the survivors keep their order"
+    );
+}
+
+/// A disabled *head* means the next enabled entry leads the chain.
+///
+/// This is the case the phase existed to fix: parking the local model was
+/// supposed to fall through to the cloud entry below, and instead produced
+/// `NotConfigured` because the head was consulted regardless of `enabled`.
+#[test]
+fn a_disabled_head_falls_through_to_the_next_enabled_entry() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let path = write_config(
+        &temp,
+        r#"
+[[llm]]
+enabled = false
+model = "local"
+
+[[llm]]
+model = "cloud"
+"#,
+    );
+
+    let config = load(&path).expect("load");
+    assert_eq!(
+        config.providers().first().and_then(|p| p.model.as_deref()),
+        Some("cloud"),
+        "the chain leads with the first ENABLED entry, not the first entry"
+    );
+}
+
+/// Every entry disabled is rejected at load, not at the LLM boundary.
+///
+/// Same rule as an empty list: a config that can never produce a passing run
+/// is reported by the code that read the file, naming the file.
+#[test]
+fn a_config_whose_every_provider_is_disabled_is_rejected() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let path = write_config(
+        &temp,
+        r#"
+[[llm]]
+enabled = false
+model = "a"
+
+[[llm]]
+enabled = false
+model = "b"
+"#,
+    );
+    let err = load(&path).expect_err("an all-disabled config must fail");
+    match err {
+        ConfigError::NoEnabledProviders(reported) => assert_eq!(reported, path),
+        other => panic!("expected NoEnabledProviders, got {other:?}"),
+    }
+}
+
+/// An entry that does not mention `enabled` is in the chain.
+///
+/// `enabled` is an opt-*out*. Defaulting it to false made declaring a
+/// provider do nothing until you also enabled it - so a user who hand-wrote a
+/// second `[[llm]]` block by copying the first, minus the `enabled` line, got
+/// a silently inert fallback and no failover.
+#[test]
+fn an_entry_without_an_enabled_key_participates() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let path = write_config(&temp, "[[llm]]\nmodel = \"x\"\n");
+    let config = load(&path).expect("load");
+    assert!(config.llm[0].enabled, "`enabled` defaults to true");
+    assert_eq!(config.providers().len(), 1);
+}
+
+/// `providers()` on a directly-constructed empty `Config` is empty rather
+/// than panicking. `load` cannot produce one, but `Config` is constructible,
+/// and a panic inside a commit gate is worse than an error.
+#[test]
+fn providers_of_an_empty_config_is_empty() {
+    assert!(Config::default().providers().is_empty());
 }

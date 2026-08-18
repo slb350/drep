@@ -7,6 +7,94 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Rust rewrite - 2026-08-18 - Phase 5c: multi-provider LLM failover
+
+`[[llm]]` becomes a real failover chain. `src/llm/chain.rs` tries each enabled
+provider in turn; the analyzer calls it instead of `LlmClient` directly.
+
+A deliberate reversal. The rewrite dropped the circuit breaker and the rate
+limiter as server-shaped complexity, and failover is the same category. It was
+taken for one failure that happens in practice: a local endpoint that is off
+blocks every commit, because exit 2 is a hard stop by design.
+
+**The policy.** Only transport failures advance the chain - status-less
+failures (timeout, refused connection, empty body) plus 408, 429 and 5xx. A 401
+or 403 stops it: that is misconfiguration, and falling back masks it. A
+non-empty body carrying no JSON stops it too, because it is deterministic. An
+*empty* body does fail over: it reaches the chain only after the SDK has
+already retried it, it produced zero output tokens, and a provider that keeps
+answering with nothing is as unusable as one that is down.
+
+**`enabled` flipped to default `true`.** It is an opt-out - the way to park one
+entry of an ordered list. Defaulting it to `false` made declaring a provider do
+nothing until you also enabled it, so a fallback added by copying the first
+block minus its `enabled` line was silently inert. `Config::providers()` is now
+the chain (enabled entries, file order), a disabled head falls through to the
+entry below it, and a config where every entry is disabled is rejected at load
+with its own error rather than at the LLM boundary.
+
+**Demotion is sticky for the run, and checked twice.** "Does the chain advance"
+and "is this failure remembered" are separate questions, and the sticky set is
+the wider one: every endpoint-level failure is remembered, a 401 included,
+because a stale key answers the same way for every file and re-handshaking once
+per file is pure wall-clock on a gate that will exit 2 regardless. The
+remembered reason is then replayed through the failover rule, so a demoted 401
+still *stops* the chain rather than being silently routed around. The first file
+that fails marks that provider down; later files skip it, so a dead endpoint
+does not cost forty-nine files the full backoff schedule each. Files are
+analyzed concurrently, so the check *before* the limiter only stops files that
+had not started - everything already queued passed it before the first failure
+landed. A second check after the slot is granted bounds the waste by
+`max_concurrent` instead of by the file count. Each provider also carries its
+own limiter now, because `max_concurrent` is a per-entry field and the slot
+represents work against one endpoint.
+
+**The cache key moves with the provider.** It is computed inside the loop, once
+per provider tried, and `Served::key` names whoever answered. Keying the head
+and letting the fallback serve would file that answer under a key it did not
+come from, and a later run with the head restored would get a hit that never
+came from the head. This is the bug that would have shipped green under every
+"did the loop advance" test.
+
+**Reporting.** Text output is silent about providers on the happy path and
+prints every provider that served - model, endpoint, file count - once the
+chain falls through, because a silent switch from a local endpoint to a paid
+API is a cost surprise. JSON always carries a `providers` array.
+`FailureReason::ChainFailed` carries every provider's reason including the
+skipped ones, under "no LLM provider analyzed this file" - phrased by what
+happened rather than by a count, since a 401 at the head stops the chain and
+the providers below it are deliberately never asked. It appears **only for a
+chain of two or more**; a single-provider config reports exactly what it did
+before, JSON `kind` included. The trigger is the chain's length rather than the
+number of failures, because those differ exactly where the structure is worth
+most. `doctor` marks
+disabled entries `(disabled - skipped)` and states which of three situations
+the config is in: nothing enabled, one provider and no fallback, or N tried in
+order with the 401/403 exception named.
+
+**Testing: 412 passing** (up from 366), clippy-clean, mutation-clean on the
+staged diff (85 mutants: 38 caught, 47 unviable, 0 missed) and on
+`src/llm/chain.rs` swept whole.
+
+- 21 tests in `src/llm/chain/tests/` across construction, failover policy,
+  cache-key movement and demotion.
+- 8 in `src/analysis/tests/code_quality_failover.rs` for the analyzer join:
+  provider accounting, the `ChainFailed` mapping, the collapse rule, and the
+  actual `cache.put` landing under the serving provider's key.
+- 7 in `src/cli/check/tests/failover_report.rs` for both output formats.
+- 4 new `doctor` tests, 5 new config tests.
+
+The suite was not trusted until three deliberate sabotages were run against it:
+keying on the head instead of the serving provider (3 of 4 `cache_key` tests
+failed), failing over on every status (2 `failover` tests failed), and deleting
+demotion (all 4 `demotion` tests failed).
+
+`unanalyzed_json.rs`'s "every variant renders a distinct kind" test was a
+hand-written list that `ChainFailed` walked straight past. The expected tag is
+now restated as an exhaustive `match`, so a new `FailureReason` variant cannot
+be added without this file failing to compile.
+
+
 ### Rust rewrite - 2026-08-18 - an empty LLM response is a transport failure
 
 The second thing drep's own gated push found. With clippy fixed, the push was
