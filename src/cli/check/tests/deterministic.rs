@@ -28,6 +28,7 @@ use crate::analysis::result::FailureReason;
 use crate::cli::check::deterministic;
 use crate::cli::check::input::Work;
 use crate::diff::hunks::Hunk;
+use crate::test_support::make_executable;
 
 /// Build a `Work` with one whole-file hunk per path. Empty
 /// `read_failures` because deterministic tests start from a clean
@@ -158,15 +159,3 @@ async fn unconfigured_tool_is_skipped_and_adds_no_failure() {
         "Skipped must contribute no failures, got {failures:?}"
     );
 }
-
-/// Mark `path` executable on Unix; no-op elsewhere.
-#[cfg(unix)]
-fn make_executable(path: &std::path::Path) {
-    use std::os::unix::fs::PermissionsExt;
-    let mut perms = std::fs::metadata(path).unwrap().permissions();
-    perms.set_mode(perms.mode() | 0o111);
-    std::fs::set_permissions(path, perms).unwrap();
-}
-
-#[cfg(not(unix))]
-fn make_executable(_path: &std::path::Path) {}

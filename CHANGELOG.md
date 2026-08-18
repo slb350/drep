@@ -7,6 +7,64 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Landed - 2026-08-17 — Phase 5a review-gate fixes
+
+The pre-push gate blocked Phase 5a with exit 2 and 53 advisories. Exit 2 was
+five files coming back `finish_reason='length'` or `'error'` — the truncation
+class again, which 1.x has no type for.
+
+Real defects, three of them in code this session had already touched:
+
+- **A truncated response cut off before `issues` reported as
+  `MalformedFinding`.** The early return for a missing `issues` array did not
+  consult the truncation flag, so the real cause was replaced by a symptom.
+- **The text renderer detached suggestions from their findings.** It printed
+  every finding line and then every suggestion line, so with two findings the
+  first suggestion appeared under the second finding. Only a single-finding
+  fixture could miss it, which is what the acceptance test used.
+- **`resolve_tool` indexed `spec.command[0]`**, panicking on an empty command
+  in a function documented never to panic.
+- **A file whose name begins with `-` was passed to tools as an option.** A
+  repository can contain `--fix`. Guarded with a `./` prefix rather than a
+  `--` separator, because `--` is not accepted uniformly across
+  ruff/eslint/tsc/gofmt/go vet/clippy while `./` is unambiguous to any
+  argument parser.
+
+Three non-discriminating tests:
+
+- `merge_unions_same_path_into_one_entry_keeping_the_first_reason` asserted
+  only things that were already true *before* `merge` ran, so a `merge` that
+  did nothing would have passed.
+- `non_executable_repo_local_path_falls_through_to_path` asserted `None` with
+  nothing on PATH, which a `resolve_tool` that gave up at the non-executable
+  local hit would also satisfy — and it depended on the host not having a
+  `mytool` installed.
+- `request_count` mapped an unavailable mock-server log to `0`, making a broken
+  server indistinguishable from one that received nothing. The tests asserting
+  "no request was made" are exactly the ones that would have passed wrongly.
+
+Test-infrastructure fixes: `PathGuard` now **prepends** to `PATH` instead of
+replacing it — replacing made the fake binary resolvable and `git`
+unresolvable, and `PATH_LOCK` does not help because it excludes other
+PATH-rewriting tests, not the git-shelling ones running concurrently. Two
+`diff` tests failed that way while this was being written. `PATH_LOCK` is also
+taken through a helper that tolerates poisoning, so one panicking test no
+longer cascades into every later one. `make_executable` had five copies across
+four modules and now has one. The gating tests that still called `check::run`
+directly — bypassing the cache seam and writing to the developer's real
+`~/Library/Caches` — go through `run_with`.
+
+Declined, with reasons: `ArgGroup` lacking `required(true)` (bare `drep check`
+meaning "the whole tree" is deliberate and now tested); the unconfigured-tool
+test depending on ambient `PATH` (`tool_status` returns `Skipped` before any
+PATH lookup); Windows `.cmd`/`.exe` resolution and non-UTF-8 paths (both
+already recorded as out of scope); and a TOCTOU window between `metadata` and
+`read_to_string` (the read's result is what is used).
+
+Testing:
+- 284 passing, 2 added
+- Break-tests re-derived; `cargo mutants` 0 missed
+
 ### Landed - 2026-08-17 — Phase 5a: `drep check` end to end
 
 `src/cli/check/{mod,input,deterministic,render}.rs` plus 27 acceptance tests.

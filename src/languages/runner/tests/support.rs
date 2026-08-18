@@ -5,8 +5,6 @@
 //! cargo never compiled them and appending invalid Rust did not fail the build.
 //! If you add a file here, declare it in this directory's `mod.rs`.
 
-use std::path::Path;
-
 use crate::languages::spec::ToolSpec;
 
 /// A minimal ruff-shaped spec for parser tests, avoiding the real
@@ -67,17 +65,6 @@ pub(crate) fn clippy_like_spec() -> ToolSpec {
     }
 }
 
-// ---- helpers ----
-
-/// Mark a file executable on unix; no-op elsewhere.
-pub(crate) fn make_executable(path: &Path) {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mut perms = std::fs::metadata(path).unwrap().permissions();
-        perms.set_mode(perms.mode() | 0o111);
-        std::fs::set_permissions(path, perms).unwrap();
-    }
-    #[cfg(not(unix))]
-    let _ = path;
-}
+/// Re-exported so this suite's `use super::support::*` importers reach the
+/// crate-wide helper rather than a local copy.
+pub(crate) use crate::test_support::make_executable;

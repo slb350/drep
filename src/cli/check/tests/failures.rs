@@ -53,6 +53,11 @@ fn merge_unions_same_path_into_one_entry_keeping_the_first_reason() {
         },
     );
 
+    // `second` carries the colliding path AND a path of its own. Without the
+    // second path every assertion below is already true before `merge` runs -
+    // `first` starts with one entry holding the 429 - so a `merge` that did
+    // nothing at all would pass.
+    let other = PathBuf::from("src/other.rs");
     let mut second = AnalysisResult::default();
     second.failed_files.insert(
         path.clone(),
@@ -61,13 +66,20 @@ fn merge_unions_same_path_into_one_entry_keeping_the_first_reason() {
             message: "internal".to_owned(),
         },
     );
+    second
+        .failed_files
+        .insert(other.clone(), FailureReason::Truncated);
 
     first.merge(second);
 
     assert_eq!(
         first.failed_files.len(),
-        1,
-        "two failed_files entries on the same path must union into one"
+        2,
+        "the colliding path unions into one entry and the new path is added"
+    );
+    assert!(
+        first.failed_files.contains_key(&other),
+        "a no-op merge would leave this absent"
     );
     let kept = first
         .failed_files

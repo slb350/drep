@@ -9,6 +9,8 @@ use tempfile::TempDir;
 
 use super::support::*;
 use crate::languages::runner::*;
+use crate::languages::spec::ToolSpec;
+use crate::test_support::PathGuard;
 
 // ---- resolve_tool ----
 
@@ -28,12 +30,28 @@ fn repo_local_executable_is_preferred_over_path() {
     assert_eq!(resolve_tool(&spec, dir.path()), Some(bin));
 }
 
+/// A non-executable repo-local hit is skipped, and resolution continues to
+/// PATH rather than stopping.
+///
+/// The fallthrough is the half that needs an executable on PATH to observe.
+/// Asserting only `None` proved nothing: a `resolve_tool` that returned `None`
+/// the moment it saw a non-executable local path would pass identically, and
+/// the assertion also depended on the host not happening to have a `mytool`
+/// installed.
 #[test]
 fn non_executable_repo_local_path_falls_through_to_path() {
-    let _guard = crate::test_support::PATH_LOCK.lock().unwrap();
+    let _guard = crate::test_support::lock_path();
     let dir = TempDir::new().unwrap();
-    // exists, but not executable - must be skipped, not picked.
+
+    // Repo-local hit that exists but is not executable: must be skipped.
     std::fs::write(dir.path().join("mytool"), "not executable").unwrap();
+
+    // The same name, executable, on PATH. Resolution must reach it.
+    let path_dir = TempDir::new().unwrap();
+    let on_path = path_dir.path().join("mytool");
+    std::fs::write(&on_path, "#!/bin/sh\nexit 0\n").unwrap();
+    make_executable(&on_path);
+    let _path = PathGuard::set(path_dir.path());
 
     let spec = ToolSpec {
         local_paths: &["mytool"],
@@ -41,17 +59,11 @@ fn non_executable_repo_local_path_falls_through_to_path() {
         ..ToolSpec::default()
     };
 
-    // Falls through to PATH; `/bin/echo` is on every unix.
-    assert_eq!(resolve_tool(&spec, dir.path()), None);
-    let resolved = resolve_tool(
-        &ToolSpec {
-            local_paths: &[],
-            command: &["echo"],
-            ..ToolSpec::default()
-        },
-        dir.path(),
+    assert_eq!(
+        resolve_tool(&spec, dir.path()),
+        Some(on_path),
+        "the non-executable local hit must be skipped and PATH consulted"
     );
-    assert!(resolved.is_some(), "/bin/echo should be on PATH");
 }
 
 #[test]
@@ -119,4 +131,55 @@ fn passed_is_false_only_for_unavailable() {
     assert!(outcome.passed());
     outcome.status = ToolStatus::Unavailable;
     assert!(!outcome.passed());
+}
+
+/// A file whose name begins with `-` is passed as a path, not an option.
+///
+/// A repository can legitimately contain `--fix`, and every checker drep runs
+/// would read that as a flag. The guard is a `./` prefix rather than a `--`
+/// separator, because `--` is not universally accepted across
+/// ruff/eslint/tsc/gofmt/go vet/clippy while `./` is unambiguous to any
+/// argument parser.
+///
+/// Resolves the fake tool through `local_paths`, not `PATH`. `PathGuard`
+/// *replaces* `PATH` for its lifetime, and only tests that take `PATH_LOCK`
+/// are excluded by it - so a concurrent test shelling out to `git` would stop
+/// finding it. Repo-local resolution needs no global state at all.
+#[tokio::test]
+async fn a_filename_that_looks_like_a_flag_is_passed_as_a_path() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let bin = dir.path().join("bin");
+    std::fs::create_dir_all(&bin).expect("mkdir bin");
+    let tool = bin.join("argvdump");
+    std::fs::write(
+        &tool,
+        format!(
+            "#!/bin/sh\nfor a in \"$@\"; do echo \"$a\"; done > {}/argv.txt\nexit 0\n",
+            dir.path().display()
+        ),
+    )
+    .expect("write tool");
+    make_executable(&tool);
+    std::fs::write(dir.path().join("pyproject.toml"), "").expect("config");
+
+    let spec = ToolSpec {
+        name: "argvdump",
+        command: &["argvdump"],
+        local_paths: &["bin/argvdump"],
+        config_files: &["pyproject.toml"],
+        output_format: "lines",
+        diagnostics_stream: "stdout",
+    };
+
+    let _ = run_tool(&spec, dir.path(), &["--fix".to_owned()]).await;
+
+    let argv = std::fs::read_to_string(dir.path().join("argv.txt")).unwrap_or_default();
+    assert!(
+        argv.lines().any(|a| a == "./--fix"),
+        "a dash-leading filename must reach the tool as `./--fix`, got: {argv:?}"
+    );
+    assert!(
+        !argv.lines().any(|a| a == "--fix"),
+        "it must not reach the tool as a bare option: {argv:?}"
+    );
 }

@@ -21,6 +21,7 @@ use std::process::Command;
 use serde_json::Value;
 use wiremock::MockServer;
 
+use crate::test_support::make_executable;
 use crate::test_support::mount_sse;
 use crate::test_support::sse;
 
@@ -70,18 +71,6 @@ async fn mount_llm(server: &MockServer, body: &str) {
     )
     .await;
 }
-
-/// Mark `path` executable on Unix; no-op elsewhere.
-#[cfg(unix)]
-fn make_executable(path: &Path) {
-    use std::os::unix::fs::PermissionsExt;
-    let mut perms = std::fs::metadata(path).unwrap().permissions();
-    perms.set_mode(perms.mode() | 0o111);
-    std::fs::set_permissions(path, perms).unwrap();
-}
-
-#[cfg(not(unix))]
-fn make_executable(_path: &Path) {}
 
 // ---------- 19 ----------
 
@@ -386,5 +375,55 @@ fn json_exit_matches_the_gate_when_an_llm_finding_does_not_block() {
             .expect("findings array")
             .is_empty(),
         "the finding must still be reported, just not blocking: {stdout}"
+    );
+}
+
+/// Each suggestion is written directly beneath the finding it belongs to.
+///
+/// The renderer used to print every finding line and then every suggestion
+/// line, so with two findings the first suggestion appeared below the second
+/// finding and read as if it belonged to it. Only a single-finding fixture
+/// could miss this, which is what criterion 19 uses.
+#[test]
+fn each_suggestion_follows_its_own_finding() {
+    use crate::analysis::findings::{Finding, Severity};
+    use crate::cli::OutputFormat;
+    use crate::cli::check::{CheckOutcome, render};
+    use std::collections::BTreeMap;
+
+    let finding = |line: u32, message: &str, suggestion: &str| Finding {
+        kind: "bug".to_owned(),
+        severity: Severity::Error,
+        file_path: "src/lib.rs".to_owned(),
+        line,
+        column: None,
+        message: message.to_owned(),
+        suggestion: Some(suggestion.to_owned()),
+    };
+
+    let outcome = CheckOutcome {
+        tool_findings: vec![
+            finding(1, "first", "fix one"),
+            finding(2, "second", "fix two"),
+        ],
+        llm_findings: Vec::new(),
+        failures: BTreeMap::new(),
+        exit: crate::Exit::FoundIssues,
+    };
+
+    let mut buf: Vec<u8> = Vec::new();
+    render::render_to(&mut buf, &outcome, OutputFormat::Text).expect("render");
+    let text = String::from_utf8(buf).expect("utf8");
+
+    let lines: Vec<&str> = text.lines().collect();
+    assert_eq!(
+        lines,
+        vec![
+            "src/lib.rs:1: error [tool/bug] first",
+            "    suggestion: fix one",
+            "src/lib.rs:2: error [tool/bug] second",
+            "    suggestion: fix two",
+        ],
+        "each suggestion must directly follow its own finding, got:\n{text}"
     );
 }

@@ -129,7 +129,12 @@ pub fn resolve_tool(spec: &ToolSpec, root: &Path) -> Option<PathBuf> {
         }
     }
 
-    which_first(spec.command[0]).map(PathBuf::from)
+    // `first()`, not `[0]`. A `ToolSpec` with an empty `command` is a
+    // definitions bug, but this function is documented never to panic and a
+    // panic here would take the whole gate down rather than reporting the
+    // tool unavailable.
+    let name = spec.command.first()?;
+    which_first(name).map(PathBuf::from)
 }
 
 /// Look up `command` on PATH, mirroring `shutil.which` from the Python
@@ -227,7 +232,18 @@ pub async fn run_tool(spec: &ToolSpec, root: &Path, files: &[String]) -> ToolOut
     let mut argv: Vec<String> = Vec::with_capacity(spec.command.len() + files.len());
     argv.push(executable.to_string_lossy().into_owned());
     argv.extend(spec.command[1..].iter().map(|s| (*s).to_owned()));
-    argv.extend(files.iter().cloned());
+    // A repository can contain a file whose name begins with `-`, and every
+    // checker here would read `--fix` as an option rather than a path. `--`
+    // is the conventional guard but is not universally supported across
+    // ruff/eslint/tsc/gofmt/go vet/clippy, whereas a `./` prefix is
+    // unambiguous to any argument parser and leaves ordinary paths untouched.
+    argv.extend(files.iter().map(|f| {
+        if f.starts_with('-') {
+            format!("./{f}")
+        } else {
+            f.clone()
+        }
+    }));
 
     let mut command = Command::new(&argv[0]);
     command.args(&argv[1..]);

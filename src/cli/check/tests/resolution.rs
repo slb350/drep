@@ -15,40 +15,11 @@
 //! the second branch the only path that can return a value - so what
 //! this test pins is exactly the `which_first` behaviour the spec wants.
 
-use std::ffi::OsString;
 use std::path::Path;
 
 use crate::languages::runner::resolve_tool;
 use crate::languages::spec::ToolSpec;
-
-/// Set `PATH` to exactly `dir` for the lifetime of the returned guard.
-/// On drop, restores whatever `PATH` was at construction.
-struct PathGuard {
-    original: Option<OsString>,
-}
-
-impl PathGuard {
-    fn set(path: &Path) -> Self {
-        let original = std::env::var_os("PATH");
-        let joined = std::env::join_paths([path]).expect("single dir joins");
-        // SAFETY: this test takes `PATH_LOCK` for its entire lifetime, so
-        // no other test can read PATH while we hold it.
-        unsafe { std::env::set_var("PATH", joined) };
-        Self { original }
-    }
-}
-
-impl Drop for PathGuard {
-    fn drop(&mut self) {
-        // SAFETY: see `set`.
-        unsafe {
-            match self.original.take() {
-                Some(prev) => std::env::set_var("PATH", prev),
-                None => std::env::remove_var("PATH"),
-            }
-        }
-    }
-}
+use crate::test_support::{PathGuard, make_executable};
 
 /// Criterion 24: the PATH lookup rejects a non-executable PATH entry
 /// and accepts the same file once the executable bit is set.
@@ -58,7 +29,7 @@ impl Drop for PathGuard {
 /// bit would fail the first.
 #[test]
 fn path_lookup_skips_non_executable_then_returns_it_when_executable() {
-    let _guard = crate::test_support::PATH_LOCK.lock().unwrap();
+    let _guard = crate::test_support::lock_path();
 
     let dir = tempfile::tempdir().expect("tempdir");
     let tool = dir.path().join("mytool");
@@ -94,17 +65,3 @@ fn path_lookup_skips_non_executable_then_returns_it_when_executable() {
     drop(path_guard);
     drop(_guard);
 }
-
-/// Mark `path` executable on Unix; no-op elsewhere. Mirrors the helper
-/// in `runner/tests/support.rs` rather than depending on that path -
-/// `pub(crate)` re-exports across test subdirectories get fragile.
-#[cfg(unix)]
-fn make_executable(path: &Path) {
-    use std::os::unix::fs::PermissionsExt;
-    let mut perms = std::fs::metadata(path).unwrap().permissions();
-    perms.set_mode(perms.mode() | 0o111);
-    std::fs::set_permissions(path, perms).unwrap();
-}
-
-#[cfg(not(unix))]
-fn make_executable(_path: &Path) {}

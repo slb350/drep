@@ -56,11 +56,15 @@ pub(crate) fn sse(parts: &[&str]) -> String {
 
 /// How many requests the mock server received.
 pub(crate) async fn request_count(server: &MockServer) -> usize {
+    // `expect`, not `unwrap_or(0)`. Mapping an unavailable request log to zero
+    // makes a broken mock server indistinguishable from one that genuinely
+    // received nothing - and the tests that assert "no request was made" are
+    // exactly the ones that would then pass for the wrong reason.
     server
         .received_requests()
         .await
-        .map(|reqs| reqs.len())
-        .unwrap_or(0)
+        .expect("the mock server must be recording requests")
+        .len()
 }
 
 /// Build a client through the production `LlmClient::new`, then shrink only the
@@ -113,3 +117,76 @@ pub(crate) async fn mount_sse(server: &MockServer, template: ResponseTemplate) {
 /// one here and one in `cli::check::tests::resolution`, which is the failure
 /// mode the lock exists to prevent.
 pub(crate) static PATH_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Take [`PATH_LOCK`], ignoring poisoning.
+///
+/// A test that panics while holding the lock poisons it, and every later
+/// `.lock().unwrap()` then panics on the poison rather than on its own
+/// assertion - turning one real failure into a cascade that hides it. The
+/// guarded data is `()`, so there is no invariant for poisoning to protect.
+pub(crate) fn lock_path() -> std::sync::MutexGuard<'static, ()> {
+    PATH_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// Mark a file executable on unix; a no-op elsewhere.
+///
+/// Crate-wide because five copies of this existed across four test modules,
+/// each a `#[cfg(unix)]`/`#[cfg(not(unix))]` pair. `expect`, not `unwrap`, so
+/// a failure names what went wrong rather than pointing at a line number in a
+/// helper.
+pub(crate) fn make_executable(path: &std::path::Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = std::fs::metadata(path)
+            .expect("the file must exist before its mode is changed")
+            .permissions();
+        perms.set_mode(perms.mode() | 0o111);
+        std::fs::set_permissions(path, perms).expect("setting the executable bit must succeed");
+    }
+    #[cfg(not(unix))]
+    let _ = path;
+}
+
+/// Prepend `dir` to `PATH` for the guard's lifetime, restoring it on drop.
+///
+/// **Prepends rather than replaces.** Replacing `PATH` outright made the fake
+/// binary resolvable but also made `git` unresolvable, and `PATH_LOCK` does
+/// not help: it excludes other *PATH-rewriting* tests, not the git-shelling
+/// ones running concurrently in the same process. Two `diff` tests failed that
+/// way. Prepending gives the fake directory priority, which is all these tests
+/// need, and leaves everything else on `PATH` findable.
+///
+/// Callers must still hold [`lock_path`]: `PATH` is process-global, so two
+/// tests rewriting it concurrently would see each other's value.
+pub(crate) struct PathGuard {
+    original: Option<std::ffi::OsString>,
+}
+
+impl PathGuard {
+    pub(crate) fn set(path: &std::path::Path) -> Self {
+        let original = std::env::var_os("PATH");
+        let existing = original.clone().unwrap_or_default();
+        let mut dirs = vec![path.to_path_buf()];
+        dirs.extend(std::env::split_paths(&existing));
+        let joined = std::env::join_paths(dirs).expect("the directories join");
+        // SAFETY: the caller holds `PATH_LOCK`, so no other test reads or
+        // writes PATH while this guard is alive.
+        unsafe { std::env::set_var("PATH", joined) };
+        Self { original }
+    }
+}
+
+impl Drop for PathGuard {
+    fn drop(&mut self) {
+        // SAFETY: see `set`.
+        unsafe {
+            match self.original.take() {
+                Some(prev) => std::env::set_var("PATH", prev),
+                None => std::env::remove_var("PATH"),
+            }
+        }
+    }
+}

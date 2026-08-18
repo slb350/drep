@@ -257,10 +257,15 @@ fn parse_response(
     // The response shape is `{"issues": [...], "summary": "..."}`. Anything
     // else is malformed, and the whole file is unanalyzed.
     let Some(issues) = value.get("issues").and_then(Value::as_array) else {
-        result.failed_files.insert(
-            file_path.to_path_buf(),
-            FailureReason::MalformedFinding("response has no `issues` array".to_owned()),
-        );
+        // Truncation wins over "no `issues` array": a response cut off before
+        // it reached `issues` has no array *because* it was truncated, and
+        // reporting that as a malformed record hides the real cause.
+        let reason = if truncated {
+            FailureReason::Truncated
+        } else {
+            FailureReason::MalformedFinding("response has no `issues` array".to_owned())
+        };
+        result.failed_files.insert(file_path.to_path_buf(), reason);
         return result;
     };
 

@@ -22,6 +22,7 @@ use crate::analysis::findings::Severity;
 use crate::cli::OutputFormat;
 use crate::cli::check::{self, CheckArgs};
 use crate::llm::cache::Cache;
+use crate::test_support::make_executable;
 use crate::test_support::mount_sse;
 use crate::test_support::sse;
 
@@ -234,7 +235,7 @@ async fn llm_finding_at_error_blocks_under_fail_on_error() {
         format: OutputFormat::Text,
         fail_on: Some(Severity::Error),
     };
-    let exit = check::run(&args, dir.path()).await.expect("ok");
+    let exit = run_paths_with(&args, dir.path()).await;
     assert_eq!(
         exit,
         check::Exit::FoundIssues,
@@ -266,7 +267,7 @@ async fn llm_finding_at_warning_does_not_block_under_fail_on_error() {
         format: OutputFormat::Text,
         fail_on: Some(Severity::Error),
     };
-    let exit = check::run(&args, dir.path()).await.expect("ok");
+    let exit = run_paths_with(&args, dir.path()).await;
     assert_eq!(
         exit,
         check::Exit::Clean,
@@ -314,7 +315,7 @@ async fn failure_outranks_finding() {
         format: OutputFormat::Text,
         fail_on: None,
     };
-    let exit = check::run(&args, dir.path()).await.expect("ok");
+    let exit = run_paths_with(&args, dir.path()).await;
     assert_eq!(
         exit,
         check::Exit::Unanalyzed,
@@ -365,15 +366,3 @@ max_retries = 1
 }
 
 // ---------- shared helpers ----------
-
-/// Mark `path` executable on Unix; no-op elsewhere.
-#[cfg(unix)]
-fn make_executable(path: &std::path::Path) {
-    use std::os::unix::fs::PermissionsExt;
-    let mut perms = std::fs::metadata(path).unwrap().permissions();
-    perms.set_mode(perms.mode() | 0o111);
-    std::fs::set_permissions(path, perms).unwrap();
-}
-
-#[cfg(not(unix))]
-fn make_executable(_path: &std::path::Path) {}
