@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Landed - 2026-08-17 — `ToolOutcome::passed` removed
+
+The gate flagged `passed()` as letting a commit through despite findings. The
+premise was wrong — it had **zero production callers**, and Phase 5a's gate
+reads `tool_findings` and `failures` directly — but the name and doc were
+genuinely misleading: "safe to treat as nothing wrong here" reads as "no
+findings" when it meant "the tool got to look". A test-shaped method with a
+misleading name is a trap for the phases that build on it, so it is gone, and
+with it a test that only asserted field equality on values it had just set. The
+invariant it claimed lives in `unavailable_tool_marks_every_file_in_the_batch_as_failed`.
+
 ### Landed - 2026-08-17 — Phase 5a review-gate, round two
 
 The gate blocked again with six `error`-severity findings. Four were real, and

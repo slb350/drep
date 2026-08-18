@@ -114,24 +114,6 @@ fn tool_status_unavailable_when_configured_but_binary_missing() {
     assert_eq!(outcome.status, ToolStatus::Unavailable);
 }
 
-#[test]
-fn passed_is_false_only_for_unavailable() {
-    // The invariant that matters most: an unavailable tool must never
-    // read as a pass. Skipped and Ok both genuinely mean the tool got
-    // to look at the code (or deliberately chose not to).
-    let mut outcome = ToolOutcome {
-        tool: "ruff",
-        status: ToolStatus::Ok,
-        findings: vec![],
-        detail: String::new(),
-    };
-    assert!(outcome.passed());
-    outcome.status = ToolStatus::Skipped;
-    assert!(outcome.passed());
-    outcome.status = ToolStatus::Unavailable;
-    assert!(!outcome.passed());
-}
-
 /// A file whose name begins with `-` is passed as a path, not an option.
 ///
 /// A repository can legitimately contain `--fix`, and every checker drep runs

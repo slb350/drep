@@ -61,18 +61,6 @@ pub struct ToolOutcome {
     pub detail: String,
 }
 
-impl ToolOutcome {
-    /// Whether this outcome is safe to treat as "nothing wrong here".
-    ///
-    /// `Unavailable` is not: the check never happened. The Rust type makes
-    /// that impossible to forget - `passed()` only returns `true` for `Ok`
-    /// and `Skipped`, both of which genuinely mean the tool got to look at
-    /// the code (or deliberately chose not to).
-    pub const fn passed(&self) -> bool {
-        !matches!(self.status, ToolStatus::Unavailable)
-    }
-}
-
 /// The tool produced output we could not parse.
 ///
 /// Raised rather than swallowed: unparseable output means we do not know
