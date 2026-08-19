@@ -7,6 +7,71 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Rust rewrite - 2026-08-19 - Phase 7: cargo-dist
+
+`cargo-dist` 0.32.0 is still current: published 2026-05-21, and both the latest
+GitHub release and the latest version on crates.io. The version the migration
+doc pinned holds. Its config *location* does not. `dist init` writes a
+`dist-workspace.toml` with a `[dist]` table, and the `[workspace.metadata.dist]`
+block in `Cargo.toml` that the doc's snippet used is the older variant, the one
+`dist migrate` exists to convert. The snippet has been corrected in place.
+
+A release builds four targets, each on a runner of its own architecture:
+`aarch64-apple-darwin` on macos-14, `x86_64-apple-darwin` on macos-15-intel,
+`x86_64-unknown-linux-gnu` on ubuntu-22.04 and `aarch64-unknown-linux-gnu` on
+ubuntu-22.04-arm. Nothing cross-compiles, so no `cross` container and no zig in
+CI. Locally that is the one sharp edge: a bare `dist build --artifacts=local`
+tries to produce every target from this machine and asks for `cargo-zigbuild`,
+where CI passes `--target=<triple>` per runner.
+
+The Homebrew formula is named `drep` while the crate stays `drep-ai`, which
+carries the suffix because `drep` is taken on crates.io exactly as it is on
+PyPI. A tap is namespaced by its owner and has no such conflict, so the formula
+matches the binary: `brew install slb350/tap/drep`.
+
+`[profile.dist]` adds nothing to `[profile.release]`. `dist init` writes it as
+`inherits = "release"` plus `lto = "thin"`, which is its own build-time default
+rather than a judgement about this crate, and it would have reverted the fat
+LTO, the single codegen unit and the `strip` that `[profile.release]` sets for
+the only binaries anyone installs. `dist init` leaves an existing
+`[profile.dist]` alone, verified by running it twice, so the pruned profile
+survives regeneration.
+
+`tests/release_config.rs` pins five facts across the two generated files, on
+the same reasoning as `tests/published_hooks.rs`: nothing else in the suite
+reads them, and the first sign of a mistake is a release that already happened.
+Four are the config (the target list, the installer pair, the tap and the
+publish job, the formula name); the fifth compares `cargo-dist-version` against
+the `dist` release URL baked into `release.yml`, which catches the config being
+edited without `dist init` being re-run - a release planned by a version of
+`dist` that never saw the change.
+
+The `/simplify` pass moved the comment-stripping reader out of both test
+files. `published_hooks.rs` had it first and `release_config.rs` transcribed
+it, which is the duplication `src/test_support.rs` exists to prevent - except
+integration tests are separate crates and cannot see a `pub(crate)` module, so
+their sharing point is `tests/common/mod.rs`. It also split the assertion
+style: the two generated files stay textual, and the `[profile.dist]` check now
+parses `Cargo.toml` and compares the key set, because that file is hand-edited
+here and reformatting the line is not the mistake being guarded against.
+
+Verified without cutting a release. `dist plan` emits the four archives plus
+`drep-ai-installer.sh`, `drep.rb`, `source.tar.gz` and `sha256.sum`, with
+`README.md`, `CHANGELOG.md` and `LICENSE` in each archive.
+`dist build --artifacts=local --target=aarch64-apple-darwin` produced
+`drep-ai-aarch64-apple-darwin.tar.xz` in 45s; the extracted binary is a 3.5 MB
+arm64 Mach-O that reports `drep 2.0.0-alpha.0`. `dist build --artifacts=global`
+renders the formula with a URL for all four platforms.
+`.github/workflows/release.yml` is a new file and `rust.yml` is untouched, so
+the mutation sweep stays the local full sweep it has to be.
+
+**The tap and its token are still missing**, and the version number is what
+hides it. `slb350/homebrew-tap` does not exist and `slb350/drep` has no secrets,
+so `publish-homebrew-formula` would fail at checkout - but dist gates that job
+on `!announcement_is_prerelease`, and `2.0.0-alpha.0` is a prerelease, so it
+skips. An alpha tag would release cleanly today and push no formula. The first
+stable tag is where both prerequisites become load-bearing.
+
 ### Rust rewrite - 2026-08-19 - Phase 7: what drep installs now runs `lint-docs`
 
 Three wiring gaps between the command Phase 6 shipped and the hooks drep hands

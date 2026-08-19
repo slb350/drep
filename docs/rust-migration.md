@@ -665,28 +665,34 @@ one is the more obvious:
   bug and the same fix.
 
 ### Phase 7 — Distribution
-`cargo-dist` 0.32 (repo active as of 2026-08-17) generates the release
-workflow, multi-arch binaries, the shell installer, **and** the Homebrew
-formula pushed to a `slb350/homebrew-tap` repo. Config:
+`cargo-dist` 0.32 generates the release workflow, multi-arch binaries, the
+shell installer, **and** the Homebrew formula pushed to a `slb350/homebrew-tap`
+repo. Verified again 2026-08-19: 0.32.0 (2026-05-21) is still the latest GitHub
+release and the latest on crates.io. Config lives in `dist-workspace.toml`,
+which is what `dist init` writes; the `[workspace.metadata.dist]` block in
+`Cargo.toml` this doc used to show is the older variant that `dist migrate`
+converts.
 
 ```toml
-[workspace.metadata.dist]
+[dist]
+cargo-dist-version = "0.32.0"
+ci = "github"
 installers = ["shell", "homebrew"]
+targets = [
+  "aarch64-apple-darwin", "aarch64-unknown-linux-gnu",
+  "x86_64-apple-darwin", "x86_64-unknown-linux-gnu",
+]
+hosting = "github"
 tap = "slb350/homebrew-tap"
 publish-jobs = ["homebrew"]
-targets = [
-  "aarch64-apple-darwin", "x86_64-apple-darwin",
-  "x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu",
-]
+formula = "drep"
 ```
 
 Requires a `HOMEBREW_TAP_TOKEN` secret with `repo` scope, and the
-`slb350/homebrew-tap` repository to exist. Version verified again 2026-08-18:
-cargo-dist is still 0.32.0, so the block above is current.
+`slb350/homebrew-tap` repository to exist.
 
-Also rewrite `.pre-commit-hooks.yaml` to `language: rust` (or `language: system`
-against the installed binary) — the current `language: python` entry dies with
-the package.
+Also rewrite `.pre-commit-hooks.yaml` to `language: rust` ✅ (2026-08-19) — the
+`language: python` entry it replaced dies with the package.
 
 **Two `lint-docs` wiring gaps carried from Phase 6 ✅ (2026-08-19).** Both were
 about the same thing: the command shipped, and nothing that drep *installs* ran
@@ -732,8 +738,21 @@ runs `drep lint-docs --staged --fail-on error` before `drep check --staged`.
 by `tests/published_hooks.rs`. Renderer says "(none at or above <severity>)"
 when a threshold was in force and nothing reached it.
 
-**Still open in this phase:** cargo-dist itself, which is blocked on the
-`slb350/homebrew-tap` repository existing and a `HOMEBREW_TAP_TOKEN` secret.
+**cargo-dist shipped 2026-08-19.** `dist-workspace.toml` and the generated
+`.github/workflows/release.yml` are in the tree; `tests/release_config.rs` pins
+the targets, the installers, the tap, the formula name, and that the pinned
+`dist` version is the one `release.yml` installs. `[profile.dist]` inherits
+`[profile.release]` and overrides nothing, so a shipped binary is what
+`cargo build --release` produces. All four targets build on native runners.
+Verified by `dist plan`, `dist build --artifacts=local --target=<host>` and
+`dist build --artifacts=global`.
+
+**Still open in this phase:** the two prerequisites a release needs, neither of
+which is created from here - the `slb350/homebrew-tap` repository, and a
+`HOMEBREW_TAP_TOKEN` secret with `repo` scope on `slb350/drep`. They do not
+block a prerelease: dist gates `publish-homebrew-formula` on
+`!announcement_is_prerelease`, so a `v2.0.0-alpha.N` tag skips it and releases
+the binaries and the shell installer. They block the first stable tag.
 
 ### Phase 8 — Delete Python
 Remove `drep/`, `tests/`, `pyproject.toml`, `scripts/install.sh`. Rewrite

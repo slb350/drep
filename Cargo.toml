@@ -69,3 +69,11 @@ strip = true
 # main.rs turns every error into an ExitCode rather than panicking, so nothing
 # depends on unwinding. Measured at -13% binary size with no build-time cost.
 panic = "abort"
+
+# The profile a release is built with. `dist init` writes this as `inherits =
+# "release"` plus `lto = "thin"`, which is its own build-time default rather
+# than a judgement about this crate - and it would revert the fat LTO above for
+# the only binaries anyone installs. Adding nothing here is the point: what
+# users run is what `cargo build --release` produces.
+[profile.dist]
+inherits = "release"

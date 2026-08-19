@@ -7,18 +7,15 @@
 //! are deliberately textual: adding a YAML parser to state four facts about a
 //! 40-line file is a dependency for no gain.
 
+mod common;
+
 /// The file with its comments stripped.
 ///
 /// The comments explain what each setting replaced - `language: python`,
 /// `--strict` - so asserting over the raw text matches the explanation of the
 /// old value as if it were still in force.
 fn hooks_yaml() -> String {
-    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/.pre-commit-hooks.yaml");
-    let raw = std::fs::read_to_string(path).expect(".pre-commit-hooks.yaml must be readable");
-    raw.lines()
-        .filter(|line| !line.trim_start().starts_with('#'))
-        .collect::<Vec<_>>()
-        .join("\n")
+    common::without_comments(".pre-commit-hooks.yaml")
 }
 
 /// 2.0 is a Rust binary. `language: python` builds an isolated environment
