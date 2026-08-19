@@ -34,6 +34,7 @@ fn expected_kind(reason: &FailureReason) -> &'static str {
     match reason {
         FailureReason::Transport { .. } => "transport",
         FailureReason::Unparseable(_) => "unparseable",
+        FailureReason::ModelStopped { .. } => "model_stopped",
         FailureReason::Truncated => "truncated",
         FailureReason::MalformedFinding(_) => "malformed_finding",
         FailureReason::ToolUnavailable { .. } => "tool_unavailable",
@@ -57,6 +58,10 @@ fn each_failure_variant_renders_its_own_kind_tag() {
             message: "boom".to_owned(),
         },
         FailureReason::Unparseable("no json".to_owned()),
+        FailureReason::ModelStopped {
+            finish: "length".to_owned(),
+            message: "the model hit its output token limit".to_owned(),
+        },
         FailureReason::Truncated,
         FailureReason::MalformedFinding("bad severity".to_owned()),
         FailureReason::ToolUnavailable {

@@ -32,7 +32,7 @@ use std::time::Duration;
 
 use futures::StreamExt;
 use open_agent::retry::{RetryConfig, retry_with_backoff_conditional};
-use open_agent::{AgentOptions, ContentBlock, query};
+use open_agent::{AgentOptions, ContentBlock, FinishReason, StreamEvent, query};
 use thiserror::Error;
 
 use crate::config::LlmConfig;
@@ -112,6 +112,19 @@ pub enum LlmError {
     #[error("LLM response was unparseable: {0}")]
     Unparseable(String),
 
+    /// The model stopped before producing any JSON, and the server said why.
+    ///
+    /// Deterministic in a way [`Self::Unparseable`] is not: the request hit a
+    /// limit, so asking again hits the same one. `finish` is the server's own
+    /// word for it, kept as a machine tag beside the human `message` - the same
+    /// shape as [`Self::Transport`]'s `status`, and for the same reason.
+    ///
+    /// It is about the *request*, never the endpoint, so it must not fail over
+    /// and must not demote the provider. A second provider cannot make a file
+    /// smaller.
+    #[error("{message}")]
+    ModelStopped { finish: String, message: String },
+
     /// Configuration is incomplete (LLM disabled, no endpoint, no model).
     /// Surfaced at construction so the binary can fail fast instead of
     /// running a gate that will silently never analyze anything.
@@ -131,7 +144,9 @@ impl LlmError {
     pub fn status(&self) -> Option<u16> {
         match self {
             LlmError::Transport { status, .. } => *status,
-            LlmError::Unparseable(_) | LlmError::NotConfigured(_) => None,
+            LlmError::Unparseable(_)
+            | LlmError::ModelStopped { .. }
+            | LlmError::NotConfigured(_) => None,
         }
     }
 }
@@ -271,7 +286,19 @@ impl LlmClient {
 
             match result {
                 Ok(Answer::Parsed(extracted)) => return Ok(extracted),
-                Ok(Answer::NoJson(body)) => last_body = body,
+                // The server said why it stopped, and the reason rules out a
+                // retry: the request hit a limit, so the same request hits the
+                // same limit. This is the genuinely deterministic case the
+                // original "never retry a non-empty body" rule was reaching
+                // for - it just used "no JSON in the body" as the proxy, which
+                // is not the same question.
+                Ok(Answer::NoJson { text, finish }) if !worth_asking_again(&finish) => {
+                    return Err(LlmError::ModelStopped {
+                        finish: finish.as_str().to_owned(),
+                        message: stopped_message(&finish, &text),
+                    });
+                }
+                Ok(Answer::NoJson { text, .. }) => last_body = text,
                 Err(e) => {
                     // The SDK exposes the status code separately (via
                     // `status_code`); reading it before formatting means the
@@ -306,10 +333,25 @@ impl LlmClient {
     ) -> open_agent::Result<Answer> {
         let mut stream = query(prompt, options).await?;
         let mut text = String::new();
-        while let Some(block) = stream.next().await {
-            // Image, ToolUse, ToolResult are not used here.
-            if let ContentBlock::Text(t) = block? {
-                text.push_str(&t.text);
+        // `Unspecified` is the right default rather than a panic-if-absent:
+        // several OpenAI-compatible servers never report a reason at all, and
+        // "no information" is a distinct answer from "stopped normally".
+        let mut finish = FinishReason::Unspecified;
+        while let Some(event) = stream.next().await {
+            match event? {
+                // Image, ToolUse, ToolResult are not used here.
+                StreamEvent::Block(ContentBlock::Text(t)) => text.push_str(&t.text),
+                StreamEvent::Finish(reason) => finish = reason,
+                // Everything else is discarded, and that is the contract:
+                // `text` holds assistant text and nothing else. It covers the
+                // non-text blocks drep has no use for, the `Reasoning` side
+                // channel (opt-in, and drep does not opt in - chain-of-thought
+                // must never reach the text drep parses as JSON), and any
+                // variant a later SDK adds, since `StreamEvent` is
+                // `#[non_exhaustive]`. Spelled as one arm because a separate
+                // `Reasoning(_) => {}` above it does the same nothing, and an
+                // arm indistinguishable from the wildcard is dead code.
+                _ => {}
             }
         }
 
@@ -345,7 +387,7 @@ impl LlmClient {
             // which made every occurrence of this failure look identical and
             // left no way to tell a refusal from a prose preamble from
             // reasoning that leaked into the content channel.
-            None => Answer::NoJson(text),
+            None => Answer::NoJson { text, finish },
         })
     }
 }
@@ -358,7 +400,12 @@ impl LlmClient {
 /// no-JSON decision here rather than inside it.
 enum Answer {
     Parsed(Extracted),
-    NoJson(String),
+    /// No JSON at all, with why generation stopped. The reason decides whether
+    /// asking again can possibly help.
+    NoJson {
+        text: String,
+        finish: FinishReason,
+    },
 }
 
 /// How many times a response carrying no JSON at all is asked for again.
@@ -375,6 +422,56 @@ enum Answer {
 /// and a model that answers in prose twice is not going to be talked round on
 /// the third try.
 pub const NO_JSON_ATTEMPTS: u32 = 2;
+
+/// Whether asking the same question again could produce a different answer.
+///
+/// `false` for the reasons that are a property of the *request*: a token cap is
+/// hit identically every time, and a content filter that refused this payload
+/// refuses it again. `true` where the server told us nothing useful, because a
+/// model at temperature above zero can simply answer differently - which is
+/// what drep's own gated push demonstrated, failing on a different file each
+/// run with every failing file analyzing cleanly when asked again.
+fn worth_asking_again(finish: &FinishReason) -> bool {
+    // Written as a negated match on the two request-shaped reasons rather than
+    // as an enumeration of the rest. `FinishReason` is `#[non_exhaustive]`, so
+    // a wildcard arm is required either way - and an enumerated "everything
+    // else is retryable" arm sitting above it is behaviourally identical to the
+    // wildcard, which makes it undeletable-but-unobservable: exactly the dead
+    // code the mutation gate exists to find.
+    //
+    // The consequence of the wildcard is deliberate: a reason a later SDK adds
+    // defaults to retrying. The retry is bounded and cheap to be wrong about,
+    // whereas refusing to retry something transient fails a commit outright.
+    !matches!(
+        finish,
+        // A token cap is hit identically every time - drep sends no
+        // `max_tokens`, so the cap is the server's. A content filter that
+        // refused this payload refuses it again.
+        FinishReason::Length | FinishReason::ContentFilter
+    )
+}
+
+/// A sentence a user can act on, for the reasons that end the attempt.
+///
+/// The two cases want different actions - one is "this file is too big for this
+/// model in one pass", the other is "this provider refused the content" - so
+/// they do not share a message.
+fn stopped_message(finish: &FinishReason, text: &str) -> String {
+    match finish {
+        FinishReason::Length => format!(
+            "the model hit its output token limit before producing any JSON. \
+             This file is too large for this model to review in one request - \
+             split it, or use a provider with a larger output budget. \
+             It managed: {}",
+            excerpt(text)
+        ),
+        _ => format!(
+            "the model stopped ({}) before producing any JSON: {}",
+            finish.as_str(),
+            excerpt(text)
+        ),
+    }
+}
 
 /// A one-line, bounded, control-character-free excerpt of a model response.
 ///

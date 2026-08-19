@@ -1040,9 +1040,9 @@ checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
 
 [[package]]
 name = "open-agent-sdk"
-version = "0.7.0"
+version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "adc935e68c35fefb8112a18d240ad564c86915e4c9e13c82764fe44c15cdfb68"
+checksum = "4ebd5b8397a4540c8c5183fbb2703e5c82721dd968c58f29159eac7462904392"
 dependencies = [
  "anyhow",
  "async-trait",

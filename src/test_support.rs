@@ -56,6 +56,40 @@ pub(crate) fn sse(parts: &[&str]) -> String {
     out
 }
 
+/// Build an SSE body whose final chunk carries `finish` rather than `"stop"`.
+///
+/// The reason the server gives is what decides whether drep asks again, so a
+/// test about that decision has to be able to set it. [`sse`] is this with
+/// `"stop"`.
+pub(crate) fn sse_finishing_with(parts: &[&str], finish: &str) -> String {
+    let mut out = String::new();
+    for (i, part) in parts.iter().enumerate() {
+        let reason = if i + 1 == parts.len() {
+            format!("\"{finish}\"")
+        } else {
+            "null".to_owned()
+        };
+        out.push_str(&format!(
+            "data: {{\"id\":\"1\",\"object\":\"chat.completion.chunk\",\"created\":0,\"model\":\"m\",\"choices\":[{{\"index\":0,\"delta\":{{\"content\":{}}},\"finish_reason\":{reason}}}]}}\n\n",
+            serde_json::to_string(part).expect("string serializes")
+        ));
+    }
+    out.push_str("data: [DONE]\n\n");
+    out
+}
+
+/// A server answering 200 with `parts` and a final `finish_reason` of `finish`.
+pub(crate) async fn server_finishing_with(parts: &[&str], finish: &str) -> MockServer {
+    let server = MockServer::start().await;
+    mount_sse(
+        &server,
+        ResponseTemplate::new(200)
+            .set_body_raw(sse_finishing_with(parts, finish), "text/event-stream"),
+    )
+    .await;
+    server
+}
+
 /// How many requests the mock server received.
 pub(crate) async fn request_count(server: &MockServer) -> usize {
     // `expect`, not `unwrap_or(0)`. Mapping an unavailable request log to zero

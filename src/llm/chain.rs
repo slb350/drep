@@ -422,6 +422,13 @@ fn should_failover(err: &LlmError) -> bool {
         // A non-empty body we could not parse is deterministic - a second
         // provider is a second full-price call for the same outcome.
         LlmError::Unparseable(_) => false,
+        // A token cap or a content filter is a property of the request. A
+        // second provider cannot make the file smaller, and asking one to is
+        // the same category error as failing over on a 400. `is_sticky` is
+        // defined in terms of this, so it is not remembered either - which
+        // matters, because remembering a non-failover failure is what let one
+        // bad file stop the chain for every later one.
+        LlmError::ModelStopped { .. } => false,
         // Misconfiguration. Routing around it is what hides it.
         LlmError::NotConfigured(_) => false,
     }

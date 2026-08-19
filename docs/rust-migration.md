@@ -610,6 +610,31 @@ are dropped as unknown fields. Both are fixable in the SDK (same author); until
 then the excerpt is what turns the next occurrence into a diagnosis instead of
 a guess.
 
+### Follow-up available: `Truncated` is still inferred, not confirmed
+
+open-agent-sdk 0.8.0 surfaces `finish_reason`, and drep now uses it to decide
+whether a JSON-free response is worth asking for again. The same signal would
+also let drep stop *guessing* about truncation.
+
+Today `Extracted::Truncated` means only "the JSON parsed after brace-balancing".
+That conflates two different failures:
+
+- balanced **and** `finish_reason == Length` — genuinely cut off at the cap.
+- balanced **and** `finish_reason == Stop` — the model emitted unbalanced JSON
+  and stopped of its own accord. That is *malformed*, not truncated, and it
+  points at a prompt or model problem rather than a size problem.
+
+Both already land on exit 2, so this is diagnostic precision rather than a
+correctness gap — which is why it was not taken with the 0.8.0 upgrade.
+
+The reason it needs design rather than a patch: `json_parsing` cannot know the
+finish reason, so the fact has to reach `parse_response`. Passing it as a
+`capped: bool` beside `extracted` is exactly the shape `code_quality`'s module
+doc records as a past bug — an earlier version took `extracted` *and* a
+`truncated: bool`, which let `(Extracted::Truncated(v), false)` compile and
+report a truncated file as clean. Encoding it in the type instead means
+reshaping `Extracted`, which is a wider change than the upgrade warranted.
+
 ### Phase 6 — `lint-docs`
 Port the markdown checks including `_fence_mask`. No LLM, fast, runs on every
 commit.

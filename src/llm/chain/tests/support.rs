@@ -8,7 +8,7 @@
 
 use wiremock::MockServer;
 
-use crate::test_support::server_returning;
+use crate::test_support::{server_finishing_with, server_returning};
 
 /// The system prompt and payload every chain test sends. Constants rather than
 /// literals at each call site because the cache-key assertions have to name the
@@ -38,4 +38,12 @@ pub(super) async fn server_returning_prose() -> MockServer {
 /// A server that answers 200 with a clean analyzer response.
 pub(super) async fn server_returning_json() -> MockServer {
     server_returning(&[GOOD_JSON]).await
+}
+
+/// A server that answers with prose and reports the output cap.
+///
+/// Produces `LlmError::ModelStopped`, which is request-shaped: it must neither
+/// advance the chain nor demote the provider.
+pub(super) async fn server_hitting_the_token_cap() -> MockServer {
+    server_finishing_with(&["I will begin by reading"], "length").await
 }

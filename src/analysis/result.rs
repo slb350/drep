@@ -40,6 +40,14 @@ pub enum FailureReason {
     },
     /// A response arrived and no JSON could be extracted from it.
     Unparseable(String),
+    /// The model stopped before producing JSON, and the server said why.
+    ///
+    /// Distinct from [`Self::Unparseable`] because the cause is known and
+    /// deterministic - an output-token cap or a content filter - so the answer
+    /// is not "ask again" but "this request cannot be served as sent". `finish`
+    /// is the server's own word for it, kept as a machine tag beside the human
+    /// message exactly as [`Self::Transport`] keeps its status.
+    ModelStopped { finish: String, message: String },
     /// The response parsed only after closing unbalanced delimiters, so it is
     /// a prefix of what the model meant to say.
     Truncated,
@@ -128,6 +136,9 @@ impl FailureReason {
             FailureReason::Unparseable(message) => {
                 format!("LLM response was unparseable: {message}")
             }
+            // The message is already a sentence a user can act on; prefixing it
+            // with a category would bury the actionable half.
+            FailureReason::ModelStopped { message, .. } => message.clone(),
             FailureReason::Truncated => "response was truncated".to_owned(),
             FailureReason::MalformedFinding(detail) => format!("malformed finding: {detail}"),
             FailureReason::ToolUnavailable { tool, detail } => {

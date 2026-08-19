@@ -198,6 +198,9 @@ fn into_failure_reason(err: LlmError) -> FailureReason {
     match err {
         LlmError::Transport { status, message } => FailureReason::Transport { status, message },
         LlmError::Unparseable(message) => FailureReason::Unparseable(message),
+        LlmError::ModelStopped { finish, message } => {
+            FailureReason::ModelStopped { finish, message }
+        }
         // `NotConfigured` is a configuration failure at the LLM boundary —
         // not a connectivity failure, but indistinguishable from one to the
         // gate, which only cares whether the file was analyzed. Mapping to

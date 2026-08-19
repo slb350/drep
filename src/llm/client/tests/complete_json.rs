@@ -12,7 +12,8 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use crate::llm::client::{Extracted, LlmClient, LlmError};
 use crate::test_support::{
-    cfg_for, fast_retry_client, mount_sse, request_count, server_returning, sse,
+    cfg_for, fast_retry_client, mount_sse, request_count, server_finishing_with, server_returning,
+    sse,
 };
 
 /// Criterion 22: a 200 response with a fenced JSON body yields `Complete`.
@@ -451,4 +452,134 @@ async fn the_reported_body_is_stripped_of_control_characters() {
         message.contains("red"),
         "the text itself survives: {message}"
     );
+}
+
+// ---- the server said why it stopped ----
+
+/// A response cut off at the output token cap is NOT retried.
+///
+/// This is the genuinely deterministic case: drep sends no `max_tokens`, so the
+/// cap is the server's, and the same request hits the same cap every time.
+/// Retrying is pure spend. The original "never retry a non-empty body" rule was
+/// reaching for exactly this, but identified it by "no JSON in the body" - the
+/// wrong proxy, because a model that merely chose prose *will* answer
+/// differently next time.
+#[tokio::test]
+async fn a_response_cut_off_at_the_token_cap_is_not_retried() {
+    let server = server_finishing_with(&["Let me start by reading the file"], "length").await;
+    let client = fast_retry_client(&cfg_for(&server, "m", 1));
+
+    let err = client
+        .complete_json("sys", "content")
+        .await
+        .expect_err("no JSON was produced");
+
+    match err {
+        LlmError::ModelStopped { finish, message } => {
+            assert_eq!(finish, "length", "the server's own word, kept as a tag");
+            assert!(
+                message.contains("output token limit"),
+                "the message must name the cause, got {message:?}"
+            );
+            assert!(
+                message.contains("split it"),
+                "and be actionable, got {message:?}"
+            );
+        }
+        other => panic!("expected ModelStopped, got {other:?}"),
+    }
+    assert_eq!(
+        request_count(&server).await,
+        1,
+        "the same request hits the same cap - asking again is pure spend"
+    );
+}
+
+/// A content filter refusal is NOT retried either, and says so.
+#[tokio::test]
+async fn a_content_filter_refusal_is_not_retried() {
+    let server = server_finishing_with(&["I cannot process this"], "content_filter").await;
+    let client = fast_retry_client(&cfg_for(&server, "m", 1));
+
+    let err = client
+        .complete_json("sys", "content")
+        .await
+        .expect_err("no JSON was produced");
+
+    match err {
+        LlmError::ModelStopped { finish, message } => {
+            assert_eq!(finish, "content_filter");
+            assert!(
+                !message.contains("output token limit"),
+                "a filter refusal is not a budget problem, got {message:?}"
+            );
+        }
+        other => panic!("expected ModelStopped, got {other:?}"),
+    }
+    assert_eq!(request_count(&server).await, 1);
+}
+
+/// A model that merely *stopped* without JSON IS retried.
+///
+/// The discriminating counterpart to both tests above. Same observable body -
+/// prose, no JSON - and the opposite decision, which only the finish reason can
+/// justify. A rule keyed on the body would treat all three identically, which is
+/// precisely the bug this replaced.
+#[tokio::test]
+async fn a_model_that_stopped_without_json_is_still_retried() {
+    let server = server_finishing_with(&["I am afraid I cannot help"], "stop").await;
+    let client = fast_retry_client(&cfg_for(&server, "m", 1));
+
+    let err = client
+        .complete_json("sys", "content")
+        .await
+        .expect_err("prose never parses");
+
+    assert!(
+        matches!(err, LlmError::Unparseable(_)),
+        "a model that chose prose may choose differently next time, got {err:?}"
+    );
+    assert_eq!(
+        request_count(&server).await,
+        crate::llm::client::NO_JSON_ATTEMPTS as usize
+    );
+}
+
+/// A server that never reports a reason is retried.
+///
+/// `Unspecified` means "no information", which several OpenAI-compatible
+/// servers give by default. It must not be read as `Stop` - but it must not
+/// stop the retry either, because nothing rules a different answer out.
+#[tokio::test]
+async fn a_response_with_no_finish_reason_is_retried() {
+    let server = server_returning(&["still not JSON"]).await;
+    let client = fast_retry_client(&cfg_for(&server, "m", 1));
+
+    let err = client
+        .complete_json("sys", "content")
+        .await
+        .expect_err("prose never parses");
+    assert!(matches!(err, LlmError::Unparseable(_)), "got {err:?}");
+    assert_eq!(
+        request_count(&server).await,
+        crate::llm::client::NO_JSON_ATTEMPTS as usize
+    );
+}
+
+/// A capped response that *did* produce parseable JSON is still accepted.
+///
+/// `Length` only ends the attempt when there is no JSON to show for it. A
+/// response that closed its own braces before the cap is a complete answer,
+/// whatever happened after it.
+#[tokio::test]
+async fn a_capped_response_that_still_produced_json_is_accepted() {
+    let server = server_finishing_with(&[r#"{"issues": []}"#], "length").await;
+    let client = fast_retry_client(&cfg_for(&server, "m", 1));
+
+    let extracted = client
+        .complete_json("sys", "content")
+        .await
+        .expect("the JSON parsed, so the cap is irrelevant");
+    assert!(matches!(extracted, Extracted::Complete(_)));
+    assert_eq!(request_count(&server).await, 1);
 }

@@ -7,6 +7,59 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Rust rewrite - 2026-08-18 - open-agent-sdk 0.8.0: the server says why it stopped
+
+Upgraded to open-agent-sdk 0.8.0, which surfaces `finish_reason` for the first
+time. `query()` now yields `StreamEvent`, ending in exactly one
+`Finish(FinishReason)`.
+
+That replaces a heuristic with a fact. The previous commit retried *any*
+response with no JSON, twice, because the body could not say why it was
+JSON-free. The server can:
+
+- **`Length`** - the model hit its output token cap before emitting JSON. drep
+  sends no `max_tokens`, so the cap is the server's and the same request hits it
+  every time. This is the genuinely deterministic case the original Phase 3 rule
+  was reaching for; it just identified it by "no JSON in the body", which is the
+  wrong proxy. Not retried, and reported as something a user can act on: the
+  file is too large for this model in one pass.
+- **`ContentFilter`** - the provider refused the payload. Also not retried, with
+  its own message, because "too big" and "refused" want different actions.
+- **`Stop`, `Unspecified`, anything else** - nothing rules out a different
+  answer, so the bounded retry stays. `Unspecified` is deliberately distinct
+  from `Stop`: several OpenAI-compatible servers never report a reason, and "no
+  information" is not "finished normally".
+
+New `LlmError::ModelStopped { finish, message }` and
+`FailureReason::ModelStopped` (JSON `kind: "model_stopped"`), shaped like
+`Transport { status, message }` - the server's own word kept as a machine tag
+beside the human sentence.
+
+**It neither fails over nor demotes**, and that is the same rule as a 400: a
+token cap is a property of the request, not the endpoint, so a second provider
+cannot fix it and remembering it would stop the chain for every later file.
+
+Two smaller things fell out of the upgrade. `FinishReason::as_str()` already
+exists, so a hand-rolled wire-name mapping was deleted before it could drift.
+And the mutation gate flagged two match arms that were behaviourally identical
+to the wildcard beneath them - an enumerated "everything else is retryable" arm
+and a standalone `StreamEvent::Reasoning(_) => {}`. Both were collapsed:
+`FinishReason` and `StreamEvent` are `#[non_exhaustive]`, so a wildcard is
+mandatory, and an arm indistinguishable from it is dead code rather than
+documentation.
+
+**Testing: 445 passing**, clippy-clean, rustfmt-clean, mutation-clean.
+
+**Not done, deliberately.** `finish_reason` also makes `Truncated` checkable:
+today drep infers truncation from brace-balancing alone, so a response that
+needed closing braces *and* stopped normally is reported as truncated when it is
+really malformed. Wiring that in cleanly needs either a reshaped `Extracted` or
+a `capped: bool` passed beside it - and the latter is the exact shape
+`code_quality` documents as a past bug, where `(Extracted::Truncated(v), false)`
+compiled and reported a truncated file as clean. Both outcomes are already exit
+2, so this is diagnostic precision, not a correctness gap.
+
+
 ### Rust rewrite - 2026-08-18 - a response with no JSON is not the deterministic case
 
 Phase 3 split LLM outcomes two ways: retry transport failures, never retry a

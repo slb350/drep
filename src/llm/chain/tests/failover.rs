@@ -7,7 +7,8 @@
 //! failed over and happened to get the same error back.
 
 use super::support::{
-    CONTENT, SYSTEM, server_returning_json, server_returning_nothing, server_returning_prose,
+    CONTENT, SYSTEM, server_hitting_the_token_cap, server_returning_json, server_returning_nothing,
+    server_returning_prose,
 };
 use crate::llm::json_parsing::Extracted;
 use crate::test_support::{
@@ -241,4 +242,35 @@ async fn when_all_providers_fail_each_reason_is_reported() {
     assert_eq!(err.attempts[1].error.status(), Some(503));
     assert_eq!(err.attempts[1].model, "b");
     assert!(!err.attempts[1].skipped);
+}
+
+/// A response cut off at the output cap does NOT fail over.
+///
+/// It is a property of the request, not the endpoint - a second provider cannot
+/// make the file smaller. Same rule that keeps a 400 from failing over, and the
+/// argument is the same one: sending an identical payload elsewhere converts a
+/// diagnosable condition into a paid guess.
+#[tokio::test]
+async fn a_response_at_the_token_cap_does_not_fail_over() {
+    let capped = server_hitting_the_token_cap().await;
+    let healthy = server_returning_json().await;
+    let (cache, _dir) = temp_cache();
+    let chain = fast_retry_chain(&[cfg_for(&capped, "a", 1), cfg_for(&healthy, "b", 1)]);
+
+    let err = chain
+        .complete_json(SYSTEM, CONTENT, &cache)
+        .await
+        .expect_err("the cap fails the file");
+
+    assert_eq!(err.attempts.len(), 1, "only the head was asked");
+    assert_eq!(
+        request_count(&healthy).await,
+        0,
+        "a second provider cannot make the file smaller"
+    );
+    assert!(
+        !chain.providers()[0].is_down(),
+        "and it must not be remembered - remembering a non-failover failure is \
+         what let one oversized file stop the chain for every later one"
+    );
 }

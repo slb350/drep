@@ -211,6 +211,7 @@ fn failure_kind(reason: &FailureReason) -> &'static str {
     match reason {
         FailureReason::Transport { .. } => "transport",
         FailureReason::Unparseable(_) => "unparseable",
+        FailureReason::ModelStopped { .. } => "model_stopped",
         FailureReason::Truncated => "truncated",
         FailureReason::MalformedFinding(_) => "malformed_finding",
         FailureReason::ToolUnavailable { .. } => "tool_unavailable",
