@@ -70,6 +70,26 @@ pub enum FailureReason {
     PayloadTooLarge { bytes: u64, limit: u64 },
     /// The file could not be read from disk.
     Unreadable(String),
+    /// The user named a file that the running command has no analyzer for.
+    ///
+    /// Only ever produced for an **explicitly named** path. A walk that turns
+    /// up nothing analyzable is legitimately empty - `drep check .` in a
+    /// documentation repository has correctly found no code. A path the user
+    /// typed is different: reporting "No issues found." for a file drep
+    /// declined to look at is the single failure this codebase is built to
+    /// prevent, and it is the same distinction `resolve_paths` already draws
+    /// for an argument that does not exist at all.
+    ///
+    /// `hint` names the command that *does* handle the type, when there is
+    /// one. Markdown has `drep lint-docs`, so the error is a redirection
+    /// rather than a dead end.
+    Unsupported {
+        /// The extension as written, with its dot. `None` when the file has
+        /// none, which reads differently in the message.
+        extension: Option<String>,
+        /// What to run instead, phrased as an imperative.
+        hint: Option<String>,
+    },
     /// A failover chain produced no answer, with what each provider
     /// contributed.
     ///
@@ -113,6 +133,21 @@ pub struct ProviderFailure {
 }
 
 impl FailureReason {
+    /// Build an [`Self::Unsupported`] for `path`.
+    ///
+    /// The extension convention (leading dot, `None` when there is none) is
+    /// stated here, beside the variant whose `one_line` renders it, rather than
+    /// at each command that raises one. It was written out twice, which is one
+    /// copy per command pointing at the other.
+    pub fn unsupported(path: &std::path::Path, hint: Option<String>) -> Self {
+        FailureReason::Unsupported {
+            extension: path
+                .extension()
+                .map(|ext| format!(".{}", ext.to_string_lossy())),
+            hint,
+        }
+    }
+
     /// A single line suitable for a terminal, derived from the variant.
     ///
     /// The HTTP status is rendered next to the message so a 429 is visible
@@ -135,6 +170,18 @@ impl FailureReason {
             }
             FailureReason::Unparseable(message) => {
                 format!("LLM response was unparseable: {message}")
+            }
+            // Deliberately says nothing about *which* command is running: both
+            // `check` and `lint-docs` produce this, pointing at each other.
+            FailureReason::Unsupported { extension, hint } => {
+                let what = match extension {
+                    Some(ext) => format!("`{ext}` files"),
+                    None => "files with no extension".to_owned(),
+                };
+                match hint {
+                    Some(hint) => format!("no analyzer for {what}: {hint}"),
+                    None => format!("no analyzer for {what}"),
+                }
             }
             // The message is already a sentence a user can act on; prefixing it
             // with a category would bury the actionable half.

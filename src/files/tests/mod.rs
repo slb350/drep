@@ -5,6 +5,7 @@
 //! so cargo never compiled them and appending invalid Rust did not fail the
 //! build. If you add a file here, declare it in this directory's `mod.rs`.
 
+mod expand_named;
 mod expand_paths;
 mod ignored_dir;
 mod predicates;

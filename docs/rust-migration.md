@@ -90,7 +90,9 @@ cargo only `.rs`.
 | `src/llm/json_parsing.rs` | `llm/json_parsing.py` | Tolerant JSON extraction |
 | `src/analysis/code_quality.rs` | `code_quality/analyzer.py` | |
 | `src/analysis/findings.rs` | `models/findings.py` | `Severity`, `SEVERITY_RANK` |
-| `src/docs/markdown.rs` | `documentation/analyzer.py` | Includes `_fence_mask` |
+| `src/docs/` | `documentation/analyzer.py` | `fence`/`lines`/`links`/`blocks`; the fence mask lives in `fence.rs` |
+| `src/cli/render.rs` | — | Finding line and failure block, shared by `check` and `lint-docs` |
+| `src/text.rs` | — | `excerpt`: bounding text drep did not write |
 | `src/config.rs` | `config.py` | TOML, not YAML |
 
 ## Dependencies
@@ -635,18 +637,32 @@ doc records as a past bug — an earlier version took `extracted` *and* a
 report a truncated file as clean. Encoding it in the type instead means
 reshaping `Extracted`, which is a wider change than the upgrade warranted.
 
-### Phase 6 — `lint-docs`
-Port the markdown checks including `_fence_mask`. No LLM, fast, runs on every
-commit.
+### Phase 6 — `lint-docs` ✅
+**Landed 2026-08-18.** `src/docs/` (the ten checks, split by what a check needs
+to see) and `src/cli/lint_docs/`. See the CHANGELOG for the full note.
 
-**Carries one gap from 5a/5b.** `files::is_scan_target` accepts `.md`, but no
-language claims it, so `drep check README.md` reads the file, finds no
-deterministic tool and no LLM language, and prints "No issues found." That is
-the banned move — a file drep declined to analyze reported as clean — applied to
-a path the user named explicitly. The same distinction `resolve_paths` already
-draws for a non-existent argument applies here: a *walk* that finds no
-analyzable file is legitimately empty, an explicitly-named one is not. Giving
-`.md` a real home here is the fix; until then it is a known hole.
+**The `.md` gap from 5a/5b is closed, and how it was closed is a contract.**
+`files::is_scan_target` accepted `.md`, but no language claims it, so `drep
+check README.md` read the file, found no deterministic tool and no LLM language,
+and printed "No issues found." That is the banned move, applied to a path the
+user named explicitly.
+
+Two fixes were available, and the choice is worth recording because the rejected
+one is the more obvious:
+
+- Route markdown through `check` to the doc checks. Rejected. It needs a third
+  gating category, because the doc checks are deterministic but are drep's
+  opinion rather than the project's own configured tool, so "tool findings
+  always block" does not extend to them. It also has no good answer in the diff
+  modes, where a file arrives as hunks and a whole-file check like
+  `unclosed_code_fence` would see an odd delimiter count on every partial view.
+- Give markdown its own command and refuse it in `check`. Taken.
+  `is_scan_target` is registered-language sources, `is_markdown` is markdown,
+  and the two are disjoint. A path the user *names* outside the running
+  command's class is `FailureReason::Unsupported`, carrying the extension and
+  what to run instead; a directory *walk* that finds nothing analyzable stays
+  legitimately empty. The rule generalised: `drep check notes.txt` had the same
+  bug and the same fix.
 
 ### Phase 7 — Distribution
 `cargo-dist` 0.32 (repo active as of 2026-08-17) generates the release

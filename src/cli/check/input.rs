@@ -107,26 +107,33 @@ pub async fn resolve(args: &CheckArgs, root: &Path) -> Result<Work> {
 /// swallowed, so a file drep declined to analyze reaches the gate as a
 /// failure rather than a reported-clean.
 fn resolve_paths(paths: &[PathBuf], root: &Path) -> Result<Work> {
-    let targets = resolve_paths_targets(paths, root);
+    // `files::expand_named` owns the whole "what did the user ask for, and what
+    // could I not do with it" question, including the no-arguments default and
+    // the named-path rejections. This function used to re-walk `paths` itself
+    // to rediscover the rejections, and `lint-docs` grew a second copy of the
+    // same loop; both missed a named path that exists but is neither a regular
+    // file nor a directory.
+    let files::Expansion { targets, rejected } =
+        files::expand_named(paths, root, files::is_scan_target);
+
     let mut by_file: Vec<Vec<Hunk>> = Vec::new();
     let mut read_failures: BTreeMap<PathBuf, FailureReason> = BTreeMap::new();
     let mut lint_only: Vec<PathBuf> = Vec::new();
 
-    // `expand_paths` silently skips a path that does not exist - a deliberate
-    // contract inherited from 1.x's `scan`, where a stale argument was not
-    // worth failing over. Under this gate it is: `drep check typo.rs` would
-    // resolve to zero targets and print "No issues found." A path the user
-    // named and drep did not analyze is the same category as one too large to
-    // send. Only *explicit* arguments are checked; a directory walk that finds
-    // nothing is a legitimately empty result.
-    for named in paths {
-        if !named.exists() {
-            read_failures.insert(
-                named.clone(),
-                FailureReason::Unreadable("no such file or directory".to_owned()),
-            );
-        }
+    for (path, why) in rejected {
+        let reason = match why {
+            files::Rejected::Missing => {
+                FailureReason::Unreadable("no such file or directory".to_owned())
+            }
+            // The hint comes from `files::redirect_hint`, so `check` does not
+            // hold its own opinion about which command handles markdown.
+            files::Rejected::Unanalyzable => {
+                FailureReason::unsupported(&path, files::redirect_hint(&path))
+            }
+        };
+        read_failures.insert(path, reason);
     }
+
     for path in targets {
         let bytes = match std::fs::metadata(&path) {
             Ok(meta) => meta.len(),
@@ -176,25 +183,6 @@ fn resolve_paths(paths: &[PathBuf], root: &Path) -> Result<Work> {
         read_failures,
         lint_only,
     })
-}
-
-/// Distinguish "the user passed a path" from "the user passed nothing".
-///
-/// `PATHS` (or nothing) → `["."]`. The CLI's mutual-exclusion rules leave
-/// `paths` empty when `--staged` or `--diff` is set.
-fn resolve_paths_targets(paths: &[PathBuf], root: &Path) -> Vec<PathBuf> {
-    let predicate: fn(&Path) -> bool = files::is_scan_target;
-    // Both branches go through `expand_paths`. The empty case used to return
-    // the root path unexpanded, which is a *directory*: `metadata` succeeded,
-    // the size gate passed, and `read_to_string` then failed with "Is a
-    // directory". So bare `drep check` - the plainest invocation of the
-    // primary command - reported the repo root as unreadable and exited 2
-    // without analyzing anything. A special case that skips the expander is
-    // how that happens; there is only one path now.
-    if paths.is_empty() {
-        return files::expand_paths(&[root.to_path_buf()], predicate);
-    }
-    files::expand_paths(paths, predicate)
 }
 
 /// Group hunks into `Vec<Vec<Hunk>>` keyed by file.

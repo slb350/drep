@@ -11,6 +11,7 @@ pub mod check;
 pub mod doctor;
 pub mod init;
 pub mod lint_docs;
+pub mod render;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand, ValueEnum};
@@ -59,16 +60,10 @@ pub enum OutputFormat {
 pub async fn run(cli: Cli) -> Result<Exit> {
     match cli.command {
         Command::Check(args) => check::run(&args, std::path::Path::new(".")).await,
-        Command::LintDocs(_) => unimplemented("lint-docs", "phase 6"),
+        Command::LintDocs(args) => lint_docs::run(&args, std::path::Path::new(".")),
         Command::Doctor(args) => doctor::run(&args),
         Command::Init(args) => init::run(&args).await,
     }
-}
-
-/// Fail loudly rather than exiting 0, so a hook wired up against a
-/// half-finished build blocks instead of silently passing every commit.
-fn unimplemented(command: &str, phase: &str) -> Result<Exit> {
-    anyhow::bail!("`drep {command}` is not implemented yet (lands in {phase})")
 }
 
 #[cfg(test)]
@@ -129,12 +124,39 @@ mod tests {
         assert!(Cli::try_parse_from(["drep", "check", "--fail-on", "critical"]).is_err());
     }
 
-    #[tokio::test]
-    async fn unimplemented_commands_error_rather_than_exiting_clean() {
-        // `doctor` and `init` landed in Phase 5b; only `lint-docs` is still
-        // unimplemented. A test that lumps all three together would fail
-        // every time a phase ships.
+    #[test]
+    fn every_command_dispatches_to_an_implementation() {
+        // The last stub (`lint-docs`) landed in Phase 6, so there is no
+        // `unimplemented` arm left to pin. What replaces that test is the
+        // guarantee it was really protecting: no subcommand may reach `run`
+        // and fall through to a clean exit. `run`'s match is exhaustive over
+        // `Command`, so the compiler enforces it - this asserts the enum is
+        // still the four commands the contract names, so a fifth added
+        // without an arm is a compile error rather than a silent pass.
+        let names: Vec<String> = Cli::command()
+            .get_subcommands()
+            .map(|c| c.get_name().to_owned())
+            .collect();
+        assert_eq!(names, vec!["check", "lint-docs", "doctor", "init"]);
+    }
+
+    #[test]
+    fn lint_docs_takes_paths_and_strict() {
+        let cli = Cli::try_parse_from(["drep", "lint-docs", "--strict", "a.md"]).unwrap();
+        match cli.command {
+            Command::LintDocs(args) => {
+                assert!(args.strict);
+                assert_eq!(args.paths.len(), 1);
+            }
+            other => panic!("expected lint-docs, got {other:?}"),
+        }
         let cli = Cli::try_parse_from(["drep", "lint-docs"]).unwrap();
-        assert!(run(cli).await.is_err());
+        match cli.command {
+            Command::LintDocs(args) => {
+                assert!(!args.strict, "report-only is the default");
+                assert!(args.paths.is_empty());
+            }
+            other => panic!("expected lint-docs, got {other:?}"),
+        }
     }
 }

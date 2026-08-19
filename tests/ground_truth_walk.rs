@@ -7,14 +7,23 @@
 //! The pruning assertions are the load-bearing ones. Descending into `venv/`
 //! costs tens of thousands of syscalls and is the reason this uses the `ignore`
 //! crate rather than a recursive glob.
+//!
+//! Only properties that need a *real* tree live here. The explicit-path
+//! asymmetry (naming a gitignored file outranks the walk) used to have a copy
+//! in this file, pointed at a review document under the gitignored `.claude/`
+//! and wrapped in `if exists()`. `.claude/` is not tracked, so on any fresh
+//! clone - CI included - the guard was false and the test asserted nothing.
+//! `files::tests::expand_paths::explicit_filenames_are_honoured_even_when_gitignored`
+//! covers it hermetically, which is where a property that needs no real tree
+//! belongs.
 
-use drep::files::{is_scan_target, walk_targets};
+use drep::files::{is_markdown, is_scan_target, walk_targets};
 use std::path::Path;
 
-#[test]
-fn walk_this_repo_prunes_vendored_trees_and_respects_gitignore() {
+/// Walk this repository with `predicate`, as repo-relative strings.
+fn walk(predicate: fn(&Path) -> bool) -> Vec<String> {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let rel: Vec<String> = walk_targets(root, is_scan_target)
+    walk_targets(root, predicate)
         .iter()
         .map(|p| {
             p.strip_prefix(root)
@@ -22,7 +31,12 @@ fn walk_this_repo_prunes_vendored_trees_and_respects_gitignore() {
                 .to_string_lossy()
                 .into_owned()
         })
-        .collect();
+        .collect()
+}
+
+#[test]
+fn walk_this_repo_prunes_vendored_trees_and_respects_gitignore() {
+    let rel = walk(is_scan_target);
 
     assert!(!rel.is_empty(), "walked nothing at all");
 
@@ -37,31 +51,48 @@ fn walk_this_repo_prunes_vendored_trees_and_respects_gitignore() {
         );
     }
 
-    // Gitignored dotted directories stay out even though hidden(false) means
-    // the walker is willing to look at dotted paths. Both of these hold real
-    // .md files, so only .gitignore keeps them out.
+    // Tracked sources of several languages are found. Markdown is *not* a
+    // scan target - `check` and `lint-docs` own disjoint file classes - so
+    // this list is code only, and the assertion below states the absence
+    // rather than leaving it to be inferred from a missing entry.
+    for expected in ["src/lib.rs", "drep/cli.py"] {
+        assert!(rel.iter().any(|p| p == expected), "missing {expected}");
+    }
+    assert!(
+        !rel.iter().any(|p| p.ends_with(".md")),
+        "markdown belongs to lint-docs, not to check"
+    );
+}
+
+#[test]
+fn the_markdown_walk_finds_this_repos_docs_and_respects_gitignore() {
+    // The other half of the split, and the one that carries the gitignore
+    // assertions: `.claude/` and `.pytest_cache/` hold real `.md` files, so
+    // only `.gitignore` keeps them out of this walk. Asserting that against
+    // `is_scan_target` stopped meaning anything once markdown left it.
+    let rel = walk(is_markdown);
+
+    // Note what is *not* here: `CLAUDE.md` is gitignored in this repository,
+    // so the walk correctly skips it and `drep lint-docs` says nothing about
+    // it unless the user names it. That is the same asymmetry the explicit
+    // -path test below pins, seen from the walk's side.
+    for expected in ["README.md", "CHANGELOG.md", "docs/rust-migration.md"] {
+        assert!(rel.iter().any(|p| p == expected), "missing {expected}");
+    }
     for ignored in [".claude/", ".pytest_cache/"] {
         assert!(
             !rel.iter().any(|p| p.contains(ignored)),
             "{ignored} is gitignored but was walked"
         );
     }
-
-    // Tracked sources of several languages are found.
-    for expected in ["src/lib.rs", "drep/cli.py", "README.md"] {
-        assert!(rel.iter().any(|p| p == expected), "missing {expected}");
-    }
-
-    // The deliberate asymmetry, against a real gitignored file rather than a
-    // fixture: naming a path explicitly outranks a repo-wide .gitignore, so
-    // `drep check .claude/foo.md` analyzes it even though the walk would not.
-    let ignored = root.join(".claude/pr-reviews/pr-6-review-2025-11-08.md");
-    if ignored.exists() {
-        let explicit = drep::files::expand_paths(std::slice::from_ref(&ignored), is_scan_target);
-        assert_eq!(
-            explicit,
-            vec![ignored],
-            "an explicitly named gitignored file must still be honoured"
+    for pruned in ["venv/", "target/", "node_modules/", ".git/"] {
+        assert!(
+            !rel.iter().any(|p| p.contains(pruned)),
+            "descended into {pruned}"
         );
     }
+    assert!(
+        rel.iter().all(|p| p.ends_with(".md")),
+        "the markdown walk returned a non-markdown file"
+    );
 }

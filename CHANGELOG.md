@@ -7,6 +7,132 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Rust rewrite - 2026-08-18 - Phase 6: `lint-docs`, and markdown gets a home
+
+Ported `drep/documentation/analyzer.py` to `src/docs/`, and closed the `.md`
+hole Phase 5 left open.
+
+Ten checks, by the `type=` strings 1.x emitted: `bare_url`, `empty_heading`,
+`link_syntax_invalid`, `long_line`, `missing_space_after_heading`,
+`multiple_blank_lines`, `tab_character`, `trailing_blank_lines`,
+`trailing_whitespace`, `unclosed_code_fence`. The names are pinned against an
+independently written list, so a rename fails a test rather than silently
+breaking anyone who scripted against them.
+
+`src/docs/fence.rs` derives fence state once per file and every check that needs
+it consults that one answer. The tests state each check's fence position in a
+table whose completeness is asserted, so a new check cannot be added without
+deciding what it does inside a code block. Sources split across `fence.rs`,
+`lines.rs`, `links.rs` and `blocks.rs` by what a check needs to see.
+
+No regex dependency. The five patterns 1.x compiled are hand-written scanners
+over `&[char]`, which keeps every reported column a character offset rather than
+a byte offset, and keeps startup at ~10 ms with nothing to compile.
+
+Three divergences from 1.x, each because the Python's advice was wrong:
+
+- A link reference definition's URL is not a bare URL. `[1.1.3]: https://...`
+  declares a target that is supposed to be bare, and "wrap it as `[text](url)`"
+  breaks the definition. This repository's own CHANGELOG footer is nine of them.
+- `tab_character` now respects code fences, because "replace tabs with spaces"
+  stops a ```` ```make ```` sample being a Makefile. A check that cannot give
+  correct advice about a line should not fire on it. `trailing_whitespace` stays
+  fence-blind for the mirror reason.
+- `suggestion` is advice rather than a literal replacement. 1.x's `replacement`
+  field held a rewritten line half the time and a sentence the rest, because a
+  draft-PR autofix consumed it. 2.0 has no autofix.
+
+Severity follows one question: does it change how the document renders? An
+unclosed fence turns every line below it into code, so it alone is `error`. A
+heading or link that renders wrong is `warning`. Whitespace and line length
+render identically, so they are `info`. That is what keeps `--strict`
+calibratable; on a scale where a trailing space blocks a commit, the gate gets
+switched off.
+
+#### The `.md` hole
+
+`files::is_scan_target` accepted `.md`, but no language claimed it, so `drep
+check README.md` read the file, found no deterministic tool and no LLM language,
+and printed "No issues found." A file drep declined to analyze, reported as
+clean, on a path the user named explicitly.
+
+Two fixes were available. Routing markdown through `check` to the doc checks was
+rejected: it needs a third gating category, since the doc checks are
+deterministic but are drep's opinion rather than the project's configured tool,
+so "tool findings always block" does not extend to them. It also has no good
+answer in the diff modes, where a file arrives as hunks and a whole-file check
+like `unclosed_code_fence` would see an odd delimiter count on every partial
+view.
+
+So `check` and `lint-docs` own disjoint file classes. `is_scan_target` is
+registered-language sources, `is_markdown` is markdown, and nothing satisfies
+both. A path the user *names* outside the running command's class becomes a new
+`FailureReason::Unsupported` (JSON `kind: "unsupported"`) carrying the extension
+and, where another command handles the type, what to run instead. A directory
+walk that finds nothing analyzable stays legitimately empty, which is the same
+distinction `resolve_paths` already drew for a non-existent argument. The rule
+generalised for free: `drep check notes.txt` had the identical bug.
+
+`lint-docs` exits 2 for a file it could not read whether or not `--strict` was
+passed, since that is the absence of analysis rather than a finding. Findings
+exit 1 only under `--strict`, matching the report-only default this repository's
+pre-commit hook relies on. Its startup path touches `docs` and `files` and
+nothing else.
+
+#### Verification
+
+Against this repository, `drep lint-docs` reports 75 findings across the tracked
+docs in ~10 ms, with no false positives on inspection. An independent oracle
+confirms the fence invariant: `rg '^#{1,6}[^#[:space:]]'` finds seven lines that
+look like malformed headings, `#!/bin/bash` in `technical-design.md` and six
+`#[pyfunction]` attributes in `rust-optimization-analysis.md`. All seven sit
+inside code fences and drep reports none of them.
+
+The mutation gate found ten survivors on the first pass, all in `links.rs`. An
+exhaustive differential over generated inputs separated them: four were missing
+tests (blanking a code span with text before it, two consecutive nested brackets
+in link text, and both arms of the reference-definition scan), and five were
+equivalent mutants where a `+ 1` was unobservable because the position had
+already been blanked or could not hold the character being searched for. The
+four gaps got tests; the five unobservable expressions were restructured away,
+which also put the offending bracket counts into the `link_syntax_invalid`
+message where a reader can use them.
+
+The `/simplify` pass then found that the fix had been applied twice rather than
+once. Both commands re-walked their argument list with their own `exists()` /
+`is_file()` probes to rediscover what `expand_paths` had already decided and
+thrown away, and both reconstructions were lossy the same way: a named fifo
+satisfies neither `is_file` nor `is_dir`, so it was dropped by the expander,
+missed by the reconstruction, and reported as a clean run. That is the same
+banned move the phase was written to close, still open one file type over.
+`files::expand_named` now returns `Expansion { targets, rejected }` and owns the
+no-arguments default as well, `files::owning_command` replaces each command's
+hardcoded pointer at the other, and `cli::render` and `text::excerpt` absorb the
+transcribed copies of the failure block and of the untrusted-text bound. The
+`bare_url` copy of `excerpt` truncated without stripping control characters,
+which is the one thing that function exists for, so a URL carrying an escape
+sequence reached the terminal intact.
+
+The efficiency pass measured rather than guessed. Holding a `Vec<char>` per line
+was 43% of the analysis pass, so `Line` no longer carries one and `analyze`
+fills two reused buffers instead; a first-character guard in `find_url` removed
+another 19%, since the URL scan ran over every character of every prose line to
+find 65 URLs. Three suggestions were checked and disconfirmed: fusing the four
+bracket counters into one loop is a 2.5x pessimization because the separate
+counts autovectorize, the two per-file allocations in `analyze` are both read,
+and the double sort had already been narrowed.
+
+Two pre-existing test defects surfaced while updating the suite.
+`tests/ground_truth_walk.rs` wrapped its explicit-path assertion in
+`if ignored.exists()` against one review file under the gitignored `.claude/`,
+so on any fresh clone - CI included - the guard was false and the test asserted
+nothing. `files::tests::expand_paths` already covers that property hermetically,
+so the vacuous copy is gone rather than rewritten. The `unanalyzed` JSON tag
+test's exhaustive match did its job: adding `Unsupported` failed to compile
+there, in the file holding the sample list.
+
+Testing: 556 passing, up from 445. Clippy-clean, rustfmt-clean, mutation-clean.
+
 ### Rust rewrite - 2026-08-18 - open-agent-sdk 0.8.0: the server says why it stopped
 
 Upgraded to open-agent-sdk 0.8.0, which surfaces `finish_reason` for the first

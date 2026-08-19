@@ -15,9 +15,11 @@ pub mod analysis;
 pub mod cli;
 pub mod config;
 pub mod diff;
+pub mod docs;
 pub mod files;
 pub mod languages;
 pub mod llm;
+pub mod text;
 
 /// Shared fixtures for tests across every module. Compiled only under
 /// `cfg(test)`, so it adds nothing to the shipped binary.

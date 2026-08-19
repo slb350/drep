@@ -41,6 +41,7 @@ fn expected_kind(reason: &FailureReason) -> &'static str {
         FailureReason::FileTooLarge { .. } => "file_too_large",
         FailureReason::PayloadTooLarge { .. } => "payload_too_large",
         FailureReason::Unreadable(_) => "unreadable",
+        FailureReason::Unsupported { .. } => "unsupported",
         FailureReason::ChainFailed(_) => "chain_failed",
     }
 }
@@ -71,6 +72,10 @@ fn each_failure_variant_renders_its_own_kind_tag() {
         FailureReason::FileTooLarge { bytes: 1, limit: 0 },
         FailureReason::PayloadTooLarge { bytes: 1, limit: 0 },
         FailureReason::Unreadable("eperm".to_owned()),
+        FailureReason::Unsupported {
+            extension: Some(".md".to_owned()),
+            hint: Some("run `drep lint-docs` instead".to_owned()),
+        },
         FailureReason::ChainFailed(vec![ProviderFailure {
             provider: 0,
             model: "m".to_owned(),

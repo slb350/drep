@@ -37,6 +37,13 @@ use thiserror::Error;
 
 use crate::config::LlmConfig;
 use crate::llm::json_parsing::{Extracted, extract_json};
+use crate::text::excerpt;
+
+/// How much of a model response reaches an error message.
+///
+/// Generous: unlike a URL, the useful signal in a refusal or a prose preamble
+/// is often a sentence or two in.
+const RESPONSE_EXCERPT_MAX: usize = 200;
 
 /// A configured LLM client ready to issue requests.
 ///
@@ -314,7 +321,7 @@ impl LlmClient {
         Err(LlmError::Unparseable(format!(
             "no JSON in the response after {NO_JSON_ATTEMPTS} attempts; \
              the model answered: {}",
-            excerpt(&last_body)
+            excerpt(&last_body, RESPONSE_EXCERPT_MAX)
         )))
     }
 
@@ -463,51 +470,14 @@ fn stopped_message(finish: &FinishReason, text: &str) -> String {
              This file is too large for this model to review in one request - \
              split it, or use a provider with a larger output budget. \
              It managed: {}",
-            excerpt(text)
+            excerpt(text, RESPONSE_EXCERPT_MAX)
         ),
         _ => format!(
             "the model stopped ({}) before producing any JSON: {}",
             finish.as_str(),
-            excerpt(text)
+            excerpt(text, RESPONSE_EXCERPT_MAX)
         ),
     }
-}
-
-/// A one-line, bounded, control-character-free excerpt of a model response.
-///
-/// Bounded because a reasoning model can return kilobytes and this lands in a
-/// terminal and in `--format json`. Control characters are replaced rather
-/// than passed through: the text is model output, and an escape sequence in it
-/// would otherwise be interpreted by the terminal reading the report.
-fn excerpt(body: &str) -> String {
-    const MAX_CHARS: usize = 200;
-    let cleaned: String = body
-        .chars()
-        .map(|c| if c.is_control() { ' ' } else { c })
-        .collect();
-    let mut out = String::with_capacity(MAX_CHARS);
-    let mut last_was_space = false;
-    for c in cleaned.trim().chars() {
-        if out.chars().count() >= MAX_CHARS {
-            out.push('…');
-            break;
-        }
-        if c == ' ' {
-            if last_was_space {
-                continue;
-            }
-            last_was_space = true;
-        } else {
-            last_was_space = false;
-        }
-        out.push(c);
-    }
-    if out.is_empty() {
-        // Unreachable in practice - an empty body is a transport failure long
-        // before this - but a quoted empty string reads as a bug in drep.
-        return "<nothing>".to_owned();
-    }
-    out
 }
 
 #[cfg(test)]

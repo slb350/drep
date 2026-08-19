@@ -35,6 +35,7 @@ use crate::analysis::findings::Finding;
 use crate::analysis::result::{FailureReason, ProviderFailure};
 use crate::cli::OutputFormat;
 use crate::cli::check::{CheckOutcome, ProviderUse};
+use crate::cli::render::{finding_line, write_failures};
 
 /// Render the outcome to stdout in the requested format.
 ///
@@ -71,7 +72,7 @@ fn render_text<W: Write>(out: &mut W, outcome: &CheckOutcome) -> Result<()> {
         by_position.insert(
             (f.file_path.clone(), f.line, idx),
             (
-                format_finding_line(source, f),
+                finding_line(Some(source), f),
                 f.suggestion
                     .as_ref()
                     .map(|s| format!("    suggestion: {s}")),
@@ -87,22 +88,7 @@ fn render_text<W: Write>(out: &mut W, outcome: &CheckOutcome) -> Result<()> {
         }
     }
 
-    if !outcome.failures.is_empty() {
-        // Blank separator *between* the two blocks - so only when there is a
-        // findings block above it. Emitting it unconditionally made every
-        // clean-but-unanalyzed run open with a stray empty line.
-        if !by_position.is_empty() {
-            writeln!(out)?;
-        }
-        writeln!(
-            out,
-            "{} file(s) could not be analyzed:",
-            outcome.failures.len()
-        )?;
-        for (path, reason) in &outcome.failures {
-            writeln!(out, "  {}: {}", path.display(), reason.one_line())?;
-        }
-    }
+    write_failures(out, &outcome.failures, !by_position.is_empty())?;
 
     write_provider_block(out, &outcome.provider_uses)?;
 
@@ -147,21 +133,6 @@ fn tagged(outcome: &CheckOutcome) -> impl Iterator<Item = (&'static str, &Findin
         .iter()
         .map(|f| ("tool", f))
         .chain(outcome.llm_findings.iter().map(|f| ("llm", f)))
-}
-
-/// One line of text output for a finding.
-///
-/// The `tool/` or `llm/` prefix is the source; the path is the file; the rest
-/// is position, severity, kind, and message. The exact format is pinned by the
-/// text-output acceptance test.
-fn format_finding_line(source: &'static str, f: &Finding) -> String {
-    let severity = f.severity.as_str();
-    let kind = &f.kind;
-    let message = &f.message;
-    let path = &f.file_path;
-    let line = f.line;
-    let column = f.column.map(|c| format!(":{c}")).unwrap_or_default();
-    format!("{path}:{line}{column}: {severity} [{source}/{kind}] {message}")
 }
 
 /// Render the JSON format. One object, pretty-printed, on stdout.
@@ -218,6 +189,7 @@ fn failure_kind(reason: &FailureReason) -> &'static str {
         FailureReason::FileTooLarge { .. } => "file_too_large",
         FailureReason::PayloadTooLarge { .. } => "payload_too_large",
         FailureReason::Unreadable(_) => "unreadable",
+        FailureReason::Unsupported { .. } => "unsupported",
         FailureReason::ChainFailed(_) => "chain_failed",
     }
 }

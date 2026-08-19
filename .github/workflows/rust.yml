@@ -67,12 +67,11 @@ jobs:
       # Survivors are printed as `MISSED <file>:<line>: <mutation>` lines, so the
       # job log is already the actionable report - no artifact upload needed.
       #
-      # --minimum-test-timeout because the derived timeout comes from the
-      # unmutated baseline (~1s here) and a loaded runner can exceed it for a
-      # perfectly healthy mutant. A timeout is not a failure: some mutations
-      # produce an infinite loop, and a suite that hangs has detected the mutant
-      # as surely as one that fails.
-      - run: cargo mutants --no-shuffle -j 4 --minimum-test-timeout 60
+      # Through the same script the pre-commit hook uses, so CI and the hook
+      # cannot disagree about what counts as a failure. It owns the timeout
+      # rule in particular, which neither caller had right: see the comment in
+      # scripts/mutants-run.sh. No arguments means the full sweep.
+      - run: ./scripts/mutants-run.sh
 
   msrv:
     name: msrv (1.85)
