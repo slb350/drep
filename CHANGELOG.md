@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Rust rewrite - 2026-08-18 - the mutation sweep moves off the laptop
+
+`scripts/mutants-remote.sh` syncs the tree to another machine over SSH, runs
+`scripts/mutants-run.sh` there and propagates its exit code, mirroring
+`target/mutants/` back so a surviving mutant is read where the fix gets written.
+The pre-commit hook goes through it; CI still calls `mutants-run.sh` directly,
+because a GitHub runner cannot reach the LAN. An unreachable host falls back to
+a local run with a warning on stderr - a commit gate that silently skips itself
+because the network blipped is worse than a slow one.
+
+Measured on the 12 mutants of `src/docs/fence.rs`: 1m54 locally at `-j 4` with
+the machine pinned for the duration, 39s end to end on a 32-thread box,
+including the sync in both directions. `-j` is now `MUTANTS_JOBS` on
+`mutants-run.sh` so both callers can tune it, but raising it is a trap: the same
+scope took 38s at `-j 4`, 54s at `-j 8` and 72s at `-j 16`, never exceeding
+2200% CPU of a possible 3200. Every job copies the tree *including* `target/`,
+which is what keeps its builds warm, so more jobs multiply a multi-gigabyte copy
+before the first mutant runs. The run is I/O-bound, not CPU-bound.
+
+The `/simplify` pass moved two things down a layer. `target/mutants` was the
+same string literal in six places across three scripts, where a stale copy does
+not error - it just stops finding `missed.txt`; `scripts/mutants-common.sh` is
+now the one definition. And the transport script no longer scans its arguments
+for `--in-diff` to discover which file to ship: `mutants-staged.sh` names it in
+`MUTANTS_EXTRA_FILES`, because "move these bytes" belongs at that layer and
+cargo-mutants' argument grammar does not. The efficiency pass found ~64MB of
+caches (`.mypy_cache`, `.pytest_cache`, `.ruff_cache`, stale `mutants.out.old`)
+syncing on every commit against a Rust payload of about 1MB, and two `ssh
+mkdir -p` round trips that `rsync --mkpath` does as part of the transfer.
+
+The ETXTBSY fix in the commit before this one is what made any of it usable: the
+suite failed one Linux run in three, and inside a mutation sweep that does not
+read as a flake - it records a mutant as caught that nothing actually caught.
+
 ### Rust rewrite - 2026-08-18 - Phase 6: `lint-docs`, and markdown gets a home
 
 Ported `drep/documentation/analyzer.py` to `src/docs/`, and closed the `.md`

@@ -12,9 +12,10 @@
 
 set -euo pipefail
 
-DIFF_DIR="target/mutants"
-DIFF="$DIFF_DIR/staged.diff"
-mkdir -p "$DIFF_DIR"
+# shellcheck source=scripts/mutants-common.sh
+. "$(dirname "$0")/mutants-common.sh"
+DIFF="$MUTANTS_OUT_DIR/staged.diff"
+mkdir -p "$MUTANTS_OUT_DIR"
 
 # pre-commit stashes unstaged changes before running hooks, so the working tree
 # matches the index here - which is what makes diffing the index correct.
@@ -28,4 +29,9 @@ fi
 # Through mutants-remote.sh, which offloads the run to a bigger machine and
 # falls back to a local run when it cannot be reached. The verdict is
 # scripts/mutants-run.sh's either way.
-exec ./scripts/mutants-remote.sh --in-diff "$DIFF"
+#
+# The diff lands under the one directory the remote sync excludes - target/ -
+# so it is named here as a file the run needs. The alternative was for the
+# transport layer to scan the arguments for `--in-diff`, which is cargo-mutants
+# grammar it has no business knowing.
+MUTANTS_EXTRA_FILES="$DIFF" exec ./scripts/mutants-remote.sh --in-diff "$DIFF"

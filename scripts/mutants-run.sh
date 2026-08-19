@@ -11,10 +11,13 @@ set -euo pipefail
 
 # --output pins the results directory because this script reads `missed.txt` out
 # of it to reach its verdict, so it has to know where it is rather than inherit
-# whatever the caller's cwd happened to be. target/ because it is already
-# gitignored. This is not concurrency protection: two runs in the same checkout
-# share this directory exactly as they shared a cwd-relative `mutants.out`.
-OUT_DIR="target/mutants"
+# whatever the caller's cwd happened to be. The path itself is defined once, in
+# mutants-common.sh, because all three scripts in this trio need it. This is not
+# concurrency protection: two runs in the same checkout share this directory
+# exactly as they shared a cwd-relative `mutants.out`.
+# shellcheck source=scripts/mutants-common.sh
+. "$(dirname "$0")/mutants-common.sh"
+OUT_DIR="$MUTANTS_OUT_DIR"
 mkdir -p "$OUT_DIR"
 
 # --minimum-test-timeout: cargo-mutants derives the per-mutant timeout from the
