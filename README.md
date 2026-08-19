@@ -4,522 +4,116 @@
 
 <img src="docs/images/drep.png" alt="drep logo" width="200" />
 
-**D**ocumentation & **R**eview **E**nhancement **P**latform
+**A local commit gate.** It runs the linters your repository already
+configures, and sends the code you changed to an LLM for review.
 
-[![PyPI version](https://badge.fury.io/py/drep-ai.svg)](https://badge.fury.io/py/drep-ai)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
-[![Downloads](https://pepy.tech/badge/drep-ai)](https://pepy.tech/project/drep-ai)
+[![Rust 1.85+](https://img.shields.io/badge/rust-1.85+-orange.svg)](https://www.rust-lang.org)
 
-A local code review gate for **Python, JavaScript, TypeScript, Go and Rust** — and an automated reviewer for **Gitea, GitHub, and GitLab**.
-
-Run it on `git push` and it checks your changes twice: your project's own linters and formatters gate the push, and an LLM reviews the semantics without blocking on opinions.
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/slb350/drep/main/scripts/install.sh | bash
+```sh
+curl --proto '=https' --tlsv1.2 -LsSf \
+  https://github.com/slb350/drep/releases/latest/download/drep-ai-installer.sh | sh
 ```
-
-> **v1.3.0:** Local pre-push gate with multi-language support. drep now runs the tools your
-> project already configures — ruff, eslint, tsc, gofmt, go vet, clippy — and gates on their
-> findings, while LLM review runs advisory alongside. Works with no configuration at all: the
-> deterministic half needs no model, no key and no tokens. See
-> [Local Gate](#local-gate-pre-push--pre-pr).
 
 </div>
 
-## Features
+## What it does
 
-### Proactive Code Analysis
-Unlike reactive tools, drep continuously monitors repositories and automatically:
-- Detects bugs, security vulnerabilities, and best practice violations
-- Opens issues with detailed findings and suggested fixes
-- No manual intervention required
+On `git commit` and `git push`, drep checks your changes twice.
 
-### Docstring Intelligence
-LLM-powered docstring analysis purpose-built for Python:
-- Generates Google-style docstrings for public APIs
-- Flags TODOs, placeholders, and low-signal docstrings
-- Respects decorators (e.g., `@property`, `@classmethod`) and skips simple helpers
+| Layer | Source | Blocks? |
+|---|---|---|
+| Deterministic | ruff, eslint, tsc, gofmt, go vet, clippy | Yes |
+| Semantic | an LLM you point it at | No, unless you ask |
 
-### Automated PR/MR Reviews
-Intelligent review workflow for Gitea pull requests:
-- Parses diffs into structured hunks
-- Generates inline comments tied to added lines
-- Produces a high-level summary with approval signal
+Your linters are precise, so their findings block. A model's opinion about
+naming is not precise at any severity, so it informs instead. Splitting by
+source rather than by severity is what makes the gate calibratable; opt the
+LLM into blocking with `--fail-on error` when you want it.
 
-### Flexible LLM Backends
-Choose the right LLM backend for your needs:
-- **Local models:** Complete privacy with Ollama, llama.cpp, LM Studio
-- **AWS Bedrock:** Enterprise compliance with Claude 4.5 on AWS ✅ **NEW**
-- **Anthropic Direct:** Latest Claude models with direct API access (planned)
-- **OpenAI-compatible:** Works with any compatible endpoint
+drep is a single binary. It talks to no platform, runs no server, stores
+nothing, and needs no account. The deterministic half needs no model and no
+API key at all.
 
-### Platform Support & Roadmap
-- **Available now:** Gitea, GitHub, GitLab + Python repositories
-- **Planned:** Additional languages, advanced draft PR workflows
+## Install
 
-## LLM-Powered Analysis
+```sh
+# Shell installer (macOS and Linux, x86_64 and arm64)
+curl --proto '=https' --tlsv1.2 -LsSf \
+  https://github.com/slb350/drep/releases/latest/download/drep-ai-installer.sh | sh
 
-drep includes intelligent code analysis powered by local LLMs via OpenAI-compatible backends (LM Studio, Ollama, open-agent-sdk).
+# Homebrew
+brew install slb350/tap/drep
 
-### Features
-
-- **Code Quality Analysis**: Detects bugs, security issues, and best practice violations
-- **Docstring Generation**: Automatically generates Google-style docstrings
-- **PR Reviews**: Context-aware code review comments
-- **Smart Caching**: 80%+ cache hit rate on repeated scans
-- **Cost Tracking**: Monitor token usage and estimated costs
-- **Circuit Breaker**: Graceful degradation when LLM unavailable
-- **Progress Reporting**: Real-time feedback during analysis
-
-### Quick Start
-
-#### Step 1: Install drep
-
-```bash
-pip install drep-ai
+# From source
+cargo install --git https://github.com/slb350/drep drep-ai
 ```
 
-#### Step 2: Initialize Configuration (Interactive Wizard) 🧙‍♂️
+The crate is `drep-ai` because `drep` was taken on crates.io. The binary is
+`drep`.
 
-```bash
-drep init
-```
+## Set up a repository
 
-The interactive wizard guides you through:
-1. **Config Location**: Choose between current directory or user config directory
-2. **Platform Selection**: Gitea, GitHub, or GitLab
-3. **Enterprise Servers**: Detect and configure GitHub Enterprise, self-hosted GitLab/Gitea
-4. **Repository Patterns**: Use wildcards (`owner/*`) or specific repos (`owner/repo`)
-5. **LLM Backend**: OpenAI-compatible (local), AWS Bedrock, or Anthropic
-6. **Documentation Settings**: Enable markdown linting, custom dictionaries
-7. **Advanced Options**: Database URL, LLM temperature, rate limits
-
-**Example Wizard Flow:**
-
-```bash
-$ drep init
-
-============================================================
-Welcome to drep configuration setup!
-============================================================
-
-Where should the configuration be created?
-
-  1. Current directory (./config.yaml)
-     Use for project-specific configuration
-
-  2. User config directory (/Users/you/Library/Application Support/drep/config.yaml)
-     Use for system-wide configuration (recommended for pip/brew install)
-
-Choose location (1, 2) [2]: 1
-
-Step 1: Git Platform Configuration
-------------------------------------------------------------
-Which git platform are you using? (github, gitea, gitlab) [github]: github
-
-GitHub Configuration:
-Are you using GitHub Enterprise? [y/N]: n
-
-Repository Configuration:
-Examples: 'your-org/*' (all repos), 'owner/repo' (single repo)
-Enter repositories (comma-separated) [your-org/*]: slb350/*
-
-Step 2: LLM Configuration
-------------------------------------------------------------
-Enable LLM-powered code analysis? [Y/n]: y
-Choose LLM provider (openai-compatible, bedrock, anthropic) [openai-compatible]: openai-compatible
-
-OpenAI-Compatible Configuration:
-API Endpoint [http://localhost:1234/v1]:
-Model name [qwen3-30b-a3b]:
-Require API key? [y/N]: n
-
-... (more wizard steps) ...
-
-============================================================
-✓ Configuration created successfully!
-============================================================
-
-Config location: config.yaml
-
-Next steps:
-1. Set the GITHUB_TOKEN environment variable:
-   export GITHUB_TOKEN='your-api-token-here'
-
-2. Validate your configuration:
-   drep validate
-
-3. Start scanning repositories:
-   drep scan owner/repo
-```
-
-#### Manual Configuration (Alternative)
-
-For advanced users who prefer YAML editing:
-
-**Option 1: Local Models (LM Studio)**
-
-1. Install LM Studio: https://lmstudio.ai/
-2. Download a model (Qwen3-30B-A3B recommended)
-3. Create `config.yaml`:
-
-```yaml
-llm:
-  enabled: true
-  endpoint: http://localhost:1234/v1  # LM Studio / OpenAI-compatible API (also works with open-agent-sdk)
-  model: qwen3-30b-a3b
-  temperature: 0.2
-  max_tokens: 8000
-
-  # Rate limiting
-  max_concurrent_global: 5
-  requests_per_minute: 60
-
-  # Caching
-  cache:
-    enabled: true
-    ttl_days: 30
-```
-
-#### Option 2: AWS Bedrock (Claude 4.5)
-
-1. Enable Bedrock model access in AWS Console
-2. Configure AWS credentials (`aws configure` or `~/.aws/credentials`)
-3. Configure drep:
-
-```yaml
-llm:
-  enabled: true
-  provider: bedrock  # Required for AWS Bedrock
-
-  bedrock:
-    region: us-east-1
-    model: anthropic.claude-sonnet-4-5-20250929-v1:0  # Or Haiku 4.5
-
-  temperature: 0.2
-  max_tokens: 4000
-
-  # Caching
-  cache:
-    enabled: true
-    ttl_days: 30
-```
-
-See `docs/llm-setup.md` for detailed setup instructions and troubleshooting.
-
-#### Run Analysis
-
-```bash
-drep scan owner/repo --show-progress --show-metrics
-```
-
-### View Metrics
-
-```bash
-# Show detailed usage statistics
-drep metrics --detailed
-
-# Export to JSON
-drep metrics --export metrics.json
-
-# Last 7 days only
-drep metrics --days 7
-```
-
-**Example output:**
-```
-===== LLM Usage Report =====
-Session duration: 0h 5m 32s
-Total requests: 127 (115 successful, 12 failed, 95 cached)
-Success rate: 90.6%
-Cache hit rate: 74.8%
-
-Tokens used: 45,230 prompt + 12,560 completion = 57,790 total
-Estimated cost: $0.29 USD (or $0 with LM Studio)
-
-Performance:
-  Average latency: 1250ms
-  Min/Max: 450ms / 3200ms
-
-By Analyzer:
-  code_quality: 45 requests (12,345 tokens)
-  docstring: 38 requests (8,901 tokens)
-  pr_review: 44 requests (36,544 tokens)
-```
-
-## Quick Start
-
-### Installation
-
-#### Via Homebrew (macOS/Linux)
-```bash
-brew tap slb350/drep
-brew install drep-ai
-```
-
-#### Via pip
-```bash
-pip install drep-ai
-```
-
-**Note**: The PyPI package is named `drep-ai` (the name `drep` was already taken). After installation, the command-line tool is still `drep`.
-
-#### From source
-```bash
-git clone https://github.com/slb350/drep.git
-cd drep
-pip install -e ".[dev]"
-```
-
-#### Via Docker
-```bash
-docker pull ghcr.io/slb350/drep:latest
-```
-
-### Configuration
-
-drep supports **GitHub**, **Gitea**, and **GitLab**. The `init` command will ask which platform you're using and generate the correct configuration.
-
-#### Step 1: Initialize Configuration
-
-```bash
-drep init
-```
-
-You'll be prompted to choose where to store the configuration and which platform to use:
-
-```
-Where should the configuration be created?
-
-  1. Current directory (./config.yaml)
-     Use for project-specific configuration
-
-  2. User config directory (~/.config/drep/config.yaml)
-     Use for system-wide configuration (recommended for pip/brew install)
-
-Choose location (1, 2) [2]: 2
-
-Step 1: Platform Configuration
-------------------------------------------------------------
-Which git platform are you using?
-Choose platform (github, gitea, gitlab) [github]: github
-
-✓ Configuration created successfully!
-------------------------------------------------------------
-Config location: /Users/yourname/.config/drep/config.yaml
-
-Next steps:
-1. Set the GITHUB_TOKEN environment variable:
-   export GITHUB_TOKEN='your-api-token-here'
-```
-
-**Config File Discovery:**
-drep automatically finds your config file in this order:
-1. Explicit `--config` path (if provided)
-2. `DREP_CONFIG` environment variable
-3. `./config.yaml` (project-specific)
-4. `~/.config/drep/config.yaml` (user config)
-
-This means you can run `drep scan owner/repo` without specifying `--config` - it will automatically find your configuration!
-
-#### Step 2: Set Your API Token
-
-Create an API token from your platform:
-
-**For GitHub:**
-1. Go to Settings → Developer settings → Personal access tokens → Tokens (classic)
-2. Generate new token with `repo` scope
-3. Set the environment variable:
-
-```bash
-export GITHUB_TOKEN="ghp_your_token_here"
-```
-
-**For Gitea:**
-1. Go to Settings → Applications → Generate New Token
-2. Set the environment variable:
-
-```bash
-export GITEA_TOKEN="your_token_here"
-```
-
-**For GitLab:**
-1. Go to User Settings → Access Tokens
-2. Create token with `api` scope
-3. Set the environment variable:
-
-```bash
-export GITLAB_TOKEN="your_token_here"
-```
-
-#### Step 3: Configure Repositories (Optional)
-
-Edit your config file (location shown in `drep init` output) to specify which repositories to monitor:
-
-```yaml
-# For GitHub:
-github:
-  token: ${GITHUB_TOKEN}
-  repositories:
-    - myorg/*           # All repos in 'myorg'
-    - myorg/myrepo      # Specific repo
-
-# For GitLab (gitlab.com or self-hosted):
-gitlab:
-  url: https://gitlab.com  # Or your self-hosted URL
-  token: ${GITLAB_TOKEN}
-  repositories:
-    - myorg/*           # All projects in 'myorg'
-    - myorg/myproject   # Specific project
-
-# For Gitea:
-gitea:
-  url: http://localhost:3000
-  token: ${GITEA_TOKEN}
-  repositories:
-    - myorg/*
-```
-
-#### Step 4: (Optional) Set Up Local LLM
-
-For AI-powered analysis, you'll need an LLM backend. The `init` command creates a config with LM Studio defaults:
-
-**Option A: LM Studio** (Easiest)
-1. Download from https://lmstudio.ai/
-2. Load a model (Qwen3-30B-A3B recommended)
-3. Start the server (default: `http://localhost:1234`)
-4. No config changes needed!
-
-**Option B: Ollama**
-1. Install Ollama from https://ollama.ai/
-2. Pull a model: `ollama pull qwen3-30b-a3b`
-3. Update `config.yaml`:
-
-```yaml
-llm:
-  endpoint: http://localhost:11434/v1  # Ollama's OpenAI-compatible endpoint
-```
-
-**Option C: AWS Bedrock (Enterprise)**
-1. Enable Claude models in AWS Console
-2. Configure AWS credentials (`aws configure`)
-3. Update `config.yaml`:
-
-```yaml
-llm:
-  provider: bedrock
-  bedrock:
-    region: us-east-1
-    model: anthropic.claude-sonnet-4-5-20250929-v1:0
-```
-
-The default config generated by `drep init` includes LLM settings for LM Studio. If you don't want AI features, set `llm.enabled: false` in `config.yaml`.
-
-### Run drep
-
-#### As a Service (Recommended)
-```bash
-# Start web server to receive webhooks
-drep serve --host 0.0.0.0 --port 8000
-```
-
-Configure webhooks to point to:
-- Gitea: `http://your-server:8000/webhooks/gitea`
-- GitLab: `http://your-server:8000/webhooks/gitlab`
-- GitHub: `http://your-server:8000/webhooks/github`
-
-**Webhook authentication (Gitea):** set a shared secret in your config and the same
-secret in Gitea's webhook settings — requests without a valid `X-Gitea-Signature`
-(HMAC-SHA256 of the raw body) are rejected with 403:
-
-```yaml
-webhook_secret: ${DREP_WEBHOOK_SECRET}
-```
-
-Without a configured secret, webhooks are accepted without authentication (a warning
-is logged).
-
-#### Manual Scan
-```bash
-# Scan a specific repository
-drep scan owner/repository
-```
-
-#### Review a Pull Request
-```bash
-# Analyze PR #42 on owner/repository without posting comments
-drep review owner/repository 42 --no-post
-```
-
-#### Docker Compose (with Ollama)
-```yaml
-version: '3.8'
-services:
-  drep:
-    image: ghcr.io/slb350/drep:latest
-    ports:
-      - "8000:8000"
-    volumes:
-      - ./config.yaml:/app/config.yaml
-      - ./data:/app/data
-    environment:
-      - DREP_LLM_ENDPOINT=http://ollama:11434
-    depends_on:
-      - ollama
-
-  ollama:
-    image: ollama/ollama:latest
-    ports:
-      - "11434:11434"
-    volumes:
-      - ollama_data:/root/.ollama
-
-volumes:
-  ollama_data:
-```
-
-```bash
-docker compose up -d
-```
-
-## Local Gate (pre-push / pre-PR)
-
-drep runs on your machine before code leaves it. No platform tokens, and for the
-deterministic half, no model and no API key either.
-
-### Install
-
-```bash
+```sh
 cd your-repo
-curl -fsSL https://raw.githubusercontent.com/slb350/drep/main/scripts/install.sh | bash
+drep init --provider openrouter        # or local, openai, custom
+export OPENROUTER_API_KEY='...'
 ```
 
-The installer detects your languages, installs a pre-push hook, and asks which model
-you want for the advisory review — **None**, **Local** (LM Studio/Ollama), **OpenRouter**
-or **OpenAI**. "None" is a real answer: the gate still works.
+`drep init` writes two things: a `drep.toml` naming your model, and a git hook.
+The default is a pre-push hook; `--hooks pre-commit` or `--hooks both` if you
+want the gate earlier, `--hooks none` for the config alone.
 
-It is safe to re-run, and it handles `core.hooksPath` — if you have a global git hooks
-directory, a repo-local hook would otherwise never fire, silently.
+It writes native git hooks rather than a pre-commit entry, and it handles
+`core.hooksPath`: if you have a global hooks directory, a repository-local hook
+would otherwise never fire, silently.
 
-### The two layers
+To adopt drep through [pre-commit](https://pre-commit.com) instead:
 
-| | Source | Precision | Blocks the push? |
-|---|---|---|---|
-| **Deterministic** | ruff, eslint, tsc, gofmt, go vet, clippy | Exact | **Yes** |
-| **Semantic** | Your chosen LLM | Variable | No — reported only |
-
-Splitting by *source* rather than severity is what makes the gate usable. Your linters are
-precise enough to gate on; an LLM's opinion about naming is not, at any severity. If you
-do want LLM findings to block, opt in with `--fail-on error`.
-
-### What will it actually check?
-
-```bash
-drep doctor
+```yaml
+repos:
+  - repo: https://github.com/slb350/drep
+    rev: v2.0.0
+    hooks:
+      - id: drep-check-push   # pre-push: what the push touches
+      # - id: drep-check      # pre-commit: staged files
+      # - id: drep-lint-docs  # markdown, rule-based
 ```
 
+## Commands
+
+```sh
+drep check                      # this directory
+drep check src/ main.go         # named files or directories
+drep check --staged             # what is staged, for a pre-commit hook
+drep check --diff origin/main   # what changed since a ref, for pre-push
+drep check --fail-on error      # also block on LLM findings
+drep check --format json        # machine-readable
+
+drep lint-docs                  # markdown in this tree
+drep lint-docs --staged --fail-on error
+drep doctor                     # what will actually run here
 ```
+
+Exit codes, shared by `check` and `lint-docs`:
+
+| Code | Meaning |
+|---|---|
+| 0 | Everything that should have run, ran, and found nothing blocking |
+| 1 | Blocking findings |
+| 2 | Something that should have run did not |
+
+Exit 2 is the one that matters. An unreachable endpoint, a file too large for
+the model, a configured tool that is not installed: none of those are a pass,
+and a gate that reports them as one is worse than no gate.
+
+## What will run here
+
+```console
+$ drep doctor
+drep in /Users/you/your-repo
+============================================================
+
 Languages found:
   Go: 12 file(s)         Python: 48 file(s)      TypeScript: 31 file(s)
 
@@ -529,423 +123,106 @@ Deterministic checks (these gate):
   go vet: ready
   eslint: not configured (add one of: eslint.config.js, ...)
   tsc: configured but NOT INSTALLED - these checks will not run
+
+LLM analysis (required):
+  1. deepseek/deepseek-v4-pro-0813 at https://openrouter.ai/api/v1
 ```
 
-That last line matters: a configured-but-missing tool makes `drep check` exit **2**, not 0.
-A check that did not run is never reported as a pass.
+Three rules decide what runs:
 
-### Manual setup
+- Repository-local before PATH, so a project is checked by the version its CI
+  runs.
+- Only where the project configured it. No eslint config means no eslint
+  opinion.
+- A configured tool that is missing makes the run exit 2. A check that did not
+  run is never reported as a pass.
 
-If you would rather not pipe a script into bash, add drep to `.pre-commit-config.yaml`
-yourself:
+## Languages
 
-```yaml
-repos:
-  - repo: https://github.com/slb350/drep
-    rev: v1.3.0
-    hooks:
-      - id: drep-check-push     # pre-push: checks what the push touches
-      # - id: drep-check        # pre-commit: checks staged files
-      # - id: drep-lint-docs    # markdown, rule-based
-```
+| Language | Extensions | Tools |
+|---|---|---|
+| Python | `.py` | ruff |
+| JavaScript | `.js` `.jsx` `.mjs` `.cjs` | eslint |
+| TypeScript | `.ts` `.tsx` `.mts` `.cts` | eslint, tsc |
+| Go | `.go` | gofmt, go vet |
+| Rust | `.rs` | clippy |
 
-```bash
-pre-commit install --hook-type pre-push
-```
+The LLM half reads any of them. It parses nothing, so it needs no grammar per
+language; it is told which language it is reading and which conventions that
+language's ecosystem expects.
 
-To add a model afterwards:
+## Markdown
 
-```bash
-drep init-llm --provider openrouter    # or local / openai / custom
-export OPENROUTER_API_KEY='...'
-```
+`drep lint-docs` is rule-based only: no LLM, no network, no config file. Ten
+checks, and their severity answers one question, which is whether the finding
+changes how the document renders.
 
-### Commands
+| Severity | Checks |
+|---|---|
+| error | `unclosed_code_fence` |
+| warning | `empty_heading`, `missing_space_after_heading`, `link_syntax_invalid` |
+| info | `bare_url`, `long_line`, `tab_character`, `trailing_whitespace`, `trailing_blank_lines`, `multiple_blank_lines` |
 
-```bash
-drep check                    # current directory
-drep check src/ main.go       # specific files or directories
-drep check --staged           # only staged files
-drep check --fail-on error    # also block on LLM findings
-drep check --format json      # machine-readable
-drep doctor                   # what will run here
-drep lint-docs --strict       # markdown as a gate
-```
-
-Exit codes:
-
-| Code | Meaning |
-|------|---------|
-| 0 | Everything that should have run, ran, and found nothing blocking |
-| 1 | Blocking findings |
-| 2 | Something that should have run did not — **not** a pass |
-
-## How It Works
-
-### Repository Scanning
-```
-Push Event → drep receives webhook
-           ↓
-         Scans all files
-           ↓
-   ┌──────┴──────┐
-   ▼             ▼
-Doc Analysis        Code Analysis
-   ↓                    ↓
-Docstring Findings   Code Quality Findings
-           ↘          ↙
-         Issues / Review Comments
-```
-
-### Docstring Analysis (Python)
-```
-File → Function extraction → Filtering (public ≥3 lines) → LLM docstring review
-                                                    ↓
-                                          Suggestions & findings
-```
-
-### PR Review
-```
-PR Opened → Analyze changed files
-           ↓
-         Find issues
-           ↓
-    Post review comments
-```
-
-## What drep Detects
-
-### Documentation Issues
-- Missing docstrings on public functions and methods
-- Placeholder docstrings containing TODO/FIXME text
-- Generic descriptions that fail to explain purpose or behavior
-- Decorated accessors without documentation (`@property`, `@classmethod`)
- - Optional Markdown checks (when `documentation.markdown_checks` = true):
-   - Trailing whitespace, tabs
-   - Empty or malformed headings (e.g., missing space after `#`)
-   - Unclosed code fences (```)
-   - Long lines (>120 chars), multiple blank lines, trailing blank lines
-   - Bare URLs (suggest wrapping in `[text](url)`) and basic broken link syntax
-
-### Code Issues
-- Bare except clauses
-- Mutable default arguments
-- Security vulnerabilities
-- Best practice violations
-- Potential bugs
-- Performance issues
-
-### Supported Languages
-
-| Language | Deterministic tools | LLM review | Docstring generation |
-|---|---|---|---|
-| Python | ruff | ✅ | ✅ Google-style |
-| TypeScript | eslint, tsc | ✅ | — |
-| JavaScript | eslint | ✅ | — |
-| Go | gofmt, go vet | ✅ | — |
-| Rust | clippy | ✅ | — |
-
-Deterministic tools run only where your project has configured them — a repo with no
-eslint config gets no eslint findings, rather than a wall of default-preset complaints.
-A tool that *is* configured but missing is reported as a gap, never as a pass.
-
-Docstring generation is Python-only because it parses the AST; the LLM review needs no
-parser, which is why every other language works without one.
-
-## Example Output
-
-### Example PR Review Summary
-
-```markdown
-## 🤖 drep AI Code Review
-
-Looks great overall! Tests cover the new behavior and naming is clear.
-
-**Recommendation:** ✅ Approve
-
----
-*Generated by drep using qwen3-30b-a3b*
-```
-
-### Example Docstring Suggestion
-
-````markdown
-Suggested docstring for `calculate_total()`:
-
-```python
-def calculate_total(...):
-    """
-    Compute the final invoice total including tax.
-
-    Args:
-        prices: Individual line-item amounts.
-        tax_rate: Tax rate expressed as a decimal.
-
-    Returns:
-        Total amount with tax applied.
-    """
-```
-
-**Reasoning:** Summarizes the calculation inputs and highlights tax handling.
-````
+An unclosed fence turns every line below it into code, so it alone blocks by
+default. Whitespace renders identically, so it does not. `--strict` is the
+shorthand for `--fail-on info`, which blocks on everything; over a real
+repository that is dominated by line length, and a hook that blocks a commit
+over a long line is a hook that gets deleted.
 
 ## Configuration
 
-### Full config.yaml Example
+`drep.toml`, written by `drep init`:
 
-**Option 1: Local LLM (LM Studio / Ollama)**
-```yaml
-gitea:
-  url: http://localhost:3000
-  token: ${GITEA_TOKEN}
-  repositories:
-    - your-org/*
-
-documentation:
-  enabled: true
-  custom_dictionary:
-    - asyncio
-    - fastapi
-    - kubernetes
-
-database_url: sqlite:///./drep.db
-
-llm:
-  enabled: true
-  endpoint: http://localhost:1234/v1  # LM Studio / Ollama endpoint
-  model: qwen3-30b-a3b
-  temperature: 0.2
-  timeout: 120
-  max_retries: 3
-  retry_delay: 2
-  max_concurrent_global: 5
-  max_concurrent_per_repo: 3
-  requests_per_minute: 60
-  max_tokens_per_minute: 80000
-  cache:
-    enabled: true
-    directory: ~/.cache/drep/llm
-    ttl_days: 30
-    max_size_gb: 10
+```toml
+[[llm]]
+endpoint = "https://openrouter.ai/api/v1"
+model = "deepseek/deepseek-v4-pro-0813"
+api_key = "${OPENROUTER_API_KEY}"
+timeout_secs = 1800
 ```
 
-**Option 2: AWS Bedrock (Phase 3.3 - Complete) ✅**
-```yaml
-llm:
-  enabled: true
-  provider: bedrock
+`api_key` names an environment variable rather than holding the secret, so the
+file can be committed.
 
-  bedrock:
-    region: us-east-1
-    model: anthropic.claude-3-5-sonnet-20241022-v2:0
-    # Optional: Uses AWS credentials chain if not specified
-    # aws_access_key_id: ${AWS_ACCESS_KEY_ID}
-    # aws_secret_access_key: ${AWS_SECRET_ACCESS_KEY}
+`[[llm]]` is an array of tables, and the order is a failover chain. Each entry
+is tried in turn: a timeout, a refused connection, a 429, a 5xx or an empty
+answer falls through to the next one. A 401 or 403 does not, because that is a
+broken key and falling back would hide it. Set `enabled = false` on an entry to
+park it without deleting it.
 
-  temperature: 0.2
-  max_tokens: 4000
-  cache:
-    enabled: true
+```toml
+# Local model first, cloud when it is not running.
+[[llm]]
+endpoint = "http://localhost:1234/v1"
+model = "qwen3-30b-a3b"
+
+[[llm]]
+endpoint = "https://openrouter.ai/api/v1"
+model = "deepseek/deepseek-v4-pro-0813"
+api_key = "${OPENROUTER_API_KEY}"
 ```
 
-**Option 3: Anthropic Direct (Planned - Phase 3.4)**
-```yaml
-llm:
-  enabled: true
-  provider: anthropic
-
-  anthropic:
-    api_key: ${ANTHROPIC_API_KEY}
-    model: claude-3-5-sonnet-20241022
-
-  temperature: 0.2
-  max_tokens: 4000
-  requests_per_minute: 50  # Anthropic tier limits
-  cache:
-    enabled: true
-```
-
-### Environment Variables
-
-```bash
-# Platform tokens (recommended over hardcoding)
-export GITEA_TOKEN="your-token"
-# Future adapters will also respect:
-# export GITHUB_TOKEN="your-token"
-# export GITLAB_TOKEN="your-token"
-
-# Config file location (part of auto-discovery hierarchy)
-export DREP_CONFIG="/path/to/config.yaml"
-
-# Override LLM endpoint (optional)
-export DREP_LLM_ENDPOINT="http://localhost:11434"
-```
-
-## CLI Commands
-
-All commands auto-discover your config file. Use `--config` only to override the default discovery.
-
-```bash
-# Initialize configuration (prompts for location)
-drep init
-
-# Validate configuration (auto-discovers config)
-drep validate
-
-# Check local files (pre-commit friendly, config optional)
-drep check [PATH] [--staged] [--exit-zero] [--format text|json]
-
-# Start web server (auto-discovers config)
-drep serve [--host 0.0.0.0] [--port 8000]
-
-# Manual repository scan (auto-discovers config)
-drep scan owner/repo
-
-# Review a pull request (auto-discovers config)
-drep review owner/repo PR_NUMBER [--no-post]
-
-# View metrics
-drep metrics [--detailed] [--export FILE] [--days N]
-
-# Override config file location (any command)
-drep scan owner/repo --config /path/to/config.yaml
-```
-
-## Architecture
-
-drep uses a modular architecture with platform adapters:
-
-```
-drep/
-├── adapters/         # Platform-specific implementations
-│   ├── base.py       # Abstract adapter interface
-│   ├── gitea.py      # Gitea adapter
-│   ├── github.py     # GitHub adapter
-│   └── gitlab.py     # GitLab adapter
-├── core/             # Core business logic
-├── documentation/    # Documentation analyzer
-└── models/           # Data models
-```
-
-See [docs/technical-design.md](docs/technical-design.md) for complete architecture details.
+Other keys: `temperature`, `max_tokens` (unset by default, so a reasoning model
+is never truncated mid-thought), `max_retries`, `max_concurrent`.
 
 ## Development
 
-### Setup Development Environment
-
-```bash
-# Clone repository
-git clone https://github.com/slb350/drep.git
-cd drep
-
-# Create virtual environment
-python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-
-# Install in development mode
-pip install -e ".[dev]"
-
-# Run tests
-pytest
-
-# Format code
-ruff format drep/
-ruff check drep/
-
-# Type checking
-mypy drep/
+```sh
+cargo test --all-targets --all-features
+cargo clippy --all-targets --all-features     # levels come from [lints] in Cargo.toml
+cargo mutants                                 # a green suite is not a discriminating one
 ```
 
-### Running Tests
+`docs/technical-design.md` is the architecture. `CLAUDE.md` carries the
+invariants, each with the defect that produced it.
 
-```bash
-# Run all tests
-pytest
+## History
 
-# Run with coverage
-pytest --cov=drep --cov-report=html
-
-# Run specific test file
-pytest tests/unit/test_adapters.py
-```
-
-## Roadmap
-
-See **[docs/roadmap.md](docs/roadmap.md)** for the complete development roadmap with priorities, timelines, and contribution opportunities.
-
-### Current Status (v1.0.0 - Production Release) 🎉
-- ✅ Full platform support: Gitea, GitHub, and GitLab
-- ✅ Complete BaseAdapter implementation for all platforms
-- ✅ LLM-powered code quality analysis (Python)
-- ✅ Pre-commit hook support (local-only analysis)
-- ✅ Intelligent caching (80%+ hit rate)
-- ✅ Circuit breaker & rate limiting
-- ✅ Docstring generator for Python
-- ✅ CLI interface with metrics tracking
-- ✅ 618 tests passing (production-ready)
-
-### Development Progress (5 Development Phases)
-
-**🎯 Phase 1: Quick Wins** (Sprint 1-2) ✅ COMPLETE
-- Security audit, BaseAdapter interface, extract constants
-- 22 new tests added, 390 total tests passing
-
-**🔧 Phase 2: Quality & Testing** (Sprint 3-4) ✅ COMPLETE
-- E2E integration tests, API documentation, dependency injection
-- 18 new tests added, 411 total tests passing
-
-**🚀 Phase 3: Platform & LLM Backend Expansion** (Sprint 5-8) ✅ COMPLETE
-- ✅ Phase 3.1: GitHub adapter (API complete, 58 unit + 6 integration tests)
-- ✅ Phase 3.2: CLI integration for GitHub (scan & review commands)
-- ✅ Phase 3.3: AWS Bedrock LLM provider (Claude 4.5, enterprise compliance, 17 tests)
-- ✅ Phase 3.5: GitLab adapter support (API complete, 93 unit tests)
-- ✅ Phase 3.6: Pre-commit hook support (local-only analysis, 14 tests)
-- 🔜 Phase 3.4: Anthropic Direct LLM provider (planned, latest Claude models)
-
-**🌟 Phase 4: Feature Expansion** (Sprint 9-12)
-- Multi-language support (JavaScript, TypeScript, Go, Rust)
-- Web UI dashboard for viewing findings and metrics
-
-**🔬 Phase 5: Advanced Features** (Backlog)
-- Custom rules engine, performance optimizations, vector database for cross-file context
-
-**Want to help?** Good first issues: Anthropic Direct provider, adding benchmarks, multi-language support. See [docs/roadmap.md](docs/roadmap.md#-contributing) for details.
-
-## Comparison with Existing Tools
-
-| Feature | drep (current) | Greptile | PR-Agent | Codedog |
-|---------|----------------|----------|----------|---------|
-| **CLI repository scans** | ✅ | ❌ | ❌ | ❌ |
-| **Docstring suggestions (Python)** | ✅ | ❌ | ❌ | ❌ |
-| **Gitea PR reviews** | ✅ | ❌ | ❌ | ❌ |
-| **Local LLM** | ✅ | ❌ | Partial | Partial |
-| **Gitea support** | ✅ Full | ❌ | ❌ | ❌ |
-| **GitHub support** | ✅ Full | ✅ | ✅ | ✅ |
-| **GitLab support** | ✅ Full | ✅ | ✅ | ✅ |
-| **Draft PR automation** | 🚧 Planned | ❌ | ❌ | ❌ |
-
-**Key Differentiator**: drep is the only tool with full support for Gitea, GitHub, AND GitLab, powered by local LLMs for complete privacy. Perfect for organizations using multiple git platforms or self-hosted solutions.
-
-## Contributing
-
-Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+Versions up to 1.3.0 were a Python package (`drep-ai` on PyPI) that also ran a
+webhook server, posted reviews to Gitea, GitHub and GitLab, generated
+docstrings and kept a SQLite cache. 2.0 is a rewrite in Rust and keeps only the
+local gate. The PyPI releases stay up; nothing new is published there.
 
 ## License
 
-MIT License - see [LICENSE](LICENSE) for details.
-
-## Support
-
-- **Documentation**: [docs/](docs/)
-- **Issues**: https://github.com/slb350/drep/issues
-- **Discussions**: https://github.com/slb350/drep/discussions
-
-## Acknowledgments
-
-- Uses OpenAI-compatible local LLMs (LM Studio, Ollama)
-- Inspired by tools like Greptile, PR-Agent, and Codedog
-- Thanks to the open-source community
-
----
-
-**Made with ❤️ for developers who care about code quality and documentation**
+MIT. See [LICENSE](LICENSE).

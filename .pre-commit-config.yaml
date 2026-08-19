@@ -1,37 +1,72 @@
-# drep's own commit gate. Install with: ./venv/bin/pre-commit install
+# drep's own commit gate.
 #
-# Every hook runs out of ./venv (language: system), so pre-commit builds no
-# isolated environments and the tool versions match the ones CI and the release
-# checklist use.
+# Install (the `core.hooksPath` dance is explained in CLAUDE.md):
 #
-# Ordering is deliberate: the instant rule-based checks run first so an obvious
-# lint failure does not cost an LLM round-trip. `drep check` is last and is by
-# far the slowest hook - it sends each staged Python file to the LLM endpoint in
-# config.yaml. Exit 2 from it means files could not be analyzed (endpoint down),
-# which is a failed gate, not a pass.
+#     git config --local core.hooksPath "" \
+#       && pre-commit install \
+#       && pre-commit install --hook-type pre-push
+#     git config --local --unset core.hooksPath
+#
+# `pre-commit` itself is the one Python left anywhere near this repository, and
+# it lives on PATH rather than in a venv here: `uv tool install pre-commit`.
+# Every hook below is `language: system`, so pre-commit builds no environments
+# and the tool versions are the ones CI runs.
+#
+# Ordering is deliberate: the instant checks run first, so an obvious lint
+# failure does not cost an LLM round-trip.
 repos:
   - repo: local
     hooks:
-      - id: ruff-check
-        name: ruff check
-        entry: ./venv/bin/ruff check --fix --force-exclude
+      # `cargo fmt` rewrites in place, so pre-commit sees the modified file and
+      # fails the commit rather than committing unformatted code.
+      - id: cargo-fmt
+        name: cargo fmt
+        entry: cargo fmt --
         language: system
-        types_or: [python, pyi]
+        types: [rust]
         require_serial: true
 
-      - id: ruff-format
-        name: ruff format
-        entry: ./venv/bin/ruff format --force-exclude
+      # --all-targets so test code is linted too. Lint levels come from
+      # [lints] in Cargo.toml, so this agrees with CI and with a plain local
+      # `cargo clippy` by construction.
+      #
+      # Warm-incremental this is ~0.14s, but a cold target dir costs seconds
+      # and goes cold on every toolchain bump, branch switch and dependency
+      # change. Move it to pre-push if that starts biting.
+      - id: cargo-clippy
+        name: cargo clippy
+        entry: cargo clippy --all-targets --all-features
         language: system
-        types_or: [python, pyi]
+        types: [rust]
+        pass_filenames: false
         require_serial: true
 
-      # Report-only, deliberately: lint-docs' long_line check flags >120 chars,
-      # and this repo turns that rule off (MD013: false in .markdownlint.json).
-      # Add --strict in a project that wants markdown to gate the commit.
+      # A green suite proves the tests ran, not that they would notice if the
+      # code were wrong. cargo-mutants perturbs the implementation and reports
+      # mutations no test catches; a surviving mutant IS a non-discriminating
+      # test. Added after the first full sweep found 11 of them, including one
+      # on a load-bearing invariant - replacing the executable-bit check in
+      # resolve_tool with a constant `true` failed no test.
+      #
+      # Scoped to the staged diff, so cost is proportional to the change
+      # (~30s for one file). CI runs the full sweep. The run itself happens on
+      # strix.local; scripts/mutants-remote.sh falls back to a local run with a
+      # warning when it cannot be reached.
+      - id: cargo-mutants
+        name: cargo mutants (staged diff)
+        entry: ./scripts/mutants-staged.sh
+        language: system
+        types: [rust]
+        pass_filenames: false
+        require_serial: true
+
+      # drep gating drep, at the calibration `drep init` writes and
+      # .pre-commit-hooks.yaml publishes. `--fail-on error` blocks on an
+      # unclosed code fence and stays quiet about line length, which this repo
+      # turns off anyway (MD013: false in .markdownlint.json).
       - id: drep-lint-docs
         name: drep lint-docs
-        entry: ./venv/bin/drep lint-docs
+        entry: ./target/release/drep lint-docs --fail-on error
         language: system
         types: [markdown]
 
@@ -39,19 +74,23 @@ repos:
       # money per file (deepseek-v4-pro ~3.5min and ~$0.16 a file), which is
       # fine once per push and intolerable on every commit.
       #
-      # No --fail-on: deterministic tool findings (ruff, eslint, go vet) block
-      # on their own, and the LLM's findings inform. Passing --fail-on error
-      # here opted the LLM back into gating and blocked a push with 18
-      # "blocking" findings that were model opinions, not tool output.
+      # `cargo build --release` is deliberately not run here - the hook uses
+      # whatever binary is at target/release/drep, and `cargo-clippy` above
+      # already fails the commit if the tree does not compile.
+      #
+      # No --fail-on: deterministic tool findings block on their own, and the
+      # LLM's findings inform. Passing --fail-on error here opted the LLM back
+      # into gating and blocked a push with 18 "blocking" findings that were
+      # model opinions, not tool output.
       #
       # Filenames come from pre-commit, which at the pre-push stage resolves
-      # them to the files the outgoing commits actually touch. `--staged` would
-      # be wrong here: nothing is staged at push time, so it would analyze
-      # nothing and pass silently.
+      # them to the files the outgoing commits touch. `--staged` would be wrong
+      # here: nothing is staged at push time, so it would analyze nothing and
+      # pass silently.
       - id: drep-check
         name: drep check (LLM code quality)
-        entry: ./venv/bin/drep check
+        entry: ./target/release/drep check
         language: system
-        types: [python]
+        types: [rust]
         stages: [pre-push]
         require_serial: true

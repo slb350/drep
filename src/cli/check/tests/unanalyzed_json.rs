@@ -1,0 +1,156 @@
+//! The machine-readable shape of `--format json`'s `unanalyzed` array.
+//!
+//! Every entry used to carry only `file` and `reason`, where `reason` is an
+//! English sentence. A consumer wanting to tell "the endpoint rate-limited us"
+//! from "the endpoint is misconfigured" had to match on that prose — and Phase
+//! 5c's failover has to make exactly that call, because a 429 should fail over
+//! to the next provider and a 401 must not (falling back would mask the
+//! misconfiguration). So each entry now carries a stable `kind` tag, and an
+//! HTTP `status` when there was one.
+
+use serde_json::Value;
+
+use super::support::{outcome_failing, rendered_json};
+use crate::analysis::result::{FailureReason, ProviderFailure};
+
+/// Render `failures` as JSON and hand back the parsed `unanalyzed` array.
+fn unanalyzed_for(failures: Vec<(&str, FailureReason)>) -> Vec<Value> {
+    let parsed = rendered_json(&outcome_failing(failures));
+    parsed["unanalyzed"]
+        .as_array()
+        .expect("unanalyzed is an array")
+        .clone()
+}
+
+/// The tag each variant is expected to render, restated here independently of
+/// production.
+///
+/// Written as an **exhaustive match** on purpose. The sample list below is
+/// hand-written, and a new `FailureReason` variant added without a sample would
+/// otherwise slip through with no tag test at all - which is exactly what
+/// happened when `AllProviders` arrived and this file kept passing. Adding a
+/// variant now fails to compile here, in the file holding the list.
+fn expected_kind(reason: &FailureReason) -> &'static str {
+    match reason {
+        FailureReason::Transport { .. } => "transport",
+        FailureReason::Unparseable(_) => "unparseable",
+        FailureReason::ModelStopped { .. } => "model_stopped",
+        FailureReason::Truncated => "truncated",
+        FailureReason::MalformedFinding(_) => "malformed_finding",
+        FailureReason::ToolUnavailable { .. } => "tool_unavailable",
+        FailureReason::FileTooLarge { .. } => "file_too_large",
+        FailureReason::PayloadTooLarge { .. } => "payload_too_large",
+        FailureReason::Unreadable(_) => "unreadable",
+        FailureReason::Unsupported { .. } => "unsupported",
+        FailureReason::ChainFailed(_) => "chain_failed",
+    }
+}
+
+/// Every `FailureReason` variant renders a distinct `kind`.
+///
+/// Listed exhaustively rather than sampled: the tags are what a consumer
+/// branches on, so two variants collapsing to one tag is a silent loss of
+/// information exactly where the JSON format is supposed to be adding it.
+#[test]
+fn each_failure_variant_renders_its_own_kind_tag() {
+    let cases: Vec<FailureReason> = vec![
+        FailureReason::Transport {
+            status: Some(500),
+            message: "boom".to_owned(),
+        },
+        FailureReason::Unparseable("no json".to_owned()),
+        FailureReason::ModelStopped {
+            finish: "length".to_owned(),
+            message: "the model hit its output token limit".to_owned(),
+        },
+        FailureReason::Truncated,
+        FailureReason::MalformedFinding("bad severity".to_owned()),
+        FailureReason::ToolUnavailable {
+            tool: "ruff".to_owned(),
+            detail: "not found".to_owned(),
+        },
+        FailureReason::FileTooLarge { bytes: 1, limit: 0 },
+        FailureReason::PayloadTooLarge { bytes: 1, limit: 0 },
+        FailureReason::Unreadable("eperm".to_owned()),
+        FailureReason::Unsupported {
+            extension: Some(".md".to_owned()),
+            hint: Some("run `drep lint-docs` instead".to_owned()),
+        },
+        FailureReason::ChainFailed(vec![ProviderFailure {
+            provider: 0,
+            model: "m".to_owned(),
+            reason: FailureReason::Transport {
+                status: None,
+                message: "refused".to_owned(),
+            },
+            skipped: false,
+        }]),
+    ];
+
+    let mut seen: Vec<&str> = Vec::new();
+    for reason in cases {
+        let expected = expected_kind(&reason);
+        let entries = unanalyzed_for(vec![("src/a.rs", reason.clone())]);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(
+            entries[0]["kind"].as_str(),
+            Some(expected),
+            "{reason:?} must render kind {expected}"
+        );
+        seen.push(expected);
+    }
+    let mut unique = seen.clone();
+    unique.sort_unstable();
+    unique.dedup();
+    assert_eq!(
+        unique.len(),
+        seen.len(),
+        "every variant needs its own tag; duplicates found in {seen:?}"
+    );
+}
+
+/// A transport failure with an HTTP code exposes it as a **number**.
+///
+/// The number is the point: 5c branches on 429 versus 401, and a consumer
+/// substring-matching the prose would break the first time the message is
+/// reworded.
+#[test]
+fn a_transport_failure_exposes_its_status_as_a_number() {
+    let entries = unanalyzed_for(vec![(
+        "src/a.rs",
+        FailureReason::Transport {
+            status: Some(429),
+            message: "rate limited".to_owned(),
+        },
+    )]);
+    assert_eq!(entries[0]["status"].as_u64(), Some(429));
+    assert_eq!(entries[0]["kind"].as_str(), Some("transport"));
+    assert_eq!(entries[0]["file"].as_str(), Some("src/a.rs"));
+    assert!(
+        entries[0]["reason"]
+            .as_str()
+            .expect("reason is a string")
+            .contains("429"),
+        "the human line keeps carrying the code too"
+    );
+}
+
+/// A failure with no HTTP code omits `status` entirely rather than emitting
+/// `null`, so the key's presence is itself the signal.
+#[test]
+fn a_failure_without_a_status_omits_the_key_rather_than_nulling_it() {
+    for reason in [
+        FailureReason::Truncated,
+        FailureReason::Transport {
+            status: None,
+            message: "connection refused".to_owned(),
+        },
+    ] {
+        let entries = unanalyzed_for(vec![("src/a.rs", reason.clone())]);
+        let obj = entries[0].as_object().expect("entry is an object");
+        assert!(
+            !obj.contains_key("status"),
+            "{reason:?} has no HTTP status, so `status` must be absent, got {obj:?}"
+        );
+    }
+}

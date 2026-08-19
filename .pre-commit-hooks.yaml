@@ -2,13 +2,15 @@
 #
 #   repos:
 #     - repo: https://github.com/slb350/drep
-#       rev: v1.3.0
+#       rev: v2.0.0
 #       hooks:
 #         - id: drep-check-push
 #
-# `language: python` so pre-commit builds an isolated environment from this
-# package. With `language: system` the consumer had to install drep-ai
-# themselves first, and the hook simply failed if they had not.
+# `language: rust` so pre-commit builds the binary from this repository
+# (`cargo install --path .`) into its own environment. With `language: system`
+# the consumer has to install drep themselves first and the hook simply fails
+# if they have not; `language: python` was the 1.x answer and installs a PyPI
+# package that 2.0 does not publish.
 #
 # types_or covers every language the registry knows: with `types: [python]`
 # these hooks never fired in a Go or TypeScript repo.
@@ -17,7 +19,7 @@
   name: drep code quality check
   description: Check staged files (deterministic tools always; LLM if configured)
   entry: drep check --staged
-  language: python
+  language: rust
   pass_filenames: false
   types_or: [python, javascript, jsx, ts, tsx, go, rust]
 
@@ -25,7 +27,7 @@
   name: drep code quality check (pre-push)
   description: Check the files an outgoing push touches
   entry: drep check
-  language: python
+  language: rust
   # Filenames come from pre-commit, which at the pre-push stage resolves them
   # to what the outgoing commits touch. `--staged` would be wrong here: nothing
   # is staged at push time, so it would analyze nothing and pass silently.
@@ -36,13 +38,19 @@
   name: drep full check
   description: Check every supported file in the repository
   entry: drep check
-  language: python
+  language: rust
   pass_filenames: false
   types_or: [python, javascript, jsx, ts, tsx, go, rust]
 
+# `--fail-on error`, not `--strict`. Severity here answers one question: does
+# the finding change how the document renders? An unclosed fence does - the
+# rest of the file becomes code - and it is the only check that says `error`.
+# `--strict` is `--fail-on info`, which blocks on trailing whitespace and line
+# length: 75 findings on drep's own tree, none of them above `info`. A hook
+# that blocks a commit over a long line is a hook the consumer deletes.
 - id: drep-lint-docs
   name: drep markdown lint
   description: Rule-based markdown checks on staged docs (no LLM, no config)
-  entry: drep lint-docs --strict
-  language: python
+  entry: drep lint-docs --fail-on error
+  language: rust
   types: [markdown]
