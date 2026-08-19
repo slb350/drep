@@ -7,6 +7,57 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Rust rewrite - 2026-08-19 - Phase 8: delete Python
+
+The Python package is gone. `drep/`, the pytest suite, `pyproject.toml`,
+`uv.lock` and `scripts/install.sh` are deleted, along with everything that only
+existed to ship or serve them: the Dockerfile and compose file, the CI and
+docker-publish workflows, the sphinx `docs/api/` tree, and the 1.x docs
+(`llm-setup`, `roadmap`, `multi-language-analysis`,
+`rust-optimization-analysis`, `SECURITY`). Nothing was yanked from PyPI. 1.3.0
+stays up and nothing new is published there.
+
+`README.md` went from ~900 lines describing webhooks, platform adapters,
+docstring generation and a metrics dashboard to 228 describing a commit gate.
+`docs/technical-design.md` was rewritten as the architecture of the Rust
+binary, and now says what the shape is while `CLAUDE.md` says why it cannot
+change. `CLAUDE.md` itself went from 1071 lines to 438: the invariants block
+survives intact, everything around it was 1.x.
+
+The gate needed rewiring, not just editing. Every hook in
+`.pre-commit-config.yaml` ran out of `./venv`, and `.git/hooks/pre-commit`
+named `./venv/bin/python3.14` as the interpreter that drives pre-commit itself,
+so deleting the venv would have silently disarmed the gate rather than breaking
+it loudly. `pre-commit` now lives on PATH (`uv tool install pre-commit`), the
+hooks were reinstalled to point at it, and the config keeps cargo fmt, cargo
+clippy, cargo mutants and drep - all `language: system`, no ruff, no venv.
+
+`tests/no_python_remains.rs` (5 tests) pins the outcome, because every one of
+these fails somewhere other than here: on a fresh clone, in a contributor's
+first commit, on a user's machine. No `.py` anywhere in the tree, no venv or
+pytest in the commit gate, no workflow installing Python, and a README that
+installs the binary the release workflow ships rather than the package that
+stopped being published.
+
+The `/simplify` pass rewrote the walk in that file. It was a hand-rolled stack
+with its own list of directories not to descend into, which had already drifted
+from `files::is_ignored_dir` - the production answer to the same question -
+by missing `node_modules`, `build` and `dist`. It now prunes through that
+predicate, adding only `repos/` and `external/`, which are clones of other
+projects fetched for manual testing and hold 129 `.py` files between them.
+Gitignore stays off: a stray `.py` that something later gitignores is still a
+Python file in the tree.
+
+`tests/ground_truth_walk.rs` had to be updated rather than deleted, and it is
+the one place the deletion showed up as a test failure. It walks *this*
+repository to prove the walk survives contact with a real tree, and its ground
+truth was the Python one: it asserted `drep/cli.py` is found and that the walk
+never descends into a 222MB `venv/`. Both statements are now about a tree that
+does not exist. It asserts `tests/cli.rs` and a 15GB `target/` instead, and the
+gitignore assertion lost `.pytest_cache/` and kept `.claude/` - a directory
+that no longer exists cannot fail an assertion about being skipped.
+
+
 ### Rust rewrite - 2026-08-19 - Phase 7: cargo-dist
 
 `cargo-dist` 0.32.0 is still current: published 2026-05-21, and both the latest

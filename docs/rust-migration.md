@@ -49,25 +49,18 @@ fastapi, uvicorn, uvloop, gitpython, boto3/botocore, pydantic, click, httpx.
 What survives and gets ported is ~4,500 LOC of real substance, which lands
 around 6,000–8,000 LOC of Rust with tests. That is the actual size of this job.
 
-## Repo layout during the migration
+## Repo layout
 
-Rust lives at the repo root alongside the Python package. Python is
-reference-only from Phase 1 onward — no further changes to it.
-
-```
-Cargo.toml           # new
-src/                 # new
-tests/*.rs           # new (integration tests, alongside the Python suite)
-drep/                # Python, reference only, deleted in Phase 8
-tests/               # Python, reference only, deleted in Phase 8
-pyproject.toml       # deleted in Phase 8
-```
+Through Phase 7 the Rust crate lived at the repo root alongside the Python
+package, which was reference-only from Phase 1 onward. Phase 8 deleted the
+Python half; git history has it.
 
 Rust integration tests go directly in `tests/` as `tests/*.rs`, not a `tests/rust/`
 subdirectory: cargo only discovers test targets at `tests/*.rs` (or
 `tests/<dir>/main.rs`), so a nested `tests/rust/cli.rs` would silently never
-run. The two suites coexist there until Phase 8 - pytest collects only `.py`,
-cargo only `.rs`.
+run. That mattered while the two suites shared the directory - pytest collected
+only `.py`, cargo only `.rs` - and it still decides where a new integration
+test goes.
 
 ## Module map
 
@@ -754,10 +747,26 @@ block a prerelease: dist gates `publish-homebrew-formula` on
 `!announcement_is_prerelease`, so a `v2.0.0-alpha.N` tag skips it and releases
 the binaries and the shell installer. They block the first stable tag.
 
-### Phase 8 — Delete Python
-Remove `drep/`, `tests/`, `pyproject.toml`, `scripts/install.sh`. Rewrite
-`README.md`, `CLAUDE.md`, and `docs/technical-design.md` for the new scope.
-Yank nothing from PyPI; just stop publishing.
+### Phase 8 — Delete Python ✅ (2026-08-19)
+`drep/`, the pytest suite, `pyproject.toml`, `uv.lock`, `scripts/install.sh`,
+the Dockerfile and compose file, the 1.x CI and docker-publish workflows, and
+the 1.x docs (`llm-setup`, `roadmap`, `multi-language-analysis`,
+`rust-optimization-analysis`, `SECURITY`, the sphinx `docs/api/`) are gone.
+`README.md`, `CLAUDE.md` and `docs/technical-design.md` are rewritten for the
+2.0 scope. Nothing was yanked from PyPI; 1.3.0 stays up and nothing new is
+published there.
+
+`.pre-commit-config.yaml` keeps the framework but no longer runs anything out
+of `./venv`: cargo fmt, cargo clippy, cargo mutants and drep itself, all
+`language: system`. `pre-commit` is now the only Python involved and lives on
+PATH (`uv tool install pre-commit`) rather than in a repository venv, so the
+git hooks had to be reinstalled to stop pointing at `./venv/bin/python3.14`.
+
+`tests/no_python_remains.rs` pins the result: no `.py` under the tree, no venv
+or pytest in the commit gate, no workflow installing Python, and a README that
+installs the binary rather than the PyPI package. `tests/ground_truth_walk.rs`
+needed updating rather than deleting - it walks this repository, so its ground
+truth changed when the Python tree did.
 
 ## Invariants that must survive the port
 
@@ -882,4 +891,4 @@ machinery. Revisit only if a real workload demands it.
 - `cargo clippy -- -D warnings` and `cargo fmt --check` clean.
 - `drep check` runs green over drep's own source, with **zero** files
   unanalyzed — the deterministic tools actually executing, not merely resolving.
-- Python removed from the repository.
+- Python removed from the repository. ✅ (2026-08-19)

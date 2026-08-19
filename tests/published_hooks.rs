@@ -19,9 +19,9 @@ fn hooks_yaml() -> String {
 }
 
 /// 2.0 is a Rust binary. `language: python` builds an isolated environment
-/// from the PyPI package, which Phase 8 deletes - and a consumer's hook would
-/// then fail at install time with a pip error naming a package that no longer
-/// exists.
+/// from the PyPI package that Phase 8 deleted, so a consumer's hook would fail
+/// at install time with a pip error naming a package this repository no longer
+/// publishes.
 #[test]
 fn no_published_hook_installs_the_python_package() {
     let yaml = hooks_yaml();

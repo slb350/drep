@@ -1,12 +1,15 @@
 //! `walk_targets` against this actual repository.
 //!
 //! The unit tests use temp-dir fixtures, which prove the walk matches its spec.
-//! This one proves the spec survives contact with a real tree: a 222MB `venv/`,
-//! a `target/` directory, and a `.gitignore` that excludes dotted caches.
+//! This one proves the spec survives contact with a real tree: a 15GB `target/`
+//! directory, a `.git/` directory, and a `.gitignore` that excludes dotted
+//! directories holding real markdown.
 //!
-//! The pruning assertions are the load-bearing ones. Descending into `venv/`
+//! The pruning assertions are the load-bearing ones. Descending into `target/`
 //! costs tens of thousands of syscalls and is the reason this uses the `ignore`
-//! crate rather than a recursive glob.
+//! crate rather than a recursive glob. Until Phase 8 the same sentence was
+//! about a 222MB `venv/`; the tree it walks is the ground truth, so deleting
+//! Python changed what this file can honestly assert.
 //!
 //! Only properties that need a *real* tree live here. The explicit-path
 //! asymmetry (naming a gitignored file outranks the walk) used to have a copy
@@ -40,9 +43,10 @@ fn walk_this_repo_prunes_vendored_trees_and_respects_gitignore() {
 
     assert!(!rel.is_empty(), "walked nothing at all");
 
-    // Never descended into. venv/ alone holds ~222MB of .py files, so a leak
-    // here is both a correctness bug and a performance cliff.
-    for pruned in ["venv/", "target/", "node_modules/", ".git/"] {
+    // Never descended into. target/ alone is ~15GB, so a leak here is both a
+    // correctness bug and a performance cliff. Both directories exist in this
+    // tree - asserting the absence of one that cannot appear proves nothing.
+    for pruned in ["target/", ".git/"] {
         let leaked: Vec<&String> = rel.iter().filter(|p| p.contains(pruned)).collect();
         assert!(
             leaked.is_empty(),
@@ -55,7 +59,7 @@ fn walk_this_repo_prunes_vendored_trees_and_respects_gitignore() {
     // scan target - `check` and `lint-docs` own disjoint file classes - so
     // this list is code only, and the assertion below states the absence
     // rather than leaving it to be inferred from a missing entry.
-    for expected in ["src/lib.rs", "drep/cli.py"] {
+    for expected in ["src/lib.rs", "tests/cli.rs"] {
         assert!(rel.iter().any(|p| p == expected), "missing {expected}");
     }
     assert!(
@@ -67,9 +71,11 @@ fn walk_this_repo_prunes_vendored_trees_and_respects_gitignore() {
 #[test]
 fn the_markdown_walk_finds_this_repos_docs_and_respects_gitignore() {
     // The other half of the split, and the one that carries the gitignore
-    // assertions: `.claude/` and `.pytest_cache/` hold real `.md` files, so
-    // only `.gitignore` keeps them out of this walk. Asserting that against
-    // `is_scan_target` stopped meaning anything once markdown left it.
+    // assertions: `.claude/` holds 15 real `.md` files, so only `.gitignore`
+    // keeps them out of this walk. Asserting that against `is_scan_target`
+    // stopped meaning anything once markdown left it. `.pytest_cache/` was the
+    // second example here until Phase 8 deleted it, and a directory that no
+    // longer exists cannot fail this assertion.
     let rel = walk(is_markdown);
 
     // Note what is *not* here: `CLAUDE.md` is gitignored in this repository,
@@ -79,13 +85,11 @@ fn the_markdown_walk_finds_this_repos_docs_and_respects_gitignore() {
     for expected in ["README.md", "CHANGELOG.md", "docs/rust-migration.md"] {
         assert!(rel.iter().any(|p| p == expected), "missing {expected}");
     }
-    for ignored in [".claude/", ".pytest_cache/"] {
-        assert!(
-            !rel.iter().any(|p| p.contains(ignored)),
-            "{ignored} is gitignored but was walked"
-        );
-    }
-    for pruned in ["venv/", "target/", "node_modules/", ".git/"] {
+    assert!(
+        !rel.iter().any(|p| p.contains(".claude/")),
+        ".claude/ is gitignored but was walked"
+    );
+    for pruned in ["target/", ".git/"] {
         assert!(
             !rel.iter().any(|p| p.contains(pruned)),
             "descended into {pruned}"

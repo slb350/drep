@@ -1,35 +1,24 @@
-# drep's own commit gate. Install with: ./venv/bin/pre-commit install
+# drep's own commit gate.
 #
-# Every hook runs out of ./venv (language: system), so pre-commit builds no
-# isolated environments and the tool versions match the ones CI and the release
-# checklist use.
+# Install (the `core.hooksPath` dance is explained in CLAUDE.md):
 #
-# Ordering is deliberate: the instant rule-based checks run first so an obvious
-# lint failure does not cost an LLM round-trip. `drep check` is last and is by
-# far the slowest hook - it sends each staged Python file to the LLM endpoint in
-# config.yaml. Exit 2 from it means files could not be analyzed (endpoint down),
-# which is a failed gate, not a pass.
+#     git config --local core.hooksPath "" \
+#       && pre-commit install \
+#       && pre-commit install --hook-type pre-push
+#     git config --local --unset core.hooksPath
+#
+# `pre-commit` itself is the one Python left anywhere near this repository, and
+# it lives on PATH rather than in a venv here: `uv tool install pre-commit`.
+# Every hook below is `language: system`, so pre-commit builds no environments
+# and the tool versions are the ones CI runs.
+#
+# Ordering is deliberate: the instant checks run first, so an obvious lint
+# failure does not cost an LLM round-trip.
 repos:
   - repo: local
     hooks:
-      - id: ruff-check
-        name: ruff check
-        entry: ./venv/bin/ruff check --fix --force-exclude
-        language: system
-        types_or: [python, pyi]
-        require_serial: true
-
-      - id: ruff-format
-        name: ruff format
-        entry: ./venv/bin/ruff format --force-exclude
-        language: system
-        types_or: [python, pyi]
-        require_serial: true
-
-      # drep 2.0 is Rust (docs/rust-migration.md). These gate the new code the
-      # way ruff gates the old; both sets coexist until Python is deleted.
       # `cargo fmt` rewrites in place, so pre-commit sees the modified file and
-      # fails the commit - same contract as ruff-format above.
+      # fails the commit rather than committing unformatted code.
       - id: cargo-fmt
         name: cargo fmt
         entry: cargo fmt --
@@ -37,10 +26,9 @@ repos:
         types: [rust]
         require_serial: true
 
-      # --all-targets so test code is linted too: most of the port's early
-      # output is tests, and unlinted tests is where the rot starts. Lint
-      # levels come from [lints] in Cargo.toml, so this agrees with CI and
-      # with a plain local `cargo clippy` by construction.
+      # --all-targets so test code is linted too. Lint levels come from
+      # [lints] in Cargo.toml, so this agrees with CI and with a plain local
+      # `cargo clippy` by construction.
       #
       # Warm-incremental this is ~0.14s, but a cold target dir costs seconds
       # and goes cold on every toolchain bump, branch switch and dependency
@@ -61,7 +49,9 @@ repos:
       # resolve_tool with a constant `true` failed no test.
       #
       # Scoped to the staged diff, so cost is proportional to the change
-      # (~30s for one file). CI runs the full sweep.
+      # (~30s for one file). CI runs the full sweep. The run itself happens on
+      # strix.local; scripts/mutants-remote.sh falls back to a local run with a
+      # warning when it cannot be reached.
       - id: cargo-mutants
         name: cargo mutants (staged diff)
         entry: ./scripts/mutants-staged.sh
@@ -70,13 +60,10 @@ repos:
         pass_filenames: false
         require_serial: true
 
-      # The 2.0 binary, gated at `error` - the calibration `drep init` now
-      # writes and `.pre-commit-hooks.yaml` publishes, so this repository runs
-      # what it ships. `--fail-on error` blocks on an unclosed code fence and
-      # stays quiet about line length, which this repo turns off anyway
-      # (MD013: false in .markdownlint.json). Report-only was the old answer
-      # to the same problem, and it meant the one finding that breaks a
-      # document did not block either.
+      # drep gating drep, at the calibration `drep init` writes and
+      # .pre-commit-hooks.yaml publishes. `--fail-on error` blocks on an
+      # unclosed code fence and stays quiet about line length, which this repo
+      # turns off anyway (MD013: false in .markdownlint.json).
       - id: drep-lint-docs
         name: drep lint-docs
         entry: ./target/release/drep lint-docs --fail-on error
@@ -87,31 +74,23 @@ repos:
       # money per file (deepseek-v4-pro ~3.5min and ~$0.16 a file), which is
       # fine once per push and intolerable on every commit.
       #
-      # **The 2.0 binary, not ./venv/bin/drep.** 1.x sets `max_retries: 1` with
-      # a comment that a length failure repeats deterministically - true, and it
-      # silently disabled retry for *transport* errors too. That blocked three
-      # consecutive pushes during Phase 5a on `finish_reason='error'` in files
-      # the change never touched (see CHANGELOG, 98a5096). 2.0 splits the two:
-      # transport retries with backoff, truncation fails the file immediately.
-      # It reads drep.toml rather than config.yaml.
-      #
       # `cargo build --release` is deliberately not run here - the hook uses
       # whatever binary is at target/release/drep, and `cargo-clippy` above
       # already fails the commit if the tree does not compile.
       #
-      # No --fail-on: deterministic tool findings (ruff, clippy) block on their
-      # own, and the LLM's findings inform. Passing --fail-on error here opted
-      # the LLM back into gating and blocked a push with 18 "blocking" findings
-      # that were model opinions, not tool output.
+      # No --fail-on: deterministic tool findings block on their own, and the
+      # LLM's findings inform. Passing --fail-on error here opted the LLM back
+      # into gating and blocked a push with 18 "blocking" findings that were
+      # model opinions, not tool output.
       #
       # Filenames come from pre-commit, which at the pre-push stage resolves
-      # them to the files the outgoing commits actually touch. `--staged` would
-      # be wrong here: nothing is staged at push time, so it would analyze
-      # nothing and pass silently.
+      # them to the files the outgoing commits touch. `--staged` would be wrong
+      # here: nothing is staged at push time, so it would analyze nothing and
+      # pass silently.
       - id: drep-check
         name: drep check (LLM code quality)
         entry: ./target/release/drep check
         language: system
-        types_or: [python, rust]
+        types: [rust]
         stages: [pre-push]
         require_serial: true

@@ -1,31 +1,11 @@
-# Python
-__pycache__/
-*.py[cod]
-*$py.class
-*.so
-.Python
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-*.egg-info/
-.installed.cfg
-*.egg
+# Rust
+/target/
 
-# Virtual Environment
-venv/
-env/
-ENV/
+# cargo-mutants run output
+/mutants.out/
+/mutants.out.old/
 
-# IDE
+# Editors, and the agent scratch this repo keeps out of git
 .vscode/
 .idea/
 .obsidian/
@@ -36,45 +16,18 @@ AGENTS.md
 *.swo
 *~
 
-# Testing
-.pytest_cache/
-.coverage
-htmlcov/
-*.cover
-
-# Database
-*.db
-*.sqlite
-*.sqlite3
-
-# Config
-config.yaml
+# Secrets. .env holds OPENROUTER_API_KEY for the pre-push gate; .tokens is
+# 1.x's PyPI credentials and must never be committed.
 .env
 .tokens
 
-# Repos
-repos/
-
-# Temp files
-*.log
-.DS_Store
-*.tmp.*
-.cache/
-__pycache__/
-
-# LLM cache and metrics
+# Local caches and scratch
 .drep/
-*.metrics.json
+.cache/
+*.log
+*.tmp.*
+.DS_Store
 
-# External dependencies
+# Trees fetched for manual testing against a real repository
+repos/
 external/
-
-# Rust
-/target/
-
-# cargo-mutants run output
-/mutants.out/
-/mutants.out.old/
-
-# Delegation specs — working files, not shipped docs
-PHASE_*_SPEC.md

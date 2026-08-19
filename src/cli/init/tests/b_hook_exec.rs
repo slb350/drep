@@ -349,8 +349,8 @@ fn run_pre_commit(dir: &Path, stub_exit: i32) -> (Option<i32>, Vec<String>) {
 ///
 /// `drep init` used to write `exec drep check --staged` and nothing else, so a
 /// repository gated by drep's own installer had no markdown gating at all -
-/// invisible in this repository, whose `.pre-commit-config.yaml` runs
-/// `lint-docs` through the Python venv.
+/// invisible in this repository, which ran `lint-docs` from its own
+/// `.pre-commit-config.yaml` instead of from the hook it ships.
 ///
 /// First because it is rule-based and takes ~10 ms, and `check` sends files to
 /// an LLM: an obvious documentation defect should not cost a round trip.
