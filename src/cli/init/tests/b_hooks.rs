@@ -182,8 +182,7 @@ async fn install_leaves_a_foreign_chainer_alone() {
     let chainer_dir = dir.path().join(rel);
     std::fs::create_dir_all(&chainer_dir).expect("chainer dir");
     let foreign = "#!/bin/sh\necho other\n";
-    std::fs::write(chainer_dir.join("pre-push"), foreign).expect("write foreign chainer");
-    crate::test_support::make_executable(&chainer_dir.join("pre-push"));
+    crate::test_support::write_executable(&chainer_dir.join("pre-push"), foreign);
 
     let mut out = Vec::new();
     install(&mut out, dir.path(), HookKind::PrePush, false)

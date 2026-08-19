@@ -22,9 +22,9 @@ use crate::analysis::findings::Severity;
 use crate::cli::OutputFormat;
 use crate::cli::check::{self, CheckArgs};
 use crate::llm::cache::Cache;
-use crate::test_support::make_executable;
 use crate::test_support::mount_sse;
 use crate::test_support::sse;
+use crate::test_support::write_executable;
 
 // ---------- in-process scaffolding ----------
 
@@ -128,12 +128,10 @@ async fn tool_finding_blocks_with_no_fail_on() {
     // newline) so the JSON parser sees exactly one element.
     let bin = dir.path().join("venv/bin/ruff");
     std::fs::create_dir_all(bin.parent().unwrap()).expect("bin dir");
-    std::fs::write(
+    write_executable(
         &bin,
         "#!/bin/sh\nprintf '%s' '[{\"code\":\"F401\",\"filename\":\"src/lib.py\",\"location\":{\"row\":1,\"column\":1},\"message\":\"unused import\"}]'\n",
-    )
-    .expect("write ruff");
-    make_executable(&bin);
+    );
     std::fs::write(dir.path().join("pyproject.toml"), "").expect("pyproject");
     std::fs::create_dir_all(dir.path().join("src")).expect("src dir");
     std::fs::write(dir.path().join("src/lib.py"), "import os\n").expect("lib.py");
@@ -282,12 +280,10 @@ async fn failure_outranks_finding() {
     // One file produces a tool finding.
     let bin = dir.path().join("venv/bin/ruff");
     std::fs::create_dir_all(bin.parent().unwrap()).expect("bin dir");
-    std::fs::write(
+    write_executable(
         &bin,
         "#!/bin/sh\nprintf '%s' '[{\"code\":\"F401\",\"filename\":\"src/lib.py\",\"location\":{\"row\":1,\"column\":1},\"message\":\"unused import\"}]'\n",
-    )
-    .expect("write ruff");
-    make_executable(&bin);
+    );
     std::fs::write(dir.path().join("pyproject.toml"), "").expect("pyproject");
     std::fs::create_dir_all(dir.path().join("src")).expect("src dir");
     std::fs::write(dir.path().join("src/lib.py"), "import os\n").expect("lib.py");

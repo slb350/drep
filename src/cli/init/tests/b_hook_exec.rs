@@ -72,12 +72,10 @@ fn run_pre_push_status(
         args_log.to_string_lossy()
     );
     let stub_path = bin_dir.join("drep");
-    std::fs::write(&stub_path, stub).expect("write stub");
-    crate::test_support::make_executable(&stub_path);
+    crate::test_support::write_executable(&stub_path, stub);
 
     let hook_path = dir.join("pre-push");
-    std::fs::write(&hook_path, hook_body("pre-push").expect("known")).expect("write hook");
-    crate::test_support::make_executable(&hook_path);
+    crate::test_support::write_executable(&hook_path, hook_body("pre-push").expect("known"));
 
     // The zero-oid branch shells out to `git`, so that case needs the real
     // PATH as well as the stub directory.
@@ -241,12 +239,10 @@ fn the_highest_exit_code_across_refs_wins() {
         c = counter.to_string_lossy()
     );
     let stub_path = bin_dir.join("drep");
-    std::fs::write(&stub_path, stub).expect("write stub");
-    crate::test_support::make_executable(&stub_path);
+    crate::test_support::write_executable(&stub_path, stub);
 
     let hook_path = dir.path().join("pre-push");
-    std::fs::write(&hook_path, hook_body("pre-push").expect("known")).expect("write hook");
-    crate::test_support::make_executable(&hook_path);
+    crate::test_support::write_executable(&hook_path, hook_body("pre-push").expect("known"));
 
     let stdin = "refs/heads/a 1111111111111111111111111111111111111111 refs/heads/a \
                  2222222222222222222222222222222222222222\n\
@@ -293,8 +289,7 @@ fn a_missing_drep_binary_blocks_the_push_with_an_explanation() {
     let dir = tempfile::tempdir().expect("tempdir");
     crate::test_support::git_init(dir.path());
     let hook_path = dir.path().join("pre-push");
-    std::fs::write(&hook_path, hook_body("pre-push").expect("known")).expect("write hook");
-    crate::test_support::make_executable(&hook_path);
+    crate::test_support::write_executable(&hook_path, hook_body("pre-push").expect("known"));
 
     // An empty PATH: no stub, no real drep.
     let empty = dir.path().join("empty-bin");

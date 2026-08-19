@@ -188,6 +188,53 @@ pub(crate) fn temp_cache() -> (Cache, tempfile::TempDir) {
     (cache, dir)
 }
 
+/// Write `contents` to `path` and mark it executable, without ever holding a
+/// write descriptor for it in this process.
+///
+/// The obvious spelling - `fs::write` then [`make_executable`] - races on
+/// Linux and fails the *exec*, not the write, with `ETXTBSY` ("Text file
+/// busy"). The kernel refuses to exec a file any process has open for writing,
+/// and `fork` copies the whole descriptor table: a test thread spawning a
+/// subprocess during the microseconds our `fs::write` descriptor is open hands
+/// that child an inherited copy, which keeps the inode busy until the child
+/// reaches `exec`. Nothing in the writing test is wrong, and nothing in the
+/// spawning test is wrong; they simply overlap. `O_CLOEXEC` (which Rust sets)
+/// does not help, because the descriptor is only closed *at* exec, after the
+/// window that matters.
+///
+/// So the write happens in a child process instead. This process never opens
+/// the file, so no fork of it can inherit a descriptor to it, and the one
+/// process that does hold it - the `sh` below - has exited before this
+/// function returns. Deterministic: no retry loop, no sleep.
+///
+/// macOS does not enforce `ETXTBSY` this way, which is why the suite was green
+/// locally while flaking on Linux - where CI and the mutants sweep run, and
+/// where a spurious failure inside a mutation run records a mutant as caught
+/// that nothing actually caught.
+pub(crate) fn write_executable(path: &std::path::Path, contents: impl AsRef<str>) {
+    #[cfg(unix)]
+    {
+        // Contents travel as argv rather than through a pipe: no descriptor of
+        // ours to inherit, and no deadlock surface if a forked child holds the
+        // write end open. Stubs are a few hundred bytes, far under ARG_MAX.
+        let status = std::process::Command::new("/bin/sh")
+            .arg("-c")
+            .arg(r#"printf '%s' "$2" > "$1" && chmod +x "$1""#)
+            .arg("sh") // $0
+            .arg(path)
+            .arg(contents.as_ref())
+            .status()
+            .expect("the writer process must start");
+        assert!(
+            status.success(),
+            "writing the executable {} failed: {status}",
+            path.display()
+        );
+    }
+    #[cfg(not(unix))]
+    std::fs::write(path, contents.as_ref()).expect("writing the executable must succeed");
+}
+
 /// Mark a file executable on unix; a no-op elsewhere.
 ///
 /// Crate-wide because five copies of this existed across four test modules,

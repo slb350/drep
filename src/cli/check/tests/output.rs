@@ -21,9 +21,9 @@ use std::process::Command;
 use serde_json::Value;
 use wiremock::MockServer;
 
-use crate::test_support::make_executable;
 use crate::test_support::mount_sse;
 use crate::test_support::sse;
+use crate::test_support::write_executable;
 
 // ---------- scaffolding ----------
 
@@ -220,12 +220,10 @@ fn json_findings_distinguish_tool_from_llm_via_source_field() {
         std::fs::write(dir.path().join("pyproject.toml"), "").expect("pyproject");
         let bin = dir.path().join("venv/bin/ruff");
         std::fs::create_dir_all(bin.parent().unwrap()).expect("bin dir");
-        std::fs::write(
+        write_executable(
             &bin,
             "#!/bin/sh\nprintf '%s' '[{\"code\":\"F401\",\"filename\":\"lib.py\",\"location\":{\"row\":1,\"column\":1},\"message\":\"tool-msg\"}]'\n",
-        )
-        .expect("ruff");
-        make_executable(&bin);
+        );
 
         std::fs::write(dir.path().join("lib.py"), "x = 1\ny = 2\n").expect("lib.py");
         (dir, server)

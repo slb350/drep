@@ -17,8 +17,7 @@ use crate::languages::spec::ToolSpec;
 fn repo_local_executable_is_preferred_over_path() {
     let dir = TempDir::new().unwrap();
     let bin = dir.path().join("mytool");
-    std::fs::write(&bin, "#!/bin/sh\n").unwrap();
-    make_executable(&bin);
+    write_executable(&bin, "#!/bin/sh\n");
 
     let spec = ToolSpec {
         local_paths: &["mytool"],
@@ -48,8 +47,7 @@ fn non_executable_repo_local_path_falls_through_to_path() {
     // reach it rather than stopping at the non-executable local hit.
     let path_dir = TempDir::new().unwrap();
     let on_path = path_dir.path().join("mytool");
-    std::fs::write(&on_path, "#!/bin/sh\nexit 0\n").unwrap();
-    make_executable(&on_path);
+    write_executable(&on_path, "#!/bin/sh\nexit 0\n");
 
     let spec = ToolSpec {
         local_paths: &["mytool"],
@@ -131,15 +129,13 @@ async fn a_filename_that_looks_like_a_flag_is_passed_as_a_path() {
     let bin = dir.path().join("bin");
     std::fs::create_dir_all(&bin).expect("mkdir bin");
     let tool = bin.join("argvdump");
-    std::fs::write(
+    write_executable(
         &tool,
         format!(
             "#!/bin/sh\nfor a in \"$@\"; do echo \"$a\"; done > {}/argv.txt\nexit 0\n",
             dir.path().display()
         ),
-    )
-    .expect("write tool");
-    make_executable(&tool);
+    );
     std::fs::write(dir.path().join("pyproject.toml"), "").expect("config");
 
     let spec = ToolSpec {

@@ -53,12 +53,10 @@ async fn run_tool_reads_stderr_when_diagnostics_stream_is_stderr() {
     // (stdout is empty, so it parses as `[]`).
     let dir = TempDir::new().unwrap();
     let bin = dir.path().join("diag");
-    std::fs::write(
+    write_executable(
         &bin,
         "#!/bin/sh\nprintf '%s' '[{\"code\":\"E1\",\"filename\":\"x\",\"location\":{\"row\":1,\"column\":1},\"message\":\"m\"}]' 1>&2\n",
-    )
-    .unwrap();
-    make_executable(&bin);
+    );
 
     let spec = ToolSpec {
         name: "diag",
@@ -94,8 +92,7 @@ async fn run_tool_reads_stderr_when_diagnostics_stream_is_stderr() {
 async fn run_tool_reports_unavailable_for_unparseable_output_not_empty_ok() {
     let dir = TempDir::new().unwrap();
     let bin = dir.path().join("noisy");
-    std::fs::write(&bin, "#!/bin/sh\necho 'this is not json'\n").unwrap();
-    make_executable(&bin);
+    write_executable(&bin, "#!/bin/sh\necho 'this is not json'\n");
 
     let spec = ToolSpec {
         name: "noisy",
@@ -128,8 +125,7 @@ async fn run_tool_reports_unavailable_for_unparseable_output_not_empty_ok() {
 async fn a_silent_non_zero_exit_is_unavailable_not_a_clean_pass() {
     let dir = TempDir::new().unwrap();
     let bin = dir.path().join("failtool");
-    std::fs::write(&bin, "#!/bin/sh\necho 'fatal: bad config' >&2\nexit 2\n").unwrap();
-    make_executable(&bin);
+    write_executable(&bin, "#!/bin/sh\necho 'fatal: bad config' >&2\nexit 2\n");
     std::fs::write(dir.path().join("pyproject.toml"), "").unwrap();
 
     // `lines`, not `json`. An empty stdout is not valid JSON, so a `json`
@@ -174,8 +170,7 @@ async fn a_relative_root_still_finds_the_repo_local_tool() {
     let relative = pathdiff_relative(&cwd, dir.path());
 
     let bin = dir.path().join("mytool");
-    std::fs::write(&bin, "#!/bin/sh\nexit 0\n").unwrap();
-    make_executable(&bin);
+    write_executable(&bin, "#!/bin/sh\nexit 0\n");
     std::fs::write(dir.path().join("pyproject.toml"), "").unwrap();
 
     let spec = ToolSpec {
@@ -225,8 +220,7 @@ async fn a_whole_project_tool_is_invoked_without_file_arguments() {
         log.to_string_lossy()
     );
     let tool = root.join("wholeproject");
-    std::fs::write(&tool, stub).expect("write stub");
-    crate::test_support::make_executable(&tool);
+    write_executable(&tool, stub);
 
     let spec = ToolSpec {
         name: "wholeproject",
@@ -269,8 +263,7 @@ async fn a_whole_project_tools_findings_are_narrowed_to_the_requested_files() {
     // `lines` format: each line names a file the tool has an opinion about.
     let stub = "#!/bin/sh\nprintf 'wanted.rs\\nuntouched.rs\\nalso_wanted.rs\\n'\n";
     let tool = root.join("wholeproject");
-    std::fs::write(&tool, stub).expect("write stub");
-    crate::test_support::make_executable(&tool);
+    write_executable(&tool, stub);
 
     let spec = ToolSpec {
         name: "wholeproject",
@@ -316,8 +309,7 @@ async fn a_file_taking_tools_findings_are_not_filtered() {
 
     let stub = "#!/bin/sh\nprintf 'somewhere/else.rs\\n'\n";
     let tool = root.join("perfile");
-    std::fs::write(&tool, stub).expect("write stub");
-    crate::test_support::make_executable(&tool);
+    write_executable(&tool, stub);
 
     let spec = ToolSpec {
         name: "perfile",

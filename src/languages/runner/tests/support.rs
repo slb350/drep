@@ -72,4 +72,4 @@ pub(crate) fn clippy_like_spec() -> ToolSpec {
 
 /// Re-exported so this suite's `use super::support::*` importers reach the
 /// crate-wide helper rather than a local copy.
-pub(crate) use crate::test_support::make_executable;
+pub(crate) use crate::test_support::write_executable;

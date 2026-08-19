@@ -28,7 +28,7 @@ use crate::analysis::result::FailureReason;
 use crate::cli::check::deterministic;
 use crate::cli::check::input::Work;
 use crate::diff::hunks::Hunk;
-use crate::test_support::make_executable;
+use crate::test_support::write_executable;
 
 /// Build a `Work` with one whole-file hunk per path. Empty
 /// `read_failures` because deterministic tests start from a clean
@@ -60,12 +60,10 @@ async fn two_python_files_invoke_their_tool_once_not_twice() {
     let counter_str = counter.to_string_lossy().into_owned();
     // Append one line per invocation. `printf` is more portable than `echo`
     // (echo's behaviour across shells diverges on `-n`, escapes, ...).
-    std::fs::write(
+    write_executable(
         &bin,
         format!("#!/bin/sh\nprintf '%s\\n' called >> {counter_str}\nprintf '%s' '[]'\n"),
-    )
-    .expect("write ruff");
-    make_executable(&bin);
+    );
 
     // A `pyproject.toml` makes the project opted into ruff; otherwise the
     // tool would be `Skipped` and the counter would stay at zero for an
@@ -104,8 +102,7 @@ async fn unavailable_tool_marks_every_file_in_the_batch_as_failed() {
     // Output JSON the parser rejects. The exit code is irrelevant - ruff
     // exits non-zero on findings anyway - and the parse path treats any
     // unparseable payload as `Unavailable` regardless.
-    std::fs::write(&bin, "#!/bin/sh\nprintf '%s' 'this is not json, sorry'\n").expect("write ruff");
-    make_executable(&bin);
+    write_executable(&bin, "#!/bin/sh\nprintf '%s' 'this is not json, sorry'\n");
     std::fs::write(dir.path().join("pyproject.toml"), "").expect("pyproject");
 
     let a = dir.path().join("a.py");
