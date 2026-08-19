@@ -2,8 +2,12 @@
 name = "drep-ai"
 version = "2.0.0"
 edition = "2024"
-# Set by open-agent-sdk, which is the floor for the whole crate.
-rust-version = "1.85"
+# Set by `ignore` 0.4.30, which uses let-chains and declares no `rust-version`
+# of its own - so cargo cannot refuse the resolve, and the failure is a build
+# error inside a dependency. open-agent-sdk asks only for 1.85; measured, 1.86
+# and 1.87 both fail and 1.88 builds. Pinning `ignore` back would hold the
+# older floor at the cost of freezing the file walk.
+rust-version = "1.88"
 description = "A local commit gate: runs the linters your repo configures, and sends changed code to an LLM for review"
 license = "MIT"
 repository = "https://github.com/slb350/drep"

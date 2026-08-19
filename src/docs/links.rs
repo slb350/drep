@@ -88,11 +88,11 @@ fn blank_inline_code(chars: &mut [char]) {
 fn blank_links(chars: &mut [char]) {
     let mut i = 0;
     while i < chars.len() {
-        if chars[i] == '[' {
-            if let Some(end) = match_link(chars, i) {
-                chars[i..=end].fill(' ');
-                i = end;
-            }
+        if chars[i] == '['
+            && let Some(end) = match_link(chars, i)
+        {
+            chars[i..=end].fill(' ');
+            i = end;
         }
         i += 1;
     }

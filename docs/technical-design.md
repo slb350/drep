@@ -219,6 +219,6 @@ to `slb350/homebrew-tap`. `.github/workflows/release.yml` is generated from that
 config and must not be hand-edited.
 
 CI (`.github/workflows/rust.yml`) runs fmt and clippy once, the test suite on
-Linux and macOS, an MSRV check at 1.85, and a full `cargo mutants` sweep. The
+Linux and macOS, an MSRV check at 1.88, and a full `cargo mutants` sweep. The
 sweep is local to the runner because a GitHub runner cannot reach the LAN host
 the pre-commit hook offloads to.

@@ -79,7 +79,18 @@ echo "mutants: running on $HOST (-j $JOBS), results mirrored back to $MUTANTS_OU
 # on every commit against a Rust payload of about 1MB. Credentials are excluded
 # because nothing in the suite reads them and they have no business on another
 # host.
-rsync -a --delete --mkpath \
+# --delete alone leaves the remote tree stale, and the sweep then tests a tree
+# the commit does not have. An excluded name *inside* a directory protects that
+# directory from removal, so `docs/api/build/html` kept `docs/api` alive after
+# the commit that deleted it, and a test asserting the directory is gone failed
+# on the remote while passing here. --force is not enough - it deletes
+# non-empty directories, not protected ones.
+#
+# So: --delete-excluded, which removes the excluded leftovers too, with an
+# explicit `P` (protect) rule for `/target`. That directory is the build cache
+# this whole offload exists to reuse - 1.7GB of it - and --delete-excluded
+# would otherwise take it, turning every run into a cold build.
+rsync -a --delete --force --delete-excluded --filter='P /target' --mkpath \
   --exclude target --exclude 'mutants.out*' \
   --exclude .git --exclude venv --exclude node_modules \
   --exclude .mypy_cache --exclude .pytest_cache --exclude .ruff_cache \

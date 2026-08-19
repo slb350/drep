@@ -177,10 +177,17 @@ async fn two_endpoints_serving_the_same_model_do_not_share_a_cache_entry() {
     let (cache, _dir) = temp_cache();
     const MODEL: &str = "qwen3-30b-a3b";
 
+    // Run one's servers are bound here, not inside the block, and stay alive
+    // for the whole test. Dropping them frees their ephemeral ports, and Linux
+    // hands the next listener a port it just released - so `revived` below came
+    // up on the address `healthy` had used, the two endpoints were the same
+    // string, and the keys matched. That failed only on Linux, and only in CI:
+    // macOS does not recycle a port that eagerly.
+    let dead = server_failing_with(500).await;
+    let healthy = server_returning_json().await;
+
     // Run one: the head is down, the fallback answers, the caller stores it.
     let fallback_key = {
-        let dead = server_failing_with(500).await;
-        let healthy = server_returning_json().await;
         let chain = fast_retry_chain(&[cfg_for(&dead, MODEL, 1), cfg_for(&healthy, MODEL, 1)]);
         let served = chain
             .complete_json(SYSTEM, CONTENT, &cache)
@@ -197,6 +204,11 @@ async fn two_endpoints_serving_the_same_model_do_not_share_a_cache_entry() {
     // the model alone would hit the fallback's entry.
     let revived = server_returning_json().await;
     let spare = server_returning_json().await;
+    assert_ne!(
+        revived.uri(),
+        healthy.uri(),
+        "the test needs two genuinely different endpoints to compare keys"
+    );
     let chain = fast_retry_chain(&[cfg_for(&revived, MODEL, 1), cfg_for(&spare, MODEL, 1)]);
     let served = chain
         .complete_json(SYSTEM, CONTENT, &cache)

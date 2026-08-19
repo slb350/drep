@@ -9,6 +9,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `rust.yml` had never run: `rust-rewrite` only ever went to Gitea, so CI first
+  executed when 2.0 merged to `main` - and three jobs failed. The MSRV was
+  wrong: `ignore` 0.4.30 uses let-chains and declares no `rust-version` of its
+  own, so cargo could not refuse the resolve and the failure arrived as a
+  compile error inside a dependency. Measured, 1.86 and 1.87 fail and 1.88
+  builds, so the declared floor is 1.88 rather than the 1.85 open-agent-sdk
+  asks for. Pinning `ignore` back would have held the old floor at the cost of
+  freezing the file walk. Raising it turned on four MSRV-gated clippy lints,
+  since `is_multiple_of` and collapsing an `if` into a let-chain both need a
+  compiler the old floor did not promise; `src/docs/blocks.rs`,
+  `src/docs/links.rs`, `src/llm/json_parsing.rs` and one test now use them.
+- `two_endpoints_serving_the_same_model_do_not_share_a_cache_entry` failed on
+  Linux and passed on macOS. Run one's mock servers were dropped at the end of
+  a block, which frees their ephemeral ports, and Linux hands the next listener
+  a port it just released - so the "revived head" came up on the address the
+  fallback had used, the two endpoints were the same string, and the keys
+  matched. The servers now live for the whole test, and it asserts the two
+  endpoints differ before comparing keys. Nothing was wrong with the cache key.
+  The same failure took the mutants job with it, as a failing baseline.
+- The mutation sweep tested a tree the commit did not have.
+  `scripts/mutants-remote.sh` synced with `--delete`, and an excluded name
+  inside a directory protects that directory from removal - so
+  `docs/api/build/html` kept `docs/api` alive on strix after the commit that
+  deleted it, and `the_python_package_and_its_build_files_are_gone` failed
+  there while passing here. `--force` does not cover it: it deletes non-empty
+  directories, not protected ones. The sync now passes `--delete-excluded`
+  with a `P /target` filter, so stale leftovers go and the 1.7GB build cache
+  the offload exists to reuse stays.
 - The v2.0.0 release built and published every binary, then failed to push the
   Homebrew formula. Not the token: the `publish-homebrew-formula` job passes the
   whole `dist plan` manifest to the runner as one environment variable, Linux

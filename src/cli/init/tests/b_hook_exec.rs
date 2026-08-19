@@ -80,10 +80,8 @@ fn run_pre_push_status(
     // The zero-oid branch shells out to `git`, so that case needs the real
     // PATH as well as the stub directory.
     let mut entries: Vec<PathBuf> = vec![bin_dir.clone()];
-    if include_real_path {
-        if let Some(existing) = std::env::var_os("PATH") {
-            entries.extend(std::env::split_paths(&existing));
-        }
+    if include_real_path && let Some(existing) = std::env::var_os("PATH") {
+        entries.extend(std::env::split_paths(&existing));
     }
     let path = std::env::join_paths(entries).expect("join paths");
 

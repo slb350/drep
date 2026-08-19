@@ -86,7 +86,7 @@ fn unclosed_code_fence(
     out: &mut Vec<Finding>,
 ) {
     let delimiters = fences.delimiters();
-    if delimiters.len() % 2 == 0 {
+    if delimiters.len().is_multiple_of(2) {
         return;
     }
     let opener = *delimiters

@@ -8,7 +8,7 @@
 configures, and sends the code you changed to an LLM for review.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Rust 1.85+](https://img.shields.io/badge/rust-1.85+-orange.svg)](https://www.rust-lang.org)
+[![Rust 1.88+](https://img.shields.io/badge/rust-1.88+-orange.svg)](https://www.rust-lang.org)
 
 ```sh
 curl --proto '=https' --tlsv1.2 -LsSf \

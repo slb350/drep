@@ -153,10 +153,10 @@ pub fn extract_json(content: &str) -> Option<Extracted> {
     // and so is invisible to the stripper. Appending the closers first turns it
     // into `{"a":1,}`, which the stripper then repairs. Doing it the other way
     // round leaves the comma in place and the parse fails.
-    if let Some(balanced) = balance_unclosed(&repaired).map(|b| strip_trailing_commas(&b)) {
-        if let Ok(value) = serde_json::from_str::<Value>(&balanced) {
-            return Some(Extracted::Truncated(value));
-        }
+    if let Some(balanced) = balance_unclosed(&repaired).map(|b| strip_trailing_commas(&b))
+        && let Ok(value) = serde_json::from_str::<Value>(&balanced)
+    {
+        return Some(Extracted::Truncated(value));
     }
 
     None

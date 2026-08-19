@@ -115,7 +115,10 @@ wiremock   = "0.6"          # mock LLM endpoint
 tempfile   = "3.27"
 ```
 
-Edition 2024, `rust-version = "1.85"` (floor set by the SDK).
+Edition 2024. `rust-version` was `"1.85"`, the floor the SDK asks for, until
+`ignore` 0.4.30 raised the real one to `"1.88"` by using let-chains while
+declaring no `rust-version` of its own (2026-08-19; 1.86 and 1.87 measured to
+fail).
 
 ## Working agreement (how these phases get built)
 
@@ -206,9 +209,10 @@ deduped. **Landed 2026-08-17** — see CHANGELOG for the full note (30 new tests
 pattern from Phase 1, `ignore = "0.4"` is the only new dependency).
 
 ### Phase 3 — LLM layer ✅
-Wire `open-agent-sdk` (0.7.0, crates.io, edition 2024, rust-version 1.85 — it
-is what sets this crate's MSRV). Port the cache (content-addressed on prompt +
-content + model + temperature), tolerant JSON parsing, and a simplified
+Wire `open-agent-sdk` (0.7.0, crates.io, edition 2024, rust-version 1.85 — the
+crate's MSRV at the time; `ignore` has since raised it to 1.88). Port the cache
+(content-addressed on prompt + content + model + temperature), tolerant JSON
+parsing, and a simplified
 concurrency limiter. Test against `wiremock`, not a live endpoint.
 
 The SDK published 2026-08-09, so it post-dates the training cutoff of any model

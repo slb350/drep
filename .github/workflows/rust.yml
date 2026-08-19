@@ -74,14 +74,17 @@ jobs:
       - run: ./scripts/mutants-run.sh
 
   msrv:
-    name: msrv (1.85)
+    name: msrv (1.88)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
 
-      # open-agent-sdk sets the floor. If this breaks, the MSRV in Cargo.toml
-      # is wrong - do not paper over it by bumping the toolchain here.
-      - uses: dtolnay/rust-toolchain@1.85.0
+      # If this breaks, the MSRV in Cargo.toml is wrong - do not paper over it
+      # by bumping the toolchain here. It has moved once already: `ignore`
+      # 0.4.30 raised the real floor to 1.88 while open-agent-sdk still asks
+      # for 1.85, and declares no `rust-version`, so the first sign was a
+      # compile error in a dependency.
+      - uses: dtolnay/rust-toolchain@1.88.0
 
       - uses: Swatinem/rust-cache@v2
 
