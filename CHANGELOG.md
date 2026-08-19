@@ -5,7 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [2.0.0] - 2026-08-19
+
+drep is a Rust binary. The Python package, the webhook server, the platform
+adapters, the issue manager, the docstring generator and the SQLite cache are
+gone; what remains is the local commit gate. `drep-ai` 1.3.0 stays on PyPI
+unyanked, and nothing new is published there. Install with the shell installer
+or `brew install slb350/tap/drep`.
 
 ### Rust rewrite - 2026-08-19 - Phase 8: delete Python
 
@@ -2298,7 +2304,9 @@ behavior changes.
 - Rate limiting considerations
 - Sanitized LLM prompts to prevent injection
 
-[Unreleased]: https://github.com/slb350/drep/compare/v1.1.3...HEAD
+[2.0.0]: https://github.com/slb350/drep/compare/v1.3.0...v2.0.0
+[1.3.0]: https://github.com/slb350/drep/compare/v1.2.0...v1.3.0
+[1.2.0]: https://github.com/slb350/drep/compare/v1.1.3...v1.2.0
 [1.1.3]: https://github.com/slb350/drep/compare/v1.1.2...v1.1.3
 [1.1.2]: https://github.com/slb350/drep/compare/v1.1.1...v1.1.2
 [1.1.1]: https://github.com/slb350/drep/compare/v1.1.0...v1.1.1

@@ -1,6 +1,6 @@
 [package]
 name = "drep-ai"
-version = "2.0.0-alpha.0"
+version = "2.0.0"
 edition = "2024"
 # Set by open-agent-sdk, which is the floor for the whole crate.
 rust-version = "1.85"
