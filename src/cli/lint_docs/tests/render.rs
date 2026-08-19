@@ -7,7 +7,7 @@
 use crate::Exit;
 use crate::analysis::findings::{Finding, Severity};
 use crate::analysis::result::FailureReason;
-use crate::cli::lint_docs::{LintOutcome, render};
+use crate::cli::lint_docs::{Gating, LintOutcome, render};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
@@ -25,9 +25,29 @@ fn finding(kind: &str, line: u32, column: Option<u32>) -> Finding {
 }
 
 /// Render an outcome and hand back the bytes as a string.
-fn rendered(outcome: &LintOutcome, strict: bool) -> String {
+///
+/// `gated` is "was a threshold in force and did the findings reach it", which
+/// is the footer's whole input - `--strict` and `--fail-on` reach the renderer
+/// as the same [`Gating`].
+fn rendered(outcome: &LintOutcome, gated: bool) -> String {
+    let gating = if gated {
+        Gating::Blocked
+    } else {
+        Gating::ReportOnly
+    };
+    render_with(outcome, gating)
+}
+
+/// Render an outcome under an explicit gating decision.
+fn render_with(outcome: &LintOutcome, gating: Gating) -> String {
     let mut buffer = Vec::new();
-    render::render_to(&mut buffer, outcome, strict).expect("render");
+    let outcome = LintOutcome {
+        findings: outcome.findings.clone(),
+        failures: outcome.failures.clone(),
+        exit: outcome.exit,
+        gating,
+    };
+    render::render_to(&mut buffer, &outcome).expect("render");
     String::from_utf8(buffer).expect("utf8")
 }
 
@@ -48,6 +68,8 @@ fn outcome(findings: Vec<Finding>, failures: Vec<(&str, FailureReason)>) -> Lint
         findings,
         failures,
         exit,
+        // Overridden by `render_with`; `rendered` picks the variant it wants.
+        gating: Gating::ReportOnly,
     }
 }
 
@@ -108,6 +130,29 @@ fn the_footer_says_report_only_unless_strict() {
     let strict = rendered(&one, true);
     assert!(strict.ends_with("1 issue(s) found.\n"), "{strict}");
     assert!(!strict.contains("report only"), "{strict}");
+}
+
+/// A threshold nothing reached says so.
+///
+/// Observed on this repository: `lint-docs --fail-on error` over the tracked
+/// docs printed 24 findings, exited 0, and ended "24 issue(s) found." - the
+/// same line a blocking run prints. A hook log that reports two dozen problems
+/// and a passing status has to explain itself, or the next reader assumes the
+/// gate is broken.
+#[test]
+fn the_footer_says_when_nothing_reached_the_threshold() {
+    use crate::analysis::findings::Severity;
+
+    let info_only = outcome(vec![finding("k", 1, Some(1))], vec![]);
+    let text = render_with(&info_only, Gating::NoneReached(Severity::Error));
+    assert!(
+        text.ends_with("1 issue(s) found (none at or above error).\n"),
+        "{text}"
+    );
+
+    // The blocking case keeps the bare count: the exit code carries the rest.
+    let text = render_with(&info_only, Gating::Blocked);
+    assert!(text.ends_with("1 issue(s) found.\n"), "{text}");
 }
 
 #[test]

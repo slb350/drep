@@ -7,6 +7,69 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Rust rewrite - 2026-08-19 - Phase 7: what drep installs now runs `lint-docs`
+
+Three wiring gaps between the command Phase 6 shipped and the hooks drep hands
+to other people. All of them had the same shape: `lint-docs` worked, and
+nothing that installs itself ran it correctly.
+
+`drep init` wrote a pre-commit hook that was `exec drep check --staged` and
+nothing else, so a repository gated by drep's own installer had no markdown
+gating at all. Invisible here, because this repository's `.pre-commit-config.yaml`
+ran `lint-docs` through the Python venv - and `src/cli/lint_docs/mod.rs`
+claimed in its module doc that the command runs on every commit, which was true
+of exactly one repository. The hook now runs `drep lint-docs --staged --fail-on
+error` before `drep check --staged`: rule-based first at ~10 ms, so an
+unclosed fence does not cost an LLM round trip, and its status propagates.
+
+`--staged` is new, and it needed the diff layer to stop deciding the file class
+for its callers. `diff::staged_files` hardcoded `is_scan_target` -
+registered-language sources - so the only way to lint the staged markdown was
+to lint the whole repository and hope the noise was tolerable. The predicate is
+a parameter now; `check` passes `is_scan_target`, `lint-docs` passes
+`is_markdown`, and the two classes stay disjoint the way Phase 6 drew them.
+Staged mode deliberately does not route through `files::expand_named`: that
+expander resolves an *empty* path list to `root`, which is what makes bare
+`drep lint-docs` mean "this tree" and would have turned "this commit touches no
+markdown" into "lint every document in the repository", on every commit.
+
+`--fail-on <severity>` joins `--strict`, matching `check`'s vocabulary, and
+`--strict` becomes the shorthand for `--fail-on info` rather than a second
+mechanism. The published `drep-lint-docs` hook shipped `--strict`, written
+against 1.x where the doc checks carried no severity: under the Phase 6 scale
+that blocks on any finding, which over this repository is 24 findings across
+the top-level docs, every one of them `info`. A consumer adopting that hook has
+commits blocked by line length. It now ships `--fail-on error`, which is the
+one check that changes how the rest of the document renders.
+
+Two smaller things fell out of using it. The renderer grew a third footer:
+`--fail-on error` over this repository prints two dozen findings and exits 0,
+and "24 issue(s) found." is the same line a blocking run prints - a hook log
+that reports problems and passes has to say why, so it now reads "(none at or
+above error)". And the published hooks moved from `language: python` to
+`language: rust`, since the PyPI package they install disappears in Phase 8;
+`tests/published_hooks.rs` pins both facts, because that file's consumer is
+somebody else's commit gate and nothing else in the suite reads it.
+
+The `/simplify` pass found the renderer re-deriving the gate. Its footer asked
+"did any finding reach the threshold" a second time, from the findings and the
+threshold, which is the mistake `check` documents on `CheckOutcome::exit` and
+fixed - and it was already wrong in one case, because `gate` gives failures
+precedence and the footer did not, so a run with both an unreadable file and
+blocking findings printed the blocked phrasing under exit 2. `LintOutcome` now
+carries a `Gating` the gate computes once, and the renderer reports it rather
+than recomputing it. The comparison itself became
+`findings::any_at_or_above`, shared with `check`, which had it written out
+separately. The same pass finished the diff-layer generalization: the *hunks*
+queries still hardcoded `is_scan_target` while the *names* query took it from
+the caller, so `staged_hunks`, `hunks_since` and `hunks_between` now take the
+predicate too.
+
+This repository's own hook now runs the 2.0 binary at `--fail-on error` too,
+rather than the Python one report-only. Report-only was the old answer to
+`long_line` contradicting `MD013: false`, and it meant the one finding that
+breaks a document did not block either.
+
 ### Rust rewrite - 2026-08-18 - the mutation sweep moves off the laptop
 
 `scripts/mutants-remote.sh` syncs the tree to another machine over SSH, runs

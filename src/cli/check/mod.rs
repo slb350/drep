@@ -28,12 +28,11 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, anyhow};
-use clap::builder::{PossibleValuesParser, TypedValueParser};
 use clap::{ArgGroup, Args};
 
-use crate::analysis::findings::{Finding, Severity};
+use crate::analysis::findings::{self, Finding, Severity};
 use crate::analysis::result::{AnalysisResult, FailureReason, union_failures};
-use crate::cli::OutputFormat;
+use crate::cli::{OutputFormat, severity_parser};
 use crate::config::{self, LlmConfig};
 use crate::llm::cache::Cache;
 use crate::llm::chain::ProviderChain;
@@ -85,15 +84,6 @@ pub struct CheckArgs {
     /// nearly every file.
     #[arg(long, value_name = "SEVERITY", value_parser = severity_parser())]
     pub fail_on: Option<Severity>,
-}
-
-/// Parse `--fail-on` from the severity vocabulary.
-///
-/// Built from `Severity::ALL` rather than a literal list, so `--help` shows
-/// exactly the values `FromStr` accepts and neither can drift.
-fn severity_parser() -> impl TypedValueParser<Value = Severity> {
-    PossibleValuesParser::new(Severity::ALL.map(Severity::as_str))
-        .map(|name| name.parse::<Severity>().expect("possible values parse"))
 }
 
 /// Everything one `check` run produced.
@@ -253,10 +243,10 @@ fn gate(outcome: &CheckOutcome, fail_on: Option<Severity>) -> Exit {
     if any_blocking_tool_finding(&outcome.tool_findings) {
         return Exit::FoundIssues;
     }
-    if let Some(threshold) = fail_on {
-        if outcome.llm_findings.iter().any(|f| f.severity >= threshold) {
-            return Exit::FoundIssues;
-        }
+    if let Some(threshold) = fail_on
+        && findings::any_at_or_above(&outcome.llm_findings, threshold)
+    {
+        return Exit::FoundIssues;
     }
     Exit::Clean
 }

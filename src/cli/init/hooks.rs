@@ -39,8 +39,20 @@ pub const MANAGED_MARKER: &str = managed_marker!();
 
 /// The body drep writes for `pre-commit`.
 ///
-/// `exec` is what keeps the LLM client's exit status, which is what aborts
-/// the commit when a finding gates it.
+/// Two commands, in this order. `lint-docs` is rule-based and takes ~10 ms, so
+/// an obvious documentation defect does not cost an LLM round trip; `check`
+/// sends the staged code to a model and is the expensive half.
+///
+/// `--fail-on error` rather than `--strict`: under the severity scale the doc
+/// checks use, `--strict` blocks on *any* finding, which over a real
+/// repository is dominated by line length and trailing whitespace. Measured on
+/// drep's own tree that is 75 findings, none above `info`. A hook that blocks
+/// a commit over a long line is a hook that gets deleted. `error` is one
+/// check - an unclosed fence, which renders the rest of the document as code.
+///
+/// `exec` on the last command is what keeps the LLM client's exit status,
+/// which is what aborts the commit when a finding gates it. The first command
+/// cannot be `exec`ed, so its status is propagated explicitly.
 pub const PRE_COMMIT_BODY: &str = concat!(
     "#!/bin/sh\n",
     managed_marker!(),
@@ -50,6 +62,7 @@ if ! command -v drep > /dev/null 2>&1; then
     echo "drep: not found on PATH; refusing to let the commit through unreviewed." >&2
     exit 1
 fi
+drep lint-docs --staged --fail-on error || exit $?
 exec drep check --staged
 "##
 );

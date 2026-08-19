@@ -680,9 +680,60 @@ targets = [
 ]
 ```
 
-Requires a `HOMEBREW_TAP_TOKEN` secret with `repo` scope. Also rewrite
-`.pre-commit-hooks.yaml` to `language: rust` (or `language: system` against the
-installed binary) — the current `language: python` entry dies with the package.
+Requires a `HOMEBREW_TAP_TOKEN` secret with `repo` scope, and the
+`slb350/homebrew-tap` repository to exist. Version verified again 2026-08-18:
+cargo-dist is still 0.32.0, so the block above is current.
+
+Also rewrite `.pre-commit-hooks.yaml` to `language: rust` (or `language: system`
+against the installed binary) — the current `language: python` entry dies with
+the package.
+
+**Two `lint-docs` wiring gaps carried from Phase 6 ✅ (2026-08-19).** Both were
+about the same thing: the command shipped, and nothing that drep *installs* ran
+it correctly. They landed here because this phase already owns both files.
+
+- **`drep init` installed no markdown hook at all.** ✅ `hooks::PRE_COMMIT_BODY` is
+  `exec drep check --staged` and nothing else, so a user who runs `drep init`
+  gets no markdown gating. This repository's own `.pre-commit-config.yaml` runs
+  `lint-docs` through the Python venv, which is why the gap is invisible
+  locally, and `src/cli/lint_docs/mod.rs` claims in its module doc that the
+  command runs on every commit — true only here.
+
+  **Fix: give `lint-docs` a `--staged` mode and have the hook use it.** Running
+  it bare would work (~10 ms over this repo) but reports findings in files the
+  commit never touched, and per-commit noise is how a report-only gate gets
+  ignored. `--staged` also matches `check`'s vocabulary rather than inventing a
+  second one. The prerequisite is small: `diff::staged_files` hardcodes
+  `filter_scan_targets`, so it needs the predicate as a parameter — the same
+  `is_scan_target` / `is_markdown` split Phase 6 drew everywhere else. The
+  `ACMR` filter and empty-tree fallback in `staged_diff` are unchanged and stay
+  shared.
+
+- **The published `drep-lint-docs` hook was miscalibrated.** ✅ Its entry is
+  `drep lint-docs --strict`, written against 1.x, where the checks carried no
+  severity. Under Phase 6's scale `--strict` blocks on *any* finding: measured
+  on this repository that is 75 findings, all of them `info` (64 `long_line`,
+  10 `bare_url`, 1 `multiple_blank_lines`) and not one `warning` or `error`. A
+  consumer adopting that hook has commits blocked by line length.
+
+  **Fix: add `--fail-on <severity>` to `lint-docs`, matching `check`, and
+  publish the hook as `--fail-on error`.** That blocks on an unclosed fence —
+  the one defect that changes how the rest of the file renders — and stays
+  quiet about whitespace. `--strict` remains as the shorthand for
+  `--fail-on info`, since it is the documented flag and the two are the same
+  question asked at different thresholds.
+
+**Shipped 2026-08-19.** `lint-docs` gained `--staged` and
+`--fail-on <severity>`; `--strict` is now the shorthand for `--fail-on info`.
+`diff::staged_files` takes the file-class predicate as a parameter, so `check`
+and `lint-docs` each ask for their own class. The `drep init` pre-commit body
+runs `drep lint-docs --staged --fail-on error` before `drep check --staged`.
+`.pre-commit-hooks.yaml` moved to `language: rust` and `--fail-on error`, pinned
+by `tests/published_hooks.rs`. Renderer says "(none at or above <severity>)"
+when a threshold was in force and nothing reached it.
+
+**Still open in this phase:** cargo-dist itself, which is blocked on the
+`slb350/homebrew-tap` repository existing and a `HOMEBREW_TAP_TOKEN` secret.
 
 ### Phase 8 — Delete Python
 Remove `drep/`, `tests/`, `pyproject.toml`, `scripts/install.sh`. Rewrite

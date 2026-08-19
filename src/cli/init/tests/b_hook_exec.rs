@@ -314,3 +314,98 @@ fn a_missing_drep_binary_blocks_the_push_with_an_explanation() {
         "and it must say why; stderr: {stderr}"
     );
 }
+
+/// Run the `pre-commit` body against a stub `drep` that records its argv and
+/// exits `stub_exit`, and hand back (status, recorded args).
+fn run_pre_commit(dir: &Path, stub_exit: i32) -> (Option<i32>, Vec<String>) {
+    let bin_dir = dir.join("bin");
+    std::fs::create_dir_all(&bin_dir).expect("bin dir");
+    let args_log = dir.join("args.log");
+    let stub = format!(
+        "#!/bin/sh\nfor a in \"$@\"; do printf '%s\\n' \"$a\" >> {}; done\nexit {stub_exit}\n",
+        args_log.to_string_lossy()
+    );
+    crate::test_support::write_executable(&bin_dir.join("drep"), stub);
+
+    let hook_path = dir.join("pre-commit");
+    crate::test_support::write_executable(&hook_path, hook_body("pre-commit").expect("known"));
+
+    let path = std::env::join_paths([bin_dir]).expect("join paths");
+    let output = Command::new("/bin/sh")
+        .arg(&hook_path)
+        .env("PATH", &path)
+        .current_dir(dir)
+        .output()
+        .expect("run hook");
+    let recorded: Vec<String> = std::fs::read_to_string(&args_log)
+        .unwrap_or_default()
+        .lines()
+        .map(str::to_owned)
+        .collect();
+    (output.status.code(), recorded)
+}
+
+/// The installed hook runs the markdown checks, and runs them first.
+///
+/// `drep init` used to write `exec drep check --staged` and nothing else, so a
+/// repository gated by drep's own installer had no markdown gating at all -
+/// invisible in this repository, whose `.pre-commit-config.yaml` runs
+/// `lint-docs` through the Python venv.
+///
+/// First because it is rule-based and takes ~10 ms, and `check` sends files to
+/// an LLM: an obvious documentation defect should not cost a round trip.
+#[test]
+fn the_pre_commit_hook_lints_markdown_before_it_calls_the_llm() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let (status, args) = run_pre_commit(dir.path(), 0);
+
+    assert_eq!(status, Some(0), "a passing hook must exit 0");
+    let lint = args
+        .iter()
+        .position(|a| a == "lint-docs")
+        .unwrap_or_else(|| panic!("hook must run lint-docs, recorded {args:?}"));
+    let check = args
+        .iter()
+        .position(|a| a == "check")
+        .unwrap_or_else(|| panic!("hook must run check, recorded {args:?}"));
+    assert!(lint < check, "lint-docs must run first, recorded {args:?}");
+    assert!(
+        args.contains(&"--staged".to_owned()),
+        "both commands take --staged, recorded {args:?}"
+    );
+}
+
+/// `--fail-on error`, not `--strict`.
+///
+/// Under the Phase 6 severity scale `--strict` blocks on any finding, which
+/// over a real repository is dominated by line length and trailing whitespace.
+/// A hook that blocks a commit over a long line is a hook that gets deleted.
+/// `error` is exactly one check - an unclosed fence, which turns the rest of
+/// the document into code.
+#[test]
+fn the_pre_commit_hook_blocks_only_on_error_severity_markdown() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let (_, args) = run_pre_commit(dir.path(), 0);
+    let fail_on = args
+        .iter()
+        .position(|a| a == "--fail-on")
+        .unwrap_or_else(|| panic!("expected --fail-on, recorded {args:?}"));
+    assert_eq!(args.get(fail_on + 1).map(String::as_str), Some("error"));
+    assert!(
+        !args.iter().any(|a| a == "--strict"),
+        "--strict blocks on info findings, recorded {args:?}"
+    );
+}
+
+/// A failing markdown lint aborts the commit without paying for the LLM.
+#[test]
+fn a_failed_markdown_lint_stops_the_hook_before_check_runs() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let (status, args) = run_pre_commit(dir.path(), 3);
+
+    assert_eq!(status, Some(3), "the hook must propagate the exit status");
+    assert!(
+        !args.iter().any(|a| a == "check"),
+        "check must not run after lint-docs failed, recorded {args:?}"
+    );
+}

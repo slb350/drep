@@ -14,17 +14,17 @@ use std::io::Write;
 
 use anyhow::Result;
 
-use crate::cli::lint_docs::LintOutcome;
+use crate::cli::lint_docs::{Gating, LintOutcome};
 use crate::cli::render::{finding_line, write_failures, write_suggestion};
 
 /// Render to stdout.
-pub fn render(outcome: &LintOutcome, strict: bool) -> Result<()> {
-    render_to(&mut std::io::stdout().lock(), outcome, strict)
+pub fn render(outcome: &LintOutcome) -> Result<()> {
+    render_to(&mut std::io::stdout().lock(), outcome)
 }
 
 /// Render to an arbitrary sink, so a test can capture the bytes without a
 /// subprocess.
-pub fn render_to<W: Write>(out: &mut W, outcome: &LintOutcome, strict: bool) -> Result<()> {
+pub fn render_to<W: Write>(out: &mut W, outcome: &LintOutcome) -> Result<()> {
     for finding in &outcome.findings {
         writeln!(out, "{}", finding_line(None, finding))?;
         write_suggestion(out, finding)?;
@@ -42,13 +42,22 @@ pub fn render_to<W: Write>(out: &mut W, outcome: &LintOutcome, strict: bool) -> 
     if !outcome.findings.is_empty() {
         writeln!(out)?;
         let count = outcome.findings.len();
-        if strict {
-            writeln!(out, "{count} issue(s) found.")?;
-        } else {
-            writeln!(
+        // Three footers, because there are three ways a run can end with
+        // findings on screen, and `Gating` is the gate's own answer rather
+        // than a second reading of it. The middle case is the one that needs
+        // saying: `--fail-on error` over this repository prints two dozen
+        // findings and exits 0, and a bare count there reads as a broken gate.
+        match outcome.gating {
+            Gating::ReportOnly => writeln!(
                 out,
                 "{count} issue(s) found (report only; pass --strict to fail)."
-            )?;
+            )?,
+            Gating::NoneReached(threshold) => writeln!(
+                out,
+                "{count} issue(s) found (none at or above {}).",
+                threshold.as_str()
+            )?,
+            Gating::Blocked => writeln!(out, "{count} issue(s) found.")?,
         }
     }
     Ok(())

@@ -204,7 +204,7 @@ fn numbered_new_lines_skips_removed_lines_without_advancing() {
 #[test]
 fn the_parser_is_free_of_scan_target_policy() {
     // Which files drep reviews is a product decision and lives in `mod.rs`
-    // beside `filter_scan_targets`, not in a mechanical diff parser. The
+    // beside `filter_paths`, not in a mechanical diff parser. The
     // parser reports every file the diff mentions; `staged_hunks` is what
     // drops `Cargo.lock`, pinned by
     // `staged_hunks_returns_no_hunk_for_cargo_lock`. Keeping the policy out

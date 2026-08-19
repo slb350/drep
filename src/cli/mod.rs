@@ -14,7 +14,10 @@ pub mod lint_docs;
 pub mod render;
 
 use anyhow::Result;
+use clap::builder::{PossibleValuesParser, TypedValueParser};
 use clap::{Parser, Subcommand, ValueEnum};
+
+use crate::analysis::findings::Severity;
 
 use crate::Exit;
 use check::CheckArgs;
@@ -46,6 +49,17 @@ pub enum Command {
     Init(InitArgs),
 }
 
+/// Parse a `--fail-on` severity, for whichever command takes one.
+///
+/// Built from `Severity::ALL` rather than a literal list, so `--help` shows
+/// exactly the values `FromStr` accepts and neither can drift. Shared by
+/// `check` and `lint-docs`: two commands in one binary that disagree about the
+/// severity vocabulary are two contracts a hook author has to learn.
+pub(crate) fn severity_parser() -> impl TypedValueParser<Value = Severity> {
+    PossibleValuesParser::new(Severity::ALL.map(Severity::as_str))
+        .map(|name| name.parse::<Severity>().expect("possible values parse"))
+}
+
 /// How findings are rendered.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum OutputFormat {
@@ -60,7 +74,7 @@ pub enum OutputFormat {
 pub async fn run(cli: Cli) -> Result<Exit> {
     match cli.command {
         Command::Check(args) => check::run(&args, std::path::Path::new(".")).await,
-        Command::LintDocs(args) => lint_docs::run(&args, std::path::Path::new(".")),
+        Command::LintDocs(args) => lint_docs::run(&args, std::path::Path::new(".")).await,
         Command::Doctor(args) => doctor::run(&args),
         Command::Init(args) => init::run(&args).await,
     }
@@ -79,6 +93,51 @@ mod tests {
             Command::Check(args) => args,
             other => panic!("expected check, got {other:?}"),
         }
+    }
+
+    /// Parse a `lint-docs` invocation and hand back its arguments.
+    fn lint_docs_args<const N: usize>(argv: [&str; N]) -> LintDocsArgs {
+        let cli = Cli::try_parse_from(argv).expect("should parse");
+        match cli.command {
+            Command::LintDocs(args) => args,
+            other => panic!("expected lint-docs, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn lint_docs_gating_is_off_by_default() {
+        let args = lint_docs_args(["drep", "lint-docs"]);
+        assert!(!args.strict);
+        assert_eq!(args.fail_on, None);
+        assert_eq!(args.threshold(), None);
+    }
+
+    #[test]
+    fn lint_docs_fail_on_accepts_the_whole_severity_vocabulary() {
+        for expected in Severity::ALL {
+            let args = lint_docs_args(["drep", "lint-docs", "--fail-on", expected.as_str()]);
+            assert_eq!(args.fail_on, Some(expected));
+            assert_eq!(args.threshold(), Some(expected));
+        }
+        assert!(Cli::try_parse_from(["drep", "lint-docs", "--fail-on", "critical"]).is_err());
+    }
+
+    /// `--strict` is the shorthand, not a second mechanism.
+    #[test]
+    fn lint_docs_strict_is_fail_on_info() {
+        assert_eq!(
+            lint_docs_args(["drep", "lint-docs", "--strict"]).threshold(),
+            Some(Severity::Info)
+        );
+    }
+
+    /// Passing both asks two different questions at once. Which wins is not a
+    /// thing a user should have to remember, so clap refuses.
+    #[test]
+    fn lint_docs_strict_and_fail_on_are_mutually_exclusive() {
+        assert!(
+            Cli::try_parse_from(["drep", "lint-docs", "--strict", "--fail-on", "error"]).is_err()
+        );
     }
 
     #[test]

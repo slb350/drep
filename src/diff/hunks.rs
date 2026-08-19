@@ -15,7 +15,7 @@
 //! Deliberately **free of drep policy**: this module answers "what does this
 //! diff say", not "which files does drep review". Whether a path is worth
 //! analyzing is a product decision, and it lives with the other git-semantics
-//! decisions in `mod.rs` beside `filter_scan_targets`. Keeping it out of here
+//! decisions in `mod.rs` beside `filter_paths`. Keeping it out of here
 //! is what lets the parser serve a future caller with a different scope (an
 //! `include`/`exclude` config, `lint-docs`) without threading a predicate
 //! through it.

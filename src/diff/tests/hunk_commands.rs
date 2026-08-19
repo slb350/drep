@@ -4,6 +4,7 @@ use std::fs;
 
 use crate::diff::hunks::HunkLine;
 use crate::diff::{hunks_since, staged_hunks};
+use crate::files;
 
 use super::support::{GitRepo, run_in};
 
@@ -20,7 +21,9 @@ async fn staged_hunks_reports_a_real_line_number_for_a_modified_staged_file() {
     fs::write(&path, "line 1\nline 2\nCHANGED\nline 4\nline 5\n").expect("write");
     run_in(root, &["add", "feature.rs"]).await;
 
-    let hunks = staged_hunks(root).await.expect("staged_hunks");
+    let hunks = staged_hunks(root, files::is_scan_target)
+        .await
+        .expect("staged_hunks");
     assert_eq!(hunks.len(), 1, "expected one hunk, got {hunks:?}");
     let h = &hunks[0];
     let line_3 = h
@@ -44,7 +47,9 @@ async fn staged_hunks_works_on_a_repo_with_no_commits_yet() {
     fs::write(root.join("first.rs"), "alpha\nbeta\ngamma\n").expect("write");
     run_in(root, &["add", "first.rs"]).await;
 
-    let hunks = staged_hunks(root).await.expect("staged_hunks no-commits");
+    let hunks = staged_hunks(root, files::is_scan_target)
+        .await
+        .expect("staged_hunks no-commits");
     assert_eq!(hunks.len(), 1, "expected one hunk, got {hunks:?}");
     assert_eq!(hunks[0].file_path.to_string_lossy(), "first.rs");
 }
@@ -60,7 +65,9 @@ async fn staged_hunks_returns_no_hunk_for_cargo_lock() {
     fs::write(root.join("Cargo.lock"), "after\n").expect("write");
     run_in(root, &["add", "Cargo.lock"]).await;
 
-    let hunks = staged_hunks(root).await.expect("staged_hunks");
+    let hunks = staged_hunks(root, files::is_scan_target)
+        .await
+        .expect("staged_hunks");
     assert!(
         hunks.is_empty(),
         "Cargo.lock must be dropped by is_scan_target, got {hunks:?}"
@@ -98,7 +105,9 @@ async fn hunks_since_uses_three_dot_semantics_not_two_dot() {
 
     repo.checkout("feature").await;
 
-    let hunks = hunks_since(root, "main").await.expect("hunks_since");
+    let hunks = hunks_since(root, "main", files::is_scan_target)
+        .await
+        .expect("hunks_since");
     let names: Vec<String> = hunks
         .iter()
         .map(|h| h.file_path.to_string_lossy().into_owned())
@@ -138,7 +147,9 @@ async fn staged_hunks_requests_at_least_fifteen_context_lines() {
     fs::write(&path, &mutated).expect("write");
     run_in(root, &["add", "wide.rs"]).await;
 
-    let hunks = staged_hunks(root).await.expect("staged_hunks");
+    let hunks = staged_hunks(root, files::is_scan_target)
+        .await
+        .expect("staged_hunks");
     assert_eq!(hunks.len(), 1);
     let h = &hunks[0];
     let before_change: usize = h
@@ -171,7 +182,7 @@ async fn hunks_between_reports_plainly_when_the_repo_has_no_commits() {
     let repo = GitRepo::init_no_commits().await;
     let root = repo.root();
 
-    let err = crate::diff::hunks_between(root, EMPTY_TREE_SHA, None)
+    let err = crate::diff::hunks_between(root, EMPTY_TREE_SHA, None, files::is_scan_target)
         .await
         .expect_err("there is no HEAD to diff to");
     let rendered = format!("{err}");
@@ -186,7 +197,7 @@ async fn hunks_between_reports_plainly_when_the_repo_has_no_commits() {
 
     // An explicit tip skips the HEAD probe entirely, so this fails inside git
     // rather than at the guard above.
-    let err = crate::diff::hunks_between(root, EMPTY_TREE_SHA, Some("HEAD"))
+    let err = crate::diff::hunks_between(root, EMPTY_TREE_SHA, Some("HEAD"), files::is_scan_target)
         .await
         .expect_err("HEAD is unborn");
     assert!(

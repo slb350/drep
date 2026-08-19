@@ -70,12 +70,16 @@ repos:
         pass_filenames: false
         require_serial: true
 
-      # Report-only, deliberately: lint-docs' long_line check flags >120 chars,
-      # and this repo turns that rule off (MD013: false in .markdownlint.json).
-      # Add --strict in a project that wants markdown to gate the commit.
+      # The 2.0 binary, gated at `error` - the calibration `drep init` now
+      # writes and `.pre-commit-hooks.yaml` publishes, so this repository runs
+      # what it ships. `--fail-on error` blocks on an unclosed code fence and
+      # stays quiet about line length, which this repo turns off anyway
+      # (MD013: false in .markdownlint.json). Report-only was the old answer
+      # to the same problem, and it meant the one finding that breaks a
+      # document did not block either.
       - id: drep-lint-docs
         name: drep lint-docs
-        entry: ./venv/bin/drep lint-docs
+        entry: ./target/release/drep lint-docs --fail-on error
         language: system
         types: [markdown]
 

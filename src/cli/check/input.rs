@@ -89,9 +89,9 @@ pub async fn resolve(args: &CheckArgs, root: &Path) -> Result<Work> {
     // measured), paid on every pre-commit and pre-push run before any useful
     // work started.
     let hunks = if args.staged {
-        diff::staged_hunks(root).await?
+        diff::staged_hunks(root, files::is_scan_target).await?
     } else if let Some(git_ref) = args.diff.as_deref() {
-        diff::hunks_between(root, git_ref, args.tip.as_deref()).await?
+        diff::hunks_between(root, git_ref, args.tip.as_deref(), files::is_scan_target).await?
     } else {
         return resolve_paths(&args.paths, root);
     };

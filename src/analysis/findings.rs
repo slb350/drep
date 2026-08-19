@@ -29,6 +29,16 @@ pub enum Severity {
     Error,
 }
 
+/// Does any finding sit at or above `threshold`?
+///
+/// The one definition of "this finding blocks". `check` and `lint-docs` both
+/// gate on it and the `lint-docs` footer reports on it, and the comparison was
+/// written out at all three sites - the same drift `SEVERITY_RANK` living here
+/// exists to prevent, one level up.
+pub fn any_at_or_above(findings: &[Finding], threshold: Severity) -> bool {
+    findings.iter().any(|finding| finding.severity >= threshold)
+}
+
 /// Raised when a producer emits a severity outside the vocabulary.
 ///
 /// An unrecognised severity is a bug to surface, not a value to coerce to the

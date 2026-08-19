@@ -156,19 +156,24 @@ pub(crate) async fn run_git(root: &Path, args: &[&str]) -> Result<String, GitErr
 }
 
 /// Parse the newline-delimited output of `git diff --name-only` into paths,
-/// then keep only those drep analyzes.
+/// then keep only those the caller analyzes.
 ///
 /// Empty lines are tolerated because git occasionally emits a trailing one
 /// depending on version and locale settings; the filter is the load-bearing
-/// half — `is_scan_target` is what makes a diff query return files drep can
-/// do something with, and keeps lock/build output from inflating the work
-/// set.
-fn filter_scan_targets(output: &str) -> Vec<PathBuf> {
+/// half — it is what makes a diff query return files drep can do something
+/// with, and keeps lock/build output from inflating the work set.
+///
+/// `wanted` is a parameter rather than a hardcoded `files::is_scan_target`
+/// because the file classes are disjoint and one command owns each: `check`
+/// asks for registered-language sources, `lint-docs` asks for markdown. With
+/// the predicate baked in, `lint-docs --staged` could not be expressed at all
+/// and the hook ran over the whole repository instead.
+fn filter_paths(output: &str, wanted: fn(&Path) -> bool) -> Vec<PathBuf> {
     output
         .lines()
         .filter(|line| !line.trim().is_empty())
         .map(PathBuf::from)
-        .filter(|path| files::is_scan_target(path))
+        .filter(|path| wanted(path))
         .collect()
 }
 
@@ -178,8 +183,11 @@ fn filter_scan_targets(output: &str) -> Vec<PathBuf> {
 /// cannot be analyzed, and passing it on would look like an unreadable file
 /// rather than an absent one. The empty-tree fallback covers the
 /// initial-commit case (no `HEAD` yet).
-pub async fn staged_files(root: &Path) -> Result<Vec<PathBuf>, GitError> {
-    Ok(filter_scan_targets(&staged_diff(root, NAMES).await?))
+pub async fn staged_files(
+    root: &Path,
+    wanted: fn(&Path) -> bool,
+) -> Result<Vec<PathBuf>, GitError> {
+    Ok(filter_paths(&staged_diff(root, NAMES).await?, wanted))
 }
 
 /// `git diff --cached` in whichever output mode the caller wants.
@@ -270,8 +278,9 @@ const NAMES: &str = "--name-only";
 /// git exit non-zero, and that surfaces here as `Err(GitError::NonZero)`
 /// rather than an empty Vec — see the module docs.
 pub async fn changed_since(root: &Path, git_ref: &str) -> Result<Vec<PathBuf>, GitError> {
-    Ok(filter_scan_targets(
+    Ok(filter_paths(
         &since_diff(root, git_ref, None, NAMES).await?,
+        files::is_scan_target,
     ))
 }
 
@@ -289,8 +298,8 @@ pub const CONTEXT_LINES: u32 = 20;
 /// fallback when there is no HEAD — but the diff itself rather than the
 /// names. `CONTEXT_LINES` of context is requested so the model reading each
 /// hunk has the surrounding function body to compare against.
-pub async fn staged_hunks(root: &Path) -> Result<Vec<Hunk>, GitError> {
-    Ok(scan_target_hunks(&staged_diff(root, &unified()).await?))
+pub async fn staged_hunks(root: &Path, wanted: fn(&Path) -> bool) -> Result<Vec<Hunk>, GitError> {
+    Ok(hunks_for(&staged_diff(root, &unified()).await?, wanted))
 }
 
 /// The `--unified=N` flag, built from [`CONTEXT_LINES`].
@@ -298,16 +307,17 @@ fn unified() -> String {
     format!("--unified={CONTEXT_LINES}")
 }
 
-/// Parse a diff and keep only the hunks for files drep analyzes.
+/// Parse a diff and keep only the hunks for the files the caller analyzes.
 ///
-/// The scan-target policy is applied here rather than inside the parser: which
-/// files drep reviews is a product decision, and `hunks.rs` answers only "what
-/// does this diff say". This is the same layer at which `filter_scan_targets`
-/// applies the policy to `--name-only` output, so both queries meet drep's
-/// scope in one place.
-fn scan_target_hunks(diff_text: &str) -> Vec<Hunk> {
+/// The file-class policy is applied here rather than inside the parser: which
+/// files a command reviews is a product decision, and `hunks.rs` answers only
+/// "what does this diff say". Same layer, and now same signature, as
+/// `filter_paths` over `--name-only` output: both queries take the class from
+/// their caller, so a command cannot get one of them right and the other
+/// wrong.
+fn hunks_for(diff_text: &str, wanted: fn(&Path) -> bool) -> Vec<Hunk> {
     let mut hunks = parse_unified_diff(diff_text);
-    hunks.retain(|hunk| files::is_scan_target(&hunk.file_path));
+    hunks.retain(|hunk| wanted(&hunk.file_path));
     hunks
 }
 
@@ -317,8 +327,12 @@ fn scan_target_hunks(diff_text: &str) -> Vec<Hunk> {
 /// so work that landed on the base branch after the fork is not attributed to
 /// this branch. `CONTEXT_LINES` of context is requested so the model has
 /// enough surrounding code to judge each change.
-pub async fn hunks_since(root: &Path, git_ref: &str) -> Result<Vec<Hunk>, GitError> {
-    hunks_between(root, git_ref, None).await
+pub async fn hunks_since(
+    root: &Path,
+    git_ref: &str,
+    wanted: fn(&Path) -> bool,
+) -> Result<Vec<Hunk>, GitError> {
+    hunks_between(root, git_ref, None, wanted).await
 }
 
 /// Hunks between `git_ref` and an explicit `tip`, or `HEAD` when `tip` is
@@ -332,9 +346,11 @@ pub async fn hunks_between(
     root: &Path,
     git_ref: &str,
     tip: Option<&str>,
+    wanted: fn(&Path) -> bool,
 ) -> Result<Vec<Hunk>, GitError> {
-    Ok(scan_target_hunks(
+    Ok(hunks_for(
         &since_diff(root, git_ref, tip, &unified()).await?,
+        wanted,
     ))
 }
 

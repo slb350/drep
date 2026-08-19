@@ -6,11 +6,13 @@
 mod gating;
 mod render;
 mod resolve;
+mod staged;
 
 use std::path::Path;
 
 use tempfile::TempDir;
 
+use crate::analysis::findings::Severity;
 use crate::cli::lint_docs::{LintDocsArgs, LintOutcome, analyze};
 
 /// A temp directory with the named files written into it.
@@ -35,11 +37,27 @@ fn repo(files: &[(&str, &str)]) -> TempDir {
 /// argument and the walk root are relative to the same place. The parameter
 /// exists so a test does not have to chdir a shared process.
 fn run_in(root: &Path, paths: &[&str], strict: bool) -> LintOutcome {
-    let args = LintDocsArgs {
+    analyze(&args_for(root, paths, strict, None), root)
+}
+
+/// The same, gated at an explicit severity rather than by `--strict`.
+fn run_failing_on(root: &Path, paths: &[&str], severity: Severity) -> LintOutcome {
+    analyze(&args_for(root, paths, false, Some(severity)), root)
+}
+
+/// The argument struct, built in one place.
+///
+/// `LintDocsArgs` has gained three fields so far, and each helper spelling out
+/// its own literal means every new field is edited into every helper - or
+/// missed in one, where it silently takes the `Default`-shaped value the test
+/// author never considered.
+fn args_for(root: &Path, paths: &[&str], strict: bool, fail_on: Option<Severity>) -> LintDocsArgs {
+    LintDocsArgs {
         paths: paths.iter().map(|p| root.join(p)).collect(),
+        staged: false,
         strict,
-    };
-    analyze(&args, root)
+        fail_on,
+    }
 }
 
 /// Run over the whole of `root` (no explicit paths), report-only.

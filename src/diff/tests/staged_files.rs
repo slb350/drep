@@ -4,6 +4,7 @@ use std::fs;
 use std::path::Path;
 
 use crate::diff::staged_files;
+use crate::files;
 
 use super::support::GitRepo;
 
@@ -15,7 +16,9 @@ async fn returns_a_staged_added_source_file() {
     fs::write(root.join("feature.rs"), "fn main() {}\n").expect("write");
     crate::diff::tests::support::run_in(root, &["add", "feature.rs"]).await;
 
-    let files = staged_files(root).await.expect("staged_files");
+    let files = staged_files(root, files::is_scan_target)
+        .await
+        .expect("staged_files");
     assert!(
         files.iter().any(|p| p == Path::new("feature.rs")),
         "feature.rs should appear in staged_files, got {files:?}"
@@ -39,7 +42,9 @@ async fn excludes_a_staged_deletion() {
     // before running `drep check --staged`.
     crate::diff::tests::support::run_in(root, &["rm", "-f", "victim.rs"]).await;
 
-    let files = staged_files(root).await.expect("staged_files");
+    let files = staged_files(root, files::is_scan_target)
+        .await
+        .expect("staged_files");
     assert!(
         !files.iter().any(|p| p == Path::new("victim.rs")),
         "deletions must be excluded, got {files:?}"
@@ -56,7 +61,9 @@ async fn excludes_a_staged_non_target_file() {
     fs::write(root.join("notes.txt"), "scratchpad\n").expect("write");
     crate::diff::tests::support::run_in(root, &["add", "notes.txt"]).await;
 
-    let files = staged_files(root).await.expect("staged_files");
+    let files = staged_files(root, files::is_scan_target)
+        .await
+        .expect("staged_files");
     assert!(
         !files.iter().any(|p| p == Path::new("notes.txt")),
         "non-target files must be filtered out, got {files:?}"
@@ -74,7 +81,9 @@ async fn works_on_a_repo_with_no_commits_yet() {
     fs::write(root.join("first.rs"), "").expect("write");
     crate::diff::tests::support::run_in(root, &["add", "first.rs"]).await;
 
-    let files = staged_files(root).await.expect("staged_files no-commits");
+    let files = staged_files(root, files::is_scan_target)
+        .await
+        .expect("staged_files no-commits");
     assert!(
         files.iter().any(|p| p == Path::new("first.rs")),
         "expected first.rs in staged_files, got {files:?}"
@@ -88,7 +97,9 @@ async fn errors_when_the_directory_is_not_a_git_repository() {
     // and run `git init` (or omit `--staged`), not get a silent pass.
     let dir = tempfile::tempdir().expect("tempdir");
 
-    let err = staged_files(dir.path()).await.expect_err("must error");
+    let err = staged_files(dir.path(), files::is_scan_target)
+        .await
+        .expect_err("must error");
     let display = err.to_string();
     assert!(
         display.contains("git")
@@ -97,4 +108,30 @@ async fn errors_when_the_directory_is_not_a_git_repository() {
                 || display.contains("spawned")),
         "expected a git error message, got {display:?}"
     );
+}
+
+/// The file class is the caller's, not this module's.
+///
+/// `staged_files` hardcoded `is_scan_target`, which is registered-language
+/// sources - so `lint-docs --staged` had no way to ask git for the staged
+/// *markdown*. The two predicates are disjoint by construction, so one call
+/// with each over the same index is the whole contract.
+#[tokio::test]
+async fn the_caller_chooses_the_file_class() {
+    let repo = GitRepo::init().await;
+    let root = repo.root();
+
+    fs::write(root.join("feature.rs"), "fn main() {}\n").expect("write");
+    fs::write(root.join("README.md"), "# Title\n").expect("write");
+    crate::diff::tests::support::run_in(root, &["add", "feature.rs", "README.md"]).await;
+
+    let sources = staged_files(root, files::is_scan_target)
+        .await
+        .expect("staged sources");
+    assert_eq!(sources, vec![Path::new("feature.rs").to_path_buf()]);
+
+    let markdown = staged_files(root, files::is_markdown)
+        .await
+        .expect("staged markdown");
+    assert_eq!(markdown, vec![Path::new("README.md").to_path_buf()]);
 }
