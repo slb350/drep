@@ -217,17 +217,84 @@ fn escape(s: &str) -> String {
 /// path and points at `--force` so the user does not have to read code to
 /// learn how to recover.
 pub fn write(root: &Path, body: &str, force: bool) -> Result<PathBuf> {
+    use std::io::Write;
+
     let path = root.join(crate::config::default_config_path());
-    if path.exists() && !force {
-        return Err(already_exists(&path));
+
+    // `create_new` rather than `exists()` then `write`. Two reasons, and the
+    // second is the one that bites: the check and the write are not one
+    // operation, and `Path::exists` reports *false* for a dangling symlink
+    // while `fs::write` follows it - so a `drep.toml` symlinked at something
+    // that does not exist yet got the config written through it, to a path
+    // nobody named. `create_new` asks the OS the question and does the write
+    // in the same call, and refuses a symlink outright.
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true);
+    if force {
+        options.create(true).truncate(true);
+    } else {
+        options.create_new(true);
     }
-    std::fs::write(&path, body).with_context(|| format!("could not write {}", path.display()))?;
+
+    let mut file = match options.open(&path) {
+        Ok(file) => file,
+        Err(err) if !force && err.kind() == std::io::ErrorKind::AlreadyExists => {
+            return Err(already_exists(&path));
+        }
+        Err(err) => {
+            return Err(
+                anyhow::Error::new(err).context(format!("could not write {}", path.display()))
+            );
+        }
+    };
+    file.write_all(body.as_bytes())
+        .with_context(|| format!("could not write {}", path.display()))?;
     Ok(path)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_write_that_fails_for_another_reason_is_not_reported_as_already_existing() {
+        // `already_exists` names `--force` as the way out, so reporting it for
+        // a missing directory or a permission error sends the user to a flag
+        // that cannot help - and `--force` would then fail the same way with
+        // the same message.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let missing = dir.path().join("no-such-directory");
+
+        let err = write(&missing, "model = \"x\"\n", false)
+            .expect_err("there is no directory to write into");
+
+        assert!(
+            !err.to_string().contains("already exists"),
+            "nothing exists here; got {err}"
+        );
+        assert!(err.to_string().contains("could not write"), "got {err}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_dangling_symlink_named_drep_toml_is_refused_rather_than_followed() {
+        // `Path::exists` reports false for a symlink whose target is missing,
+        // while `fs::write` creates the target - so the guard said "nothing is
+        // there" and the write went somewhere nobody named.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let elsewhere = dir.path().join("elsewhere.toml");
+        std::os::unix::fs::symlink(&elsewhere, dir.path().join("drep.toml")).expect("symlink");
+
+        let err = write(dir.path(), "model = \"x\"\n", false)
+            .expect_err("a dangling symlink is still something being there");
+
+        assert!(err.to_string().contains("drep.toml"), "got {err}");
+        assert!(
+            !elsewhere.exists(),
+            "and nothing was written through it to {}",
+            elsewhere.display()
+        );
+    }
 
     #[test]
     fn escape_handles_backslash_and_quote() {

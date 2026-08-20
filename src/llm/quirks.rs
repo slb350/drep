@@ -104,6 +104,29 @@ pub struct ModelFacts {
     pub output_limit: Option<u32>,
 }
 
+impl ModelFacts {
+    /// Keep whichever of `self` and `other` is the stricter claim, field by
+    /// field.
+    ///
+    /// Only reachable when two providers publish the same `api` URL and both
+    /// name the same model. Narrowing rather than replacing is what keeps the
+    /// registry's one guarantee - it may withdraw and it may lower, never the
+    /// reverse - from depending on which vendor id happened to sort last.
+    ///
+    /// A refused `temperature` wins over an accepted one, because omitting the
+    /// parameter costs default sampling while sending a rejected one is a 400
+    /// that neither fails over nor retries. A published limit wins over no
+    /// limit, and the lower of two published limits wins: an unknown ceiling
+    /// leaves the preset's fallback in place, which is the wider answer.
+    fn narrow(&mut self, other: Self) {
+        self.temperature = self.temperature && other.temperature;
+        self.output_limit = match (self.output_limit, other.output_limit) {
+            (Some(mine), Some(theirs)) => Some(mine.min(theirs)),
+            (mine, theirs) => mine.or(theirs),
+        };
+    }
+}
+
 /// The `#[serde(default)]` for [`ModelFacts::temperature`].
 fn yes() -> bool {
     true
@@ -399,13 +422,21 @@ impl Registry {
             // arrived first, taking its models with it.
             let entry = providers.entry(crate::auth::normalise(&api)).or_default();
             for (id, model) in provider.models {
-                entry.insert(
-                    id,
-                    ModelFacts {
-                        temperature: model.temperature,
-                        output_limit: model.limit.and_then(|limit| limit.output),
-                    },
-                );
+                let facts = ModelFacts {
+                    temperature: model.temperature,
+                    output_limit: model.limit.and_then(|limit| limit.output),
+                };
+                // Narrowed, not overwritten. Nothing says two providers sharing
+                // an `api` publish disjoint model lists, and the defaults for an
+                // omitted field are the permissive ones - `temperature: true`
+                // and no limit - so last-wins lets a sparse entry re-introduce a
+                // parameter the model rejects. The document is a map, walked in
+                // key order, so which entry lands second is an accident of the
+                // vendor id.
+                entry
+                    .entry(id)
+                    .and_modify(|held| held.narrow(facts))
+                    .or_insert(facts);
             }
         }
 

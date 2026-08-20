@@ -288,7 +288,14 @@ fn a_pasted_key_reaches_the_store_and_the_config_omits_it() {
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let report = String::from_utf8_lossy(&output.stdout).to_string();
+    // Both streams. A secret that leaked into an error message would be on
+    // stderr, and that is the stream a CI job is most likely to keep - so
+    // checking stdout alone is checking the half that matters least.
+    let report = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
     assert!(
         report.contains("Stored 1 key"),
         "the report should say a key was stored: {report}"
@@ -307,9 +314,10 @@ fn a_pasted_key_reaches_the_store_and_the_config_omits_it() {
 
     let config = std::fs::read_to_string(dir.path().join("drep.toml")).expect("config written");
     assert!(
-        !config
-            .lines()
-            .any(|line| line.trim_start().starts_with("api_key")),
+        !config.lines().any(|line| line
+            .split('=')
+            .next()
+            .is_some_and(|key| key.trim() == "api_key")),
         "no api_key assignment, which would override the stored key: {config}"
     );
     assert!(

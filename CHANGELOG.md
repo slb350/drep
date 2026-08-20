@@ -76,6 +76,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The registry could widen a fact instead of narrowing it.** Two providers
+  may publish the same `api` URL, and nothing says their model lists are
+  disjoint - models.dev ships `minimax` and `minimax-coding-plan` at one
+  endpoint. Duplicate entries were merged last-wins, and an omitted field
+  defaults to the permissive answer (`temperature: true`, no limit), so a
+  sparse entry landing second re-introduced a parameter the model rejects.
+  Which entry lands second is an accident of the vendor id's sort order. Facts
+  now narrow field by field, which is the one guarantee the registry makes.
+- **The credential store was written in place.** `auth.toml` was opened with
+  `truncate`, so a crash, a full disk or a serialization failure between that
+  and the last byte left it empty or half-written - and it is the one file drep
+  holds that cannot be regenerated. It is now written to a sibling created 0600,
+  synced, and renamed over the target.
+- **`auth::normalise` lowercased the path of an endpoint with no scheme.** Its
+  own rule is that a URL path is case-sensitive, and the scheme-carrying branch
+  followed it; `localhost:11434/V1` did not, which is the spelling a local
+  server is most likely to be typed as. Two such endpoints collapsed onto one
+  entry, and one of them got the other's key.
+- **Writing `drep.toml` followed a dangling symlink.** `Path::exists` reports
+  false for a symlink whose target is missing while `fs::write` creates that
+  target, so the "refuse to overwrite" guard saw nothing there and the config
+  went to a path nobody named. The write is now one `create_new` call, which
+  also closes the gap between the check and the write.
+- The git environment scrub covers `GIT_OBJECT_DIRECTORY`,
+  `GIT_ALTERNATE_OBJECT_DIRECTORIES` and `GIT_QUARANTINE_PATH` as well. They
+  redirect where a child `git` reads and writes objects, so an inherited one
+  points at the outer repository while every other setting names the intended
+  one.
 - **The model listing was read without a size ceiling.** `drep init` asks an
   endpoint the user has just typed which models it serves, holding a key while
   it does, and buffered whatever came back. The registry fetch written beside

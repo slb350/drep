@@ -337,6 +337,13 @@ pub(crate) fn git(dir: &std::path::Path) -> std::process::Command {
         .env_remove("GIT_WORK_TREE")
         .env_remove("GIT_COMMON_DIR")
         .env_remove("GIT_INDEX_FILE")
+        // The object-database trio, for the same reason as the four above:
+        // they redirect where a child `git` reads and writes objects, so an
+        // inherited one points at the outer repository's store while every
+        // other setting names the intended one.
+        .env_remove("GIT_OBJECT_DIRECTORY")
+        .env_remove("GIT_ALTERNATE_OBJECT_DIRECTORIES")
+        .env_remove("GIT_QUARANTINE_PATH")
         .current_dir(dir);
     command
 }

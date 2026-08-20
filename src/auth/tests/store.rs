@@ -333,3 +333,93 @@ fn a_url_path_keeps_its_case_while_the_host_does_not() {
     assert_eq!(store.get("https://EXAMPLE.com/API/v1"), Some("upper"));
     assert_eq!(store.get("https://example.com/api/v1"), Some("lower"));
 }
+
+#[test]
+fn saving_leaves_no_temporary_beside_the_store() {
+    // The write goes through a sibling and a rename. A temporary left behind
+    // would sit in the same 0700 directory as the store and hold the same
+    // credentials, so "it works" is not the whole requirement.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("auth.toml");
+
+    let mut store = AuthStore::new();
+    store.set("https://api.z.ai/v1", "sk-one").expect("set");
+    store.save(&path).expect("first save");
+    store.set("https://api.z.ai/v1", "sk-two").expect("set");
+    store.save(&path).expect("second save");
+
+    let names: Vec<String> = std::fs::read_dir(dir.path())
+        .expect("read_dir")
+        .map(|entry| {
+            entry
+                .expect("entry")
+                .file_name()
+                .to_string_lossy()
+                .into_owned()
+        })
+        .collect();
+
+    assert_eq!(names, vec!["auth.toml".to_string()], "got {names:?}");
+    assert_eq!(
+        AuthStore::load(&path)
+            .expect("loads")
+            .get("https://api.z.ai/v1"),
+        Some("sk-two"),
+        "and the second save is the one that survived"
+    );
+}
+
+#[test]
+fn a_save_that_cannot_be_published_leaves_the_previous_store_readable() {
+    // The reason the rename exists. Renaming onto a non-empty directory fails,
+    // which stands in for any failure between opening the replacement and
+    // publishing it - a crash, a full disk, a serialization error. Truncating
+    // the real path in place would have destroyed the old keys before this
+    // point, and they are the one thing here that cannot be regenerated.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("auth.toml");
+
+    let mut store = AuthStore::new();
+    store
+        .set("https://api.z.ai/v1", "sk-original")
+        .expect("set");
+    store.save(&path).expect("the first save succeeds");
+
+    // Replace the store with a directory that cannot be renamed over.
+    std::fs::remove_file(&path).expect("remove");
+    std::fs::create_dir(&path).expect("mkdir");
+    std::fs::write(path.join("occupied"), "x").expect("write");
+
+    let mut replacement = AuthStore::new();
+    replacement
+        .set("https://api.z.ai/v1", "sk-replacement")
+        .expect("set");
+
+    assert!(
+        replacement.save(&path).is_err(),
+        "publishing over a non-empty directory cannot succeed"
+    );
+    assert!(
+        path.join("occupied").exists(),
+        "and what was there is untouched"
+    );
+    assert!(
+        !path.with_file_name("auth.toml.drep-tmp").exists(),
+        "with no temporary left holding the credentials"
+    );
+}
+
+#[test]
+fn a_scheme_less_endpoints_path_is_case_sensitive_too() {
+    // `localhost:11434/v1` is what a user types for a local server, and it has
+    // a path like any other endpoint. Lowercasing the whole string because
+    // there was no `://` collapsed two endpoints onto one entry and handed one
+    // of them the other's key - the case the scheme-carrying branch already
+    // refuses.
+    let mut store = AuthStore::new();
+    store.set("LocalHost:11434/V1", "sk-upper").expect("set");
+    store.set("localhost:11434/v1", "sk-lower").expect("set");
+
+    assert_eq!(store.get("localhost:11434/V1"), Some("sk-upper"));
+    assert_eq!(store.get("LOCALHOST:11434/v1"), Some("sk-lower"));
+}

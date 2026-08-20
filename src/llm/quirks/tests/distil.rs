@@ -152,3 +152,86 @@ fn the_distilled_registry_records_when_it_was_made() {
             .is_stale(1_000 + 8 * 24 * 60 * 60)
     );
 }
+
+#[test]
+fn a_sparse_duplicate_entry_never_widens_a_stricter_one() {
+    // Two providers can publish the same `api` URL *and* the same model - the
+    // MiniMax pair is the case the merge exists for, and nothing says their
+    // model lists are disjoint. `temperature` defaults to `true` and
+    // `output_limit` to `None` when a document omits them, so a sparse second
+    // entry landing on top of a strict first one re-introduces a parameter the
+    // model rejects and discards a ceiling the endpoint requires. Last-wins is
+    // the one merge rule that can widen, which the registry may never do.
+    let endpoint = "https://api.minimax.io/anthropic/v1";
+    let document = format!(
+        // `b-sparse` sorts after `a-strict`, so the sparse entry is the one
+        // that lands second. The document is a map and drep walks it in key
+        // order, which means either provider can be the later one - a merge
+        // that is only safe for one ordering is not safe.
+        r#"{{"a-strict": {{"api": "{endpoint}", "models": {{"M": {{"id": "M",
+             "temperature": false, "limit": {{"output": 32768}} }} }} }},
+           "b-sparse": {{"api": "{endpoint}", "models": {{"M": {{"id": "M" }} }} }} }}"#
+    );
+
+    let registry = Registry::distil(&document, 0).expect("distils");
+    let facts = registry.facts(endpoint, "M").expect("M is named");
+
+    assert!(
+        !facts.temperature,
+        "the sparse entry's defaulted `true` must not overwrite a published `false`"
+    );
+    assert_eq!(
+        facts.output_limit,
+        Some(32_768),
+        "nor its absent limit overwrite a published one"
+    );
+}
+
+#[test]
+fn narrowing_a_duplicate_entry_does_not_depend_on_which_arrives_first() {
+    // The mirror of the case above, with the strict entry sorting last. Both
+    // orderings have to reach the same facts, or the guarantee is really "the
+    // vendor id that sorts later wins".
+    let endpoint = "https://api.minimax.io/anthropic/v1";
+    let document = format!(
+        r#"{{"a-sparse": {{"api": "{endpoint}", "models": {{"M": {{"id": "M" }} }} }},
+           "b-strict": {{"api": "{endpoint}", "models": {{"M": {{"id": "M",
+             "temperature": false, "limit": {{"output": 32768}} }} }} }} }}"#
+    );
+
+    let facts = Registry::distil(&document, 0)
+        .expect("distils")
+        .facts(endpoint, "M")
+        .copied()
+        .expect("M is named");
+
+    assert!(!facts.temperature);
+    assert_eq!(facts.output_limit, Some(32_768));
+}
+
+#[test]
+fn two_published_limits_for_one_model_narrow_to_the_lower() {
+    // Neither is "the" answer, so the registry takes the one that cannot
+    // overrun the other. Raising a required ceiling is the direction that
+    // yields a 400.
+    let endpoint = "https://api.minimax.io/anthropic/v1";
+    let document = format!(
+        r#"{{"a": {{"api": "{endpoint}", "models": {{"M": {{"id": "M",
+             "temperature": true, "limit": {{"output": 32768}} }} }} }},
+           "b": {{"api": "{endpoint}", "models": {{"M": {{"id": "M",
+             "temperature": true, "limit": {{"output": 131072}} }} }} }} }}"#
+    );
+
+    let facts = Registry::distil(&document, 0)
+        .expect("distils")
+        .facts(endpoint, "M")
+        .copied()
+        .expect("M is named");
+
+    assert_eq!(facts.output_limit, Some(32_768), "the lower of the two");
+    assert!(
+        facts.temperature,
+        "and two accepting entries stay accepting: narrowing must not withdraw \
+         a parameter neither of them refused"
+    );
+}

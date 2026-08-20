@@ -417,6 +417,26 @@ mod http {
         assert!(matches!(err, ListError::Transport(_)), "got {err:?}");
     }
 
+    #[tokio::test]
+    async fn a_key_carrying_a_newline_is_an_error_rather_than_a_crash() {
+        // A key reaches this from three places and only one of them validates:
+        // the wizard's prompt refuses control characters, but a key expanded
+        // from `${VAR}` has been through no such check, and a pasted variable
+        // routinely carries a trailing newline. Nothing in this module may stop
+        // `drep init`, so an unsendable header has to arrive as a `ListError`
+        // and leave the user typing a model name.
+        let err = Http::new()
+            .list(
+                "http://127.0.0.1:9/v1",
+                "sk-bad\nkey",
+                ApiProtocol::OpenAiChat,
+            )
+            .await
+            .expect_err("a newline cannot go in a header");
+
+        assert!(matches!(err, ListError::Transport(_)), "got {err:?}");
+    }
+
     #[test]
     fn the_production_ceiling_is_eight_megabytes() {
         // Pins the arithmetic, and that `new` is what applies it - a fetcher

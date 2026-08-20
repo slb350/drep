@@ -85,10 +85,12 @@ fn a_second_model_on_the_same_endpoint_gets_its_own_limit() {
 }
 
 #[test]
-fn a_named_model_with_no_published_limit_keeps_the_presets_fallback() {
+fn a_model_whose_endpoint_publishes_no_limit_keeps_the_presets_fallback() {
     // The endpoint still requires the field, so something has to be written.
-    let mut defaults = kimi_defaults();
-    defaults.max_tokens = Some(200_000);
+    // `quiet.example` is the fixture's provider whose one model publishes no
+    // `limit` at all, which is the case a name mentioning the *model* would
+    // have described only by accident.
+    let defaults = kimi_defaults();
 
     let resolved = resolve(
         Some(&registry()),
@@ -97,7 +99,7 @@ fn a_named_model_with_no_published_limit_keeps_the_presets_fallback() {
         "unspecified",
     );
 
-    assert_eq!(resolved.max_tokens, Some(200_000));
+    assert_eq!(resolved.max_tokens, defaults.max_tokens);
     assert!(
         !resolved.max_tokens_from_registry,
         "the rendered comment must not claim this is the model's own limit"
@@ -135,7 +137,7 @@ fn a_model_that_accepts_temperature_keeps_the_presets_value() {
     // same provider rather than one being inferred from the other.
     let resolved = resolve(Some(&registry()), zai_defaults(), ZAI, "glm-5.2");
 
-    assert_eq!(resolved.temperature, Some(0.2));
+    assert_eq!(resolved.temperature, zai_defaults().temperature);
 }
 
 #[test]
@@ -176,7 +178,11 @@ fn a_published_limit_above_the_presets_fallback_never_raises_it() {
 
     let resolved = resolve(Some(&registry), kimi_defaults(), KIMI, "k3");
 
-    assert_eq!(resolved.max_tokens, Some(200_000), "narrowed, never raised");
+    assert_eq!(
+        resolved.max_tokens,
+        kimi_defaults().max_tokens,
+        "narrowed, never raised"
+    );
     assert!(
         !resolved.max_tokens_from_registry,
         "and the rendered comment must not credit the registry for it"
@@ -200,15 +206,25 @@ fn two_providers_sharing_an_endpoint_contribute_both_model_lists() {
     // `api` URL, which is drep's own MINIMAX preset. Inserting rather than
     // merging silently discarded one list, so whichever arrived second decided
     // which models drep could resolve at all.
+    //
+    // Both models refuse a temperature, and the defaults offer one. That is
+    // what makes the assertion able to fail: an unknown model returns the
+    // defaults untouched, so a dropped list shows up as the 0.2 surviving. An
+    // earlier version asserted the temperature was *kept*, which is what
+    // `resolve` returns for a known accepting model and for an unknown one
+    // alike - it passed whether or not the merge worked.
     let endpoint = "https://api.minimax.io/anthropic/v1";
     let document = format!(
         r#"{{"minimax": {{"api": "{endpoint}", "models": {{"MiniMax-M2": {{"id": "MiniMax-M2",
-             "temperature": true, "limit": {{"output": 128000}} }} }} }},
+             "temperature": false, "limit": {{"output": 128000}} }} }} }},
            "minimax-coding-plan": {{"api": "{endpoint}", "models": {{"MiniMax-M3": {{"id":
-             "MiniMax-M3", "temperature": true, "limit": {{"output": 128000}} }} }} }} }}"#
+             "MiniMax-M3", "temperature": false, "limit": {{"output": 128000}} }} }} }} }}"#
     );
     let registry = Registry::distil(&document, 0).expect("distils");
 
+    // A preset that sends a temperature, spelled out because what this test
+    // needs is an input the registry can be seen to withdraw - not whatever
+    // `zai` happens to send today.
     let defaults = Quirks {
         temperature: Some(0.2),
         max_tokens: None,
@@ -218,7 +234,7 @@ fn two_providers_sharing_an_endpoint_contribute_both_model_lists() {
     for model in ["MiniMax-M2", "MiniMax-M3"] {
         assert_eq!(
             resolve(Some(&registry), defaults, endpoint, model).temperature,
-            Some(0.2),
+            None,
             "`{model}` should be known: neither provider's list may be dropped"
         );
     }
@@ -231,11 +247,12 @@ fn a_published_limit_equal_to_the_fallback_is_still_the_models_own_limit() {
     // decides a sentence in a file the user commits; with the number equal on
     // both sides that sentence is true, and reading the flag off a `<`
     // comparison made the file say the limit was unknown while printing it.
-    let registry = one_model(KIMI, "k3", false, Some(200_000));
+    let fallback = kimi_defaults().max_tokens.expect("kimi requires the field");
+    let registry = one_model(KIMI, "k3", false, Some(fallback));
 
     let resolved = resolve(Some(&registry), kimi_defaults(), KIMI, "k3");
 
-    assert_eq!(resolved.max_tokens, Some(200_000));
+    assert_eq!(resolved.max_tokens, Some(fallback));
     assert!(
         resolved.max_tokens_from_registry,
         "the registry named this model's limit, so the comment may say so"
@@ -243,16 +260,16 @@ fn a_published_limit_equal_to_the_fallback_is_still_the_models_own_limit() {
 }
 
 #[test]
-fn a_model_the_registry_does_not_name_is_never_credited_to_it() {
+fn a_model_named_without_a_published_limit_is_never_credited_with_one() {
     // The other side of the same flag, and what stops `<=` degenerating into
-    // "always true": a model with no published limit at all keeps the preset's
-    // fallback, and the rendered file must not claim that number came from the
-    // model.
+    // "always true". The registry does name `k3` here - it just publishes no
+    // ceiling for it - so the preset's fallback is what gets written, and the
+    // rendered file must not claim that number came from the model.
     let registry = one_model(KIMI, "k3", false, None);
 
     let resolved = resolve(Some(&registry), kimi_defaults(), KIMI, "k3");
 
-    assert_eq!(resolved.max_tokens, Some(200_000));
+    assert_eq!(resolved.max_tokens, kimi_defaults().max_tokens);
     assert!(
         !resolved.max_tokens_from_registry,
         "the registry named no limit, so the fallback is drep's own number"
