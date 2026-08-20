@@ -170,7 +170,7 @@ fn a_provider_name_resolves_to_that_presets_endpoint() {
         resolved,
         presets::preset("kimi")
             .expect("preset")
-            .endpoint
+            .endpoint()
             .expect("endpoint")
     );
 }
@@ -220,6 +220,21 @@ fn a_preset_with_no_endpoint_cannot_supply_one() {
     .expect_err("custom has no endpoint");
 
     assert!(err.to_string().contains("--endpoint"), "got {err}");
+}
+
+#[test]
+fn codex_subscription_auth_is_owned_by_the_codex_cli() {
+    let err = resolve_endpoint(&LoginArgs {
+        endpoint: None,
+        provider: Some("codex".to_string()),
+    })
+    .expect_err("Codex does not store an API key in drep");
+
+    let message = err.to_string();
+    assert!(message.contains("Codex CLI"), "got {message}");
+    assert!(message.contains("ChatGPT subscription"), "got {message}");
+    assert!(message.contains("`codex login`"), "got {message}");
+    assert!(message.contains("nothing was stored"), "got {message}");
 }
 
 #[test]

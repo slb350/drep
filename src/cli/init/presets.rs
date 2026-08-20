@@ -30,8 +30,35 @@
 //! run, every `--provider` run, and every model released since the cache was
 //! written.
 
+use crate::config::{BackendKind, ReasoningEffort};
+
+/// HTTP-specific preset fields.
+#[derive(Debug)]
+pub struct HttpPreset {
+    pub endpoint: Option<&'static str>,
+    pub api_key_env: Option<&'static str>,
+    pub protocol: Option<&'static str>,
+    pub key_url: Option<&'static str>,
+    pub max_tokens: Option<u32>,
+    pub temperature: Option<f32>,
+}
+
+/// Codex-specific preset fields.
+#[derive(Debug)]
+pub struct CodexPreset {
+    pub reasoning_effort: Option<ReasoningEffort>,
+    pub max_concurrent: usize,
+}
+
+/// Backend-specific fields that cannot be combined across execution paths.
+#[derive(Debug)]
+pub enum PresetBackend {
+    Http(HttpPreset),
+    Codex(CodexPreset),
+}
+
 /// One named way to reach a model.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug)]
 pub struct LlmPreset {
     /// The name clap and `init` accept on the command line.
     pub key: &'static str,
@@ -39,71 +66,45 @@ pub struct LlmPreset {
     pub display_name: &'static str,
     /// One line on when to pick it.
     pub description: &'static str,
-    /// Base URL, or `None` if the user must supply one.
-    pub endpoint: Option<&'static str>,
+    /// Direct HTTP or the separately installed Codex CLI, with only the fields
+    /// that backend can use.
+    pub backend: PresetBackend,
     /// Starting point for the model prompt, or `None` if the user must supply.
     pub default_model: Option<&'static str>,
-    /// Environment variable holding the key. Only the *name* is written to
-    /// `drep.toml` - the file is meant to be committed.
-    pub api_key_env: Option<&'static str>,
     /// Request timeout. `None` inherits `LlmConfig`'s default of 60s.
     pub timeout_secs: Option<u64>,
-    /// Wire protocol, or `None` for the default (`openai`). Written to the file
-    /// only when set, so an OpenAI-compatible block keeps the shape it has had
-    /// since 2.0 and nothing has to be migrated.
-    pub protocol: Option<&'static str>,
-    /// Where the user gets a key, or `None` when none is needed.
-    ///
-    /// Shown by the wizard at the moment the provider is chosen, because that
-    /// is when the answer is wanted. Verified live rather than recalled; a
-    /// wrong link here is worse than no link, since it sends someone to the
-    /// metered console of a provider whose subscription key lives elsewhere.
-    pub key_url: Option<&'static str>,
-    /// Whether this endpoint requires a completion ceiling, and what to send
-    /// when the model's own limit is unknown.
-    ///
-    /// Normally `None`: an unset cap is what stops a reasoning model being
-    /// truncated mid-thought, and inventing one per provider is the coupling
-    /// 2.0 removed. The exception is an endpoint that *requires* the field -
-    /// `api.kimi.com/coding/v1` answers a bare `invalid_request_error` 400
-    /// without it, verified against the live endpoint.
-    ///
-    /// `is_some()` is the requirement and stays a property of the endpoint. The
-    /// *value* is a fallback: when the quirks registry knows the chosen model,
-    /// its published output limit is written instead.
-    pub max_tokens: Option<u32>,
-    /// Sampling temperature, or `None` to send none at all.
-    ///
-    /// Set per preset rather than globally because it is a property of the
-    /// *model*: `k3` and `gpt-5.6-sol` reject the parameter outright, and a 400
-    /// neither fails over nor retries. A preset that guessed would be the
-    /// difference between a provider that works and one that never answers.
-    ///
-    /// The registry may withdraw it for a model that refuses it. It never adds
-    /// one here, because sending a parameter drep would have omitted is the
-    /// direction that produces a 400.
-    pub temperature: Option<f32>,
 }
 
 /// Every preset, in the order the wizard should offer them.
 ///
 /// Order matters - it is what `drep init`'s `--help` and the `--provider`
 /// completions show, and it is what the tests assert.
-pub static PRESETS: &[&LlmPreset] = &[&LOCAL, &OPENROUTER, &ZAI, &MINIMAX, &KIMI, &OPENAI, &CUSTOM];
+pub static PRESETS: &[&LlmPreset] = &[
+    &LOCAL,
+    &OPENROUTER,
+    &ZAI,
+    &MINIMAX,
+    &KIMI,
+    &OPENAI,
+    &CODEX,
+    &CUSTOM,
+];
 
 /// LM Studio, Ollama or llama.cpp on this machine. No key, no cost.
 pub static LOCAL: LlmPreset = LlmPreset {
     key: "local",
     display_name: "Local model",
     description: "LM Studio, Ollama or llama.cpp on this machine. No key, no cost.",
-    endpoint: Some("http://localhost:1234/v1"),
+    backend: PresetBackend::Http(HttpPreset {
+        endpoint: Some("http://localhost:1234/v1"),
+        key_url: None,
+        api_key_env: None,
+        protocol: None,
+        max_tokens: None,
+        temperature: Some(0.2),
+    }),
     default_model: Some("qwen3-30b-a3b"),
-    key_url: None,
-    api_key_env: None,
     timeout_secs: None,
-    protocol: None,
-    max_tokens: None,
-    temperature: Some(0.2),
 };
 
 /// One key for many providers. Good default for cloud analysis.
@@ -111,30 +112,47 @@ pub static OPENROUTER: LlmPreset = LlmPreset {
     key: "openrouter",
     display_name: "OpenRouter",
     description: "One key for many providers. Good default for cloud analysis.",
-    endpoint: Some("https://openrouter.ai/api/v1"),
+    backend: PresetBackend::Http(HttpPreset {
+        endpoint: Some("https://openrouter.ai/api/v1"),
+        key_url: Some("https://openrouter.ai/keys"),
+        api_key_env: Some("OPENROUTER_API_KEY"),
+        protocol: None,
+        max_tokens: None,
+        temperature: Some(0.2),
+    }),
     default_model: Some("deepseek/deepseek-v4-pro-0813"),
-    key_url: Some("https://openrouter.ai/keys"),
-    api_key_env: Some("OPENROUTER_API_KEY"),
     timeout_secs: Some(1800),
-    protocol: None,
-    max_tokens: None,
-    temperature: Some(0.2),
 };
 
 /// Directly against the OpenAI API.
 pub static OPENAI: LlmPreset = LlmPreset {
     key: "openai",
-    display_name: "OpenAI",
+    display_name: "OpenAI API",
     description: "Directly against the OpenAI API.",
-    endpoint: Some("https://api.openai.com/v1"),
+    backend: PresetBackend::Http(HttpPreset {
+        endpoint: Some("https://api.openai.com/v1"),
+        key_url: Some("https://platform.openai.com/api-keys"),
+        api_key_env: Some("OPENAI_API_KEY"),
+        protocol: None,
+        max_tokens: None,
+        // gpt-5.6-sol rejects `temperature` outright, so none is sent.
+        temperature: None,
+    }),
     default_model: Some("gpt-5.6-sol"),
-    key_url: Some("https://platform.openai.com/api-keys"),
-    api_key_env: Some("OPENAI_API_KEY"),
     timeout_secs: Some(1800),
-    protocol: None,
-    max_tokens: None,
-    // gpt-5.6-sol rejects `temperature` outright, so none is sent.
-    temperature: None,
+};
+
+/// The installed Codex CLI using the user's ChatGPT/Codex subscription.
+pub static CODEX: LlmPreset = LlmPreset {
+    key: "codex",
+    display_name: "ChatGPT / Codex subscription",
+    description: "Codex CLI with ChatGPT-managed authentication; no API billing.",
+    backend: PresetBackend::Codex(CodexPreset {
+        reasoning_effort: Some(ReasoningEffort::High),
+        max_concurrent: 1,
+    }),
+    default_model: Some("gpt-5.6-sol"),
+    timeout_secs: Some(1800),
 };
 
 /// z.ai's GLM Coding Plan. OpenAI-compatible, and accepts a temperature.
@@ -142,14 +160,16 @@ pub static ZAI: LlmPreset = LlmPreset {
     key: "zai",
     display_name: "z.ai GLM Coding Plan",
     description: "GLM models on a coding-plan subscription. OpenAI-compatible.",
-    endpoint: Some("https://api.z.ai/api/coding/paas/v4"),
+    backend: PresetBackend::Http(HttpPreset {
+        endpoint: Some("https://api.z.ai/api/coding/paas/v4"),
+        key_url: Some("https://z.ai/manage-apikey/apikey-list"),
+        api_key_env: Some("ZAI_API_KEY"),
+        protocol: None,
+        max_tokens: None,
+        temperature: Some(0.2),
+    }),
     default_model: Some("glm-5.3"),
-    key_url: Some("https://z.ai/manage-apikey/apikey-list"),
-    api_key_env: Some("ZAI_API_KEY"),
     timeout_secs: Some(1800),
-    protocol: None,
-    max_tokens: None,
-    temperature: Some(0.2),
 };
 
 /// MiniMax's Token Plan, over its Anthropic-compatible endpoint.
@@ -163,14 +183,16 @@ pub static MINIMAX: LlmPreset = LlmPreset {
     key: "minimax",
     display_name: "MiniMax Token Plan",
     description: "MiniMax M-series on a token-plan subscription. Anthropic protocol.",
-    endpoint: Some("https://api.minimax.io/anthropic/v1"),
+    backend: PresetBackend::Http(HttpPreset {
+        endpoint: Some("https://api.minimax.io/anthropic/v1"),
+        key_url: Some("https://platform.minimax.io/user-center/payment/token-plan"),
+        api_key_env: Some("MINIMAX_API_KEY"),
+        protocol: Some("anthropic"),
+        max_tokens: None,
+        temperature: Some(0.2),
+    }),
     default_model: Some("MiniMax-M3"),
-    key_url: Some("https://platform.minimax.io/user-center/payment/token-plan"),
-    api_key_env: Some("MINIMAX_API_KEY"),
     timeout_secs: Some(1800),
-    protocol: Some("anthropic"),
-    max_tokens: None,
-    temperature: Some(0.2),
 };
 
 /// Moonshot's Kimi for Coding plan. Anthropic protocol, and no temperature.
@@ -178,21 +200,23 @@ pub static KIMI: LlmPreset = LlmPreset {
     key: "kimi",
     display_name: "Kimi for Coding",
     description: "Moonshot's k3 on a coding-plan subscription. Anthropic protocol.",
-    endpoint: Some("https://api.kimi.com/coding/v1"),
+    backend: PresetBackend::Http(HttpPreset {
+        endpoint: Some("https://api.kimi.com/coding/v1"),
+        key_url: Some("https://www.kimi.com/code"),
+        api_key_env: Some("KIMI_API_KEY"),
+        protocol: Some("anthropic"),
+        // Required by this endpoint, not a ceiling: without it the request is refused
+        // with a bare `invalid_request_error` 400 that names no field. This value is
+        // only the fallback for a model the quirks registry cannot name; for one it
+        // can, the model's own published output limit is written instead. Verified
+        // accepted by the live endpoint, which is what a fallback has to be.
+        max_tokens: Some(200_000),
+        // k3 answers `only temperature 1 is allowed for this model` with a 400, which
+        // neither fails over nor retries. Sending none is the only value that works.
+        temperature: None,
+    }),
     default_model: Some("k3"),
-    key_url: Some("https://www.kimi.com/code"),
-    api_key_env: Some("KIMI_API_KEY"),
     timeout_secs: Some(1800),
-    protocol: Some("anthropic"),
-    // Required by this endpoint, not a ceiling: without it the request is refused
-    // with a bare `invalid_request_error` 400 that names no field. This value is
-    // only the fallback for a model the quirks registry cannot name; for one it
-    // can, the model's own published output limit is written instead. Verified
-    // accepted by the live endpoint, which is what a fallback has to be.
-    max_tokens: Some(200_000),
-    // k3 answers `only temperature 1 is allowed for this model` with a 400, which
-    // neither fails over nor retries. Sending none is the only value that works.
-    temperature: None,
 };
 
 /// Any other OpenAI-compatible endpoint.
@@ -200,27 +224,81 @@ pub static CUSTOM: LlmPreset = LlmPreset {
     key: "custom",
     display_name: "Custom endpoint",
     description: "Any other OpenAI-compatible endpoint.",
-    endpoint: None,
+    backend: PresetBackend::Http(HttpPreset {
+        endpoint: None,
+        key_url: None,
+        api_key_env: Some("LLM_API_KEY"),
+        protocol: None,
+        max_tokens: None,
+        temperature: Some(0.2),
+    }),
     default_model: None,
-    key_url: None,
-    api_key_env: Some("LLM_API_KEY"),
     timeout_secs: None,
-    protocol: None,
-    max_tokens: None,
-    temperature: Some(0.2),
 };
 
 impl LlmPreset {
+    pub fn backend_kind(&self) -> BackendKind {
+        match self.backend {
+            PresetBackend::Http(_) => BackendKind::Http,
+            PresetBackend::Codex(_) => BackendKind::Codex,
+        }
+    }
+
+    pub fn http(&self) -> Option<&HttpPreset> {
+        match &self.backend {
+            PresetBackend::Http(http) => Some(http),
+            PresetBackend::Codex(_) => None,
+        }
+    }
+
+    pub fn codex(&self) -> Option<&CodexPreset> {
+        match &self.backend {
+            PresetBackend::Codex(codex) => Some(codex),
+            PresetBackend::Http(_) => None,
+        }
+    }
+
+    pub fn endpoint(&self) -> Option<&'static str> {
+        self.http().and_then(|http| http.endpoint)
+    }
+
+    pub fn api_key_env(&self) -> Option<&'static str> {
+        self.http().and_then(|http| http.api_key_env)
+    }
+
+    pub fn key_url(&self) -> Option<&'static str> {
+        self.http().and_then(|http| http.key_url)
+    }
+
+    pub fn protocol_name(&self) -> Option<&'static str> {
+        self.http().and_then(|http| http.protocol)
+    }
+
+    pub fn max_tokens(&self) -> Option<u32> {
+        self.http().and_then(|http| http.max_tokens)
+    }
+
+    pub fn temperature(&self) -> Option<f32> {
+        self.http().and_then(|http| http.temperature)
+    }
+
     /// This preset's starting point for the per-model parameters.
     ///
     /// What `drep init` wrote before the quirks registry existed, and what
     /// every path that cannot consult it still writes: the `--provider` flag
     /// path, an offline run, and any model the registry does not name.
     pub fn quirks(&self) -> crate::llm::quirks::Quirks {
-        crate::llm::quirks::Quirks {
-            temperature: self.temperature,
-            max_tokens: self.max_tokens,
-            max_tokens_from_registry: false,
+        match self.http() {
+            Some(http) => crate::llm::quirks::Quirks {
+                temperature: http.temperature,
+                max_tokens: http.max_tokens,
+                max_tokens_from_registry: false,
+            },
+            None => crate::llm::quirks::Quirks {
+                temperature: None,
+                max_tokens: None,
+                max_tokens_from_registry: false,
+            },
         }
     }
 
@@ -232,7 +310,10 @@ impl LlmPreset {
     /// than an `unwrap_or_default()` that silently builds an OpenAI client for
     /// an Anthropic endpoint.
     pub fn protocol(&self) -> open_agent::ApiProtocol {
-        crate::config::parse_protocol(self.protocol)
+        let http = self
+            .http()
+            .unwrap_or_else(|| panic!("preset `{}` has no HTTP wire protocol", self.key));
+        crate::config::parse_protocol(http.protocol)
             .unwrap_or_else(|| panic!("preset `{}` names an unknown protocol", self.key))
     }
 }

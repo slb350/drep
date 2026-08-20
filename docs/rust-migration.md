@@ -35,12 +35,12 @@ Two triggers: pre-commit and pre-push. Nothing else.
 | `adapters/` (gitea, github, gitlab) | 2,724 | Platform integration is a crowded market; not our differentiator |
 | `server.py` + FastAPI/uvicorn | 194 | Webhooks existed to serve the adapters |
 | `pr_review/analyzer.py` | 350 | Comment posting dies with the adapters; `diff_parser.py` survives |
-| `db/` (`RepositoryScan`, `FindingCache`) | 124 | Issue dedup is meaningless without issues; incremental-scan SHA is meaningless when diffing git directly |
+| `db/` (`RepositoryScan`, `FindingCache`) | 124 | No issues to dedupe; git diffs make scan SHAs meaningless |
 | `core/issue_manager.py` | 116 | Same |
 | `docstring/` | 496 | Generation (not reporting) is why it needed `ast`. See "Deliberate behavior changes" |
 | `cli_wizard.py` + `models/wizard.py` | 789 | Mostly platform tokens and URLs; what remains is `init-llm` |
-| `llm/providers/bedrock_client.py` | 316 | open-agent-sdk-rust is OpenAI-compatible-endpoints only. Bedrock users point at a gateway (LiteLLM) |
-| `llm/metrics.py` + `metrics` command | 345 | Replaced by a `--stats` flag printing tokens/cost for the run. No history store |
+| `llm/providers/bedrock_client.py` | 316 | OpenAI-compatible endpoints only; use a Bedrock gateway such as LiteLLM |
+| `llm/metrics.py` + `metrics` command | 345 | `--stats` prints tokens/cost for the run; no history store |
 | `scan`, `review`, `serve`, `validate` commands | — | No platform, no server |
 
 Roughly **5,400 LOC deleted** of 13,343. Dependencies dropped: sqlalchemy,
@@ -76,7 +76,7 @@ test goes.
 | `src/languages/runner/` | `languages/runner.py` | Tool resolution + execution, and the parsers |
 | `src/languages/runner/parsers.rs` | `languages/runner.py` parsers | json / tsc / lines / position / cargo |
 | `src/files/mod.rs` | `core/file_targets.py` | `ignore` crate for the walk |
-| `src/diff/mod.rs` | `pr_review/diff_parser.py` + `llm/git_utils.py` | `--staged` and `--diff <ref>`; shells out to git |
+| `src/diff/mod.rs` | `pr_review/diff_parser.py` + `llm/git_utils.py` | `--staged`/`--diff <ref>` via git |
 | `src/llm/client/` | `llm/client.py` | Thin over `open-agent-sdk` |
 | `src/llm/cache.rs` | `llm/cache.py` | Content-addressed, keyed on hunks |
 | `src/llm/concurrency.rs` | `rate_limiter.py` + `circuit_breaker.py` | Deliberately simplified |
@@ -272,8 +272,8 @@ retry — which is exactly the split the Python conflated.
 
 | Failure | Deterministic? | Retry? |
 |---|---|---|
-| Response truncated at `max_tokens`, unparseable JSON | Yes - repeats identically | **No.** Re-burns a full reasoning-model call for the same result |
-| 429, 5xx, connection reset, timeout | No - transient | **Yes.** A failed request consumes no tokens, so a retry is nearly free |
+| Truncated at `max_tokens`; unparseable JSON | Yes; repeats identically | **No.** Re-burns a full model call |
+| 429, 5xx, reset, timeout | No; transient | **Yes.** No output tokens, so retry is nearly free |
 
 `config.yaml` sets `max_retries: 1` with the comment "a 'length' failure repeats
 deterministically; retrying just burns tokens" - correct for the first row, and

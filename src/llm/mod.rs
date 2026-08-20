@@ -26,10 +26,13 @@
 //! truncated response stays a type the caller can pattern-match on rather
 //! than a log line to grep for.
 
+pub mod backend;
 pub mod cache;
 pub mod chain;
 pub mod client;
+pub mod codex;
 pub mod concurrency;
+pub mod error;
 pub mod json_parsing;
 pub mod models;
 pub mod quirks;

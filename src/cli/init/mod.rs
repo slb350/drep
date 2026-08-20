@@ -151,6 +151,7 @@ pub async fn run_with<W: Write>(out: &mut W, args: &InitArgs, auth_path: &Path) 
                 source: &models,
                 quirks_source: &quirks,
                 env_is_set: &wizard::real_env,
+                codex_status: &crate::llm::codex::current_status,
             },
         )
         .await?
@@ -245,7 +246,14 @@ pub(crate) fn describe(path: &Path) -> Vec<String> {
                 Some(false) => " (disabled)",
                 _ => "",
             };
-            format!("{} at {}{disabled}", field("model"), field("endpoint"))
+            if entry.get("backend").and_then(toml::Value::as_str) == Some("codex") {
+                format!(
+                    "{} via ChatGPT/Codex subscription{disabled}",
+                    field("model")
+                )
+            } else {
+                format!("{} at {}{disabled}", field("model"), field("endpoint"))
+            }
         })
         .collect()
 }
@@ -295,16 +303,20 @@ pub(crate) fn plan_from_flags(args: &InitArgs, store: &auth::AuthStore) -> Resul
     let preset =
         presets::preset(provider).ok_or_else(|| anyhow!("unknown provider `{provider}`"))?;
 
-    let endpoint = args
-        .endpoint
-        .clone()
-        .or_else(|| preset.endpoint.map(str::to_owned))
-        .ok_or_else(|| {
-            anyhow!(
-                "--provider {} needs an --endpoint (it presumes no host)",
-                preset.key
-            )
-        })?;
+    let endpoint = match &preset.backend {
+        presets::PresetBackend::Codex(_) => None,
+        presets::PresetBackend::Http(http) => Some(
+            args.endpoint
+                .clone()
+                .or_else(|| http.endpoint.map(str::to_owned))
+                .ok_or_else(|| {
+                    anyhow!(
+                        "--provider {} needs an --endpoint (it presumes no host)",
+                        preset.key
+                    )
+                })?,
+        ),
+    };
 
     let model = args
         .model
@@ -316,16 +328,14 @@ pub(crate) fn plan_from_flags(args: &InitArgs, store: &auth::AuthStore) -> Resul
         // A key already stored for this endpoint is used, and the `${VAR}` line
         // omitted - an explicit `api_key` would otherwise override the very key
         // the user saved, with a variable they may never have exported.
-        choices: vec![config_file::Choice {
-            preset,
-            key_in_store: store.get(&endpoint).is_some(),
-            model,
-            endpoint,
-            // The preset's own values, unnarrowed: this path has no prompt, so
-            // it makes no network call either, and a flag run that reached for
-            // models.dev would be a `drep init --provider local` that needs the
-            // internet.
-            quirks: preset.quirks(),
+        choices: vec![match endpoint {
+            Some(endpoint) => {
+                let key_in_store = store.get(&endpoint).is_some();
+                // The preset's own values, unnarrowed: this path has no
+                // prompt, so it makes no network call either.
+                config_file::Choice::http(preset, model, endpoint, key_in_store, preset.quirks())
+            }
+            None => config_file::Choice::codex(preset, model),
         }],
         new_keys: Vec::new(),
         hooks: args.hooks,
@@ -395,8 +405,8 @@ async fn apply<W: Write>(
     for var in plan
         .choices
         .iter()
-        .filter(|choice| !choice.key_in_store)
-        .filter_map(|choice| choice.preset.api_key_env)
+        .filter(|choice| choice.is_http() && !choice.key_in_store())
+        .filter_map(|choice| choice.preset.api_key_env())
     {
         if !needed.contains(&var) {
             needed.push(var);

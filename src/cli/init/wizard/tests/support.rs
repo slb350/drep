@@ -209,6 +209,10 @@ pub(crate) static NEVER_SET: fn(&str) -> bool = |_| false;
 /// An environment lookup answering "set" for every variable.
 pub(crate) static ALWAYS_SET: fn(&str) -> bool = |_| true;
 
+/// A redacted, deterministic Codex diagnostic for wizard tests.
+pub(crate) static CODEX_READY: fn() -> Result<crate::llm::codex::CodexStatus, String> =
+    || Ok(crate::llm::codex::CodexStatus::new("test-version"));
+
 /// The wizard's dependencies for a test: no network, no process environment,
 /// and whatever credential store the caller supplies.
 ///
@@ -226,6 +230,7 @@ pub(crate) fn deps<'a, S, Q>(
         source,
         quirks_source,
         env_is_set: &NEVER_SET,
+        codex_status: &CODEX_READY,
     }
 }
 

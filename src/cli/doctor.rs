@@ -73,6 +73,16 @@ pub fn run_to<W: Write>(out: &mut W, args: &DoctorArgs) -> Result<Exit> {
 /// store is user-level state, and a test reading the real one reports whatever
 /// the developer happens to have stored.
 pub fn run_at<W: Write>(out: &mut W, args: &DoctorArgs, auth_path: &Path) -> Result<Exit> {
+    run_at_with_codex(out, args, auth_path, &crate::llm::codex::current_status)
+}
+
+/// [`run_at`] with the Codex readiness diagnostic injected for tests.
+pub(crate) fn run_at_with_codex<W: Write>(
+    out: &mut W,
+    args: &DoctorArgs,
+    auth_path: &Path,
+    codex_probe: &dyn Fn() -> Result<crate::llm::codex::CodexStatus, String>,
+) -> Result<Exit> {
     // `canonicalize` can fail (the path does not exist, or a parent is
     // unreadable). An unreadable path is still worth reporting on - the user
     // has typed something and wants to know what drep sees - so fall back to
@@ -97,7 +107,7 @@ pub fn run_at<W: Write>(out: &mut W, args: &DoctorArgs, auth_path: &Path) -> Res
         // one whose languages drep does not register - is exactly where they
         // are most likely to be asking it. Returning here answered it with
         // silence.
-        write_llm_section(out, args, &root, auth_path)?;
+        write_llm_section(out, args, &root, auth_path, codex_probe)?;
         return Ok(Exit::Clean);
     }
 
@@ -107,7 +117,7 @@ pub fn run_at<W: Write>(out: &mut W, args: &DoctorArgs, auth_path: &Path) -> Res
     // tool - each call stats the config files and walks PATH - and, worse,
     // left room for the summary to disagree with the lines above it.
     let missing = write_tools_section(out, &buckets, &root)?;
-    write_llm_section(out, args, &root, auth_path)?;
+    write_llm_section(out, args, &root, auth_path, codex_probe)?;
 
     // Deliberately last, after the LLM block: the user reads their coverage
     // report before being told what is wrong with it.
@@ -199,6 +209,7 @@ fn write_llm_section<W: Write>(
     args: &DoctorArgs,
     root: &Path,
     auth_path: &Path,
+    codex_probe: &dyn Fn() -> Result<crate::llm::codex::CodexStatus, String>,
 ) -> Result<()> {
     writeln!(out)?;
     writeln!(out, "LLM analysis (required):")?;
@@ -296,8 +307,15 @@ fn write_llm_section<W: Write>(
     // Read once for the whole listing. A store that cannot be read is reported
     // rather than fatal: `doctor` exists to describe a broken setup, so failing
     // out here would suppress everything else it had to say.
-    let store = match crate::auth::AuthStore::load(auth_path) {
-        Ok(store) => store,
+    let needs_auth_store = providers.iter().any(|entry| {
+        entry_is_enabled(entry) && entry.get("backend").and_then(Value::as_str) != Some("codex")
+    });
+    let store = match needs_auth_store
+        .then(|| crate::auth::AuthStore::load(auth_path))
+        .transpose()
+    {
+        Ok(Some(store)) => store,
+        Ok(None) => crate::auth::AuthStore::new(),
         Err(err) => {
             writeln!(out, "  The auth store could not be read: {err}")?;
             crate::auth::AuthStore::new()
@@ -305,6 +323,7 @@ fn write_llm_section<W: Write>(
     };
 
     let mut enabled_count = 0usize;
+    let mut codex_status: Option<Result<crate::llm::codex::CodexStatus, String>> = None;
     for entry in &providers {
         let model = entry
             .get("model")
@@ -322,15 +341,30 @@ fn write_llm_section<W: Write>(
             None | Some("openai") => String::new(),
             Some(other) => format!(" [{other}]"),
         };
+        let is_codex = entry.get("backend").and_then(Value::as_str) == Some("codex");
+        let description = if is_codex {
+            format!("{model} via ChatGPT/Codex subscription")
+        } else {
+            format!("{model} at {endpoint}{protocol}")
+        };
         if entry_is_enabled(entry) {
             enabled_count += 1;
-            writeln!(out, "  {enabled_count}. {model} at {endpoint}{protocol}")?;
-            writeln!(out, "     key: {}", key_source_line(entry, &store))?;
+            writeln!(out, "  {enabled_count}. {description}")?;
+            if is_codex {
+                let status = codex_status.get_or_insert_with(codex_probe);
+                match status {
+                    Ok(status) => {
+                        writeln!(out, "     Codex CLI: {}", status.cli_version())?;
+                        writeln!(out, "     authentication: ChatGPT-managed")?;
+                        writeln!(out, "     isolation: ephemeral, read-only, tools disabled")?;
+                    }
+                    Err(err) => writeln!(out, "     unavailable: {err}")?,
+                }
+            } else {
+                writeln!(out, "     key: {}", key_source_line(entry, &store))?;
+            }
         } else {
-            writeln!(
-                out,
-                "  -  {model} at {endpoint}{protocol} (disabled - skipped)"
-            )?;
+            writeln!(out, "  -  {description} (disabled - skipped)")?;
         }
     }
     writeln!(out, "  {}", failover_line(enabled_count))?;

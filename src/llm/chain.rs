@@ -9,12 +9,13 @@
 //!
 //! ## Two independent questions about a failure
 //!
-//! - [`should_failover`] — does the next provider get asked? Only *transport*
-//!   failures advance the chain: the SDK's retryable set (408, 429, 5xx) plus
-//!   the status-less failures (timeout, connection refused, an empty body). A
-//!   401 or 403 must **not**: that is misconfiguration, and quietly asking a
-//!   second provider masks it. An unparseable-but-non-empty response must not
-//!   either — it is deterministic, so a retry anywhere buys nothing.
+//! - [`should_failover`] — does the next provider get asked? HTTP transport
+//!   failures advance the chain for 408, 429, 5xx and status-less failures
+//!   (timeout, connection refused, an empty body). A backend may also report a
+//!   typed usage-limit failure. A 401/403 or backend authentication failure
+//!   must **not** advance: that is misconfiguration, and quietly asking a
+//!   second provider masks it. An unparseable non-empty response does not
+//!   advance either.
 //! - [`is_sticky`] — is the failure remembered for the rest of the run? Every
 //!   failure that advances the chain, plus the two that are a property of the
 //!   connection rather than the request: a stale API key returns 401 for every
@@ -37,7 +38,7 @@
 //!
 //! ## The cache key moves with the provider
 //!
-//! The key is computed from the provider's *endpoint and* model, so it is
+//! The key is computed from the provider's *backend identity and* model, so it is
 //! computed **inside** the loop, once per provider tried. Keying provider 1 and
 //! then letting provider 2 serve the answer would file that answer under a key
 //! it did not come from, and a later run with provider 1 healthy would get a
@@ -45,24 +46,25 @@
 //! provider that actually answered; the caller stores under that key or not at
 //! all.
 //!
-//! The endpoint is in the key because a model name is not an identity: one open
-//! model served locally and from a cloud provider is the canonical failover
-//! pair, and both name it the same thing.
+//! The backend is in the key because a model name is not an identity: one model
+//! served locally, through an API and through a ChatGPT subscription can have
+//! the same name while producing three distinct request paths.
 
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::config::LlmConfig;
+use crate::llm::backend::{BackendFactory, ProviderBackend};
 use crate::llm::cache::{Cache, CacheKey};
-use crate::llm::client::{LlmClient, LlmError};
 use crate::llm::concurrency::Limiter;
+use crate::llm::error::{BackendErrorKind, LlmError};
 use crate::llm::json_parsing::Extracted;
 
-/// One provider: a client, the concurrency budget for *its* endpoint, and the
+/// One provider: a backend, its concurrency budget, and the
 /// two pieces of run-scoped state that belong to it.
 ///
 /// The limiter is per provider rather than per process because the slot
-/// represents in-flight HTTP work against one endpoint, and `max_concurrent`
+/// represents in-flight backend work, and `max_concurrent`
 /// is configured per `[[llm]]` entry. A single shared limiter would apply the
 /// local model's generous budget to a rate-limited cloud endpoint.
 ///
@@ -82,7 +84,7 @@ pub struct Provider {
     /// fixtures build a chain through the production `ProviderChain::new` and
     /// then shrink only the backoff delays, so a retry test does not spend
     /// seconds asleep. Not part of the public API.
-    pub(crate) client: LlmClient,
+    pub(crate) backend: ProviderBackend,
     limiter: Limiter,
     /// Why this provider was demoted, set once. `OnceLock` rather than a
     /// `Mutex<Option<_>>` because the value is write-once and read-often, and
@@ -97,15 +99,15 @@ pub struct Provider {
 impl Provider {
     /// The model this provider asks for.
     pub fn model(&self) -> &str {
-        self.client.model()
+        self.backend.model()
     }
 
     /// The base URL this provider talks to.
     pub fn endpoint(&self) -> &str {
-        self.client.endpoint()
+        self.backend.display_location()
     }
 
-    /// The concurrency budget for this provider's endpoint.
+    /// The concurrency budget for this provider's backend.
     ///
     /// Exposed because it is the only thing that can demonstrate the limiter
     /// works: wiremock never overlaps requests, so neither an in-flight
@@ -159,11 +161,21 @@ impl Provider {
         cache.key(
             system_prompt,
             user_content,
-            self.endpoint(),
+            &self.backend.identity(),
             self.model(),
-            self.client.protocol().as_str(),
-            self.client.temperature(),
+            self.backend.request_identity(),
+            self.backend.temperature(),
         )
+    }
+
+    #[cfg(test)]
+    pub(crate) fn for_test(backend: ProviderBackend, max_concurrent: usize) -> Self {
+        Self {
+            backend,
+            limiter: Limiter::new(max_concurrent),
+            down: OnceLock::new(),
+            served: AtomicUsize::new(0),
+        }
     }
 }
 
@@ -241,6 +253,16 @@ pub struct ProviderChain {
 }
 
 impl ProviderChain {
+    #[cfg(test)]
+    pub(crate) fn for_test(providers: impl IntoIterator<Item = (ProviderBackend, usize)>) -> Self {
+        Self {
+            providers: providers
+                .into_iter()
+                .map(|(backend, max_concurrent)| Provider::for_test(backend, max_concurrent))
+                .collect(),
+        }
+    }
+
     /// Build a chain from the enabled providers, in order.
     ///
     /// A misconfigured entry is fatal rather than skipped. Skipping it would
@@ -256,11 +278,13 @@ impl ProviderChain {
             ));
         }
         let mut providers = Vec::with_capacity(cfgs.len());
+        let mut factory = BackendFactory::new();
         for (index, cfg) in cfgs.iter().enumerate() {
-            let client = LlmClient::new(cfg)
+            let backend = factory
+                .build(cfg)
                 .map_err(|err| LlmError::NotConfigured(format!("[[llm]] #{}: {err}", index + 1)))?;
             providers.push(Provider {
-                client,
+                backend,
                 limiter: Limiter::new(cfg.max_concurrent),
                 down: OnceLock::new(),
                 served: AtomicUsize::new(0),
@@ -365,7 +389,7 @@ async fn try_provider(
 
     // The slot is held for the request and released on every exit path,
     // failover included. The cache hit above never takes one: the slot
-    // represents in-flight HTTP work, and a cache read is not in flight.
+    // represents in-flight backend work, and a cache read is not in flight.
     let guard = provider.limiter.acquire().await;
 
     // Re-check after waiting. Files are analyzed concurrently, so the check
@@ -381,7 +405,7 @@ async fn try_provider(
     }
 
     let outcome = provider
-        .client
+        .backend
         .complete_json(system_prompt, user_content)
         .await;
     drop(guard);
@@ -415,7 +439,7 @@ async fn try_provider(
 fn should_failover(err: &LlmError) -> bool {
     match err {
         // No status: a timeout, a refused connection, or an empty body. All
-        // endpoint-level, all worth asking someone else.
+        // provider-level, all worth asking someone else.
         LlmError::Transport { status: None, .. } => true,
         LlmError::Transport {
             status: Some(code), ..
@@ -432,6 +456,7 @@ fn should_failover(err: &LlmError) -> bool {
         LlmError::ModelStopped { .. } => false,
         // Misconfiguration. Routing around it is what hides it.
         LlmError::NotConfigured(_) => false,
+        LlmError::Backend { kind, .. } => matches!(kind, BackendErrorKind::UsageLimit),
     }
 }
 
@@ -455,7 +480,17 @@ fn is_sticky(err: &LlmError) -> bool {
     // that shape for a request-level 4xx - one oversized payload drawing a 400
     // demoted the provider, and every file after it stopped there without ever
     // reaching the configured fallback. One bad file poisoned the run.
-    should_failover(err) || is_auth_failure(err)
+    should_failover(err) || is_auth_failure(err) || is_sticky_backend_failure(err)
+}
+
+fn is_sticky_backend_failure(err: &LlmError) -> bool {
+    matches!(
+        err,
+        LlmError::Backend {
+            kind: BackendErrorKind::Contract | BackendErrorKind::Authentication,
+            ..
+        }
+    )
 }
 
 /// Whether the endpoint rejected the credential rather than the request.

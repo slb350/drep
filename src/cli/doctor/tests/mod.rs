@@ -5,6 +5,7 @@
 //! subprocess - the command takes a `&mut dyn Write` precisely so the
 //! tests can read what would otherwise go to stdout.
 
+mod a_codex;
 mod a_languages;
 mod a_llm_section;
 mod a_no_files;

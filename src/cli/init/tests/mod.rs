@@ -5,6 +5,7 @@
 //! initialises a real repository lives next to them; criteria that exercise
 //! `render` or `write` run against a plain `TempDir`.
 
+mod b_codex;
 mod b_config_file;
 mod b_gitignore;
 mod b_hook_exec;

@@ -40,9 +40,9 @@ use std::time::Duration;
 use futures::StreamExt;
 use open_agent::retry::{RetryConfig, retry_with_backoff_conditional};
 use open_agent::{AgentOptions, ApiProtocol, ContentBlock, FinishReason, StreamEvent, query};
-use thiserror::Error;
 
 use crate::config::LlmConfig;
+use crate::llm::error::LlmError;
 use crate::llm::json_parsing::{Extracted, extract_json};
 use crate::text::excerpt;
 
@@ -98,79 +98,6 @@ impl std::fmt::Debug for LlmClient {
             .field("max_tokens", &self.max_tokens)
             .field("timeout_secs", &self.timeout_secs)
             .finish()
-    }
-}
-
-/// What can go wrong at the LLM boundary.
-///
-/// `Transport` and `Unparseable` both mean "the file went unanalyzed". They
-/// are distinct so a future caller can decide to retry one but not the other
-/// (the spec's split: parse failures are deterministic, transport failures
-/// are not). Phase 4 will read this distinction to drive the gating exit
-/// code.
-///
-/// `Clone` because the provider chain records the reason a provider went down
-/// and hands a copy to every later file that skips it. The variants are three
-/// owned `String`s and an `Option<u16>`; there is nothing here a clone can get
-/// wrong.
-#[derive(Debug, Clone, Error)]
-pub enum LlmError {
-    /// Transport failure after the SDK exhausted its retries. The endpoint
-    /// was unreachable, timed out, or returned a retryable HTTP error too
-    /// many times. The file went unanalyzed.
-    ///
-    /// `status` is the HTTP code when the SDK surfaced one (via
-    /// `open_agent::Error::status_code`); `None` for spawn/timeouts, which
-    /// never have one. Keeping the code as a number rather than only inside
-    /// the message is what lets a caller branch on the value — a 429 is
-    /// meaningfully different from a 500.
-    #[error("LLM transport failed{}: {message}", status.map(|c| format!(" (HTTP {c})")).unwrap_or_default())]
-    Transport {
-        status: Option<u16>,
-        message: String,
-    },
-
-    /// A response arrived but no JSON could be extracted. Deterministic: do
-    /// NOT retry; the same prompt truncates the same way.
-    #[error("LLM response was unparseable: {0}")]
-    Unparseable(String),
-
-    /// The model stopped before producing any JSON, and the server said why.
-    ///
-    /// Deterministic in a way [`Self::Unparseable`] is not: the request hit a
-    /// limit, so asking again hits the same one. `finish` is the server's own
-    /// word for it, kept as a machine tag beside the human `message` - the same
-    /// shape as [`Self::Transport`]'s `status`, and for the same reason.
-    ///
-    /// It is about the *request*, never the endpoint, so it must not fail over
-    /// and must not demote the provider. A second provider cannot make a file
-    /// smaller.
-    #[error("{message}")]
-    ModelStopped { finish: String, message: String },
-
-    /// Configuration is incomplete (LLM disabled, no endpoint, no model).
-    /// Surfaced at construction so the binary can fail fast instead of
-    /// running a gate that will silently never analyze anything.
-    #[error("LLM not configured: {0}")]
-    NotConfigured(String),
-}
-
-impl LlmError {
-    /// The HTTP status, when the failure carried one.
-    ///
-    /// Only `Transport` ever does. It exists so the tests that pin the
-    /// failover policy can name a status rather than substring-match the
-    /// message - the message is prose and prose gets reworded. `should_failover`
-    /// itself matches the variant, because it also has to distinguish
-    /// `Unparseable` from a status-less transport failure, which a bare
-    /// `Option<u16>` cannot.
-    pub fn status(&self) -> Option<u16> {
-        match self {
-            LlmError::Transport { status, .. } => *status,
-            LlmError::Unparseable(_)
-            | LlmError::ModelStopped { .. }
-            | LlmError::NotConfigured(_) => None,
-        }
     }
 }
 

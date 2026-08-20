@@ -31,9 +31,10 @@ naming is not precise at any severity, so it informs instead. Splitting by
 source rather than by severity is what makes the gate calibratable; opt the
 LLM into blocking with `--fail-on error` when you want it.
 
-drep is a single binary. It talks to no platform, runs no server, stores
-nothing, and needs no account. The deterministic half needs no model and no
-API key at all.
+drep is a single binary. It talks to no source-control platform, runs no
+server, and needs no drep account. The deterministic half needs no model and
+no API key at all. Semantic review can use an HTTP API or a separately
+installed Codex CLI authenticated through a ChatGPT subscription.
 
 ## Install
 
@@ -58,7 +59,9 @@ The crate is `drep-ai` because `drep` was taken on crates.io. The binary is
 cd your-repo
 drep init                              # interactive: pick a provider, paste a key,
                                        # choose from the models it actually serves
-drep init --provider openrouter        # or local, zai, minimax, kimi, openai, custom
+drep init --provider openrouter        # HTTP API
+drep init --provider codex             # ChatGPT/Codex subscription
+# Other presets: local, zai, minimax, kimi, openai, custom
 export OPENROUTER_API_KEY='...'
 ```
 
@@ -172,7 +175,8 @@ changes how the document renders.
 |---|---|
 | error | `unclosed_code_fence` |
 | warning | `empty_heading`, `missing_space_after_heading`, `link_syntax_invalid` |
-| info | `bare_url`, `long_line`, `tab_character`, `trailing_whitespace`, `trailing_blank_lines`, `multiple_blank_lines` |
+| info | `bare_url`, `long_line`, `tab_character`, `trailing_whitespace` |
+| info | `trailing_blank_lines`, `multiple_blank_lines` |
 
 An unclosed fence turns every line below it into code, so it alone blocks by
 default. Whitespace renders identically, so it does not. `--strict` is the
@@ -191,6 +195,40 @@ model = "deepseek/deepseek-v4-pro-0813"
 api_key = "${OPENROUTER_API_KEY}"
 timeout_secs = 1800
 ```
+
+HTTP is the default backend, so existing configurations remain valid without a
+`backend` field. OpenAI API usage is the `openai` preset and uses per-token API
+billing:
+
+```sh
+drep init --provider openai
+export OPENAI_API_KEY='...'
+```
+
+ChatGPT/Codex subscription usage is a separate backend. Install the Codex CLI,
+follow the official [Codex authentication](https://learn.chatgpt.com/docs/auth)
+guide to run `codex login`, then select the `codex` preset:
+
+```sh
+codex login
+drep init --provider codex
+```
+
+```toml
+[[llm]]
+backend = "codex"
+model = "gpt-5.6-sol"
+reasoning_effort = "high"
+timeout_secs = 1800
+max_concurrent = 1
+```
+
+This mode consumes the ChatGPT/Codex plan allowance, not OpenAI API credits.
+drep never reads or stores the subscription tokens: Codex owns login and token
+refresh. Every review is an ephemeral, non-interactive, read-only Codex run in
+an empty directory with tools, apps, MCP, hooks, memories, user configuration,
+and project instructions disabled. `drep doctor` verifies the installed CLI
+and ChatGPT-managed authentication without printing account details.
 
 `drep init` does not write your key into this file. Keys go to a per-machine
 store (`~/.config/drep/auth.toml`, mode 0600, keyed by endpoint), so `drep.toml`

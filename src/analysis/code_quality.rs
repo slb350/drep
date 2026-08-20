@@ -42,7 +42,7 @@ use crate::diff::hunks::Hunk;
 use crate::languages;
 use crate::llm::cache::Cache;
 use crate::llm::chain::{ChainError, ProviderChain};
-use crate::llm::client::LlmError;
+use crate::llm::error::LlmError;
 use crate::llm::json_parsing::Extracted;
 
 /// The code-quality analyzer.
@@ -190,11 +190,10 @@ impl CodeQualityAnalyzer {
 /// `AnalysisResult::failed_files`.
 ///
 /// Distinct from the parsing-path reasons because the LLM layer's failure
-/// modes are a different axis: a parse failure is a content problem, a
-/// transport failure is a connectivity problem. The shape is forced by the
-/// spec — `FailureReason::Transport` keeps the HTTP status as a number — so
-/// a caller can branch on `status` without re-parsing the message.
-fn into_failure_reason(err: LlmError) -> FailureReason {
+/// modes are a different axis. HTTP failures preserve a numeric status and
+/// process backends preserve a stable typed kind, so callers never have to
+/// recover policy from human-readable messages.
+pub(crate) fn into_failure_reason(err: LlmError) -> FailureReason {
     match err {
         LlmError::Transport { status, message } => FailureReason::Transport { status, message },
         LlmError::Unparseable(message) => FailureReason::Unparseable(message),
@@ -211,6 +210,7 @@ fn into_failure_reason(err: LlmError) -> FailureReason {
             status: None,
             message,
         },
+        LlmError::Backend { kind, message } => FailureReason::Backend { kind, message },
     }
 }
 

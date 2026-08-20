@@ -857,7 +857,7 @@ never touched:
 
 | Attempt | Unanalyzed |
 |---|---|
-| 1 | `resolution.rs` (error), `output.rs` (length), `complete_json.rs` (length), `diff/mod.rs` (length), `main.rs` (length) |
+| 1 | `resolution.rs` (error); four length stops: `output.rs`, `complete_json.rs`, `diff/mod.rs`, `main.rs` |
 | 2 | `diff/mod.rs` (error) |
 | 3 | `diff/mod.rs` (error), `resolve.rs` (length) |
 
@@ -1372,8 +1372,6 @@ other dependency changes. `cargo test --all-targets`,
 `cargo clippy --all-targets --all-features`, and `cargo fmt --all --check`
 all pass.
 
-
-
 ### Landed - 2026-08-17 — Phase 3: the LLM layer
 
 **3a** — `src/config.rs` (TOML, `${VAR}` expansion over the whole parsed tree so
@@ -1489,5 +1487,3 @@ breaks. If you add a file there, declare it in that directory's `mod.rs`.
 - Doc-comment generation for JavaScript/TypeScript, Go and Rust (needs a parser per
   language; the LLM review path does not) — **dropped in 2.0**, see above
 - Removal of deprecated `CodeQualityAnalyzer.analyze_files` (1.4.0)
-
-

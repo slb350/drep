@@ -23,6 +23,7 @@ use std::fmt;
 use std::path::PathBuf;
 
 use crate::analysis::findings::Finding;
+use crate::llm::error::BackendErrorKind;
 
 /// Why one file went unanalyzed.
 ///
@@ -36,6 +37,11 @@ pub enum FailureReason {
     /// times. `status` is the HTTP code when there was one.
     Transport {
         status: Option<u16>,
+        message: String,
+    },
+    /// A non-HTTP backend failed with a structured routing class.
+    Backend {
+        kind: BackendErrorKind,
         message: String,
     },
     /// A response arrived and no JSON could be extracted from it.
@@ -113,10 +119,9 @@ pub enum FailureReason {
 
 /// One provider's contribution to a file that no provider could analyze.
 ///
-/// `reason` is always an LLM-layer variant - `Transport` or `Unparseable`.
-/// That is a property of the only thing that builds these: the conversion runs
-/// over an `LlmError`, whose three variants map onto exactly those two, so a
-/// nested `ChainFailed` is not merely absent but unreachable.
+/// `reason` is always a non-chain LLM-layer variant. That is a property of the
+/// only thing that builds these: the conversion runs over one provider's
+/// `LlmError`, so a nested `ChainFailed` is not merely absent but unreachable.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderFailure {
     /// Zero-based position in the chain. Rendered one-based, matching how
@@ -170,6 +175,9 @@ impl FailureReason {
             }
             FailureReason::Unparseable(message) => {
                 format!("LLM response was unparseable: {message}")
+            }
+            FailureReason::Backend { kind, message } => {
+                format!("LLM backend {kind}: {message}")
             }
             // Deliberately says nothing about *which* command is running: both
             // `check` and `lint-docs` produce this, pointing at each other.

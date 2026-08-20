@@ -135,7 +135,7 @@ fn a_key_already_held_suppresses_the_api_key_line() {
     )
     .expect("plan");
 
-    assert!(plan.choices[0].key_in_store);
+    assert!(plan.choices[0].key_in_store());
 }
 
 #[test]
@@ -150,7 +150,7 @@ fn no_key_held_leaves_the_api_key_line_in_place() {
     .expect("plan");
 
     assert!(
-        !plan.choices[0].key_in_store,
+        !plan.choices[0].key_in_store(),
         "so `api_key = \"${{OPENROUTER_API_KEY}}\"` is written and CI still works"
     );
 }
@@ -169,7 +169,7 @@ fn an_explicit_model_and_endpoint_beat_the_preset() {
     .expect("plan");
 
     assert_eq!(plan.choices[0].model, "my-model");
-    assert_eq!(plan.choices[0].endpoint, "https://mine/v1");
+    assert_eq!(plan.choices[0].endpoint(), Some("https://mine/v1"));
 }
 
 #[test]

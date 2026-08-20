@@ -15,8 +15,19 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, anyhow};
 
-use super::presets::LlmPreset;
+use super::presets::{LlmPreset, PresetBackend};
 use crate::llm::quirks::Quirks;
+
+/// Fields used by exactly one execution backend.
+#[derive(Debug, Clone)]
+enum ChoiceBackend {
+    Http {
+        endpoint: String,
+        key_in_store: bool,
+        quirks: Quirks,
+    },
+    Codex,
+}
 
 /// One provider the user chose, ready to render.
 ///
@@ -30,24 +41,73 @@ pub struct Choice {
     pub preset: &'static LlmPreset,
     /// The model to ask for.
     pub model: String,
-    /// The base URL.
-    pub endpoint: String,
-    /// Whether the key is held in the user-level auth store.
-    ///
-    /// When it is, **no `api_key` line is written at all**: the key is looked up
-    /// by endpoint at run time. Writing `${VAR}` as well would name a variable
-    /// the user never set, and an explicit `api_key` wins over the store - so
-    /// the file would override the very key `drep init` had just saved.
-    pub key_in_store: bool,
-    /// What to write for `temperature` and `max_tokens`.
-    ///
-    /// Resolved before the choice is built, not derived here, because the
-    /// answer depends on the model the user picked rather than on the preset
-    /// alone - and the renderer is reached by two paths that resolve it
-    /// differently. The wizard narrows the preset's values against the quirks
-    /// registry; the `--provider` flag path, which has no prompt and makes no
-    /// network call, uses [`LlmPreset::quirks`] unchanged.
-    pub quirks: Quirks,
+    /// Backend-specific values, already resolved by the wizard or flag path.
+    backend: ChoiceBackend,
+}
+
+impl Choice {
+    pub fn http(
+        preset: &'static LlmPreset,
+        model: String,
+        endpoint: String,
+        key_in_store: bool,
+        quirks: Quirks,
+    ) -> Self {
+        assert!(
+            matches!(preset.backend, PresetBackend::Http(_)),
+            "HTTP choice requires an HTTP preset"
+        );
+        Self {
+            preset,
+            model,
+            backend: ChoiceBackend::Http {
+                endpoint,
+                key_in_store,
+                quirks,
+            },
+        }
+    }
+
+    pub fn codex(preset: &'static LlmPreset, model: String) -> Self {
+        assert!(
+            matches!(preset.backend, PresetBackend::Codex(_)),
+            "Codex choice requires a Codex preset"
+        );
+        Self {
+            preset,
+            model,
+            backend: ChoiceBackend::Codex,
+        }
+    }
+
+    pub fn is_http(&self) -> bool {
+        matches!(self.backend, ChoiceBackend::Http { .. })
+    }
+
+    pub fn endpoint(&self) -> Option<&str> {
+        match &self.backend {
+            ChoiceBackend::Http { endpoint, .. } => Some(endpoint),
+            ChoiceBackend::Codex => None,
+        }
+    }
+
+    pub fn key_in_store(&self) -> bool {
+        match &self.backend {
+            ChoiceBackend::Http { key_in_store, .. } => *key_in_store,
+            ChoiceBackend::Codex => false,
+        }
+    }
+
+    pub fn quirks(&self) -> Quirks {
+        match &self.backend {
+            ChoiceBackend::Http { quirks, .. } => *quirks,
+            ChoiceBackend::Codex => Quirks {
+                temperature: None,
+                max_tokens: None,
+                max_tokens_from_registry: false,
+            },
+        }
+    }
 }
 
 /// Render the whole `drep.toml`, comments included, for a failover chain.
@@ -75,11 +135,21 @@ pub fn render_chain(choices: &[Choice]) -> String {
     body.push_str("#\n");
     body.push_str("# Set `enabled = false` on a block to park it without deleting it.\n");
     body.push_str("#\n");
-    body.push_str("# API keys are NOT in this file. `drep init` stores them per machine, keyed\n");
-    body.push_str("# by endpoint, so this file carries only the provider choice and can be\n");
-    body.push_str("# committed. `drep auth list` shows what is stored. To pin a key to a\n");
-    body.push_str("# variable instead - which is what CI wants - add `api_key = \"${VAR}\"` to\n");
-    body.push_str("# a block; an explicit value always wins over the stored one.\n");
+    if choices.iter().any(Choice::is_http) {
+        body.push_str(
+            "# API keys are NOT in this file. `drep init` stores them per machine, keyed\n",
+        );
+        body.push_str("# by endpoint, so this file carries only the provider choice and can be\n");
+        body.push_str("# committed. `drep auth list` shows what is stored. To pin a key to a\n");
+        body.push_str(
+            "# variable instead - which is what CI wants - add `api_key = \"${VAR}\"` to\n",
+        );
+        body.push_str("# a block; an explicit value always wins over the stored one.\n");
+    }
+    if choices.iter().any(|choice| !choice.is_http()) {
+        body.push_str("# Codex owns ChatGPT subscription login and token refresh.\n");
+        body.push_str("# Run `codex login`; drep never reads or stores those credentials.\n");
+    }
 
     for choice in choices {
         body.push('\n');
@@ -95,21 +165,47 @@ fn render_one(body: &mut String, choice: &Choice) {
 
     body.push_str("[[llm]]\n");
     body.push_str("enabled = true\n");
-    body.push_str(&format!("endpoint = \"{}\"\n", escape(&choice.endpoint)));
+    if let (PresetBackend::Codex(codex), ChoiceBackend::Codex) = (&preset.backend, &choice.backend)
+    {
+        body.push_str("backend = \"codex\"\n");
+        body.push_str(&format!("model = \"{}\"\n", escape(&choice.model)));
+        if let Some(effort) = &codex.reasoning_effort {
+            body.push_str(&format!("reasoning_effort = \"{}\"\n", effort.as_str()));
+        }
+        if let Some(timeout) = preset.timeout_secs {
+            body.push_str(&format!("timeout_secs = {timeout}\n"));
+        }
+        body.push_str(&format!("max_concurrent = {}\n", codex.max_concurrent));
+        body.push_str(
+            "# Reviews consume ChatGPT/Codex subscription allowance, not OpenAI API billing.\n",
+        );
+        return;
+    }
+
+    let (http, endpoint, key_in_store, quirks) = match (&preset.backend, &choice.backend) {
+        (
+            PresetBackend::Http(http),
+            ChoiceBackend::Http {
+                endpoint,
+                key_in_store,
+                quirks,
+            },
+        ) => (http, endpoint.as_str(), *key_in_store, quirks),
+        _ => panic!("choice backend does not match preset `{}`", preset.key),
+    };
+    body.push_str(&format!("endpoint = \"{}\"\n", escape(endpoint)));
     body.push_str(&format!("model = \"{}\"\n", escape(&choice.model)));
 
     // Omitted entirely when the key is in the store: an explicit `api_key` wins
     // over a stored one, so writing `${VAR}` here would override the key
     // `drep init` just saved with a variable nobody set.
-    if !choice.key_in_store
-        && let Some(env) = preset.api_key_env
-    {
+    if !key_in_store && let Some(env) = http.api_key_env {
         body.push_str(&format!("api_key = \"${{{env}}}\"\n"));
     }
 
     // Written only when the preset names one, so an OpenAI-compatible block keeps
     // the shape it has had since 2.0 and no existing file has to be migrated.
-    if let Some(protocol) = preset.protocol {
+    if let Some(protocol) = http.protocol {
         body.push_str("# This endpoint speaks Anthropic's messages API, not chat completions.\n");
         body.push_str(&format!("protocol = \"{}\"\n", escape(protocol)));
     }
@@ -120,9 +216,9 @@ fn render_one(body: &mut String, choice: &Choice) {
     // The second comment line says where the number came from, because "this is
     // the model's own limit" is a claim in a file the user commits, and it is
     // false whenever the registry could not name the model.
-    if let Some(max_tokens) = choice.quirks.max_tokens {
+    if let Some(max_tokens) = quirks.max_tokens {
         body.push_str("# Required by this endpoint: it refuses a request that omits the field.\n");
-        if choice.quirks.max_tokens_from_registry {
+        if quirks.max_tokens_from_registry {
             body.push_str(
                 "# This is the model's own published output limit, not a cap drep chose.\n",
             );
@@ -138,7 +234,7 @@ fn render_one(body: &mut String, choice: &Choice) {
     // Absent means the parameter is omitted from the request entirely, which is what
     // a model that rejects it requires. That is a property of the model, so the
     // chosen model decides rather than the file inheriting a default.
-    match choice.quirks.temperature {
+    match quirks.temperature {
         Some(temperature) => {
             // `{:?}` rather than `{}`: Display renders `1.0` as `1`, which TOML
             // reads as an *integer* and `config::load` then refuses with a type
@@ -158,7 +254,7 @@ fn render_one(body: &mut String, choice: &Choice) {
         body.push_str(&format!("timeout_secs = {timeout}\n"));
     }
 
-    if choice.quirks.max_tokens.is_none() {
+    if quirks.max_tokens.is_none() {
         body.push_str(
             "# max_tokens is deliberately unset: with no completion cap, a reasoning model\n",
         );

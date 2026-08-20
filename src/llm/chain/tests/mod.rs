@@ -14,6 +14,8 @@
 //!   provider B prove the loop moves; they say nothing about whether the cache
 //!   key moved with it. `cache_key.rs` is the file that matters.
 
+mod backend;
+mod backend_errors;
 mod cache_key;
 mod construction;
 mod demotion;

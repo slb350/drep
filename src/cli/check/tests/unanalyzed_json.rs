@@ -5,13 +5,14 @@
 //! from "the endpoint is misconfigured" had to match on that prose — and Phase
 //! 5c's failover has to make exactly that call, because a 429 should fail over
 //! to the next provider and a 401 must not (falling back would mask the
-//! misconfiguration). So each entry now carries a stable `kind` tag, and an
-//! HTTP `status` when there was one.
+//! misconfiguration). So each entry now carries a stable `kind` tag, plus an
+//! HTTP `status` or process `backend_kind` where one exists.
 
 use serde_json::Value;
 
 use super::support::{outcome_failing, rendered_json};
 use crate::analysis::result::{FailureReason, ProviderFailure};
+use crate::llm::error::BackendErrorKind;
 
 /// Render `failures` as JSON and hand back the parsed `unanalyzed` array.
 fn unanalyzed_for(failures: Vec<(&str, FailureReason)>) -> Vec<Value> {
@@ -33,6 +34,7 @@ fn unanalyzed_for(failures: Vec<(&str, FailureReason)>) -> Vec<Value> {
 fn expected_kind(reason: &FailureReason) -> &'static str {
     match reason {
         FailureReason::Transport { .. } => "transport",
+        FailureReason::Backend { .. } => "backend",
         FailureReason::Unparseable(_) => "unparseable",
         FailureReason::ModelStopped { .. } => "model_stopped",
         FailureReason::Truncated => "truncated",
@@ -57,6 +59,10 @@ fn each_failure_variant_renders_its_own_kind_tag() {
         FailureReason::Transport {
             status: Some(500),
             message: "boom".to_owned(),
+        },
+        FailureReason::Backend {
+            kind: BackendErrorKind::Contract,
+            message: "tool event".to_owned(),
         },
         FailureReason::Unparseable("no json".to_owned()),
         FailureReason::ModelStopped {
@@ -107,6 +113,21 @@ fn each_failure_variant_renders_its_own_kind_tag() {
         seen.len(),
         "every variant needs its own tag; duplicates found in {seen:?}"
     );
+}
+
+#[test]
+fn a_backend_failure_exposes_its_typed_class_without_prose_matching() {
+    let entries = unanalyzed_for(vec![(
+        "src/a.rs",
+        FailureReason::Backend {
+            kind: BackendErrorKind::UnknownExit,
+            message: "unauthorized quota timeout words are not a classifier".to_owned(),
+        },
+    )]);
+
+    assert_eq!(entries[0]["kind"].as_str(), Some("backend"));
+    assert_eq!(entries[0]["backend_kind"].as_str(), Some("unknown_exit"));
+    assert!(entries[0].get("status").is_none());
 }
 
 /// A transport failure with an HTTP code exposes it as a **number**.

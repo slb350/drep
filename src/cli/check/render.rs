@@ -11,9 +11,9 @@
 //!   `providers`, and `exit`. The `unanalyzed` and `providers` fields are
 //!   **always present** — even when empty — so a consumer can distinguish "no
 //!   failures" from "this build of drep does not report them". Each
-//!   `unanalyzed` entry carries a machine-readable `kind` (and `status` for
-//!   HTTP failures) beside the human `reason`, so a consumer never has to
-//!   parse prose to tell a rate limit from a dead endpoint.
+//!   `unanalyzed` entry carries a machine-readable `kind`, plus `status` for
+//!   HTTP failures or `backend_kind` for process-backend failures, beside the
+//!   human `reason`.
 //!
 //! The failover report is silent on the happy path. A run served entirely by
 //! the head of the chain prints nothing about providers: that is the expected
@@ -181,6 +181,7 @@ fn render_json<W: Write>(out: &mut W, outcome: &CheckOutcome) -> Result<()> {
 fn failure_kind(reason: &FailureReason) -> &'static str {
     match reason {
         FailureReason::Transport { .. } => "transport",
+        FailureReason::Backend { .. } => "backend",
         FailureReason::Unparseable(_) => "unparseable",
         FailureReason::ModelStopped { .. } => "model_stopped",
         FailureReason::Truncated => "truncated",
@@ -252,6 +253,9 @@ fn provider_failure_json(failure: &ProviderFailure) -> serde_json::Value {
 /// not the other.
 fn insert_reason(obj: &mut serde_json::Map<String, serde_json::Value>, reason: &FailureReason) {
     obj.insert("kind".to_owned(), json!(failure_kind(reason)));
+    if let FailureReason::Backend { kind, .. } = reason {
+        obj.insert("backend_kind".to_owned(), json!(kind.as_str()));
+    }
     if let Some(status) = reason.status() {
         obj.insert("status".to_owned(), json!(status));
     }

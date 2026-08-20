@@ -44,7 +44,7 @@ async fn a_pasted_key_is_queued_for_the_store_and_kept_out_of_the_config() {
         )]
     );
     assert!(
-        plan.choices[0].key_in_store,
+        plan.choices[0].key_in_store(),
         "so no api_key line is rendered: an explicit one would override the key just saved"
     );
 }
@@ -74,7 +74,7 @@ async fn an_empty_paste_falls_back_to_the_environment_variable() {
 
     assert!(plan.new_keys.is_empty(), "nothing to store");
     assert!(
-        !plan.choices[0].key_in_store,
+        !plan.choices[0].key_in_store(),
         "so `api_key = \"${{ZAI_API_KEY}}\"` is written instead"
     );
     assert!(
@@ -91,7 +91,7 @@ async fn whitespace_only_is_treated_as_an_empty_paste() {
     let (plan, _) = run_zai(&AuthStore::new(), "   ").await;
 
     assert!(plan.new_keys.is_empty());
-    assert!(!plan.choices[0].key_in_store);
+    assert!(!plan.choices[0].key_in_store());
 }
 
 #[tokio::test]
@@ -117,7 +117,7 @@ async fn a_key_already_in_the_store_is_reused_without_asking() {
         "nothing should have been asked as a secret: {:?}",
         console.secrets_asked
     );
-    assert!(plan.choices[0].key_in_store);
+    assert!(plan.choices[0].key_in_store());
     assert!(plan.new_keys.is_empty());
     assert!(console.transcript().contains("already stored"));
 }
@@ -141,7 +141,7 @@ async fn a_stored_key_is_found_regardless_of_a_trailing_slash() {
     .expect("the wizard completes");
 
     assert!(console.secrets_asked.is_empty());
-    assert!(plan.choices[0].key_in_store);
+    assert!(plan.choices[0].key_in_store());
 }
 
 #[tokio::test]
@@ -181,7 +181,10 @@ async fn a_key_pasted_earlier_in_the_same_run_is_not_asked_for_twice() {
     );
     assert_eq!(console.secrets_asked.len(), 1, "asked once, not twice");
     assert_eq!(plan.new_keys.len(), 1, "and queued once");
-    assert!(plan.choices[1].key_in_store, "the second entry uses it too");
+    assert!(
+        plan.choices[1].key_in_store(),
+        "the second entry uses it too"
+    );
 }
 
 #[tokio::test]
@@ -203,7 +206,7 @@ async fn a_provider_needing_no_key_is_never_asked_for_one() {
         console.secrets_asked.is_empty(),
         "a local server has no key to paste"
     );
-    assert!(!plan.choices[0].key_in_store);
+    assert!(!plan.choices[0].key_in_store());
 }
 
 #[tokio::test]
@@ -212,7 +215,7 @@ async fn the_place_to_get_a_key_is_shown_when_the_preset_knows_it() {
 
     let url = presets::preset("zai")
         .expect("preset")
-        .key_url
+        .key_url()
         .expect("url");
     assert!(
         console.transcript().contains(url),
@@ -226,9 +229,9 @@ async fn every_preset_that_needs_a_key_knows_where_to_get_one() {
     // The guidance is the reason the wizard exists. A preset that demands a key
     // and cannot say where it comes from sends the user to a search engine.
     for preset in presets::PRESETS {
-        if preset.api_key_env.is_some() && preset.endpoint.is_some() {
+        if preset.api_key_env().is_some() && preset.endpoint().is_some() {
             assert!(
-                preset.key_url.is_some(),
+                preset.key_url().is_some(),
                 "preset `{}` needs a key but names no source",
                 preset.key
             );

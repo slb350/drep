@@ -46,10 +46,53 @@ async fn the_chosen_number_selects_that_preset() {
 
     assert_eq!(plan.choices[0].preset.key, "zai");
     assert_eq!(
-        plan.choices[0].endpoint,
-        "https://api.z.ai/api/coding/paas/v4"
+        plan.choices[0].endpoint(),
+        Some("https://api.z.ai/api/coding/paas/v4")
     );
     assert_eq!(plan.choices[0].model, "glm-5.3");
+}
+
+#[tokio::test]
+async fn codex_selection_checks_subscription_readiness_before_asking_for_a_model() {
+    let (plan, console) = run_with(&[&number_of("codex"), "", "", "", ""]).await;
+
+    assert_eq!(plan.choices[0].preset.key, "codex");
+    assert_eq!(plan.choices[0].endpoint(), None);
+    assert!(plan.new_keys.is_empty());
+    assert!(
+        console
+            .transcript()
+            .contains("Codex CLI test-version is authenticated through ChatGPT"),
+        "got {}",
+        console.transcript()
+    );
+}
+
+#[tokio::test]
+async fn codex_selection_stops_before_writing_a_plan_when_readiness_fails() {
+    fn unavailable() -> Result<crate::llm::codex::CodexStatus, String> {
+        Err("Codex CLI was not found; install it and run `codex login`".to_owned())
+    }
+
+    let mut console = Scripted::new(&[&number_of("codex")]);
+    let err = run(
+        &mut console,
+        Deps {
+            codex_status: &unavailable,
+            ..deps(
+                &AuthStore::new(),
+                &Catalog::Unavailable,
+                &Quirked::Unavailable,
+            )
+        },
+    )
+    .await
+    .expect_err("a subscription backend that cannot authenticate is unusable");
+
+    let message = err.to_string();
+    assert!(message.contains("Codex CLI was not found"), "got {message}");
+    assert!(message.contains("`codex login`"), "got {message}");
+    assert!(console.is_drained());
 }
 
 #[tokio::test]
@@ -71,7 +114,7 @@ async fn an_out_of_range_number_is_re_asked_rather_than_accepted() {
 async fn an_overridden_model_and_endpoint_reach_the_choice() {
     let (plan, _) = run_with(&["1", "http://elsewhere:9/v1", "some-model", "", "", ""]).await;
 
-    assert_eq!(plan.choices[0].endpoint, "http://elsewhere:9/v1");
+    assert_eq!(plan.choices[0].endpoint(), Some("http://elsewhere:9/v1"));
     assert_eq!(plan.choices[0].model, "some-model");
 }
 
@@ -93,7 +136,7 @@ async fn a_preset_with_no_default_endpoint_re_asks_until_one_is_given() {
     ])
     .await;
 
-    assert_eq!(plan.choices[0].endpoint, "https://mine/v1");
+    assert_eq!(plan.choices[0].endpoint(), Some("https://mine/v1"));
     assert!(
         console.transcript().contains("Endpoint cannot be empty"),
         "got {}",

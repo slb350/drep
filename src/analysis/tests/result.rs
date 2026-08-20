@@ -5,6 +5,7 @@ use std::path::PathBuf;
 
 use crate::analysis::findings::{Finding, Severity};
 use crate::analysis::result::{AnalysisResult, FailureReason};
+use crate::llm::error::{BackendErrorKind, LlmError};
 
 /// Criterion 5: `merge` unions `failed_files`. Two results that each name
 /// the same file merge to a map of size 1, not 2.
@@ -125,4 +126,21 @@ fn has_failures_reflects_failed_files() {
 fn failed_files_is_a_btreemap() {
     let result = AnalysisResult::default();
     let _: BTreeMap<PathBuf, FailureReason> = result.failed_files;
+}
+
+#[test]
+fn a_typed_backend_failure_is_not_misreported_as_transport() {
+    let reason = crate::analysis::code_quality::into_failure_reason(LlmError::Backend {
+        kind: BackendErrorKind::Contract,
+        message: "Codex attempted a forbidden tool".to_owned(),
+    });
+
+    assert!(matches!(
+        reason,
+        FailureReason::Backend {
+            kind: BackendErrorKind::Contract,
+            ..
+        }
+    ));
+    assert!(!reason.one_line().contains("transport"));
 }

@@ -5,6 +5,37 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **ChatGPT/Codex subscription review is a first-class backend, separate from
+  the OpenAI API.** `drep init --provider codex` writes an endpoint-less,
+  keyless `backend = "codex"` entry and invokes a separately installed Codex
+  CLI with ChatGPT authentication forced. Each review is ephemeral and runs in
+  an empty directory with a read-only sandbox, no approvals, ignored user and
+  project configuration, an allowlisted environment, disabled tool surfaces,
+  bounded output and a strict response schema. The JSONL event parser rejects
+  any command, file, MCP, web or subagent activity as a contract violation and
+  surfaces terminal error events without guessing their class from prose.
+- `drep doctor` reports the Codex CLI version, ChatGPT-managed authentication
+  and isolation mode without retaining or printing account details. The
+  interactive wizard checks the same readiness before producing a plan;
+  `drep auth --provider codex` points to `codex login` and never mutates drep's
+  API-key store.
+- HTTP and Codex providers now share a backend boundary, so either can sit in a
+  failover chain. Cache identity separates HTTP endpoint/protocol from Codex
+  CLI version, ChatGPT auth mode and reasoning effort, including when both
+  backends use the same model name. Existing HTTP cache entries miss once
+  because their backend identity now carries an explicit `http:` namespace.
+
+### Changed
+
+- The existing `openai` preset is now labelled **OpenAI API** to make its
+  per-token API billing distinct from ChatGPT/Codex subscription allowance.
+  Its endpoint, model, key variable and Chat Completions wire contract are
+  unchanged and covered by an OpenAI-specific mock-server test.
+
 ## [2.2.0] - 2026-08-20
 
 ### Added

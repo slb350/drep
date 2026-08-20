@@ -112,7 +112,7 @@ fn login(console: &mut dyn Console, args: &LoginArgs, path: &Path) -> Result<Exi
         console.say(&format!("Replacing the key stored for {endpoint}."))?;
     }
 
-    if let Some(url) = matching_preset(&endpoint).and_then(|p| p.key_url) {
+    if let Some(url) = matching_preset(&endpoint).and_then(|preset| preset.key_url()) {
         console.say(&format!("Get a key: {url}"))?;
     }
 
@@ -162,8 +162,13 @@ fn resolve_endpoint(args: &LoginArgs) -> Result<String> {
     };
 
     let preset = presets::preset(name).ok_or_else(|| anyhow!("unknown provider `{name}`"))?;
+    if matches!(preset.backend, presets::PresetBackend::Codex(_)) {
+        return Err(anyhow!(
+            "the Codex CLI owns ChatGPT subscription authentication; run `codex login` instead (nothing was stored by drep)"
+        ));
+    }
     preset
-        .endpoint
+        .endpoint()
         .map(str::to_owned)
         .ok_or_else(|| anyhow!("--provider {name} presumes no host; use --endpoint instead"))
 }
@@ -172,7 +177,7 @@ fn resolve_endpoint(args: &LoginArgs) -> Result<String> {
 fn matching_preset(endpoint: &str) -> Option<&'static presets::LlmPreset> {
     let wanted = crate::auth::normalise(endpoint);
     presets::PRESETS.iter().copied().find(|p| {
-        p.endpoint
+        p.endpoint()
             .is_some_and(|e| crate::auth::normalise(e) == wanted)
     })
 }

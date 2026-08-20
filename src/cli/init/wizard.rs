@@ -23,7 +23,7 @@
 //! same functions the flag path uses, so an answer given interactively cannot
 //! reach a different code path than the equivalent flag.
 
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 
 use super::config_file::Choice;
 use super::hooks::HookKind;
@@ -75,6 +75,7 @@ pub async fn run<S: ModelSource, Q: QuirksSource>(
     // may never reach. Deferring it puts any wait after the questions the user
     // came to answer, and a warm cache makes it invisible either way.
     let mut registry = LazyRegistry::new();
+    let mut codex_status: Option<Result<crate::llm::codex::CodexStatus, String>> = None;
     console.say("")?;
 
     let mut choices = Vec::new();
@@ -82,8 +83,15 @@ pub async fn run<S: ModelSource, Q: QuirksSource>(
 
     loop {
         let position = choices.len() + 1;
-        let (choice, key) =
-            one_provider(console, &deps, &mut registry, &new_keys, position).await?;
+        let (choice, key) = one_provider(
+            console,
+            &deps,
+            &mut registry,
+            &mut codex_status,
+            &new_keys,
+            position,
+        )
+        .await?;
         if let Some(pair) = key {
             new_keys.push(pair);
         }
@@ -156,6 +164,8 @@ pub struct Deps<'a, S, Q> {
     pub quirks_source: &'a Q,
     /// Whether an environment variable is set.
     pub env_is_set: &'a dyn Fn(&str) -> bool,
+    /// Whether the Codex CLI has usable ChatGPT-managed authentication.
+    pub(crate) codex_status: &'a dyn Fn() -> Result<crate::llm::codex::CodexStatus, String>,
 }
 
 /// The registry, fetched at most once and only when something needs it.
@@ -205,12 +215,26 @@ async fn one_provider<S: ModelSource, Q: QuirksSource>(
     console: &mut dyn Console,
     deps: &Deps<'_, S, Q>,
     registry: &mut LazyRegistry,
+    codex_status: &mut Option<Result<crate::llm::codex::CodexStatus, String>>,
     pending: &[(String, String)],
     position: usize,
 ) -> Result<(Choice, Option<(String, String)>)> {
     let preset = ask_provider(console, position)?;
 
-    let endpoint = ask_required(console, "Endpoint", preset.endpoint)?;
+    if matches!(preset.backend, presets::PresetBackend::Codex(_)) {
+        let status = codex_status
+            .get_or_insert_with(|| (deps.codex_status)())
+            .as_ref()
+            .map_err(|err| anyhow!(err.clone()))?;
+        console.say(&format!(
+            "  Codex CLI {} is authenticated through ChatGPT.",
+            status.cli_version()
+        ))?;
+        let model = ask_required(console, "Model", preset.default_model)?;
+        return Ok((Choice::codex(preset, model), None));
+    }
+
+    let endpoint = ask_required(console, "Endpoint", preset.endpoint())?;
 
     // The key is settled *before* the model, which is the whole reason the
     // endpoint can be asked what it serves: a listing needs authenticating.
@@ -243,13 +267,7 @@ async fn one_provider<S: ModelSource, Q: QuirksSource>(
     let endpoint_for_store = endpoint.clone();
 
     Ok((
-        Choice {
-            preset,
-            model,
-            endpoint,
-            key_in_store: key.in_store,
-            quirks,
-        },
+        Choice::http(preset, model, endpoint, key.in_store, quirks),
         key.to_store.map(|stored| (endpoint_for_store, stored)),
     ))
 }
@@ -387,7 +405,7 @@ fn ask_key(
     // A preset that needs no key at all - a local server - has nothing to ask.
     // `usable` stays `None`, and the listing is attempted unauthenticated,
     // which is what such a server expects.
-    let Some(env) = preset.api_key_env else {
+    let Some(env) = preset.api_key_env() else {
         return Ok(KeyChoice::none());
     };
 
@@ -410,7 +428,7 @@ fn ask_key(
         });
     }
 
-    if let Some(url) = preset.key_url {
+    if let Some(url) = preset.key_url() {
         console.say(&format!("  Get a key: {url}"))?;
     }
 

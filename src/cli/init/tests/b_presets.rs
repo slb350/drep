@@ -14,6 +14,7 @@ fn preset_keys_are_in_spec_order_and_every_key_round_trips() {
             "minimax",
             "kimi",
             "openai",
+            "codex",
             "custom"
         ],
         "preset_keys() is the source of truth for --provider and --help"
@@ -44,10 +45,10 @@ fn only_a_preset_whose_endpoint_requires_max_tokens_renders_one() {
                 .any(|line| line.trim_start().starts_with("max_tokens ="));
             assert_eq!(
                 has_line,
-                preset.max_tokens.is_some(),
+                preset.max_tokens().is_some(),
                 "preset `{}` renders max_tokens={has_line} but declares {:?}",
                 preset.key,
-                preset.max_tokens
+                preset.max_tokens()
             );
             if has_line && !rendered.contains(&preset.key) {
                 rendered.push(preset.key);
@@ -71,7 +72,7 @@ fn the_required_max_tokens_is_a_fallback_the_endpoint_is_known_to_accept() {
     // endpoint*, which it is - verified live. For a model the registry does
     // name, the model's own limit is written instead.
     let kimi = presets::preset("kimi").expect("kimi preset");
-    assert_eq!(kimi.max_tokens, Some(200_000));
+    assert_eq!(kimi.max_tokens(), Some(200_000));
 }
 
 #[test]
@@ -82,8 +83,8 @@ fn a_presets_quirks_are_its_own_declared_values() {
     // on providers that never had one.
     for preset in presets::PRESETS {
         let quirks = preset.quirks();
-        assert_eq!(quirks.temperature, preset.temperature, "{}", preset.key);
-        assert_eq!(quirks.max_tokens, preset.max_tokens, "{}", preset.key);
+        assert_eq!(quirks.temperature, preset.temperature(), "{}", preset.key);
+        assert_eq!(quirks.max_tokens, preset.max_tokens(), "{}", preset.key);
         assert!(
             !quirks.max_tokens_from_registry,
             "`{}` claims a registry it never consulted",
@@ -102,16 +103,16 @@ fn the_registry_can_replace_the_required_value_but_not_the_requirement() {
 
     for preset in PRESETS {
         let resolved = Quirks {
-            temperature: preset.temperature,
-            max_tokens: preset.max_tokens.map(|_| 42_000),
-            max_tokens_from_registry: preset.max_tokens.is_some(),
+            temperature: preset.temperature(),
+            max_tokens: preset.max_tokens().map(|_| 42_000),
+            max_tokens_from_registry: preset.max_tokens().is_some(),
         };
         let body = super::support::render_with_quirks(preset, "m", "http://e/v1", resolved);
         let line = body
             .lines()
             .find(|line| line.trim_start().starts_with("max_tokens ="));
 
-        match preset.max_tokens {
+        match preset.max_tokens() {
             Some(_) => assert_eq!(line, Some("max_tokens = 42000"), "preset `{}`", preset.key),
             None => assert_eq!(line, None, "preset `{}`", preset.key),
         }
@@ -121,14 +122,14 @@ fn the_registry_can_replace_the_required_value_but_not_the_requirement() {
 #[test]
 fn openrouter_has_api_key_and_timeout_secs() {
     let preset = presets::preset("openrouter").expect("openrouter");
-    assert_eq!(preset.api_key_env, Some("OPENROUTER_API_KEY"));
+    assert_eq!(preset.api_key_env(), Some("OPENROUTER_API_KEY"));
     assert_eq!(preset.timeout_secs, Some(1800));
 }
 
 #[test]
 fn local_has_neither_api_key_nor_timeout_secs() {
     let preset = presets::preset("local").expect("local");
-    assert_eq!(preset.api_key_env, None);
+    assert_eq!(preset.api_key_env(), None);
     assert_eq!(preset.timeout_secs, None);
 }
 
@@ -173,6 +174,13 @@ fn every_preset_pins_its_endpoint_model_and_key_variable() {
             timeout_secs: Some(1800),
         },
         Expected {
+            key: "codex",
+            endpoint: None,
+            model: Some("gpt-5.6-sol"),
+            api_key_env: None,
+            timeout_secs: Some(1800),
+        },
+        Expected {
             key: "custom",
             endpoint: None,
             model: None,
@@ -184,32 +192,67 @@ fn every_preset_pins_its_endpoint_model_and_key_variable() {
     for want in expected {
         let key = want.key;
         let preset = presets::preset(key).unwrap_or_else(|| panic!("{key} must exist"));
-        assert_eq!(preset.endpoint, want.endpoint, "{key} endpoint");
+        assert_eq!(preset.endpoint(), want.endpoint, "{key} endpoint");
         assert_eq!(preset.default_model, want.model, "{key} default model");
         assert_eq!(
-            preset.api_key_env, want.api_key_env,
+            preset.api_key_env(),
+            want.api_key_env,
             "{key} api key variable"
         );
         assert_eq!(preset.timeout_secs, want.timeout_secs, "{key} timeout");
     }
 }
 
-/// The local preset needs no key, and every cloud one does.
+#[test]
+fn every_key_url_is_exact_or_deliberately_absent() {
+    let expected = [
+        ("local", None),
+        ("openrouter", Some("https://openrouter.ai/keys")),
+        ("zai", Some("https://z.ai/manage-apikey/apikey-list")),
+        (
+            "minimax",
+            Some("https://platform.minimax.io/user-center/payment/token-plan"),
+        ),
+        ("kimi", Some("https://www.kimi.com/code")),
+        ("openai", Some("https://platform.openai.com/api-keys")),
+        ("codex", None),
+        ("custom", None),
+    ];
+
+    for (key, url) in expected {
+        let preset = presets::preset(key).unwrap_or_else(|| panic!("{key} must exist"));
+        assert_eq!(preset.key_url(), url, "{key} key URL");
+    }
+}
+
+/// The local and Codex presets need no API key; every HTTP cloud one does.
 ///
 /// Stated as a property rather than per-preset so a new cloud preset that
 /// forgot its key variable is caught: the whole point of the presets is that a
 /// user picks a name instead of knowing which variable holds the credential.
 #[test]
-fn only_the_local_preset_needs_no_api_key_variable() {
+fn only_local_and_codex_need_no_api_key_variable() {
+    use crate::config::BackendKind;
+
     for p in presets::PRESETS {
-        if p.key == "local" {
-            assert!(p.api_key_env.is_none(), "a local model needs no key");
-        } else {
-            assert!(
-                p.api_key_env.is_some(),
-                "{} reaches a remote service, so it must name a key variable",
-                p.key
-            );
+        match (p.backend_kind(), p.key) {
+            (BackendKind::Http, "local") => {
+                assert!(p.api_key_env().is_none(), "a local model needs no key");
+            }
+            (BackendKind::Http, _) => {
+                assert!(
+                    p.api_key_env().is_some(),
+                    "{} reaches an HTTP service, so it must name a key variable",
+                    p.key
+                );
+            }
+            (BackendKind::Codex, "codex") => {
+                assert!(
+                    p.api_key_env().is_none(),
+                    "Codex owns its saved ChatGPT authentication"
+                );
+            }
+            (backend, _) => panic!("preset `{}` has unexpected backend {backend:?}", p.key),
         }
     }
 }
@@ -224,7 +267,7 @@ fn every_preset_renders_a_config_that_loads() {
 
     let dir = tempfile::tempdir().expect("tempdir");
     for preset in PRESETS {
-        let endpoint = preset.endpoint.unwrap_or("http://localhost:1234/v1");
+        let endpoint = preset.endpoint().unwrap_or("http://localhost:1234/v1");
         let model = preset.default_model.unwrap_or("some-model");
         let body = super::support::render_one(preset, model, endpoint);
 
@@ -234,7 +277,7 @@ fn every_preset_renders_a_config_that_loads() {
         // 2024 because a concurrent reader on another thread is a data race,
         // and `cargo test` is multi-threaded. The substitution proves the same
         // thing - that the file's *shape* loads - without touching the process.
-        let body = match preset.api_key_env {
+        let body = match preset.api_key_env() {
             Some(env) => body.replace(&format!("${{{env}}}"), "substituted-for-the-test"),
             None => body,
         };
@@ -257,7 +300,7 @@ fn a_model_that_refuses_temperature_writes_no_temperature_line_whatever_the_pres
     use crate::llm::quirks::Quirks;
 
     let zai = presets::preset("zai").expect("zai");
-    assert_eq!(zai.temperature, Some(0.2), "the preset still sends one");
+    assert_eq!(zai.temperature(), Some(0.2), "the preset still sends one");
 
     let body = super::support::render_with_quirks(
         zai,
@@ -333,10 +376,10 @@ fn a_preset_that_names_no_temperature_writes_no_temperature_line() {
             .any(|line| line.trim_start().starts_with("temperature ="));
         assert_eq!(
             has_line,
-            preset.temperature.is_some(),
+            preset.temperature().is_some(),
             "preset `{}` writes temperature={has_line} but declares {:?}",
             preset.key,
-            preset.temperature
+            preset.temperature()
         );
     }
 }
@@ -354,7 +397,7 @@ fn a_preset_that_names_a_protocol_writes_it_and_the_others_stay_silent() {
             .find(|line| line.trim_start().starts_with("protocol ="))
             .map(str::to_string);
 
-        match preset.protocol {
+        match preset.protocol_name() {
             Some(name) => assert_eq!(
                 rendered.as_deref(),
                 Some(format!("protocol = \"{name}\"").as_str()),
@@ -373,7 +416,7 @@ fn the_anthropic_presets_are_the_ones_that_need_it() {
     // coding plan is ordinary chat completions.
     let anthropic: Vec<&str> = crate::cli::init::presets::PRESETS
         .iter()
-        .filter(|p| p.protocol == Some("anthropic"))
+        .filter(|p| p.protocol_name() == Some("anthropic"))
         .map(|p| p.key)
         .collect();
 
@@ -400,7 +443,11 @@ fn each_presets_protocol_string_resolves_to_the_protocol_it_names() {
 fn every_presets_protocol_string_is_one_the_parser_accepts() {
     // The accessor panics on an unknown name rather than defaulting, so a typo
     // in the table has to be caught here rather than at a user's first run.
-    for preset in presets::PRESETS {
+    for preset in presets::PRESETS
+        .iter()
+        .copied()
+        .filter(|preset| preset.backend_kind() == crate::config::BackendKind::Http)
+    {
         let _ = preset.protocol();
     }
 }

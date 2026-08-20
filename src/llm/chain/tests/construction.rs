@@ -2,7 +2,7 @@
 
 use crate::config::LlmConfig;
 use crate::llm::chain::ProviderChain;
-use crate::llm::client::LlmError;
+use crate::llm::error::LlmError;
 
 /// An empty chain is refused rather than tolerated as "nothing to do".
 ///

@@ -27,6 +27,9 @@ use serde::Deserialize;
 use thiserror::Error;
 use toml::Value;
 
+mod backend;
+pub use backend::{BackendKind, LlmConfig, ReasoningEffort};
+
 /// The whole configuration tree, rooted at the file.
 ///
 /// `llm` is an **array of tables** (`[[llm]]`), not a single `[llm]` section,
@@ -58,95 +61,6 @@ impl Config {
     /// list is at most a handful of entries.
     pub fn providers(&self) -> Vec<&LlmConfig> {
         self.llm.iter().filter(|p| p.enabled).collect()
-    }
-}
-
-/// One provider in the failover chain.
-///
-/// Field ordering matches the spec; every field has its documented default
-/// here so partial files work.
-///
-/// **`enabled` defaults to `true`** - it is an opt-*out*, the way to park one
-/// entry of an ordered list without deleting it. It defaulted to `false` while
-/// the list held exactly one consulted entry, which made declaring a provider
-/// do nothing until you also enabled it: a user who added a fallback by
-/// copying the first block minus its `enabled` line got a silently inert
-/// entry and no failover. A partial entry that names no endpoint is still
-/// rejected, by `LlmClient::new`, with a message about the endpoint rather
-/// than about a switch the user never touched.
-#[derive(Deserialize)]
-#[serde(default)]
-pub struct LlmConfig {
-    pub enabled: bool,
-    pub endpoint: Option<String>,
-    pub model: Option<String>,
-    pub api_key: Option<String>,
-    /// The wire protocol the endpoint speaks: `"openai"` (the default) or
-    /// `"anthropic"`. Held as the raw string so an unrecognised value can be
-    /// reported by name; [`parse_protocol`] is the single definition of what
-    /// the names mean, and it defers to the SDK's own parser rather than
-    /// keeping a second table of them here.
-    pub protocol: Option<String>,
-    /// Sampling temperature, or `None` to omit the parameter entirely.
-    ///
-    /// **Unset means unset**, not 0.2. It defaulted to 0.2 while every
-    /// endpoint drep could reach accepted the parameter; several now reject
-    /// it outright - `k3` answers `only temperature 1 is allowed for this
-    /// model` with a 400, which neither fails over nor retries - so "send no
-    /// temperature" had to become expressible. A provider that wants a
-    /// deterministic review says so, and `drep init` writes it for every
-    /// preset whose model accepts one.
-    pub temperature: Option<f32>,
-    pub max_tokens: Option<u32>,
-    pub timeout_secs: u64,
-    pub max_retries: u32,
-    pub max_concurrent: usize,
-}
-
-/// Hand-written so the API key cannot reach a log.
-///
-/// A derived `Debug` prints every field, so any `{:?}`, `dbg!` or tracing line
-/// touching a `Config` - which derives `Debug` and holds these - would emit a
-/// live credential. `LlmClient` already redacts for exactly this reason; the
-/// config the client is built *from* held the same secret in the clear.
-impl std::fmt::Debug for LlmConfig {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("LlmConfig")
-            .field("enabled", &self.enabled)
-            .field("endpoint", &self.endpoint)
-            .field("model", &self.model)
-            .field(
-                "api_key",
-                &self
-                    .api_key
-                    .as_ref()
-                    .map(|_| "<redacted>")
-                    .unwrap_or("None"),
-            )
-            .field("protocol", &self.protocol)
-            .field("temperature", &self.temperature)
-            .field("max_tokens", &self.max_tokens)
-            .field("timeout_secs", &self.timeout_secs)
-            .field("max_retries", &self.max_retries)
-            .field("max_concurrent", &self.max_concurrent)
-            .finish()
-    }
-}
-
-impl Default for LlmConfig {
-    fn default() -> Self {
-        Self {
-            enabled: true,
-            endpoint: None,
-            model: None,
-            api_key: None,
-            protocol: None,
-            temperature: None,
-            max_tokens: None,
-            timeout_secs: 60,
-            max_retries: 3,
-            max_concurrent: 3,
-        }
     }
 }
 
@@ -189,6 +103,38 @@ pub enum ConfigError {
         index + 1
     )]
     UnknownProtocol { index: usize, value: String },
+
+    #[error(
+        "[[llm]] #{} in file order: unknown backend `{value}`; expected `http` or `codex`",
+        index + 1
+    )]
+    UnknownBackend { index: usize, value: String },
+
+    #[error(
+        "[[llm]] #{} in file order: unknown reasoning_effort `{value}`; expected `minimal`, `low`, `medium`, `high`, or `xhigh`",
+        index + 1
+    )]
+    UnknownReasoningEffort { index: usize, value: String },
+
+    #[error(
+        "[[llm]] #{} in file order: backend `{backend}` does not support `{field}`",
+        index + 1
+    )]
+    BackendField {
+        index: usize,
+        backend: &'static str,
+        field: &'static str,
+    },
+
+    #[error(
+        "[[llm]] #{} in file order: backend `{backend}` requires `{field}`",
+        index + 1
+    )]
+    BackendMissingField {
+        index: usize,
+        backend: &'static str,
+        field: &'static str,
+    },
 
     #[error(
         "{0} declares no `[[llm]]` provider; drep 2.x has no deterministic-only mode. \
@@ -255,12 +201,13 @@ pub fn load(path: &Path) -> Result<Config, ConfigError> {
     // `providers()` is consulted, and it filters the entry out.
     let disabled = disabled_provider_indices(&tree);
     expand_env_except(&mut tree, path, &disabled)?;
+    let explicit_fields = backend::explicit_fields(&tree);
 
     let config: Config = tree.try_into().map_err(|err: toml::de::Error| {
         ConfigError::Parse(path.to_path_buf(), err.message().to_owned())
     })?;
 
-    validate(&config, path)?;
+    validate(&config, path, &explicit_fields)?;
     Ok(config)
 }
 
@@ -273,7 +220,11 @@ pub fn load(path: &Path) -> Result<Config, ConfigError> {
 ///
 /// The index is carried into the temperature error because with several
 /// providers "temperature 3.0 is out of range" does not say *which* one.
-fn validate(config: &Config, path: &Path) -> Result<(), ConfigError> {
+fn validate(
+    config: &Config,
+    path: &Path,
+    explicit_fields: &[backend::ExplicitFields],
+) -> Result<(), ConfigError> {
     if config.llm.is_empty() {
         return Err(ConfigError::NoProviders(path.to_path_buf()));
     }
@@ -288,6 +239,19 @@ fn validate(config: &Config, path: &Path) -> Result<(), ConfigError> {
     // an out-of-range temperature contradicts that in the one place a user
     // would notice: they parked it precisely to stop it mattering.
     for (index, llm) in config.llm.iter().enumerate().filter(|(_, l)| l.enabled) {
+        backend::validate(
+            llm,
+            explicit_fields.get(index).copied().unwrap_or_default(),
+            index,
+        )?;
+
+        if llm.max_concurrent == 0 {
+            return Err(ConfigError::ZeroConcurrency { index });
+        }
+
+        if llm.backend != BackendKind::Http {
+            continue;
+        }
         if let Some(t) = llm.temperature
             && !(0.0..=2.0).contains(&t)
         {
@@ -306,9 +270,6 @@ fn validate(config: &Config, path: &Path) -> Result<(), ConfigError> {
                 index,
                 value: raw.to_owned(),
             });
-        }
-        if llm.max_concurrent == 0 {
-            return Err(ConfigError::ZeroConcurrency { index });
         }
     }
     Ok(())

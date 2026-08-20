@@ -210,9 +210,11 @@ pub(crate) fn fast_retry_chain(cfgs: &[LlmConfig]) -> ProviderChain {
     let refs: Vec<&LlmConfig> = cfgs.iter().collect();
     let mut chain = ProviderChain::new(&refs).expect("chain builds from valid configs");
     for provider in &mut chain.providers {
-        provider.client.retry_config.initial_delay = Duration::from_millis(10);
-        provider.client.retry_config.max_delay = Duration::from_millis(50);
-        provider.client.retry_config.jitter_factor = 0.0;
+        if let Some(client) = provider.backend.http_mut() {
+            client.retry_config.initial_delay = Duration::from_millis(10);
+            client.retry_config.max_delay = Duration::from_millis(50);
+            client.retry_config.jitter_factor = 0.0;
+        }
     }
     chain
 }

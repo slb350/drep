@@ -14,7 +14,8 @@
 //! `Extracted` from the one-delta delivery of the same bytes. The third pins
 //! the terminating event, which fragmentation must not multiply.
 
-use crate::llm::client::{Extracted, LlmError};
+use crate::llm::client::Extracted;
+use crate::llm::error::LlmError;
 use crate::test_support::{
     cfg_for, fast_retry_client, request_count, server_finishing_with, server_returning,
 };

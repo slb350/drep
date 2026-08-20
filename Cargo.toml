@@ -47,7 +47,7 @@ clap = { version = "4.6", features = ["derive"] }
 # Phase 1: the deterministic tool runner.
 regex = "1.13"
 serde_json = "1.0"
-tokio = { version = "1.53", features = ["process", "rt-multi-thread", "macros", "time"] }
+tokio = { version = "1.53", features = ["io-util", "process", "rt-multi-thread", "macros", "time"] }
 # Phase 2: file discovery. Prunes ignored trees during the walk rather than
 # stat-ing every entry under them first, and understands .gitignore.
 ignore = "0.4"
@@ -66,6 +66,9 @@ thiserror = "2.0"
 toml = "1.1"
 blake3 = "1.8"
 directories = "6.0"
+# Codex reviews run from a fresh private directory containing drep's
+# replacement instructions and response schema, with an empty child cwd.
+tempfile = "3.27"
 # Phase 9: `drep init` reads a pasted API key without echoing it. A key in the
 # terminal's scrollback is the one place drep would otherwise leave a credential
 # in the clear, having hand-written `Debug` three times to avoid exactly that.
@@ -79,7 +82,6 @@ reqwest = { version = "0.12", features = ["json", "gzip"] }
 
 [dev-dependencies]
 assert_cmd = "2.2"
-tempfile = "3.27"
 wiremock = "0.6"
 
 [profile.release]

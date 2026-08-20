@@ -48,8 +48,8 @@ async fn the_chosen_models_own_limit_replaces_the_presets_required_max_tokens() 
     let (plan, _) = run_one("kimi", &catalog, &Quirked::from_json(FIXTURE), "2").await;
 
     assert_eq!(plan.choices[0].model, "kimi-for-coding");
-    assert_eq!(plan.choices[0].quirks.max_tokens, Some(32_768));
-    assert!(plan.choices[0].quirks.max_tokens_from_registry);
+    assert_eq!(plan.choices[0].quirks().max_tokens, Some(32_768));
+    assert!(plan.choices[0].quirks().max_tokens_from_registry);
 }
 
 #[tokio::test]
@@ -61,9 +61,9 @@ async fn a_model_the_registry_does_not_name_keeps_the_presets_value() {
     let (plan, _) = run_one("kimi", &catalog, &Quirked::from_json(FIXTURE), "k4-preview").await;
 
     assert_eq!(plan.choices[0].model, "k4-preview");
-    assert_eq!(plan.choices[0].quirks.max_tokens, Some(200_000));
+    assert_eq!(plan.choices[0].quirks().max_tokens, Some(200_000));
     assert!(
-        !plan.choices[0].quirks.max_tokens_from_registry,
+        !plan.choices[0].quirks().max_tokens_from_registry,
         "the rendered comment must not claim this is the model's own limit"
     );
 }
@@ -75,8 +75,8 @@ async fn an_unreachable_registry_leaves_the_preset_values_untouched_and_says_so(
 
     let (plan, console) = run_one("kimi", &catalog, &Quirked::Unavailable, "1").await;
 
-    assert_eq!(plan.choices[0].quirks.max_tokens, Some(200_000));
-    assert_eq!(plan.choices[0].quirks.temperature, None);
+    assert_eq!(plan.choices[0].quirks().max_tokens, Some(200_000));
+    assert_eq!(plan.choices[0].quirks().temperature, None);
     assert!(
         console
             .transcript()
@@ -132,7 +132,7 @@ async fn the_registry_never_adds_a_max_tokens_to_an_endpoint_that_does_not_need_
 
     let (plan, _) = run_one("zai", &catalog, &Quirked::from_json(FIXTURE), "2").await;
 
-    assert_eq!(plan.choices[0].quirks.max_tokens, None);
+    assert_eq!(plan.choices[0].quirks().max_tokens, None);
 }
 
 #[tokio::test]

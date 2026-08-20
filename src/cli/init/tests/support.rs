@@ -55,11 +55,18 @@ pub(super) fn render_with_quirks(
     endpoint: &str,
     quirks: crate::llm::quirks::Quirks,
 ) -> String {
-    crate::cli::init::config_file::render_chain(&[crate::cli::init::config_file::Choice {
-        preset,
-        model: model.to_string(),
-        endpoint: endpoint.to_string(),
-        key_in_store: false,
-        quirks,
-    }])
+    let choice = match preset.backend_kind() {
+        crate::config::BackendKind::Http => crate::cli::init::config_file::Choice::http(
+            preset,
+            model.to_string(),
+            endpoint.to_string(),
+            false,
+            quirks,
+        ),
+        crate::config::BackendKind::Codex => {
+            crate::cli::init::config_file::Choice::codex(preset, model.to_string())
+        }
+        crate::config::BackendKind::Unknown(_) => unreachable!("preset backend is known"),
+    };
+    crate::cli::init::config_file::render_chain(&[choice])
 }

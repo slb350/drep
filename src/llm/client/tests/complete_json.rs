@@ -10,7 +10,8 @@ use serde_json::json;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
-use crate::llm::client::{Extracted, LlmClient, LlmError};
+use crate::llm::client::{Extracted, LlmClient};
+use crate::llm::error::LlmError;
 use crate::test_support::{
     cfg_for, fast_retry_client, mount_sse, request_count, server_finishing_with, server_returning,
     server_without_finish_reason, sse,

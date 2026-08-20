@@ -44,7 +44,9 @@ source, `files::is_markdown` is markdown, and nothing satisfies both.
 | `files/` | file-class predicates, the walk, and CLI path expansion |
 | `diff/` | `--staged` and `--diff <ref>`, by shelling out to git |
 | `llm/chain.rs` | the provider chain: failover, demotion, per-provider cache key |
+| `llm/backend.rs` | the HTTP/Codex backend boundary used by each provider |
 | `llm/client/` | a thin layer over `open-agent-sdk` |
+| `llm/codex/` | isolated Codex command, diagnostic, process bounds and JSONL parser |
 | `llm/cache.rs` | content-addressed response cache |
 | `llm/concurrency.rs` | the permit limiter |
 | `llm/json_parsing.rs` | tolerant extraction of JSON from a model response |
@@ -119,7 +121,9 @@ dropped rather than clamped to the nearest one.
 
 `[[llm]]` is an array of tables and the order is the failover chain.
 `Config::providers()` returns the enabled entries in file order and
-`llm/chain.rs` tries them in turn.
+`llm/chain.rs` tries them in turn. Each `Provider` owns a `ProviderBackend`:
+`Http(LlmClient)` or `Codex(CodexClient)`. The chain, cache and analyzer depend
+on that boundary rather than on an HTTP endpoint.
 
 Two questions, deliberately answered by different predicates:
 
@@ -132,6 +136,13 @@ Two questions, deliberately answered by different predicates:
   failure": remembering a failure that does not fail over stops the chain for
   every later file.
 
+Backend failures carry a typed kind. Authentication and contract failures stop
+and are sticky; a request-shaped failure stops without poisoning later files;
+an explicitly classified usage-limit failure can fail over and is sticky.
+Current Codex JSONL emits only a human message for terminal failures, so an
+unknown nonzero exit stays `UnknownExit` and is never classified by matching
+prose.
+
 Demotion is sticky for the run and re-checked after the concurrency limiter,
 because files run concurrently and a check taken only before acquiring a permit
 stops nothing that had already started.
@@ -141,6 +152,22 @@ A one-provider chain collapses to that provider's own `FailureReason`;
 `drep init` writes reports exactly what it did before failover existed.
 
 ### Responses
+
+The HTTP backend uses `open-agent-sdk`. The subscription backend invokes
+`codex exec --json` with ChatGPT authentication forced. It runs in an empty
+temporary working directory with an allowlisted environment, ephemeral state,
+read-only sandboxing, approval disabled, user/project configuration ignored,
+and every available tool surface disabled. The payload is written to stdin;
+the existing review contract is supplied as a replacement instructions file;
+a strict output schema constrains the final agent message.
+
+The subprocess deadline covers stdin, stdout, stderr and exit. Output is
+bounded, the child is killed and reaped on timeout, and stderr is retained only
+as a short sanitized excerpt. The JSONL parser accepts lifecycle/progress,
+reasoning, todo-list and one final agent message followed by `turn.completed`.
+Command, file-change, MCP, web-search and subagent events are contract
+violations rather than ignorable progress. A terminal error event is surfaced
+as a bounded `UnknownExit` diagnostic without classifying its human message.
 
 `finish_reason` decides whether asking again can help. `Length` and
 `ContentFilter` are request-shaped: the same request hits the same cap, so they
@@ -164,11 +191,12 @@ which would fail over and demote a provider over a prose preamble.
 
 A directory of one JSON file per entry under
 `directories::ProjectDirs::cache_dir()`, sharded by the first two hex
-characters of the key. The key is blake3 over five length-prefixed inputs and
-**includes the endpoint**, not just the model, computed inside the failover
-loop through `Provider::cache_key`. One open model served both locally and from
-a cloud provider is the canonical failover pair and both name it identically.
-Defaults: 30-day TTL, 1 GiB.
+characters of the key. The key is blake3 over six length-prefixed inputs and
+includes a backend identity, not just the model, computed inside the failover
+loop through `Provider::cache_key`. HTTP identity includes endpoint and wire
+protocol. Codex identity includes ChatGPT auth mode, CLI version and reasoning
+effort. One model served by the OpenAI API and by a ChatGPT subscription must
+never share an entry. Defaults: 30-day TTL, 1 GiB.
 
 ## Failure contract
 
@@ -206,6 +234,14 @@ GitPython on every commit.
 environment variable rather than holding a secret, and `config::env_var_refs_in`
 is the single definition of a `${VAR}` reference, shared by the substituter and
 by `doctor`.
+
+`backend` defaults to `http`, preserving every pre-existing file. HTTP entries
+accept `endpoint`, `api_key`, `protocol`, `temperature`, `max_tokens` and
+`max_retries`; they reject the Codex-only `reasoning_effort`. A `codex` entry
+requires `model`, accepts an optional `reasoning_effort`, and rejects every
+HTTP-only field, so a subscription selection cannot silently become API
+traffic. It requires the separately installed Codex CLI and ChatGPT-managed
+login; drep's endpoint-keyed auth store is not involved.
 
 Validation is deliberately strict at load, because each of these can only fail
 later and less legibly: a file declaring no providers, or none enabled, is
