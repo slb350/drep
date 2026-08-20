@@ -19,6 +19,10 @@ fn rust_workflow() -> String {
     common::without_comments(".github/workflows/rust.yml")
 }
 
+fn release_workflow() -> String {
+    common::without_comments(".github/workflows/release.yml")
+}
+
 fn workflow_job<'a>(workflow: &'a str, name: &str) -> &'a str {
     let marker = format!("\n  {name}:\n");
     let start = workflow
@@ -177,10 +181,53 @@ fn the_pinned_dist_version_is_the_one_ci_installs() {
         .expect("dist-workspace.toml must pin a dist version")
         .trim()
         .trim_matches('"');
-    let workflow = common::without_comments(".github/workflows/release.yml");
+    let workflow = release_workflow();
     assert!(
         workflow.contains(&format!("cargo-dist/releases/download/v{pinned}/")),
         "release.yml installs a different dist than the config pins ({pinned}) - run `dist init`"
+    );
+}
+
+/// Gitea 1.25.1 and the family runner implement the v4 artifact protocol.
+///
+/// Newer generated action revisions send fields that Gitea does not understand,
+/// so the release fails in `plan` before `dist` can hand work to any native
+/// build runner. Pin every upload and download step together: mixing protocols
+/// can upload successfully and then leave a later job unable to fetch its input.
+#[test]
+fn release_artifact_actions_use_the_compatible_v4_protocol() {
+    let config = dist_config();
+    let workflow = release_workflow();
+    let artifact_actions = workflow
+        .lines()
+        .map(str::trim)
+        .filter_map(|line| line.strip_prefix("uses: actions/"))
+        .filter(|action| {
+            action.starts_with("upload-artifact@") || action.starts_with("download-artifact@")
+        })
+        .collect::<Vec<_>>();
+
+    assert!(
+        artifact_actions
+            .iter()
+            .any(|action| action.starts_with("upload-artifact@")),
+        "release.yml must upload build artifacts"
+    );
+    assert!(
+        artifact_actions
+            .iter()
+            .any(|action| action.starts_with("download-artifact@")),
+        "release.yml must download artifacts between jobs"
+    );
+    assert!(
+        artifact_actions
+            .iter()
+            .all(|action| action.ends_with("@v4")),
+        "all release artifact actions must use v4, found: {artifact_actions:?}"
+    );
+    assert!(
+        config.contains(r#"allow-dirty = ["ci"]"#),
+        "cargo-dist must permit the tested release.yml compatibility override"
     );
 }
 
