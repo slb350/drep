@@ -77,11 +77,11 @@ pub(super) fn rendered_json(outcome: &CheckOutcome) -> serde_json::Value {
 }
 
 /// One entry for the `provider_uses` field.
-pub(super) fn provider_use(index: usize, model: &str, endpoint: &str, files: usize) -> ProviderUse {
+pub(super) fn provider_use(index: usize, model: &str, location: &str, files: usize) -> ProviderUse {
     ProviderUse {
         index,
         model: model.to_owned(),
-        endpoint: endpoint.to_owned(),
+        location: location.to_owned(),
         files,
     }
 }

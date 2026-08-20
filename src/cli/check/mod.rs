@@ -120,14 +120,14 @@ pub struct CheckOutcome {
 
 /// One provider's share of a run.
 ///
-/// The endpoint is carried, not just the model, because "gpt-5.6-sol" does not
+/// The backend location is carried, not just the model, because "gpt-5.6-sol" does not
 /// tell a user whether they paid for it - two entries can name the same model
 /// at a local proxy and at the vendor.
 pub struct ProviderUse {
     /// Zero-based position in the chain. Rendered one-based.
     pub index: usize,
     pub model: String,
-    pub endpoint: String,
+    pub location: String,
     pub files: usize,
 }
 
@@ -324,7 +324,7 @@ fn provider_uses(chain: &ProviderChain) -> Vec<ProviderUse> {
         .map(|(index, provider)| ProviderUse {
             index,
             model: provider.model().to_owned(),
-            endpoint: provider.endpoint().to_owned(),
+            location: provider.location().to_owned(),
             files: provider.served(),
         })
         .collect()

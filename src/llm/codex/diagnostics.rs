@@ -5,7 +5,7 @@ use std::path::Path;
 use std::process::Stdio;
 use std::time::{Duration, Instant};
 
-use serde_json::Value;
+use serde::Deserialize;
 use thiserror::Error;
 
 use super::{CodexStatus, command::ChildEnvironment};
@@ -102,28 +102,58 @@ pub(crate) fn poll_before_deadline(elapsed: Duration, deadline: Duration) -> boo
 
 /// Parse a known diagnostic schema without retaining account paths or details.
 pub(crate) fn parse(input: &[u8]) -> Result<CodexStatus, DiagnosticError> {
-    let value: Value = serde_json::from_slice(input).map_err(|_| DiagnosticError::InvalidJson)?;
+    let diagnostic: Diagnostic<'_> =
+        serde_json::from_slice(input).map_err(|_| DiagnosticError::InvalidJson)?;
 
-    if value.get("schemaVersion").and_then(Value::as_u64) != Some(1) {
+    if diagnostic.schema_version != Some(1) {
         return Err(DiagnosticError::UnsupportedFormat);
     }
-    let version = value
-        .get("codexVersion")
-        .and_then(Value::as_str)
+    let version = diagnostic
+        .codex_version
         .filter(|version| !version.is_empty())
         .ok_or(DiagnosticError::UnsupportedFormat)?;
-    let details = value
-        .get("checks")
-        .and_then(|checks| checks.get("auth.credentials"))
-        .and_then(|check| check.get("details"))
-        .and_then(Value::as_object)
+    let details = diagnostic
+        .checks
+        .and_then(|checks| checks.auth_credentials)
+        .and_then(|check| check.details)
         .ok_or(DiagnosticError::UnsupportedFormat)?;
 
-    let chatgpt = details.get("stored ChatGPT tokens").and_then(Value::as_str) == Some("true")
-        && details.get("stored auth mode").and_then(Value::as_str) == Some("chatgpt");
+    let chatgpt = details.stored_chatgpt_tokens == Some("true")
+        && details.stored_auth_mode == Some("chatgpt");
     if !chatgpt {
         return Err(DiagnosticError::NotChatGpt);
     }
 
     Ok(CodexStatus::new(version))
+}
+
+#[derive(Deserialize)]
+struct Diagnostic<'a> {
+    #[serde(rename = "schemaVersion")]
+    schema_version: Option<u64>,
+    #[serde(rename = "codexVersion")]
+    codex_version: Option<&'a str>,
+    #[serde(borrow)]
+    checks: Option<Checks<'a>>,
+}
+
+#[derive(Deserialize)]
+struct Checks<'a> {
+    #[serde(rename = "auth.credentials")]
+    #[serde(borrow)]
+    auth_credentials: Option<AuthCheck<'a>>,
+}
+
+#[derive(Deserialize)]
+struct AuthCheck<'a> {
+    #[serde(borrow)]
+    details: Option<AuthDetails<'a>>,
+}
+
+#[derive(Deserialize)]
+struct AuthDetails<'a> {
+    #[serde(rename = "stored ChatGPT tokens")]
+    stored_chatgpt_tokens: Option<&'a str>,
+    #[serde(rename = "stored auth mode")]
+    stored_auth_mode: Option<&'a str>,
 }

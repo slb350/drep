@@ -30,7 +30,7 @@
 //! run, every `--provider` run, and every model released since the cache was
 //! written.
 
-use crate::config::{BackendKind, ReasoningEffort};
+use crate::config::ReasoningEffort;
 
 /// HTTP-specific preset fields.
 #[derive(Debug)]
@@ -237,10 +237,11 @@ pub static CUSTOM: LlmPreset = LlmPreset {
 };
 
 impl LlmPreset {
-    pub fn backend_kind(&self) -> BackendKind {
+    #[cfg(test)]
+    pub fn backend_kind(&self) -> crate::config::BackendKind {
         match self.backend {
-            PresetBackend::Http(_) => BackendKind::Http,
-            PresetBackend::Codex(_) => BackendKind::Codex,
+            PresetBackend::Http(_) => crate::config::BackendKind::Http,
+            PresetBackend::Codex(_) => crate::config::BackendKind::Codex,
         }
     }
 
@@ -251,6 +252,7 @@ impl LlmPreset {
         }
     }
 
+    #[cfg(test)]
     pub fn codex(&self) -> Option<&CodexPreset> {
         match &self.backend {
             PresetBackend::Codex(codex) => Some(codex),
@@ -270,14 +272,17 @@ impl LlmPreset {
         self.http().and_then(|http| http.key_url)
     }
 
+    #[cfg(test)]
     pub fn protocol_name(&self) -> Option<&'static str> {
         self.http().and_then(|http| http.protocol)
     }
 
+    #[cfg(test)]
     pub fn max_tokens(&self) -> Option<u32> {
         self.http().and_then(|http| http.max_tokens)
     }
 
+    #[cfg(test)]
     pub fn temperature(&self) -> Option<f32> {
         self.http().and_then(|http| http.temperature)
     }

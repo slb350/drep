@@ -101,7 +101,7 @@ fn providers_keep_their_order_with_their_own_model_and_endpoint() {
     let seen: Vec<(&str, &str)> = chain
         .providers()
         .iter()
-        .map(|p| (p.model(), p.endpoint()))
+        .map(|p| (p.model(), p.location()))
         .collect();
     assert_eq!(
         seen,

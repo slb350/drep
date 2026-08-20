@@ -115,7 +115,7 @@ fn write_provider_block<W: Write>(out: &mut W, uses: &[ProviderUse]) -> Result<(
             "  {}. {} at {}: {} file(s)",
             use_.index + 1,
             use_.model,
-            use_.endpoint,
+            use_.location,
             use_.files
         )?;
     }
@@ -268,7 +268,9 @@ fn provider_use_json(use_: &ProviderUse) -> serde_json::Value {
     json!({
         "provider": use_.index + 1,
         "model": use_.model,
-        "endpoint": use_.endpoint,
+        // Keep the published JSON field for compatibility; internally a
+        // process backend has a location rather than an HTTP endpoint.
+        "endpoint": use_.location,
         "files": use_.files,
     })
 }

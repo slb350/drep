@@ -2,7 +2,7 @@
 
 use crate::config::{BackendKind, LlmConfig};
 use crate::llm::client::LlmClient;
-use crate::llm::codex::{CodexClient, CodexRuntime};
+use crate::llm::codex::{CodexClient, CodexRuntime, CodexSettings};
 use crate::llm::error::LlmError;
 use crate::llm::json_parsing::Extracted;
 
@@ -14,10 +14,6 @@ pub enum ProviderBackend {
 }
 
 impl ProviderBackend {
-    pub fn new(cfg: &LlmConfig) -> Result<Self, LlmError> {
-        BackendFactory::new().build(cfg)
-    }
-
     pub fn model(&self) -> &str {
         match self {
             Self::Http(client) => client.model(),
@@ -33,9 +29,8 @@ impl ProviderBackend {
         }
     }
 
-    /// What existing reports call the endpoint. Codex uses an explicit URI-like
-    /// identity rather than pretending to call the OpenAI API.
-    pub fn display_location(&self) -> &str {
+    /// Backend-neutral location shown in reports.
+    pub fn location(&self) -> &str {
         match self {
             Self::Http(client) => client.endpoint(),
             Self::Codex(_) => "codex://chatgpt",
@@ -100,10 +95,13 @@ impl BackendFactory {
     ) -> Result<ProviderBackend, LlmError> {
         match cfg.backend {
             BackendKind::Http => LlmClient::new(cfg).map(ProviderBackend::Http),
-            BackendKind::Codex => match self.codex_runtime.get_or_insert_with(load_codex) {
-                Ok(runtime) => runtime.client(cfg).map(ProviderBackend::Codex),
-                Err(err) => Err(err.clone()),
-            },
+            BackendKind::Codex => {
+                let settings = CodexSettings::from_config(cfg)?;
+                match self.codex_runtime.get_or_insert_with(load_codex) {
+                    Ok(runtime) => Ok(ProviderBackend::Codex(runtime.client(settings))),
+                    Err(err) => Err(err.clone()),
+                }
+            }
             BackendKind::Unknown(ref name) => Err(LlmError::NotConfigured(format!(
                 "unknown LLM backend `{name}`"
             ))),
@@ -138,5 +136,26 @@ mod tests {
         }
 
         assert_eq!(calls.get(), 1);
+    }
+
+    #[test]
+    fn invalid_codex_config_is_rejected_before_the_runtime_probe() {
+        let cfg = LlmConfig {
+            backend: BackendKind::Codex,
+            model: None,
+            ..LlmConfig::default()
+        };
+        let calls = Cell::new(0);
+        let mut factory = BackendFactory::new();
+
+        let err = factory
+            .build_with(&cfg, || {
+                calls.set(calls.get() + 1);
+                Err(LlmError::NotConfigured("probe should not run".to_owned()))
+            })
+            .expect_err("the missing model is invalid locally");
+
+        assert!(err.to_string().contains("model"), "got {err}");
+        assert_eq!(calls.get(), 0);
     }
 }

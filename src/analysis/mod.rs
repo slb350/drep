@@ -8,6 +8,7 @@ pub mod code_quality;
 pub mod findings;
 pub mod payload;
 pub mod prompt;
+pub(crate) mod response_contract;
 pub mod result;
 
 #[cfg(test)]

@@ -74,10 +74,9 @@ use crate::llm::json_parsing::Extracted;
 /// structurally always valid — a `mark_down` that silently did nothing on an
 /// out-of-range index would be invisible.
 ///
-/// Model and endpoint are **not** duplicated onto this struct; they are read
-/// from the client, which is the same rule `CodeQualityAnalyzer` follows. A
-/// second copy is what lets a request go to one model while the cache key
-/// names another.
+/// The cache identity is computed once because it includes stable backend
+/// metadata such as the Codex CLI version. The model and display location stay
+/// on the backend so reporting cannot drift from the client that is used.
 #[derive(Debug)]
 pub struct Provider {
     /// `pub(crate)` for the same reason `LlmClient`'s fields are: the test
@@ -85,6 +84,7 @@ pub struct Provider {
     /// then shrink only the backoff delays, so a retry test does not spend
     /// seconds asleep. Not part of the public API.
     pub(crate) backend: ProviderBackend,
+    identity: String,
     limiter: Limiter,
     /// Why this provider was demoted, set once. `OnceLock` rather than a
     /// `Mutex<Option<_>>` because the value is write-once and read-often, and
@@ -102,9 +102,9 @@ impl Provider {
         self.backend.model()
     }
 
-    /// The base URL this provider talks to.
-    pub fn endpoint(&self) -> &str {
-        self.backend.display_location()
+    /// The backend-neutral location this provider talks to.
+    pub fn location(&self) -> &str {
+        self.backend.location()
     }
 
     /// The concurrency budget for this provider's backend.
@@ -161,7 +161,7 @@ impl Provider {
         cache.key(
             system_prompt,
             user_content,
-            &self.backend.identity(),
+            &self.identity,
             self.model(),
             self.backend.request_identity(),
             self.backend.temperature(),
@@ -170,8 +170,10 @@ impl Provider {
 
     #[cfg(test)]
     pub(crate) fn for_test(backend: ProviderBackend, max_concurrent: usize) -> Self {
+        let identity = backend.identity();
         Self {
             backend,
+            identity,
             limiter: Limiter::new(max_concurrent),
             down: OnceLock::new(),
             served: AtomicUsize::new(0),
@@ -283,8 +285,10 @@ impl ProviderChain {
             let backend = factory
                 .build(cfg)
                 .map_err(|err| LlmError::NotConfigured(format!("[[llm]] #{}: {err}", index + 1)))?;
+            let identity = backend.identity();
             providers.push(Provider {
                 backend,
+                identity,
                 limiter: Limiter::new(cfg.max_concurrent),
                 down: OnceLock::new(),
                 served: AtomicUsize::new(0),

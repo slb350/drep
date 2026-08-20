@@ -37,6 +37,7 @@ use serde_json::Value;
 use crate::analysis::findings::{Finding, LlmSeverity};
 use crate::analysis::payload;
 use crate::analysis::prompt::build_analysis_prompt;
+use crate::analysis::response_contract::{CATEGORY, ISSUES, LINE, MESSAGE, SEVERITY, SUGGESTION};
 use crate::analysis::result::{AnalysisResult, FailureReason, ProviderFailure};
 use crate::diff::hunks::Hunk;
 use crate::languages;
@@ -283,7 +284,7 @@ fn parse_response(
 
     // The response shape is `{"issues": [...], "summary": "..."}`. Anything
     // else is malformed, and the whole file is unanalyzed.
-    let Some(issues) = value.get("issues").and_then(Value::as_array) else {
+    let Some(issues) = value.get(ISSUES).and_then(Value::as_array) else {
         // Truncation wins over "no `issues` array": a response cut off before
         // it reached `issues` has no array *because* it was truncated, and
         // reporting that as a malformed record hides the real cause.
@@ -346,7 +347,7 @@ fn parse_response(
 fn parse_issue(issue: &Value, payload: &payload::Payload, file_path: &str) -> IssueOutcome {
     // `line` must be a positive integer. A missing field, a string,
     // a float, or a non-positive number are all malformed.
-    let Some(line) = issue.get("line").and_then(Value::as_u64) else {
+    let Some(line) = issue.get(LINE).and_then(Value::as_u64) else {
         return IssueOutcome::Malformed("missing or non-integer `line`".to_owned());
     };
     // `Value::as_u64` already rejects non-integers; the only
@@ -367,7 +368,7 @@ fn parse_issue(issue: &Value, payload: &payload::Payload, file_path: &str) -> Is
     // else is malformed: we cannot map it to a `Severity`, and we do not
     // silently coerce. The vocabulary lives on `LlmSeverity` so the prompt
     // and this parser cannot list different levels.
-    let Some(severity_str) = issue.get("severity").and_then(Value::as_str) else {
+    let Some(severity_str) = issue.get(SEVERITY).and_then(Value::as_str) else {
         return IssueOutcome::Malformed("missing `severity`".to_owned());
     };
     let Ok(severity) = severity_str.parse::<LlmSeverity>() else {
@@ -377,7 +378,7 @@ fn parse_issue(issue: &Value, payload: &payload::Payload, file_path: &str) -> Is
 
     // `message` is the only remaining required field. Missing or
     // non-string is malformed.
-    let Some(message) = issue.get("message").and_then(Value::as_str) else {
+    let Some(message) = issue.get(MESSAGE).and_then(Value::as_str) else {
         return IssueOutcome::Malformed("missing or non-string `message`".to_owned());
     };
 
@@ -386,7 +387,7 @@ fn parse_issue(issue: &Value, payload: &payload::Payload, file_path: &str) -> Is
     // the two, so `"category": 7` was reported as the finding kind "unknown" -
     // a response we demonstrably did not understand, recorded as understood and
     // then cached for the whole TTL. Same rule `severity` and `message` follow.
-    let kind = match issue.get("category") {
+    let kind = match issue.get(CATEGORY) {
         None => "unknown".to_owned(),
         Some(Value::String(text)) => text.clone(),
         Some(_) => return IssueOutcome::Malformed("non-string `category`".to_owned()),
@@ -396,7 +397,7 @@ fn parse_issue(issue: &Value, payload: &payload::Payload, file_path: &str) -> Is
     // `suggestion` is optional on the same terms. Absent or empty → `None`, not
     // `Some("")`: an empty suggestion is not a suggestion. A present non-string
     // one is malformed rather than silently absent.
-    let suggestion = match issue.get("suggestion") {
+    let suggestion = match issue.get(SUGGESTION) {
         None => None,
         Some(Value::String(text)) if text.is_empty() => None,
         Some(Value::String(text)) => Some(text.clone()),

@@ -25,6 +25,9 @@
 //! code the model was never shown.
 
 use crate::analysis::findings::LlmSeverity;
+use crate::analysis::response_contract::{
+    CATEGORY, CODE_SNIPPET, ISSUES, LINE, MESSAGE, SEVERITY, SUGGESTION, SUMMARY,
+};
 use crate::languages::spec::LanguageSupport;
 
 /// Build the code-quality system prompt for one language.
@@ -42,6 +45,14 @@ pub fn build_analysis_prompt(language: &LanguageSupport) -> String {
     // Rendered from `LlmSeverity::ALL`, so the levels the prompt asks for and
     // the levels the parser accepts are the same list by construction.
     let severities = LlmSeverity::alternation();
+    let issues = ISSUES;
+    let summary = SUMMARY;
+    let line = LINE;
+    let severity = SEVERITY;
+    let category = CATEGORY;
+    let message = MESSAGE;
+    let suggestion = SUGGESTION;
+    let code_snippet = CODE_SNIPPET;
     // The template is shaped so the conventions block, when empty, leaves
     // no stray heading and no doubled blank line. The newline after the
     // placeholder is the only one that exists in the template, so an
@@ -83,23 +94,23 @@ pub fn build_analysis_prompt(language: &LanguageSupport) -> String {
          \n\
          Return your analysis as valid JSON matching this exact schema:\n\
          {{\n\
-           \"issues\": [\n\
+           \"{issues}\": [\n\
              {{\n\
-               \"line\": <line_number>,\n\
-               \"severity\": \"<{severities}>\",\n\
-               \"category\": \"<bug|security|best-practice|performance|style|maintainability>\",\n\
-               \"message\": \"<clear description of the issue>\",\n\
-               \"suggestion\": \"<specific recommendation for fixing>\",\n\
-               \"code_snippet\": \"<the problematic code>\"\n\
+               \"{line}\": <line_number>,\n\
+               \"{severity}\": \"<{severities}>\",\n\
+               \"{category}\": \"<bug|security|best-practice|performance|style|maintainability>\",\n\
+               \"{message}\": \"<clear description of the issue>\",\n\
+               \"{suggestion}\": \"<specific recommendation for fixing>\",\n\
+               \"{code_snippet}\": \"<the problematic code>\"\n\
              }}\n\
            ],\n\
-           \"summary\": \"<overall assessment of code quality>\"\n\
+           \"{summary}\": \"<overall assessment of code quality>\"\n\
          }}\n\
          \n\
          If no issues are found, return:\n\
          {{\n\
-           \"issues\": [],\n\
-           \"summary\": \"No significant issues found. Code quality looks good.\"\n\
+           \"{issues}\": [],\n\
+           \"{summary}\": \"No significant issues found. Code quality looks good.\"\n\
          }}\n"
     )
 }

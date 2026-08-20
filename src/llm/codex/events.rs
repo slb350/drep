@@ -1,7 +1,9 @@
 //! Parse the owned subset of the Codex CLI's JSONL event protocol.
 
+use std::borrow::Cow;
 use std::io::{BufRead, BufReader, Read};
 
+use serde::Deserialize;
 use serde_json::Value;
 use thiserror::Error;
 
@@ -56,14 +58,10 @@ pub(crate) fn parse_jsonl(input: impl Read) -> Result<Value, EventError> {
         if line.iter().all(u8::is_ascii_whitespace) {
             continue;
         }
-        let event: Value =
-            serde_json::from_slice(&line).map_err(|err| EventError::MalformedLine {
-                line: line_number,
-                message: err.to_string(),
-            })?;
-        let kind = event
-            .get("type")
-            .and_then(Value::as_str)
+        let header: EventHeader<'_> = decode_line(&line, line_number)?;
+        let kind = header
+            .kind
+            .as_deref()
             .ok_or_else(|| EventError::UnknownEvent("(missing)".to_owned()))?;
 
         if turn_completed {
@@ -76,10 +74,11 @@ pub(crate) fn parse_jsonl(input: impl Read) -> Result<Value, EventError> {
         match kind {
             "thread.started" | "turn.started" => {}
             "item.started" | "item.updated" | "item.completed" => {
-                let item = event.get("item").unwrap_or(&Value::Null);
+                let event: ItemEvent<'_> = decode_line(&line, line_number)?;
+                let item = event.item;
                 let item_kind = item
-                    .get("type")
-                    .and_then(Value::as_str)
+                    .as_ref()
+                    .and_then(|item| item.kind.as_deref())
                     .unwrap_or("(missing)");
                 match item_kind {
                     "reasoning" | "todo_list" => {}
@@ -89,10 +88,9 @@ pub(crate) fn parse_jsonl(input: impl Read) -> Result<Value, EventError> {
                             return Err(EventError::DuplicateFinalMessage);
                         }
                         let text = item
-                            .get("text")
-                            .and_then(Value::as_str)
+                            .and_then(|item| item.text)
                             .ok_or_else(|| EventError::MalformedFinal("missing text".to_owned()))?;
-                        final_message = Some(text.to_owned());
+                        final_message = Some(text.into_owned());
                     }
                     other => return Err(EventError::ForbiddenItem(other.to_owned())),
                 }
@@ -104,17 +102,12 @@ pub(crate) fn parse_jsonl(input: impl Read) -> Result<Value, EventError> {
                 turn_completed = true;
             }
             "error" | "turn.failed" => {
+                let event: ErrorEvent<'_> = decode_line(&line, line_number)?;
                 let message = event
-                    .get("message")
-                    .and_then(Value::as_str)
-                    .or_else(|| {
-                        event
-                            .get("error")
-                            .and_then(|error| error.get("message"))
-                            .and_then(Value::as_str)
-                    })
-                    .unwrap_or("no diagnostic message");
-                return Err(EventError::ReportedError(excerpt(message, 400)));
+                    .message
+                    .or_else(|| event.error.and_then(|error| error.message))
+                    .unwrap_or(Cow::Borrowed("no diagnostic message"));
+                return Err(EventError::ReportedError(excerpt(message.as_ref(), 400)));
             }
             other => return Err(EventError::UnknownEvent(other.to_owned())),
         }
@@ -125,4 +118,48 @@ pub(crate) fn parse_jsonl(input: impl Read) -> Result<Value, EventError> {
         return Err(EventError::MissingTurnCompletion);
     }
     serde_json::from_str(&message).map_err(|err| EventError::MalformedFinal(err.to_string()))
+}
+
+fn decode_line<'a, T: Deserialize<'a>>(
+    line: &'a [u8],
+    line_number: usize,
+) -> Result<T, EventError> {
+    serde_json::from_slice(line).map_err(|err| EventError::MalformedLine {
+        line: line_number,
+        message: err.to_string(),
+    })
+}
+
+#[derive(Deserialize)]
+struct EventHeader<'a> {
+    #[serde(rename = "type", borrow)]
+    kind: Option<Cow<'a, str>>,
+}
+
+#[derive(Deserialize)]
+struct ItemEvent<'a> {
+    #[serde(borrow)]
+    item: Option<Item<'a>>,
+}
+
+#[derive(Deserialize)]
+struct Item<'a> {
+    #[serde(rename = "type", borrow)]
+    kind: Option<Cow<'a, str>>,
+    #[serde(borrow)]
+    text: Option<Cow<'a, str>>,
+}
+
+#[derive(Deserialize)]
+struct ErrorEvent<'a> {
+    #[serde(borrow)]
+    message: Option<Cow<'a, str>>,
+    #[serde(borrow)]
+    error: Option<ErrorDetail<'a>>,
+}
+
+#[derive(Deserialize)]
+struct ErrorDetail<'a> {
+    #[serde(borrow)]
+    message: Option<Cow<'a, str>>,
 }

@@ -61,6 +61,8 @@ pub(crate) async fn run(
     let send_input = async move {
         stdin.write_all(input.as_bytes()).await?;
         stdin.shutdown().await?;
+        // Close the pipe before waiting for the child: Codex uses EOF as the
+        // end of the stdin payload, and keeping this handle alive deadlocks.
         drop(stdin);
         Ok::<(), std::io::Error>(())
     };

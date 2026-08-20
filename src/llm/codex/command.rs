@@ -3,9 +3,7 @@
 use std::collections::BTreeMap;
 use std::ffi::{OsStr, OsString};
 use std::path::Path;
-use std::sync::OnceLock;
 
-use crate::analysis::findings::LlmSeverity;
 use crate::config::ReasoningEffort;
 use thiserror::Error;
 
@@ -32,7 +30,7 @@ impl ChildEnvironment {
 
     /// Apply the allowlist to a child after clearing its inherited environment.
     pub(crate) fn apply_to(&self, command: &mut tokio::process::Command) {
-        command.env_clear().envs(self.values.iter());
+        self.apply_to_std(command.as_std_mut());
     }
 
     pub(crate) fn apply_to_std(&self, command: &mut std::process::Command) {
@@ -131,48 +129,6 @@ pub(crate) fn instructions_text(system_prompt: &str) -> String {
          - Do not use tools, commands, files, network access, apps, MCP, or subagents.\n\
          - Return only the JSON object required by the response schema.\n"
     )
-}
-
-/// Strict schema for the response shape already validated by the analyzer.
-pub(crate) fn output_schema() -> serde_json::Value {
-    serde_json::json!({
-        "type": "object",
-        "additionalProperties": false,
-        "required": ["issues", "summary"],
-        "properties": {
-            "issues": {
-                "type": "array",
-                "items": {
-                    "type": "object",
-                    "additionalProperties": false,
-                    "required": [
-                        "line", "severity", "category", "message", "suggestion", "code_snippet"
-                    ],
-                    "properties": {
-                        "line": {"type": "integer", "minimum": 1, "maximum": u32::MAX},
-                        "severity": {
-                            "type": "string",
-                            "enum": LlmSeverity::NAMES
-                        },
-                        "category": {"type": "string"},
-                        "message": {"type": "string"},
-                        "suggestion": {"type": "string"},
-                        "code_snippet": {"type": "string"}
-                    }
-                }
-            },
-            "summary": {"type": "string"}
-        }
-    })
-}
-
-/// Encoded immutable schema shared by every Codex request in the process.
-pub(crate) fn output_schema_bytes() -> &'static [u8] {
-    static SCHEMA: OnceLock<Vec<u8>> = OnceLock::new();
-    SCHEMA.get_or_init(|| {
-        serde_json::to_vec_pretty(&output_schema())
-            .expect("the in-memory Codex response schema is always serializable")
-    })
 }
 
 fn allowed_name(name: &OsStr) -> bool {

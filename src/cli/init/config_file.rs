@@ -84,6 +84,7 @@ impl Choice {
         matches!(self.backend, ChoiceBackend::Http { .. })
     }
 
+    #[cfg(test)]
     pub fn endpoint(&self) -> Option<&str> {
         match &self.backend {
             ChoiceBackend::Http { endpoint, .. } => Some(endpoint),
@@ -98,14 +99,11 @@ impl Choice {
         }
     }
 
+    #[cfg(test)]
     pub fn quirks(&self) -> Quirks {
         match &self.backend {
             ChoiceBackend::Http { quirks, .. } => *quirks,
-            ChoiceBackend::Codex => Quirks {
-                temperature: None,
-                max_tokens: None,
-                max_tokens_from_registry: false,
-            },
+            ChoiceBackend::Codex => self.preset.quirks(),
         }
     }
 }

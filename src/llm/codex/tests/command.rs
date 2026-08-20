@@ -3,10 +3,10 @@
 use std::ffi::OsString;
 use std::path::Path;
 
+use crate::analysis::response_contract::output_schema;
 use crate::config::ReasoningEffort;
 use crate::llm::codex::command::{
-    ChildEnvironment, instructions_text, invocation_args, output_schema, sensitive_name,
-    toml_override,
+    ChildEnvironment, instructions_text, invocation_args, sensitive_name, toml_override,
 };
 
 #[test]

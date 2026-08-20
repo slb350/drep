@@ -38,8 +38,9 @@ impl CodexStatus {
 /// the CLI version and the successful authentication classification cross this
 /// boundary.
 pub(crate) fn current_status() -> Result<CodexStatus, String> {
-    let environment = ChildEnvironment::current();
-    diagnostics::probe(std::path::Path::new("codex"), &environment).map_err(|err| err.to_string())
+    CodexRuntime::probe_current()
+        .map(|runtime| CodexStatus::new(runtime.cli_version))
+        .map_err(|err| err.to_string())
 }
 
 /// Process state shared by every Codex provider in one configured chain.
@@ -56,10 +57,13 @@ pub(crate) struct CodexRuntime {
 
 impl CodexRuntime {
     pub(crate) fn current() -> Result<Self, LlmError> {
+        Self::probe_current().map_err(|err| LlmError::NotConfigured(err.to_string()))
+    }
+
+    fn probe_current() -> Result<Self, diagnostics::DiagnosticError> {
         let executable = PathBuf::from("codex");
         let environment = ChildEnvironment::current();
-        let status = diagnostics::probe(&executable, &environment)
-            .map_err(|err| LlmError::NotConfigured(err.to_string()))?;
+        let status = diagnostics::probe(&executable, &environment)?;
         Ok(Self {
             executable,
             environment,
@@ -67,13 +71,51 @@ impl CodexRuntime {
         })
     }
 
-    pub(crate) fn client(&self, cfg: &LlmConfig) -> Result<CodexClient, LlmError> {
-        CodexClient::at(
-            cfg,
+    pub(crate) fn client(&self, settings: CodexSettings) -> CodexClient {
+        CodexClient::from_settings(
+            settings,
             self.executable.clone(),
             self.environment.clone(),
             self.cli_version.clone(),
         )
+    }
+}
+
+/// Provider fields validated before any Codex process is started.
+pub(crate) struct CodexSettings {
+    model: String,
+    reasoning_effort: Option<ReasoningEffort>,
+    timeout_secs: u64,
+}
+
+impl CodexSettings {
+    pub(crate) fn from_config(cfg: &LlmConfig) -> Result<Self, LlmError> {
+        if !cfg.enabled {
+            return Err(LlmError::NotConfigured(
+                "LLM is disabled in config (set `enabled = true`)".to_owned(),
+            ));
+        }
+        if cfg.backend != BackendKind::Codex {
+            return Err(LlmError::NotConfigured(
+                "Codex client requires `backend = \"codex\"`".to_owned(),
+            ));
+        }
+        let model = cfg
+            .model
+            .clone()
+            .filter(|model| !model.trim().is_empty())
+            .ok_or_else(|| LlmError::NotConfigured("LLM model is not set in config".to_owned()))?;
+        let reasoning_effort = cfg.reasoning_effort.clone();
+        if matches!(reasoning_effort, Some(ReasoningEffort::Unknown(_))) {
+            return Err(LlmError::NotConfigured(
+                "Codex reasoning_effort is not recognised".to_owned(),
+            ));
+        }
+        Ok(Self {
+            model,
+            reasoning_effort,
+            timeout_secs: cfg.timeout_secs,
+        })
     }
 }
 
@@ -99,53 +141,43 @@ impl std::fmt::Debug for CodexClient {
 }
 
 impl CodexClient {
-    /// Build against `codex` on PATH and verify its redacted diagnostic once.
-    pub fn new(cfg: &LlmConfig) -> Result<Self, LlmError> {
-        CodexRuntime::current()?.client(cfg)
-    }
-
     /// Inject process state for tests without changing PATH or the environment.
+    #[cfg(test)]
     pub(crate) fn at(
         cfg: &LlmConfig,
         executable: PathBuf,
         environment: ChildEnvironment,
         cli_version: impl Into<String>,
     ) -> Result<Self, LlmError> {
-        if !cfg.enabled {
-            return Err(LlmError::NotConfigured(
-                "LLM is disabled in config (set `enabled = true`)".to_owned(),
-            ));
-        }
-        if cfg.backend != BackendKind::Codex {
-            return Err(LlmError::NotConfigured(
-                "Codex client requires `backend = \"codex\"`".to_owned(),
-            ));
-        }
-        let model = cfg
-            .model
-            .clone()
-            .filter(|model| !model.trim().is_empty())
-            .ok_or_else(|| LlmError::NotConfigured("LLM model is not set in config".to_owned()))?;
-        let reasoning_effort = cfg.reasoning_effort.clone();
-        if matches!(reasoning_effort, Some(ReasoningEffort::Unknown(_))) {
-            return Err(LlmError::NotConfigured(
-                "Codex reasoning_effort is not recognised".to_owned(),
-            ));
-        }
+        let settings = CodexSettings::from_config(cfg)?;
         let cli_version = cli_version.into();
         if cli_version.is_empty() {
             return Err(LlmError::NotConfigured(
                 "Codex CLI diagnostic did not report a version".to_owned(),
             ));
         }
-        Ok(Self {
+        Ok(Self::from_settings(
+            settings,
             executable,
-            model,
-            reasoning_effort,
-            timeout_secs: cfg.timeout_secs,
+            environment,
+            cli_version,
+        ))
+    }
+
+    fn from_settings(
+        settings: CodexSettings,
+        executable: PathBuf,
+        environment: ChildEnvironment,
+        cli_version: String,
+    ) -> Self {
+        Self {
+            executable,
+            model: settings.model,
+            reasoning_effort: settings.reasoning_effort,
+            timeout_secs: settings.timeout_secs,
             cli_version,
             environment,
-        })
+        }
     }
 
     #[cfg(test)]
@@ -167,11 +199,13 @@ impl CodexClient {
         &self.model
     }
 
-    pub fn cli_version(&self) -> &str {
+    #[cfg(test)]
+    pub(crate) fn cli_version(&self) -> &str {
         &self.cli_version
     }
 
-    pub fn reasoning_effort(&self) -> Option<&ReasoningEffort> {
+    #[cfg(test)]
+    pub(crate) fn reasoning_effort(&self) -> Option<&ReasoningEffort> {
         self.reasoning_effort.as_ref()
     }
 
@@ -206,7 +240,11 @@ impl CodexClient {
         std::fs::write(&instructions, command::instructions_text(system_prompt)).map_err(
             |err| LlmError::NotConfigured(format!("could not write Codex instructions: {err}")),
         )?;
-        std::fs::write(&schema, command::output_schema_bytes()).map_err(|err| {
+        std::fs::write(
+            &schema,
+            crate::analysis::response_contract::output_schema_bytes(),
+        )
+        .map_err(|err| {
             LlmError::NotConfigured(format!("could not write Codex response schema: {err}"))
         })?;
 
