@@ -16,8 +16,11 @@ AGENTS.md
 *.swo
 *~
 
-# Secrets. .env holds OPENROUTER_API_KEY for the pre-push gate; .tokens is
-# 1.x's PyPI credentials and must never be committed.
+# Local provider selection. Each checkout may use a different review backend.
+drep.toml
+
+# Secrets. .env holds the pre-push provider credential; .tokens is 1.x's PyPI
+# credentials. Neither belongs in repository history.
 .env
 .tokens
 
