@@ -120,3 +120,61 @@ async fn a_configured_max_tokens_is_forwarded() {
         "a configured cap must reach the model"
     );
 }
+
+/// An absent `protocol` builds the OpenAI-compatible client, which is what keeps
+/// every config written before the field existed working unchanged.
+#[test]
+fn an_absent_protocol_builds_the_openai_client() {
+    let cfg = LlmConfig {
+        endpoint: Some("http://host/v1".into()),
+        model: Some("m".into()),
+        ..LlmConfig::default()
+    };
+    let client = LlmClient::new(&cfg).expect("builds");
+    assert_eq!(client.protocol(), open_agent::ApiProtocol::OpenAiChat);
+}
+
+/// A named protocol reaches the client. Without this the field would parse,
+/// validate, and then be silently dropped on the way to the request.
+#[test]
+fn a_named_protocol_reaches_the_client() {
+    let cfg = LlmConfig {
+        endpoint: Some("https://api.kimi.com/coding/v1".into()),
+        model: Some("k3".into()),
+        protocol: Some("anthropic".into()),
+        ..LlmConfig::default()
+    };
+    let client = LlmClient::new(&cfg).expect("builds");
+    assert_eq!(client.protocol(), open_agent::ApiProtocol::Anthropic);
+}
+
+/// `config::load` rejects an unknown name first, but `LlmClient::new` is also
+/// reachable from a hand-built `LlmConfig`. Defaulting there would post
+/// chat-completions bytes to a `/messages` endpoint.
+#[test]
+fn an_unknown_protocol_is_not_configured_rather_than_defaulted() {
+    let cfg = LlmConfig {
+        endpoint: Some("http://host/v1".into()),
+        model: Some("m".into()),
+        protocol: Some("antropic".into()),
+        ..LlmConfig::default()
+    };
+    let err = LlmClient::new(&cfg).unwrap_err();
+    assert!(
+        matches!(err, LlmError::NotConfigured(ref m) if m.contains("antropic")),
+        "expected NotConfigured naming the value, got {err:?}"
+    );
+}
+
+/// An unset temperature survives construction as `None`, which is what makes it
+/// absent from the request rather than sent as some stand-in value.
+#[test]
+fn an_unset_temperature_stays_unset_on_the_client() {
+    let cfg = LlmConfig {
+        endpoint: Some("http://host/v1".into()),
+        model: Some("m".into()),
+        ..LlmConfig::default()
+    };
+    let client = LlmClient::new(&cfg).expect("builds");
+    assert_eq!(client.temperature(), None);
+}

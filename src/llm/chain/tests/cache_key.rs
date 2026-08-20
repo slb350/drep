@@ -245,9 +245,9 @@ async fn two_providers_differing_only_in_temperature_key_differently() {
     let (cache, _dir) = temp_cache();
 
     let mut cool = cfg_for(&server, "same-model", 1);
-    cool.temperature = 0.0;
+    cool.temperature = Some(0.0);
     let mut warm = cfg_for(&server, "same-model", 1);
-    warm.temperature = 1.0;
+    warm.temperature = Some(1.0);
 
     let chain = fast_retry_chain(&[cool, warm]);
     let key_cool = chain.providers()[0].cache_key(&cache, SYSTEM, CONTENT);
@@ -256,5 +256,48 @@ async fn two_providers_differing_only_in_temperature_key_differently() {
     assert_ne!(
         key_cool, key_warm,
         "temperature changes the answer, so it must change the key"
+    );
+}
+
+/// Same endpoint, same model, two protocols. `api.minimax.io` genuinely serves
+/// `MiniMax-M3` over both `/v1` and `/anthropic/v1`, so this is the shape the
+/// key has to separate - and neither the endpoint nor the model does it.
+#[tokio::test]
+async fn two_providers_differing_only_in_protocol_key_differently() {
+    let server = server_returning_json().await;
+    let (cache, _dir) = temp_cache();
+
+    let openai = cfg_for(&server, "same-model", 1);
+    let mut anthropic = cfg_for(&server, "same-model", 1);
+    anthropic.protocol = Some("anthropic".into());
+
+    let chain = fast_retry_chain(&[openai, anthropic]);
+    let key_openai = chain.providers()[0].cache_key(&cache, SYSTEM, CONTENT);
+    let key_anthropic = chain.providers()[1].cache_key(&cache, SYSTEM, CONTENT);
+
+    assert_ne!(
+        key_openai, key_anthropic,
+        "two protocols are two requests, so they must be two keys"
+    );
+}
+
+/// An unset temperature is a different request from any set one, and
+/// `Provider::cache_key` is the single definition that has to say so.
+#[tokio::test]
+async fn an_unset_temperature_keys_differently_through_the_provider() {
+    let server = server_returning_json().await;
+    let (cache, _dir) = temp_cache();
+
+    let mut unset = cfg_for(&server, "same-model", 1);
+    unset.temperature = None;
+    let mut set = cfg_for(&server, "same-model", 1);
+    set.temperature = Some(0.2);
+
+    let chain = fast_retry_chain(&[unset, set]);
+
+    assert_ne!(
+        chain.providers()[0].cache_key(&cache, SYSTEM, CONTENT),
+        chain.providers()[1].cache_key(&cache, SYSTEM, CONTENT),
+        "omitting the parameter lets the server pick, so the answers differ"
     );
 }

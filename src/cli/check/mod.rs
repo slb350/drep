@@ -32,6 +32,7 @@ use clap::{ArgGroup, Args};
 
 use crate::analysis::findings::{self, Finding, Severity};
 use crate::analysis::result::{AnalysisResult, FailureReason, union_failures};
+use crate::auth;
 use crate::cli::{OutputFormat, severity_parser};
 use crate::config::{self, LlmConfig};
 use crate::llm::cache::Cache;
@@ -160,14 +161,41 @@ pub const CACHE_MAX_BYTES: u64 = 256 * 1024 * 1024;
 /// from one test satisfied another: an unreachable-endpoint test once exited 0
 /// because a previous test had cached a clean response for the same payload.
 pub(crate) async fn run_with(args: &CheckArgs, root: &Path, cache: Cache) -> Result<Exit> {
+    run_against(args, root, cache, &auth::default_path()?).await
+}
+
+/// `run_with`, against a named auth store.
+///
+/// The store is user-level state outside the repository, so it is a parameter
+/// for the same reason `root` is one: a test using the real one reads whatever
+/// the developer has stored, and a config that omits `api_key` would then
+/// behave differently on their machine than in CI. `init::run_with` and
+/// `auth::run_at` already thread it for that reason; this was the one command
+/// that did not.
+pub(crate) async fn run_against(
+    args: &CheckArgs,
+    root: &Path,
+    cache: Cache,
+    auth_path: &Path,
+) -> Result<Exit> {
     // Anchored on `root`, not the process cwd. `config::default_config_path()`
     // resolves against the cwd, which would make `root` a half-truth: input
     // resolution would read one directory and configuration another. The CLI
     // passes ".", so production behaviour is unchanged, and a test can point
     // the whole run at a `TempDir` without chdir-ing a shared process.
     let config_path = root.join(config::default_config_path());
-    let config = config::load(&config_path)
+    let mut config = config::load(&config_path)
         .with_context(|| format!("could not load {}", config_path.display()))?;
+
+    // Fill in the keys the file left unset from the user-level store. An
+    // explicit `api_key` in `drep.toml` always wins, so this cannot change what
+    // an existing config does; it only supplies what `drep init` stopped writing
+    // into the repository. A store that cannot be read is fatal rather than
+    // treated as empty - running the gate unauthenticated would surface as a 401
+    // per file, which reads as a broken key rather than a broken store.
+    let store = auth::AuthStore::load(auth_path)
+        .with_context(|| format!("could not read the auth store at {}", auth_path.display()))?;
+    auth::resolve(&mut config, &store);
     // The whole enabled chain, not just its head: `providers()` is the
     // failover order, and `load` has already rejected a config with none.
     // The `is_empty` guard stays because `Config` is constructible without

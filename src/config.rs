@@ -22,6 +22,7 @@
 use std::env;
 use std::path::{Path, PathBuf};
 
+use open_agent::ApiProtocol;
 use serde::Deserialize;
 use thiserror::Error;
 use toml::Value;
@@ -80,7 +81,22 @@ pub struct LlmConfig {
     pub endpoint: Option<String>,
     pub model: Option<String>,
     pub api_key: Option<String>,
-    pub temperature: f32,
+    /// The wire protocol the endpoint speaks: `"openai"` (the default) or
+    /// `"anthropic"`. Held as the raw string so an unrecognised value can be
+    /// reported by name; [`parse_protocol`] is the single definition of what
+    /// the names mean, and it defers to the SDK's own parser rather than
+    /// keeping a second table of them here.
+    pub protocol: Option<String>,
+    /// Sampling temperature, or `None` to omit the parameter entirely.
+    ///
+    /// **Unset means unset**, not 0.2. It defaulted to 0.2 while every
+    /// endpoint drep could reach accepted the parameter; several now reject
+    /// it outright - `k3` answers `only temperature 1 is allowed for this
+    /// model` with a 400, which neither fails over nor retries - so "send no
+    /// temperature" had to become expressible. A provider that wants a
+    /// deterministic review says so, and `drep init` writes it for every
+    /// preset whose model accepts one.
+    pub temperature: Option<f32>,
     pub max_tokens: Option<u32>,
     pub timeout_secs: u64,
     pub max_retries: u32,
@@ -107,6 +123,7 @@ impl std::fmt::Debug for LlmConfig {
                     .map(|_| "<redacted>")
                     .unwrap_or("None"),
             )
+            .field("protocol", &self.protocol)
             .field("temperature", &self.temperature)
             .field("max_tokens", &self.max_tokens)
             .field("timeout_secs", &self.timeout_secs)
@@ -123,7 +140,8 @@ impl Default for LlmConfig {
             endpoint: None,
             model: None,
             api_key: None,
-            temperature: 0.2,
+            protocol: None,
+            temperature: None,
             max_tokens: None,
             timeout_secs: 60,
             max_retries: 3,
@@ -163,6 +181,15 @@ pub enum ConfigError {
     #[error("[[llm]] #{} in file order: max_concurrent must be at least 1", index + 1)]
     ZeroConcurrency { index: usize },
 
+    /// Rejected rather than defaulted: falling back to `openai` would post
+    /// chat-completions bytes to a `/messages` endpoint, and the resulting 404
+    /// reads as "the provider is down" rather than "this line has a typo".
+    #[error(
+        "[[llm]] #{} in file order: unknown protocol `{value}`; expected `openai` or `anthropic`",
+        index + 1
+    )]
+    UnknownProtocol { index: usize, value: String },
+
     #[error(
         "{0} declares no `[[llm]]` provider; drep 2.x has no deterministic-only mode. \
          Run `drep init` to write one."
@@ -182,6 +209,20 @@ pub enum ConfigError {
 /// path, so changing it here would break the contract with the init command.
 pub fn default_config_path() -> PathBuf {
     PathBuf::from("drep.toml")
+}
+
+/// Parses a `protocol =` value, or `None` when it names nothing the SDK speaks.
+///
+/// The single definition of what a protocol name means, and it owns none of the
+/// names: [`ApiProtocol::from_wire`] is the SDK's own parser, so drep cannot
+/// come to disagree with the layer that acts on the answer. An absent value is
+/// the default protocol rather than an error, which is what keeps every config
+/// written before 0.9.0 valid.
+pub fn parse_protocol(raw: Option<&str>) -> Option<ApiProtocol> {
+    match raw {
+        None => Some(ApiProtocol::default()),
+        Some(name) => ApiProtocol::from_wire(name),
+    }
 }
 
 /// Load and validate `path`.
@@ -247,11 +288,23 @@ fn validate(config: &Config, path: &Path) -> Result<(), ConfigError> {
     // an out-of-range temperature contradicts that in the one place a user
     // would notice: they parked it precisely to stop it mattering.
     for (index, llm) in config.llm.iter().enumerate().filter(|(_, l)| l.enabled) {
-        let t = llm.temperature;
-        if !(0.0..=2.0).contains(&t) {
+        if let Some(t) = llm.temperature
+            && !(0.0..=2.0).contains(&t)
+        {
             return Err(ConfigError::Temperature {
                 index,
                 temperature: t,
+            });
+        }
+        // A misspelled protocol is rejected here rather than defaulted, because
+        // silently falling back to `openai` would send chat-completions bytes to a
+        // `/messages` endpoint and report the 404 as the endpoint being down.
+        if let Some(raw) = llm.protocol.as_deref()
+            && parse_protocol(Some(raw)).is_none()
+        {
+            return Err(ConfigError::UnknownProtocol {
+                index,
+                value: raw.to_owned(),
             });
         }
         if llm.max_concurrent == 0 {

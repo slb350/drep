@@ -56,7 +56,9 @@ The crate is `drep-ai` because `drep` was taken on crates.io. The binary is
 
 ```sh
 cd your-repo
-drep init --provider openrouter        # or local, openai, custom
+drep init                              # interactive: pick a provider, paste a key,
+                                       # choose from the models it actually serves
+drep init --provider openrouter        # or local, zai, minimax, kimi, openai, custom
 export OPENROUTER_API_KEY='...'
 ```
 
@@ -181,8 +183,23 @@ api_key = "${OPENROUTER_API_KEY}"
 timeout_secs = 1800
 ```
 
-`api_key` names an environment variable rather than holding the secret, so the
-file can be committed.
+`drep init` does not write your key into this file. Keys go to a per-machine
+store (`~/.config/drep/auth.toml`, mode 0600, keyed by endpoint), so `drep.toml`
+carries only the provider choice:
+
+```sh
+drep auth list                                   # endpoints held; never the keys
+drep auth login --provider kimi                  # paste a key, no echo
+drep auth logout --endpoint https://api.kimi.com/coding/v1
+```
+
+`api_key = "${VAR}"` still works and takes precedence over a stored key, which
+is what CI wants — there is nobody to paste anything there. `DREP_AUTH_PATH`
+points drep at a different store.
+
+By default `drep init` also adds `drep.toml` to `.gitignore`; pass
+`--no-gitignore` to commit it instead and share the provider choice with the
+repository.
 
 `[[llm]]` is an array of tables, and the order is a failover chain. Each entry
 is tried in turn: a timeout, a refused connection, a 429, a 5xx or an empty
@@ -202,8 +219,41 @@ model = "deepseek/deepseek-v4-pro-0813"
 api_key = "${OPENROUTER_API_KEY}"
 ```
 
-Other keys: `temperature`, `max_tokens` (unset by default, so a reasoning model
-is never truncated mid-thought), `max_retries`, `max_concurrent`.
+### Subscription coding plans
+
+`drep init` has presets for three of them, so a plan you already pay for can run
+the gate instead of per-token API billing:
+
+```sh
+drep init --provider zai       # GLM 5.3, OpenAI-compatible
+drep init --provider minimax   # MiniMax M3, Anthropic protocol
+drep init --provider kimi      # Kimi k3, Anthropic protocol
+```
+
+Two of those endpoints expose the Anthropic messages API rather than chat
+completions, which is what `protocol` selects:
+
+```toml
+[[llm]]
+endpoint = "https://api.minimax.io/anthropic/v1"
+model = "MiniMax-M3"
+api_key = "${MINIMAX_API_KEY}"
+protocol = "anthropic"
+```
+
+`protocol` defaults to `openai`, so an existing file needs no change. `doctor`
+tags a non-default protocol in its listing.
+
+Check the plan's own terms before pointing a commit gate at it. They are not
+uniform, and some restrict a subscription to a named list of client tools or to
+interactive use.
+
+### Other keys
+
+`temperature` (unset means the parameter is not sent at all, which is what some
+models require — `k3` and `gpt-5.6-sol` reject any value), `max_tokens` (unset
+by default, so a reasoning model is never truncated mid-thought; a few endpoints
+refuse a request without it), `max_retries`, `max_concurrent`.
 
 ## Development
 

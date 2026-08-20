@@ -53,13 +53,26 @@ tokio = { version = "1.53", features = ["process", "rt-multi-thread", "macros", 
 ignore = "0.4"
 # Phase 3: the LLM layer. The crate is `open-agent-sdk`; the library it exposes
 # is `open_agent`.
-open-agent-sdk = "0.8.0"
+# 0.9.0 adds the Anthropic `/messages` protocol and makes `temperature`
+# omittable, both of which drep requires: `kimi` and `minimax` speak Anthropic,
+# and `k3` rejects any temperature at all.
+open-agent-sdk = "0.9.0"
 futures = "0.3"
 serde = { version = "1.0", features = ["derive"] }
 thiserror = "2.0"
 toml = "1.1"
 blake3 = "1.8"
 directories = "6.0"
+# Phase 9: `drep init` reads a pasted API key without echoing it. A key in the
+# terminal's scrollback is the one place drep would otherwise leave a credential
+# in the clear, having hand-written `Debug` three times to avoid exactly that.
+rpassword = "7.5"
+# Phase 9: `drep init` asks an endpoint which models it serves, so a model name
+# is chosen from what the plan actually includes rather than typed from memory.
+# One GET, no streaming and no retry, which is why it does not go through
+# open-agent-sdk - that crate owns the completion path and its retry policy.
+# Already present transitively via the SDK, so this costs no new build.
+reqwest = { version = "0.12", features = ["json"] }
 
 [dev-dependencies]
 assert_cmd = "2.2"

@@ -133,30 +133,47 @@ impl Cache {
     }
 
     /// Compute the key for
-    /// `(system_prompt, content, endpoint, model, temperature)`.
+    /// `(system_prompt, content, endpoint, model, protocol, temperature)`.
     ///
     /// Deliberately does NOT consult `self`: the key is content-only, so two
     /// `Cache` instances at different roots produce the same key for the
     /// same inputs. That is what criterion 7 asserts and what makes the
     /// cache portable across CI runs.
+    ///
+    /// `protocol` is in the key because one endpoint can serve the same model
+    /// over both wire formats - `api.minimax.io` publishes `/v1` and
+    /// `/anthropic/v1` for `MiniMax-M3` - and the two are different requests
+    /// with different reasoning handling. Keying without it files one
+    /// protocol's answer where the other looks for its own, which is the same
+    /// defect that put `endpoint` in the key.
     pub fn key(
         &self,
         system_prompt: &str,
         content: &str,
         endpoint: &str,
         model: &str,
-        temperature: f32,
+        protocol: &str,
+        temperature: Option<f32>,
     ) -> CacheKey {
         let mut hasher = blake3::Hasher::new();
         write_field(&mut hasher, system_prompt.as_bytes());
         write_field(&mut hasher, content.as_bytes());
         write_field(&mut hasher, endpoint.as_bytes());
         write_field(&mut hasher, model.as_bytes());
+        write_field(&mut hasher, protocol.as_bytes());
         // Six decimal places is finer than the resolution of `f32` itself
         // (~7 decimal digits of precision), so two `f32` values that
         // round-trip to distinct `f32`s hash differently, while `0.2` and
         // `0.20` (the same value) hash the same.
-        let temp_str = format!("{temperature:.6}");
+        //
+        // An unset temperature is a *different request* from any set one - the
+        // field is absent and the server picks - so it gets a sentinel that no
+        // formatted float can collide with, rather than being folded onto some
+        // stand-in value.
+        let temp_str = match temperature {
+            Some(value) => format!("{value:.6}"),
+            None => "unset".to_string(),
+        };
         write_field(&mut hasher, temp_str.as_bytes());
         CacheKey(hasher.finalize().to_hex().to_string())
     }

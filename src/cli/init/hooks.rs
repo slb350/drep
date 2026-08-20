@@ -329,10 +329,11 @@ async fn locate_hooks_dir(root: &Path) -> Result<PathBuf> {
 /// a blank `core.hooksPath` back as present-but-empty, which disables hooks
 /// entirely rather than naming a directory.
 async fn run_git_config_path(root: &Path) -> Result<Option<String>> {
-    match diff::run_git(root, &["config", "--get", "--type=path", "core.hooksPath"]).await {
-        Ok(value) if value.is_empty() => Ok(None),
-        Ok(value) => Ok(Some(value)),
-        Err(diff::GitError::NonZero { code: Some(1), .. }) => Ok(None),
+    // An *empty* value reads back as present-but-blank, which drep treats as
+    // unset, so it collapses into the same `None` as "no such key".
+    match diff::git_query(root, &["config", "--get", "--type=path", "core.hooksPath"]).await {
+        Ok(Some(value)) if value.is_empty() => Ok(None),
+        Ok(value) => Ok(value),
         Err(err) => Err(anyhow!(
             "could not read core.hooksPath ({err}); refusing to install a hook that \
              may never run"

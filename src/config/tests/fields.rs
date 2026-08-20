@@ -33,7 +33,12 @@ max_concurrent = 8
     assert_eq!(llm.endpoint.as_deref(), Some("http://localhost:11434/v1"));
     assert_eq!(llm.model.as_deref(), Some("qwen3:8b"));
     assert_eq!(llm.api_key.as_deref(), Some("literal-secret"));
-    assert!((llm.temperature - 0.7).abs() < f32::EPSILON);
+    assert!(
+        llm.temperature
+            .is_some_and(|t| (t - 0.7).abs() < f32::EPSILON),
+        "an explicit temperature survives the round trip, got {:?}",
+        llm.temperature
+    );
     assert_eq!(llm.max_tokens, Some(4096));
     assert_eq!(llm.timeout_secs, 120);
     assert_eq!(llm.max_retries, 5);
@@ -58,7 +63,16 @@ model = "qwen3:8b"
     assert_eq!(llm.model.as_deref(), Some("qwen3:8b"));
     assert!(llm.endpoint.is_none());
     assert!(llm.api_key.is_none());
-    assert!((llm.temperature - 0.2).abs() < f32::EPSILON, "default 0.2");
+    assert_eq!(
+        llm.temperature, None,
+        "an absent temperature is None, not a default value: the parameter is then \
+         omitted from the request entirely, which is the only thing that works against a \
+         model that rejects it"
+    );
+    assert_eq!(
+        llm.protocol, None,
+        "absent protocol means the default, openai"
+    );
     assert_eq!(llm.max_tokens, None, "absent max_tokens is None, not 0");
     assert_eq!(llm.timeout_secs, 60, "default timeout");
     assert_eq!(llm.max_retries, 3, "default max_retries");
@@ -152,4 +166,94 @@ fn debug_redacts_the_api_key() {
         format!("{absent:?}").contains("None"),
         "an absent key reads as absent, not as redacted"
     );
+}
+
+#[test]
+fn a_protocol_name_is_read_and_parsed() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let path = write_config(
+        &temp,
+        r#"
+[[llm]]
+model = "k3"
+endpoint = "https://api.kimi.com/coding/v1"
+protocol = "anthropic"
+"#,
+    );
+
+    let config = load(&path).expect("load");
+    assert_eq!(config.llm[0].protocol.as_deref(), Some("anthropic"));
+    assert_eq!(
+        crate::config::parse_protocol(config.llm[0].protocol.as_deref()),
+        Some(open_agent::ApiProtocol::Anthropic)
+    );
+}
+
+#[test]
+fn an_absent_protocol_parses_as_the_default_rather_than_failing() {
+    // What keeps every file written before this feature valid. A `None` return
+    // here would make an unannotated provider unloadable.
+    assert_eq!(
+        crate::config::parse_protocol(None),
+        Some(open_agent::ApiProtocol::OpenAiChat)
+    );
+}
+
+#[test]
+fn a_protocol_name_is_matched_case_insensitively() {
+    assert_eq!(
+        crate::config::parse_protocol(Some("Anthropic")),
+        Some(open_agent::ApiProtocol::Anthropic)
+    );
+}
+
+#[test]
+fn an_unknown_protocol_is_rejected_by_name_and_position() {
+    // Defaulting instead would post chat-completions bytes to a `/messages`
+    // endpoint, and the 404 reads as the provider being down rather than as a
+    // typo on this line.
+    let temp = tempfile::tempdir().expect("tempdir");
+    let path = write_config(
+        &temp,
+        r#"
+[[llm]]
+model = "a"
+endpoint = "http://a/v1"
+
+[[llm]]
+model = "b"
+endpoint = "http://b/v1"
+protocol = "antropic"
+"#,
+    );
+
+    let err = load(&path).expect_err("an unknown protocol is fatal");
+    let message = err.to_string();
+    assert!(message.contains("antropic"), "names the value: {message}");
+    assert!(message.contains("#2"), "names the position: {message}");
+}
+
+#[test]
+fn a_disabled_entrys_unknown_protocol_does_not_refuse_the_file() {
+    // `enabled = false` means the entry is inert. Refusing to load because a
+    // parked provider has a typo contradicts that in the one place a user would
+    // notice - they parked it precisely to stop it mattering.
+    let temp = tempfile::tempdir().expect("tempdir");
+    let path = write_config(
+        &temp,
+        r#"
+[[llm]]
+enabled = false
+model = "parked"
+endpoint = "http://a/v1"
+protocol = "nonsense"
+
+[[llm]]
+model = "live"
+endpoint = "http://b/v1"
+"#,
+    );
+
+    let config = load(&path).expect("a parked entry is inert");
+    assert_eq!(config.providers().len(), 1);
 }

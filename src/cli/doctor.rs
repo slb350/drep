@@ -279,6 +279,17 @@ fn write_llm_section<W: Write>(out: &mut W, args: &DoctorArgs, root: &Path) -> R
     // line reading "[1] cloud-model" has to name the same provider this listing
     // calls 1, and numbering the file would make the two disagree the moment
     // anything above was parked.
+    // Read once for the whole listing. A store that cannot be read is reported
+    // rather than fatal: `doctor` exists to describe a broken setup, so failing
+    // out here would suppress everything else it had to say.
+    let store = match crate::auth::AuthStore::load_default() {
+        Ok(store) => store,
+        Err(err) => {
+            writeln!(out, "  The auth store could not be read: {err}")?;
+            crate::auth::AuthStore::new()
+        }
+    };
+
     let mut enabled_count = 0usize;
     for entry in &providers {
         let model = entry
@@ -289,11 +300,23 @@ fn write_llm_section<W: Write>(out: &mut W, args: &DoctorArgs, root: &Path) -> R
             .get("endpoint")
             .and_then(|v| v.as_str())
             .unwrap_or("(no endpoint set)");
+        // Shown only when it is not the default, so an OpenAI-compatible listing
+        // keeps the line it has always had. It is worth showing at all because
+        // the protocol decides the path a request is posted to, and a wrong one
+        // reports as the endpoint being down.
+        let protocol = match entry.get("protocol").and_then(|v| v.as_str()) {
+            None | Some("openai") => String::new(),
+            Some(other) => format!(" [{other}]"),
+        };
         if entry_is_enabled(entry) {
             enabled_count += 1;
-            writeln!(out, "  {enabled_count}. {model} at {endpoint}")?;
+            writeln!(out, "  {enabled_count}. {model} at {endpoint}{protocol}")?;
+            writeln!(out, "     key: {}", key_source_line(entry, &store))?;
         } else {
-            writeln!(out, "  -  {model} at {endpoint} (disabled - skipped)")?;
+            writeln!(
+                out,
+                "  -  {model} at {endpoint}{protocol} (disabled - skipped)"
+            )?;
         }
     }
     writeln!(out, "  {}", failover_line(enabled_count))?;
@@ -320,6 +343,33 @@ fn write_llm_section<W: Write>(out: &mut W, args: &DoctorArgs, root: &Path) -> R
     match config::load(&config_path) {
         Err(config::ConfigError::EnvVarUnset(_, _)) => Ok(()),
         other => report_load_result(out, &config_path, other),
+    }
+}
+
+/// Where this provider's key will come from, as `doctor` phrases it.
+///
+/// Read from the *raw* tree for the same reason the model and endpoint are: a
+/// `${VAR}` shows as itself rather than being swallowed by the
+/// variable-not-set error, so the report describes the file the user wrote.
+///
+/// The distinction is worth a line because "works on my machine" and "works in
+/// CI" are different configurations, and once a stored key exists the
+/// difference is invisible in `drep.toml`.
+fn key_source_line(entry: &Value, store: &crate::auth::AuthStore) -> String {
+    let api_key = entry.get("api_key").and_then(|v| v.as_str());
+    let endpoint = entry.get("endpoint").and_then(|v| v.as_str());
+
+    // `enabled` is passed as true because this line is only printed for entries
+    // the listing has already established are in the chain.
+    let source = crate::auth::source_of(api_key, endpoint, true, store);
+
+    match (source, api_key) {
+        // The reference is shown verbatim - that is the whole reason doctor
+        // reads the raw tree rather than the loaded config.
+        (crate::auth::KeySource::Config, Some(reference)) => {
+            format!("{reference} ({})", crate::auth::KeySource::Config.label())
+        }
+        (source, _) => source.label().to_string(),
     }
 }
 

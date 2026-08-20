@@ -7,6 +7,7 @@
 //! Each command owns its arguments in its own module, so a command's contract
 //! and its behaviour stay together as the later phases fill them in.
 
+pub mod auth;
 pub mod check;
 pub mod doctor;
 pub mod init;
@@ -20,6 +21,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 use crate::analysis::findings::Severity;
 
 use crate::Exit;
+use auth::AuthArgs;
 use check::CheckArgs;
 use doctor::DoctorArgs;
 use init::InitArgs;
@@ -47,6 +49,8 @@ pub enum Command {
     Doctor(DoctorArgs),
     /// Write the git hooks and LLM endpoint configuration.
     Init(InitArgs),
+    /// Manage the API keys drep holds for this machine.
+    Auth(AuthArgs),
 }
 
 /// Parse a `--fail-on` severity, for whichever command takes one.
@@ -77,6 +81,7 @@ pub async fn run(cli: Cli) -> Result<Exit> {
         Command::LintDocs(args) => lint_docs::run(&args, std::path::Path::new(".")).await,
         Command::Doctor(args) => doctor::run(&args),
         Command::Init(args) => init::run(&args).await,
+        Command::Auth(args) => auth::run(&args),
     }
 }
 
@@ -190,13 +195,13 @@ mod tests {
         // guarantee it was really protecting: no subcommand may reach `run`
         // and fall through to a clean exit. `run`'s match is exhaustive over
         // `Command`, so the compiler enforces it - this asserts the enum is
-        // still the four commands the contract names, so a fifth added
-        // without an arm is a compile error rather than a silent pass.
+        // still the commands the contract names, so one added without an arm
+        // is a compile error rather than a silent pass.
         let names: Vec<String> = Cli::command()
             .get_subcommands()
             .map(|c| c.get_name().to_owned())
             .collect();
-        assert_eq!(names, vec!["check", "lint-docs", "doctor", "init"]);
+        assert_eq!(names, vec!["check", "lint-docs", "doctor", "init", "auth"]);
     }
 
     #[test]

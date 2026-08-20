@@ -29,7 +29,14 @@ fn entry_older_than_ttl_is_a_miss() {
     let temp = tempfile::tempdir().expect("tempdir");
     let cache = Cache::new(temp.path().to_path_buf(), 30, 1024 * 1024);
 
-    let key = cache.key("sys", "content", "http://endpoint/v1", "model", 0.2);
+    let key = cache.key(
+        "sys",
+        "content",
+        "http://endpoint/v1",
+        "model",
+        "openai",
+        Some(0.2),
+    );
     cache.put(&key, &json!({"x": 1})).expect("put");
     let path = cache.entry_path(&key);
 
@@ -53,7 +60,14 @@ fn entry_within_ttl_is_a_hit() {
     let temp = tempfile::tempdir().expect("tempdir");
     let cache = Cache::new(temp.path().to_path_buf(), 30, 1024 * 1024);
 
-    let key = cache.key("sys", "content", "http://endpoint/v1", "model", 0.2);
+    let key = cache.key(
+        "sys",
+        "content",
+        "http://endpoint/v1",
+        "model",
+        "openai",
+        Some(0.2),
+    );
     let value = json!({"answer": 42});
     cache.put(&key, &value).expect("put");
 
@@ -73,7 +87,14 @@ fn reading_expired_entry_removes_it_from_disk() {
     let temp = tempfile::tempdir().expect("tempdir");
     let cache = Cache::new(temp.path().to_path_buf(), 30, 1024 * 1024);
 
-    let key = cache.key("sys", "content", "http://endpoint/v1", "model", 0.2);
+    let key = cache.key(
+        "sys",
+        "content",
+        "http://endpoint/v1",
+        "model",
+        "openai",
+        Some(0.2),
+    );
     cache.put(&key, &json!({"x": 1})).expect("put");
     let path = cache.entry_path(&key);
 
@@ -111,7 +132,14 @@ fn age_equal_to_ttl_is_a_hit_not_a_miss() {
     // TTL = Duration::ZERO; the boundary is exactly age 0.
     let cache = Cache::new(temp.path().to_path_buf(), 0, 1024 * 1024);
 
-    let key = cache.key("sys", "content", "http://endpoint/v1", "model", 0.2);
+    let key = cache.key(
+        "sys",
+        "content",
+        "http://endpoint/v1",
+        "model",
+        "openai",
+        Some(0.2),
+    );
     let value = json!({"x": 1});
     cache.put(&key, &value).expect("put");
 

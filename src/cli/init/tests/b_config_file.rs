@@ -6,7 +6,7 @@ use crate::cli::init::presets;
 #[test]
 fn openrouter_render_parses_and_carries_literal_api_key_reference() {
     let preset = presets::preset("openrouter").expect("openrouter");
-    let body = config_file::render(preset, "m", "http://e/v1");
+    let body = super::support::render_one(preset, "m", "http://e/v1");
 
     let value: toml::Value = toml::from_str(&body).expect("renders as valid TOML");
     let entries = value
@@ -25,7 +25,7 @@ fn openrouter_render_parses_and_carries_literal_api_key_reference() {
 #[test]
 fn local_render_omits_api_key_and_timeout_secs_but_openrouter_has_both() {
     let local = presets::preset("local").expect("local");
-    let local_body = config_file::render(local, "m", "http://e/v1");
+    let local_body = super::support::render_one(local, "m", "http://e/v1");
     let local_value: toml::Value = toml::from_str(&local_body).expect("local parses");
     let local_entry = &local_value
         .get("llm")
@@ -41,7 +41,7 @@ fn local_render_omits_api_key_and_timeout_secs_but_openrouter_has_both() {
     );
 
     let openrouter = presets::preset("openrouter").expect("openrouter");
-    let or_body = config_file::render(openrouter, "m", "http://e/v1");
+    let or_body = super::support::render_one(openrouter, "m", "http://e/v1");
     let or_value: toml::Value = toml::from_str(&or_body).expect("openrouter parses");
     let or_entry = &or_value
         .get("llm")
@@ -73,7 +73,7 @@ fn local_render_omits_api_key_and_timeout_secs_but_openrouter_has_both() {
 #[test]
 fn rendered_config_loads_through_config_load() {
     let preset = presets::preset("local").expect("local");
-    let body = config_file::render(preset, "m", "http://e/v1");
+    let body = super::support::render_one(preset, "m", "http://e/v1");
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("drep.toml");
     std::fs::write(&path, body).expect("write");
@@ -94,7 +94,7 @@ fn rendered_config_loads_through_config_load() {
 #[test]
 fn render_names_the_api_key_env_var_rather_than_the_secret() {
     let preset = presets::preset("openrouter").expect("openrouter");
-    let body = config_file::render(preset, "m", "http://e/v1");
+    let body = super::support::render_one(preset, "m", "http://e/v1");
 
     assert!(
         body.contains(r#"api_key = "${OPENROUTER_API_KEY}""#),
@@ -113,7 +113,7 @@ fn render_names_the_api_key_env_var_rather_than_the_secret() {
 fn render_escapes_quote_and_backslash_in_model_names() {
     let preset = presets::preset("local").expect("local");
     let nasty = "a\"b\\c";
-    let body = config_file::render(preset, nasty, "http://e/v1");
+    let body = super::support::render_one(preset, nasty, "http://e/v1");
     let value: toml::Value = toml::from_str(&body).expect("still parses as TOML");
     let entry = &value.get("llm").and_then(|v| v.as_array()).expect("array")[0];
     assert_eq!(
@@ -187,9 +187,10 @@ fn a_rendered_config_always_parses_whatever_the_model_and_endpoint_contain() {
 
     for value in nasty {
         for (model, endpoint) in [(value, "http://h/v1"), ("m", value)] {
-            let body = crate::cli::init::config_file::render(preset, model, endpoint);
-            let parsed: toml::Value = toml::from_str(&body)
-                .unwrap_or_else(|e| panic!("render({model:?}, {endpoint:?}) is not TOML: {e}"));
+            let body = super::support::render_one(preset, model, endpoint);
+            let parsed: toml::Value = toml::from_str(&body).unwrap_or_else(|e| {
+                panic!("super::support::render_one({model:?}, {endpoint:?}) is not TOML: {e}")
+            });
 
             let entry = &parsed["llm"].as_array().expect("array")[0];
             assert_eq!(

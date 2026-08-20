@@ -25,7 +25,14 @@ fn put_then_get_round_trips_exact_json_value() {
     let temp = tempfile::tempdir().expect("tempdir");
     let cache = Cache::new(temp.path().to_path_buf(), 30, 1024 * 1024);
 
-    let key = cache.key("sys", "content", "http://endpoint/v1", "model", 0.2);
+    let key = cache.key(
+        "sys",
+        "content",
+        "http://endpoint/v1",
+        "model",
+        "openai",
+        Some(0.2),
+    );
     let value = json!({
         "findings": [
             {"severity": "high", "line": 42, "message": "bug"},
@@ -49,7 +56,14 @@ fn get_on_absent_key_is_none() {
     let temp = tempfile::tempdir().expect("tempdir");
     let cache = Cache::new(temp.path().to_path_buf(), 30, 1024 * 1024);
 
-    let key = cache.key("sys", "never-written", "http://endpoint/v1", "model", 0.2);
+    let key = cache.key(
+        "sys",
+        "never-written",
+        "http://endpoint/v1",
+        "model",
+        "openai",
+        Some(0.2),
+    );
     assert!(
         cache.get(&key).is_none(),
         "an absent key must be a miss, not an error"
@@ -63,7 +77,14 @@ fn get_on_corrupt_entry_is_none() {
     let temp = tempfile::tempdir().expect("tempdir");
     let cache = Cache::new(temp.path().to_path_buf(), 30, 1024 * 1024);
 
-    let key = cache.key("sys", "content", "http://endpoint/v1", "model", 0.2);
+    let key = cache.key(
+        "sys",
+        "content",
+        "http://endpoint/v1",
+        "model",
+        "openai",
+        Some(0.2),
+    );
     let path = cache.entry_path(&key);
     write_raw(&path, b"this is not JSON {{{");
 
@@ -84,7 +105,14 @@ fn get_when_entry_path_cannot_be_read_is_none() {
     let temp = tempfile::tempdir().expect("tempdir");
     let cache = Cache::new(temp.path().to_path_buf(), 30, 1024 * 1024);
 
-    let key = cache.key("sys", "content", "http://endpoint/v1", "model", 0.2);
+    let key = cache.key(
+        "sys",
+        "content",
+        "http://endpoint/v1",
+        "model",
+        "openai",
+        Some(0.2),
+    );
     let value = json!({"x": 1});
     cache.put(&key, &value).expect("put");
 
@@ -109,7 +137,14 @@ fn put_creates_the_shard_directory_when_absent() {
     let temp = tempfile::tempdir().expect("tempdir");
     let cache = Cache::new(temp.path().to_path_buf(), 30, 1024 * 1024);
 
-    let key = cache.key("sys", "content", "http://endpoint/v1", "model", 0.2);
+    let key = cache.key(
+        "sys",
+        "content",
+        "http://endpoint/v1",
+        "model",
+        "openai",
+        Some(0.2),
+    );
     let shard = &key.as_hex()[..2];
     let shard_path = temp.path().join(shard);
     assert!(
@@ -137,8 +172,22 @@ fn two_keys_coexist_on_disk() {
     let temp = tempfile::tempdir().expect("tempdir");
     let cache = Cache::new(temp.path().to_path_buf(), 30, 1024 * 1024);
 
-    let k1 = cache.key("sys", "alpha", "http://endpoint/v1", "model", 0.2);
-    let k2 = cache.key("sys", "beta", "http://endpoint/v1", "model", 0.2);
+    let k1 = cache.key(
+        "sys",
+        "alpha",
+        "http://endpoint/v1",
+        "model",
+        "openai",
+        Some(0.2),
+    );
+    let k2 = cache.key(
+        "sys",
+        "beta",
+        "http://endpoint/v1",
+        "model",
+        "openai",
+        Some(0.2),
+    );
     cache.put(&k1, &json!({"which": 1})).expect("put k1");
     cache.put(&k2, &json!({"which": 2})).expect("put k2");
 
@@ -162,7 +211,14 @@ fn put_over_existing_key_replaces_value() {
     let temp = tempfile::tempdir().expect("tempdir");
     let cache = Cache::new(temp.path().to_path_buf(), 30, 1024 * 1024);
 
-    let key = cache.key("sys", "content", "http://endpoint/v1", "model", 0.2);
+    let key = cache.key(
+        "sys",
+        "content",
+        "http://endpoint/v1",
+        "model",
+        "openai",
+        Some(0.2),
+    );
     cache.put(&key, &json!({"version": 1})).expect("put v1");
     cache.put(&key, &json!({"version": 2})).expect("put v2");
 

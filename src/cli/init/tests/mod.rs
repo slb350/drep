@@ -6,7 +6,11 @@
 //! `render` or `write` run against a plain `TempDir`.
 
 mod b_config_file;
+mod b_gitignore;
 mod b_hook_exec;
 mod b_hooks;
+mod b_plan;
 mod b_presets;
+mod b_reinit;
 mod b_run;
+mod support;

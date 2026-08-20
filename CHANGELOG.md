@@ -7,6 +7,102 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`drep init` is now interactive.** Run it with no `--provider` on a terminal
+  and it asks: which provider (the preset table, with descriptions), which
+  model and endpoint, where to get a key and then the key itself, whether to add
+  a fallback provider, which hooks, and whether to gitignore the config.
+  `--provider` still takes the scripted path unchanged; `--non-interactive`
+  forces it, and `--interactive` forces the wizard where stdin is a pipe.
+- **Keys are stored per machine instead of being exported by hand.** A pasted
+  key goes to `~/.config/drep/auth.toml` (macOS:
+  `~/Library/Application Support/dev.slb350.drep`) at mode 0600, keyed by
+  endpoint, and the rendered `drep.toml` then carries no `api_key` line at all.
+  `api_key = "${VAR}"` still works and still wins over the store, which is what
+  CI needs. `DREP_AUTH_PATH` relocates the store.
+- **`drep auth list` / `login` / `logout`**, for rotating a key, adding one for
+  a hand-edited endpoint, and checking what is held. None of them prints a key.
+- **`drep init` adds `drep.toml` to `.gitignore`** by default, asking first in
+  the wizard. `--no-gitignore` opts out. It asks git rather than reading the
+  file, so an existing rule (including a glob) is recognised, and a `drep.toml`
+  that is already *tracked* is reported with the `git rm --cached` fix instead
+  of being silently appended to a file that cannot affect it.
+- **`doctor` reports where each provider's key comes from** - the config, the
+  store, or nowhere.
+- **The wizard writes a failover chain**, not just one provider, so the
+  local-first/cloud-fallback pairing the chain was built for is reachable
+  without hand-editing the file.
+- **The wizard offers the models the endpoint actually serves.** After the key
+  is entered, `drep init` asks `GET {endpoint}/models` and lists what came back,
+  preselecting the preset's default when the endpoint still offers it and saying
+  so when it does not. A model name outside the list is still accepted, and an
+  endpoint with no listing route falls back to typing one exactly as before.
+  This replaces a hardcoded default that nothing checked, where a typo or a
+  model outside your plan surfaced as a 404 on the first push.
+- **Re-running `drep init` on a configured repository now offers to replace
+  it**, printing what is currently configured first and defaulting to no. That
+  is how you switch providers; `drep auth login` rotates a key without touching
+  the config. Non-interactive runs still refuse and name `--force`.
+
+### Fixed
+
+- **A second `drep init` half-applied itself.** The existing-config check ran at
+  the config *write*, which is after the wizard has already stored a pasted key.
+  So the second run asked every question, saved the credential, failed on
+  "drep.toml already exists" and exited 0 - leaving the store changed, the
+  config untouched and the provider not switched. The decision now happens
+  before the first question.
+
+- **Three subscription-plan providers, and a second wire protocol to reach two
+  of them.** `drep init` gains `zai`, `minimax` and `kimi` presets alongside the
+  existing four. Verified against the live endpoints on 2026-08-19 with a
+  seven-line Python fixture: z.ai `glm-5.3` returned 7 findings in 32.6s,
+  MiniMax `MiniMax-M3` 7 findings in 6.0s, Moonshot `k3` 6 findings in 28.7s.
+  All three found the `eval()` on file contents and rated it `error`.
+- **`protocol = "anthropic"`** on an `[[llm]]` block, for endpoints exposing the
+  messages API rather than chat completions. Kimi for Coding and MiniMax publish
+  their subscription tiers only that way. The default is `openai`, so no existing
+  file changes. `doctor` tags a non-default protocol in its provider listing.
+- **open-agent-sdk 0.9.0** carries the protocol itself: request path, auth
+  header, body translation and streaming vocabulary, with extended thinking
+  routed to the reasoning channel the SDK already had. Depended on from
+  crates.io; it was briefly a path dependency during development, which also
+  broke the remote mutation sweep, since `strix.local` cannot resolve a path
+  that exists only on one machine.
+
+### Changed
+
+- **`temperature` is now `Option<f32>`; an absent value sends no temperature at
+  all** rather than defaulting to 0.2. Two of the four models with presets
+  reject the parameter outright — `k3` answers `only temperature 1 is allowed
+  for this model`, `gpt-5.6-sol` refuses any value — and a 400 neither fails
+  over nor retries, so "send none" had to be expressible. `drep.toml` in this
+  repository now writes `temperature = 0.2` explicitly.
+- **The cache key includes the protocol.** `api.minimax.io` serves `MiniMax-M3`
+  over both `/v1` and `/anthropic/v1`; keying without it files one protocol's
+  answer where the other looks for its own. Existing entries miss and re-run
+  once.
+- `json_parsing`'s inline test module was split into
+  `src/llm/json_parsing/tests/` (four files, verbatim) as the file approached
+  the 600-line limit.
+
+### Fixed
+
+- **A leading `<think>...</think>` block is stripped before the JSON extraction
+  ladder runs.** MiniMax's M-series over its OpenAI-compatible endpoint, and
+  most local llama.cpp and MLX builds of Qwen, emit the whole reasoning trace
+  inline in `message.content`. Deliberation about a code review quotes code, so
+  that trace carries a fenced block of its own, and `FENCE_RE` takes the first
+  fence — the ladder selected the reasoning's sample, every later strategy
+  failed on it, and the file came back `Unparseable`, which by design neither
+  fails over nor retries. Every file would have failed with the fallback never
+  consulted.
+- `api.kimi.com/coding/v1` requires `max_tokens` and answers a bare
+  `invalid_request_error` 400 without it, which names no field. The `kimi`
+  preset sets 200,000; the rule that presets carry no cap otherwise is now
+  asserted as an exact exception list rather than a blanket prohibition.
+
 ### Fixed
 
 - The shared Rust workflow now matches each forge's actual runner coverage.

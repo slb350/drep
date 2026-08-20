@@ -108,6 +108,25 @@ async fn has_head(root: &Path) -> bool {
 /// asks git where the hooks directory is and what `core.hooksPath` holds, and
 /// a second spawn helper there would be a second place for the timeout, the
 /// stdin-null and the non-zero handling to drift.
+/// Run a git query whose answer is carried by its exit code.
+///
+/// `Ok(Some(stdout))` when git exited 0, `Ok(None)` when it exited **1**, and
+/// an error for anything else. Exit 1 is git's "no" - not ignored, not tracked,
+/// no such config key - while 2 and above mean the question could not be asked
+/// at all, and collapsing the two would report a broken repository as a clean
+/// answer.
+///
+/// Three call sites had transcribed this discrimination separately
+/// (`hooks::run_git_config_path`, and `gitignore`'s ignored and tracked
+/// probes), which is three places for the 1-versus-2 rule to drift.
+pub(crate) async fn git_query(root: &Path, args: &[&str]) -> Result<Option<String>, GitError> {
+    match run_git(root, args).await {
+        Ok(stdout) => Ok(Some(stdout)),
+        Err(GitError::NonZero { code: Some(1), .. }) => Ok(None),
+        Err(err) => Err(err),
+    }
+}
+
 pub(crate) async fn run_git(root: &Path, args: &[&str]) -> Result<String, GitError> {
     let mut command = Command::new("git");
     command

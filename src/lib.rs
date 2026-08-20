@@ -12,6 +12,7 @@
 //! thresholds over LLM output never were.
 
 pub mod analysis;
+pub mod auth;
 pub mod cli;
 pub mod config;
 pub mod diff;

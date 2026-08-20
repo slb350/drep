@@ -32,7 +32,7 @@ use std::time::Duration;
 
 use futures::StreamExt;
 use open_agent::retry::{RetryConfig, retry_with_backoff_conditional};
-use open_agent::{AgentOptions, ContentBlock, FinishReason, StreamEvent, query};
+use open_agent::{AgentOptions, ApiProtocol, ContentBlock, FinishReason, StreamEvent, query};
 use thiserror::Error;
 
 use crate::config::LlmConfig;
@@ -58,7 +58,15 @@ pub struct LlmClient {
     pub(crate) base_url: String,
     pub(crate) model: String,
     pub(crate) api_key: String,
-    pub(crate) temperature: f32,
+    /// The wire protocol this endpoint speaks. Selects the request path, the auth
+    /// header, the body shape and the streaming vocabulary together - the SDK
+    /// resolves all four from this one value.
+    pub(crate) protocol: ApiProtocol,
+    /// `None` sends no `temperature` at all. Two of the four models drep ships a
+    /// preset for reject the parameter outright, and a 400 neither fails over nor
+    /// retries, so "omit it" had to be expressible rather than approximated by a
+    /// low value.
+    pub(crate) temperature: Option<f32>,
     /// `None` means "no ceiling": since open-agent-sdk 0.7.0 an unset
     /// `max_tokens` is omitted from the request entirely and the server decides.
     /// Before 0.7.0 the builder substituted 4096, which truncated reasoning
@@ -78,6 +86,7 @@ impl std::fmt::Debug for LlmClient {
             .field("base_url", &self.base_url)
             .field("model", &self.model)
             .field("api_key", &"<redacted>")
+            .field("protocol", &self.protocol.as_str())
             .field("temperature", &self.temperature)
             .field("max_tokens", &self.max_tokens)
             .field("timeout_secs", &self.timeout_secs)
@@ -175,10 +184,17 @@ impl LlmClient {
         &self.base_url
     }
 
-    /// The sampling temperature. Part of the cache key, for the same reason
-    /// [`Self::model`] is.
-    pub fn temperature(&self) -> f32 {
+    /// The sampling temperature, or `None` when none is sent. Part of the cache
+    /// key, for the same reason [`Self::model`] is - and `None` has to key
+    /// differently from any value, because the answers genuinely differ.
+    pub fn temperature(&self) -> Option<f32> {
         self.temperature
+    }
+
+    /// The wire protocol this client speaks. For display, and for the cache key:
+    /// the same model at the same endpoint over two protocols is two requests.
+    pub fn protocol(&self) -> ApiProtocol {
+        self.protocol
     }
 
     /// Build a client from a validated `LlmConfig`.
@@ -207,6 +223,18 @@ impl LlmClient {
             .clone()
             .unwrap_or_else(|| "not-needed".to_string());
 
+        // `config::load` already rejected an unknown name, so this cannot fail for a
+        // config that came through the loader. It is re-checked rather than unwrapped
+        // because `LlmClient::new` is also reachable from tests that build an
+        // `LlmConfig` directly, and a silent default here would post
+        // chat-completions bytes to a `/messages` endpoint.
+        let protocol = crate::config::parse_protocol(cfg.protocol.as_deref()).ok_or_else(|| {
+            LlmError::NotConfigured(format!(
+                "unknown protocol `{}`; expected `openai` or `anthropic`",
+                cfg.protocol.as_deref().unwrap_or_default()
+            ))
+        })?;
+
         // max_retries is a total attempt count; the floor is 1 so a config of
         // 0 still performs exactly one attempt. See the spec's note on the
         // bogus "no exception was captured" failure.
@@ -216,6 +244,7 @@ impl LlmClient {
             base_url: endpoint,
             model,
             api_key,
+            protocol,
             temperature: cfg.temperature,
             max_tokens: cfg.max_tokens,
             timeout_secs: cfg.timeout_secs,
@@ -256,8 +285,16 @@ impl LlmClient {
             .base_url(&self.base_url)
             .api_key(&self.api_key)
             .system_prompt(system_prompt)
-            .temperature(self.temperature)
+            .protocol(self.protocol)
             .timeout(self.timeout_secs);
+
+        // Only send a temperature when one was configured. An unset value means the
+        // field is omitted entirely, which is the only thing that works against a
+        // model that rejects the parameter.
+        let builder = match self.temperature {
+            Some(temperature) => builder.temperature(temperature),
+            None => builder,
+        };
 
         // Only set a ceiling when the user asked for one. open-agent-sdk 0.7.0
         // omits `max_tokens` from the request when the setter is never called,

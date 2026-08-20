@@ -28,3 +28,4 @@ pub mod chain;
 pub mod client;
 pub mod concurrency;
 pub mod json_parsing;
+pub mod models;

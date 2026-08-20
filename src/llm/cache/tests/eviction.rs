@@ -31,8 +31,22 @@ fn evict_if_needed_removes_until_under_limit_and_reports_freed() {
     // entry out.
     let cache = Cache::new(temp.path().to_path_buf(), 30, 60);
 
-    let k1 = cache.key("sys", "alpha", "http://endpoint/v1", "model", 0.2);
-    let k2 = cache.key("sys", "beta", "http://endpoint/v1", "model", 0.2);
+    let k1 = cache.key(
+        "sys",
+        "alpha",
+        "http://endpoint/v1",
+        "model",
+        "openai",
+        Some(0.2),
+    );
+    let k2 = cache.key(
+        "sys",
+        "beta",
+        "http://endpoint/v1",
+        "model",
+        "openai",
+        Some(0.2),
+    );
     cache
         .put(
             &k1,
@@ -94,8 +108,22 @@ fn eviction_removes_oldest_entry_first() {
     // cap that fits one but not both, the older must go.
     let cache = Cache::new(temp.path().to_path_buf(), 30, 60);
 
-    let k_old = cache.key("sys", "older", "http://endpoint/v1", "model", 0.2);
-    let k_new = cache.key("sys", "newer", "http://endpoint/v1", "model", 0.2);
+    let k_old = cache.key(
+        "sys",
+        "older",
+        "http://endpoint/v1",
+        "model",
+        "openai",
+        Some(0.2),
+    );
+    let k_new = cache.key(
+        "sys",
+        "newer",
+        "http://endpoint/v1",
+        "model",
+        "openai",
+        Some(0.2),
+    );
 
     cache
         .put(
@@ -140,7 +168,14 @@ fn evict_if_needed_is_a_no_op_when_already_under_limit() {
     // Plenty of headroom; entries are small.
     let cache = Cache::new(temp.path().to_path_buf(), 30, 10 * 1024 * 1024);
 
-    let k = cache.key("sys", "content", "http://endpoint/v1", "model", 0.2);
+    let k = cache.key(
+        "sys",
+        "content",
+        "http://endpoint/v1",
+        "model",
+        "openai",
+        Some(0.2),
+    );
     cache.put(&k, &json!({"x": 1})).expect("put");
 
     let freed = cache.evict_if_needed().expect("eviction");
@@ -167,7 +202,14 @@ fn eviction_ignores_directories_that_are_not_shards() {
     let cache = Cache::new(root.clone(), 30, 1);
 
     // A real entry, so the cache has something of its own to evict.
-    let key = cache.key("sys", "content", "http://e/v1", "model", 0.2);
+    let key = cache.key(
+        "sys",
+        "content",
+        "http://e/v1",
+        "model",
+        "openai",
+        Some(0.2),
+    );
     cache.put(&key, &serde_json::json!({"a": 1})).expect("put");
 
     // Two things that are not shards: a stray file in the root, and a

@@ -161,6 +161,7 @@ impl Provider {
             user_content,
             self.endpoint(),
             self.model(),
+            self.client.protocol().as_str(),
             self.client.temperature(),
         )
     }

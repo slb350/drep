@@ -313,15 +313,7 @@ pub(crate) fn git(dir: &std::path::Path) -> std::process::Command {
 /// setting. An empty value reads back as present-but-blank, which drep treats
 /// as unset; the tests that actually exercise the chainer set their own.
 pub(crate) fn git_init(dir: &std::path::Path) {
-    let output = git(dir)
-        .args(["init", "--initial-branch=main"])
-        .output()
-        .expect("git init must run");
-    assert!(
-        output.status.success(),
-        "git init failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
+    git_must(dir, &["init", "--initial-branch=main"]);
     for (key, value) in [
         ("user.email", "test@example.com"),
         ("user.name", "test"),
@@ -330,12 +322,33 @@ pub(crate) fn git_init(dir: &std::path::Path) {
         // otherwise fail every test here for reasons unrelated to drep.
         ("commit.gpgsign", "false"),
     ] {
-        let status = git(dir)
-            .args(["config", "--local", key, value])
-            .status()
-            .expect("git config must run");
-        assert!(status.success(), "git config {key} failed");
+        git_must(dir, &["config", "--local", key, value]);
     }
+}
+
+/// Stage `path` in the repository at `dir`.
+///
+/// A tracked file is the one state where `.gitignore` silently does nothing, so
+/// reaching it in a test needs a real `git add` rather than a file on disk.
+pub(crate) fn git_add(dir: &std::path::Path, path: &str) {
+    git_must(dir, &["add", "--", path]);
+}
+
+/// Run a git command that must succeed, failing the test with its stderr.
+///
+/// Shared so a new fixture command cannot quietly discard the status, which is
+/// how the three `git_init` copies this replaced had already diverged.
+fn git_must(dir: &std::path::Path, args: &[&str]) {
+    let output = git(dir)
+        .args(args)
+        .output()
+        .unwrap_or_else(|err| panic!("git {} must run: {err}", args.join(" ")));
+    assert!(
+        output.status.success(),
+        "git {} failed: {}",
+        args.join(" "),
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 /// Assert `path` is executable, by the same predicate production uses.
