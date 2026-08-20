@@ -31,13 +31,26 @@ jobs:
       - name: Clippy
         run: cargo clippy --all-targets --all-features
 
-  test:
-    name: test (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest]
+  test-linux:
+    name: test (ubuntu-latest)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - run: cargo test --all-targets --all-features
+
+  # The family Gitea instance has only the Strix Linux runner. Its macOS
+  # runners belong to the separate novels instance, while GitHub supplies this
+  # hosted lane. Skip the job before Gitea tries to dispatch an unclaimable
+  # `macos-latest` task.
+  test-macos:
+    name: test (macos-latest)
+    if: ${{ github.server_url == 'https://github.com' }}
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v5
 
@@ -53,6 +66,10 @@ jobs:
   # job. Full sweep here; the pre-commit hook scopes to the staged diff.
   mutants:
     runs-on: ubuntu-latest
+    # Strix maps the label above to Debian 12 (glibc 2.36), while the verified
+    # cargo-mutants 27.1.0 binary requires glibc 2.39. Override only this job
+    # with Debian 13 (glibc 2.41), leaving every other family workload alone.
+    container: node:22-trixie
     steps:
       - uses: actions/checkout@v5
 
@@ -62,7 +79,7 @@ jobs:
 
       - uses: taiki-e/install-action@v2
         with:
-          tool: cargo-mutants
+          tool: cargo-mutants@27.1.0
 
       # Survivors are printed as `MISSED <file>:<line>: <mutation>` lines, so the
       # job log is already the actionable report - no artifact upload needed.

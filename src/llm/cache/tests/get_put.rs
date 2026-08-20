@@ -1,20 +1,17 @@
 //! `Cache::get` and `Cache::put`.
 //!
 //! Criteria 8-14. Every test pins a single read or write property: round
-//! trip, miss on absent, miss on corrupt, miss on unreadable, shard
+//! trip, miss on absent, miss on corrupt, miss on read failure, shard
 //! creation, shard coexistence, and overwrite.
 
-#[cfg(unix)]
-use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 
 use serde_json::json;
 
 use crate::llm::cache::Cache;
 
-/// Write `body` to `path`'s parent and return the file path used. Used by
-/// the corrupt-entry and unreadable-entry tests, which need to bypass
-/// `put` and plant their own bytes on disk.
+/// Write `body` to `path`'s parent. Used by the corrupt-entry test, which
+/// needs to bypass `put` and plant its own bytes on disk.
 fn write_raw(path: &Path, body: &[u8]) {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).expect("create shard");
@@ -76,14 +73,14 @@ fn get_on_corrupt_entry_is_none() {
     );
 }
 
-/// Criterion 11: `get` on a file the process cannot read is `None`.
+/// Criterion 11: `get` when the entry path cannot be read as bytes is `None`.
 ///
-/// We make the file unreadable via `chmod 000` and verify the read returns
-/// `None` rather than propagating an error. Skipped on platforms without
-/// POSIX permissions.
-#[cfg(unix)]
+/// A directory at the entry path makes metadata succeed and the subsequent
+/// byte read fail on every platform and under every uid. `chmod 000` does not:
+/// root can still read that file, which is how the containerized CI test gave
+/// a false failure while the same code passed under an ordinary user.
 #[test]
-fn get_on_unreadable_entry_is_none() {
+fn get_when_entry_path_cannot_be_read_is_none() {
     let temp = tempfile::tempdir().expect("tempdir");
     let cache = Cache::new(temp.path().to_path_buf(), 30, 1024 * 1024);
 
@@ -92,17 +89,14 @@ fn get_on_unreadable_entry_is_none() {
     cache.put(&key, &value).expect("put");
 
     let path = cache.entry_path(&key);
-    let original = std::fs::metadata(&path).expect("metadata").permissions();
-    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o000)).expect("chmod 000");
+    std::fs::remove_file(&path).expect("remove cache file");
+    std::fs::create_dir(&path).expect("replace cache file with directory");
 
     let result = cache.get(&key);
 
-    // Restore permissions so TempDir cleanup can remove the tree.
-    std::fs::set_permissions(&path, original).expect("chmod restore");
-
     assert!(
         result.is_none(),
-        "an unreadable entry must be a miss; reads must never fail"
+        "an entry that cannot be read as bytes must be a miss; reads must never fail"
     );
 }
 

@@ -218,7 +218,10 @@ of its own architecture, plus a shell installer and a Homebrew formula pushed
 to `slb350/homebrew-tap`. `.github/workflows/release.yml` is generated from that
 config and must not be hand-edited.
 
-CI (`.github/workflows/rust.yml`) runs fmt and clippy once, the test suite on
-Linux and macOS, an MSRV check at 1.88, and a full `cargo mutants` sweep. The
-sweep is local to the runner because a GitHub runner cannot reach the LAN host
-the pre-commit hook offloads to.
+CI (`.github/workflows/rust.yml`) runs fmt and clippy once, an MSRV check at
+1.88, and a full `cargo mutants` sweep. GitHub runs the test suite on Linux and
+macOS; the family Gitea instance runs Linux only because it has no macOS runner.
+The hosted mutation job pins `cargo-mutants` 27.1.0 inside `node:22-trixie` so
+its glibc 2.39 requirement does not depend on the family runner's older default
+job image. The sweep is local to the runner because a GitHub runner cannot reach
+the LAN host the pre-commit hook offloads to.

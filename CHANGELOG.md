@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The shared Rust workflow now matches each forge's actual runner coverage.
+  Linux tests run on both GitHub and the family Gitea instance, while the macOS
+  job is GitHub-only instead of waiting forever for a nonexistent family macOS
+  runner. The mutation job uses `node:22-trixie` and pins `cargo-mutants` 27.1.0
+  because the runner's default Debian 12 image has glibc 2.36 and cannot execute
+  that release's glibc 2.39 binary. The cache read-error regression test now
+  creates an unreadable entry shape deterministically instead of relying on
+  mode `000`, which root can still read inside the Gitea job container.
 - `rust.yml` had never run: `rust-rewrite` only ever went to Gitea, so CI first
   executed when 2.0 merged to `main` - and three jobs failed. The MSRV was
   wrong: `ignore` 0.4.30 uses let-chains and declares no `rust-version` of its
