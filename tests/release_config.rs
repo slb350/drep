@@ -40,8 +40,9 @@ fn workflow_job<'a>(workflow: &'a str, name: &str) -> &'a str {
 ///
 /// Keeping both platforms in one matrix asks Gitea to dispatch a
 /// `macos-latest` task that no family runner can claim, so the workflow stays
-/// pending forever even after every runnable job finishes. Separate jobs let
-/// the server guard skip only macOS on Gitea while GitHub retains both lanes.
+/// pending forever even after every runnable job finishes. Gitea matches a
+/// runner before evaluating the guard, so the macOS job uses a claimable Linux
+/// label there and skips its steps; GitHub retains the native macOS lane.
 #[test]
 fn family_ci_runs_linux_without_queueing_hosted_macos() {
     let workflow = rust_workflow();
@@ -58,11 +59,13 @@ fn family_ci_runs_linux_without_queueing_hosted_macos() {
     let macos = workflow_job(&workflow, "test-macos");
     assert!(
         macos.contains("if: ${{ github.server_url == 'https://github.com' }}"),
-        "the hosted macOS lane must skip before Gitea tries to dispatch it"
+        "the hosted macOS lane must not execute on Gitea"
     );
     assert!(
-        macos.contains("runs-on: macos-latest"),
-        "GitHub must retain native macOS test coverage"
+        macos.contains(
+            "runs-on: ${{ github.server_url == 'https://github.com' && 'macos-latest' || 'ubuntu-latest' }}"
+        ),
+        "GitHub must use native macOS while Gitea gets a claimable label for its guarded skip"
     );
 }
 

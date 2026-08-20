@@ -221,6 +221,9 @@ config and must not be hand-edited.
 CI (`.github/workflows/rust.yml`) runs fmt and clippy once, an MSRV check at
 1.88, and a full `cargo mutants` sweep. GitHub runs the test suite on Linux and
 macOS; the family Gitea instance runs Linux only because it has no macOS runner.
+Gitea 1.25.1 matches a runner before evaluating a job guard, so the guarded
+macOS job resolves to `ubuntu-latest` on Gitea, where Strix can claim and skip
+it, while GitHub resolves the same expression to `macos-latest`.
 The hosted mutation job pins `cargo-mutants` 27.1.0 inside `node:22-trixie` so
 its glibc 2.39 requirement does not depend on the family runner's older default
 job image. The sweep is local to the runner because a GitHub runner cannot reach

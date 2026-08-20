@@ -45,12 +45,13 @@ jobs:
 
   # The family Gitea instance has only the Strix Linux runner. Its macOS
   # runners belong to the separate novels instance, while GitHub supplies this
-  # hosted lane. Skip the job before Gitea tries to dispatch an unclaimable
-  # `macos-latest` task.
+  # hosted lane. Gitea evaluates a job-level `if` only after label matching, so
+  # give its guarded skip a claimable Linux label; GitHub still resolves this
+  # expression to native macOS.
   test-macos:
     name: test (macos-latest)
     if: ${{ github.server_url == 'https://github.com' }}
-    runs-on: macos-latest
+    runs-on: ${{ github.server_url == 'https://github.com' && 'macos-latest' || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v5
 

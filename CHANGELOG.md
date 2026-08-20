@@ -11,8 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - The shared Rust workflow now matches each forge's actual runner coverage.
   Linux tests run on both GitHub and the family Gitea instance, while the macOS
-  job is GitHub-only instead of waiting forever for a nonexistent family macOS
-  runner. The mutation job uses `node:22-trixie` and pins `cargo-mutants` 27.1.0
+  job is GitHub-only. Gitea evaluates a job guard after runner matching, so the
+  guarded skip uses its Linux label there instead of waiting forever for a
+  nonexistent family macOS runner. The mutation job uses `node:22-trixie` and
+  pins `cargo-mutants` 27.1.0
   because the runner's default Debian 12 image has glibc 2.36 and cannot execute
   that release's glibc 2.39 binary. The cache read-error regression test now
   creates an unreadable entry shape deterministically instead of relying on
