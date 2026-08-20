@@ -16,7 +16,7 @@ async fn run_local(catalog: &Catalog, model_answers: &[&str]) -> (Plan, Scripted
     answers.extend_from_slice(&["", "", ""]);
 
     let mut console = Scripted::new(&answers);
-    let plan = run(&mut console, &AuthStore::new(), catalog)
+    let plan = run(&mut console, &AuthStore::new(), catalog, &|_| false)
         .await
         .expect("the wizard completes");
     assert!(console.is_drained(), "unused answers: the flow differed");
@@ -172,7 +172,7 @@ async fn a_pasted_key_authenticates_the_listing() {
         "",
     ]);
 
-    run(&mut console, &AuthStore::new(), &source)
+    run(&mut console, &AuthStore::new(), &source, &|_| false)
         .await
         .expect("the wizard completes");
 
@@ -196,7 +196,7 @@ async fn a_key_already_in_the_store_authenticates_the_listing_too() {
     let zai = number_of("zai");
     let mut console = Scripted::new(&[zai.as_str(), "", "1", "", "", ""]);
 
-    run(&mut console, &store, &source)
+    run(&mut console, &store, &source, &|_| false)
         .await
         .expect("the wizard completes");
 
@@ -210,7 +210,7 @@ async fn a_provider_needing_no_key_lists_unauthenticated() {
     let source = Recording::new(Catalog::of(&["qwen3-30b-a3b"]));
     let mut console = Scripted::new(&["1", "", "1", "", "", ""]);
 
-    run(&mut console, &AuthStore::new(), &source)
+    run(&mut console, &AuthStore::new(), &source, &|_| false)
         .await
         .expect("the wizard completes");
 

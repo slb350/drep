@@ -132,3 +132,59 @@ fn truncation_recovery_still_applies_after_a_strip() {
         other => panic!("expected Truncated, got {other:?}"),
     }
 }
+
+#[test]
+fn a_json_response_quoting_a_code_fence_is_not_mangled_by_it() {
+    // drep's own pre-push gate hit this reviewing `json_parsing.rs`: the model
+    // answered with valid JSON whose finding *described* fence handling, so the
+    // message contained "```". The fence strategy matched that inner fence,
+    // took its body, and every later strategy then ran on prose - reporting a
+    // perfectly good answer as unparseable, and failing the push.
+    let body = concat!(
+        r#"{"issues": [{"line": 86, "severity": "high", "category": "bug", "#,
+        r#""message": "a fenced block like ```json {\"a\": 1} ``` inside a string"}], "#,
+        r#""summary": "one issue"}"#
+    );
+
+    let value = match extract_json(body).expect("valid JSON is the answer") {
+        Extracted::Complete(value) => value,
+        other => panic!("expected Complete, got {other:?}"),
+    };
+
+    assert_eq!(value["summary"], json!("one issue"));
+    assert!(
+        value["issues"][0]["message"]
+            .as_str()
+            .expect("message")
+            .contains("```json"),
+        "the fence inside the string survives untouched: {value}"
+    );
+}
+
+#[test]
+fn a_fenced_response_still_wins_when_the_content_itself_is_not_json() {
+    // The case strategy 1 must not break: prose around a fenced answer. Trying
+    // the whole content first has to fail here and fall through to the fence.
+    let body = "Here is my review:\n```json\n{\"issues\": [], \"summary\": \"clean\"}\n```\nHope that helps.";
+
+    let value = match extract_json(body).expect("the fence carries the answer") {
+        Extracted::Complete(value) => value,
+        other => panic!("expected Complete, got {other:?}"),
+    };
+
+    assert_eq!(value["summary"], json!("clean"));
+}
+
+#[test]
+fn a_reasoning_block_is_still_stripped_before_the_direct_parse() {
+    // Strategy 0 runs first, so a `<think>` block cannot make the whole-content
+    // parse fail and push a valid answer down the ladder.
+    let body = "<think>deliberating</think>{\"issues\": [], \"summary\": \"clean\"}";
+
+    let value = match extract_json(body).expect("parses") {
+        Extracted::Complete(value) => value,
+        other => panic!("expected Complete, got {other:?}"),
+    };
+
+    assert_eq!(value["summary"], json!("clean"));
+}

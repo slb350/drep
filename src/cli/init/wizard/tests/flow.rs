@@ -11,9 +11,14 @@ use super::{Catalog, Scripted, number_of};
 /// these scripts read as the navigation they are testing.
 async fn run_with(answers: &[&str]) -> (Plan, Scripted) {
     let mut console = Scripted::new(answers);
-    let plan = run(&mut console, &AuthStore::new(), &Catalog::Unavailable)
-        .await
-        .expect("the wizard completes");
+    let plan = run(
+        &mut console,
+        &AuthStore::new(),
+        &Catalog::Unavailable,
+        &|_| false,
+    )
+    .await
+    .expect("the wizard completes");
     assert!(
         console.is_drained(),
         "the script left answers unused, so this asserts against a flow that did not happen"

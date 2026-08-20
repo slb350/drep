@@ -1,6 +1,6 @@
 //! A5, A6, A7, A8, A9: every shape of the LLM section.
 
-use crate::cli::doctor::{DoctorArgs, run_to};
+use crate::cli::doctor::{DoctorArgs, run_at, run_to};
 use std::path::Path;
 
 fn args(dir: &Path) -> DoctorArgs {
@@ -462,4 +462,72 @@ model = "parked"
         rendered.contains("DREP_DOCTOR_VAR_THAT_IS_NOT_SET is NOT set"),
         "the live provider's variable must still be flagged:\n{rendered}"
     );
+}
+
+/// Run `doctor` against `dir` with an empty auth store, and return its output.
+///
+/// The store is a temp path so the report never depends on what the developer
+/// has stored, and never writes to the real one.
+fn report_with_empty_store(dir: &Path) -> String {
+    let mut out = Vec::new();
+    run_at(&mut out, &args(dir), &dir.join("auth.toml")).expect("run_at");
+    String::from_utf8(out).expect("utf8")
+}
+
+#[test]
+fn a_var_reference_is_echoed_so_the_reader_can_see_which_one() {
+    // The whole reason doctor reads the raw tree rather than the loaded config:
+    // `${VAR}` has to print as itself.
+    let dir = tempfile::tempdir().expect("tempdir");
+    write_py(dir.path());
+    std::fs::write(
+        dir.path().join("drep.toml"),
+        "[[llm]]\nendpoint = \"http://e/v1\"\nmodel = \"m\"\napi_key = \"${SOME_TOKEN}\"\n",
+    )
+    .expect("config");
+
+    let report = report_with_empty_store(dir.path());
+
+    assert!(report.contains("${SOME_TOKEN}"), "got {report}");
+    assert!(report.contains("from drep.toml"), "got {report}");
+}
+
+#[test]
+fn a_literal_key_is_never_echoed() {
+    // `config::load` accepts a literal `api_key`, and doctor's output is what
+    // people paste into bug reports and CI logs. Printing the value verbatim
+    // would put a live credential in both.
+    let dir = tempfile::tempdir().expect("tempdir");
+    write_py(dir.path());
+    std::fs::write(
+        dir.path().join("drep.toml"),
+        "[[llm]]\nendpoint = \"http://e/v1\"\nmodel = \"m\"\napi_key = \"sk-live-secret-value\"\n",
+    )
+    .expect("config");
+
+    let report = report_with_empty_store(dir.path());
+
+    assert!(
+        !report.contains("sk-live-secret-value"),
+        "the key reached the report: {report}"
+    );
+    assert!(
+        report.contains("a literal value"),
+        "and the reader is told a key is set, and to prefer a variable: {report}"
+    );
+}
+
+#[test]
+fn a_provider_with_no_key_anywhere_says_where_to_get_one() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    write_py(dir.path());
+    std::fs::write(
+        dir.path().join("drep.toml"),
+        "[[llm]]\nendpoint = \"http://e/v1\"\nmodel = \"m\"\n",
+    )
+    .expect("config");
+
+    let report = report_with_empty_store(dir.path());
+
+    assert!(report.contains("drep auth login"), "got {report}");
 }

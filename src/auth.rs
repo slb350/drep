@@ -26,6 +26,12 @@
 //! slash or a difference in case does not hide a key from the config that
 //! stored it.
 //!
+//! There is deliberately no `load_default`/`save_default` pair. Both were thin
+//! wrappers over `default_path()`, which reads the environment - so nothing
+//! could test them without `std::env::set_var`, and the mutation gate found
+//! them undetectable. Every caller resolves the path once, at its own entry
+//! point, and passes it down; that is also what keeps tests off the real store.
+//!
 //! ## Resolution order
 //!
 //! [`resolve`] fills in what `drep.toml` left unset, and an explicit value in
@@ -113,8 +119,19 @@ pub enum AuthError {
     #[error("could not parse {0}: {1}")]
     Parse(PathBuf, String),
 
+    /// Serializing the store failed. Distinct from [`Self::Parse`], which is
+    /// about reading: a write failure reported as "could not parse" sends the
+    /// reader looking at the file rather than at what drep tried to write.
+    #[error("could not serialize the auth store: {0}")]
+    Serialize(String),
+
     #[error("refusing to store an empty key for {0}")]
     EmptyKey(String),
+
+    /// A key carrying a control character cannot be sent as an HTTP header, so
+    /// storing it would defer a guaranteed failure to the first request.
+    #[error("the key for {0} contains a character that cannot be sent in a header")]
+    UnusableKey(String),
 }
 
 /// The environment variable that relocates the store.
@@ -133,8 +150,19 @@ pub const PATH_VAR: &str = "DREP_AUTH_PATH";
 /// a test key ended up in one. It also serves the ordinary case of keeping
 /// credentials somewhere deliberate, such as a mounted volume.
 pub fn default_path() -> Result<PathBuf, AuthError> {
-    if let Some(overridden) = std::env::var_os(PATH_VAR) {
-        return Ok(PathBuf::from(overridden));
+    path_from(std::env::var_os(PATH_VAR))
+}
+
+/// [`default_path`] with the override supplied rather than read.
+///
+/// Split out so the override can be tested without writing to the process
+/// environment. `std::env::set_var` is `unsafe` in edition 2024 because another
+/// thread reading the environment concurrently is a data race, and `cargo test`
+/// runs tests on several threads - a "single-threaded test process" safety
+/// comment would simply have been untrue.
+pub fn path_from(overridden: Option<std::ffi::OsString>) -> Result<PathBuf, AuthError> {
+    if let Some(path) = overridden {
+        return Ok(PathBuf::from(path));
     }
     directories::ProjectDirs::from("dev", "slb350", "drep")
         .map(|dirs| dirs.config_dir().join("auth.toml"))
@@ -165,11 +193,6 @@ impl AuthStore {
             .map_err(|err: toml::de::Error| AuthError::Parse(path.to_path_buf(), err.to_string()))
     }
 
-    /// Read the store from [`default_path`].
-    pub fn load_default() -> Result<Self, AuthError> {
-        Self::load(&default_path()?)
-    }
-
     /// Write the store to `path`, creating the directory if needed.
     ///
     /// The file is created mode 0600 and the directory 0700 on Unix, and the
@@ -177,21 +200,29 @@ impl AuthStore {
     /// ran, or one whose mode a user widened, is narrowed on the next save
     /// rather than left as found.
     pub fn save(&self, path: &Path) -> Result<(), AuthError> {
-        if let Some(parent) = path.parent() {
+        // A bare filename has `Some("")` as its parent, which is not a
+        // directory anything can create.
+        if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
+            // Only a directory drep creates is narrowed. `DREP_AUTH_PATH` can
+            // name any path, so chmodding whatever happens to be its parent
+            // would let `/etc/drep.toml` turn `/etc` into 0700 - breaking the
+            // system to protect one file. An existing directory is the user's,
+            // and the file's own 0600 is what actually guards the key.
+            let existed = parent.exists();
             std::fs::create_dir_all(parent)
                 .map_err(|err| AuthError::Write(parent.to_path_buf(), err))?;
-            restrict(parent, 0o700)?;
+            if !existed {
+                restrict(parent, 0o700)?;
+            }
         }
 
-        let body = toml::to_string_pretty(self)
-            .map_err(|err| AuthError::Parse(path.to_path_buf(), err.to_string()))?;
-        std::fs::write(path, body).map_err(|err| AuthError::Write(path.to_path_buf(), err))?;
-        restrict(path, 0o600)
-    }
+        let body =
+            toml::to_string_pretty(self).map_err(|err| AuthError::Serialize(err.to_string()))?;
 
-    /// Write the store to [`default_path`].
-    pub fn save_default(&self) -> Result<(), AuthError> {
-        self.save(&default_path()?)
+        // Created 0600 from the outset rather than written and then chmodded:
+        // between those two steps the key sits in a world-readable file, which
+        // is a window another process on a shared machine can read.
+        write_private(path, &body)
     }
 
     /// The key held for `endpoint`, if any.
@@ -210,6 +241,13 @@ impl AuthStore {
         let key = key.trim();
         if key.is_empty() {
             return Err(AuthError::EmptyKey(endpoint.to_string()));
+        }
+        // Every use of a stored key is an HTTP header value, which cannot carry
+        // a control character. Rejecting here turns a paste that picked up a
+        // stray newline or an escape sequence into a message at the prompt,
+        // rather than a transport failure on the first file of the first push.
+        if key.chars().any(|c| c.is_control()) {
+            return Err(AuthError::UnusableKey(endpoint.to_string()));
         }
         self.keys.insert(normalise(endpoint), key.to_string());
         Ok(())
@@ -242,7 +280,27 @@ impl AuthStore {
 /// `/anthropic/v1` are different APIs on the same host, and can carry different
 /// keys), so nothing beyond the trailing slash is trimmed.
 pub fn normalise(endpoint: &str) -> String {
-    endpoint.trim().trim_end_matches('/').to_ascii_lowercase()
+    let trimmed = endpoint.trim().trim_end_matches('/');
+
+    // Only the scheme and authority are case-insensitive; a URL *path* is not.
+    // Lowercasing the whole thing collapsed `/API/v1` and `/api/v1` onto one
+    // entry, which for a host serving both would hand one endpoint's key to the
+    // other - the same class of mistake as keying on the model alone.
+    match trimmed.find("://") {
+        Some(scheme_end) => {
+            let rest = &trimmed[scheme_end + 3..];
+            let host_len = rest.find('/').unwrap_or(rest.len());
+            format!(
+                "{}://{}{}",
+                trimmed[..scheme_end].to_ascii_lowercase(),
+                rest[..host_len].to_ascii_lowercase(),
+                &rest[host_len..]
+            )
+        }
+        // Not a URL drep recognises. Lowercasing a bare string is the previous
+        // behaviour and cannot collapse a path that is not there.
+        None => trimmed.to_ascii_lowercase(),
+    }
 }
 
 /// Fill in keys the config left unset, and report where each one came from.
@@ -309,6 +367,38 @@ pub fn source_of(
 /// Windows has no mode bits and `directories` puts the file under the user's
 /// roaming profile, which is already user-scoped; failing the save there would
 /// refuse to store a key for no gain.
+/// Write `body` to `path`, creating it readable only by its owner.
+///
+/// `File::create` plus a later `chmod` leaves the key in a 0644 file for the
+/// duration of the write. `OpenOptions::mode` applies the mode at *creation*,
+/// so there is no window. The mode is re-applied afterwards because it only
+/// affects creation - an existing file keeps whatever mode it had, including
+/// one a user widened.
+///
+/// One function with the `cfg` around the mode call, rather than two whole
+/// implementations: a `#[cfg(not(unix))]` twin is not compiled here, so
+/// mutating it changes nothing and the mutation gate reports an undetectable
+/// survivor on every run. Windows has no mode bits, and `directories` puts the
+/// file under the user's own roaming profile there.
+fn write_private(path: &Path, body: &str) -> Result<(), AuthError> {
+    use std::io::Write;
+
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+
+    let mut file = options
+        .open(path)
+        .map_err(|err| AuthError::Write(path.to_path_buf(), err))?;
+    file.write_all(body.as_bytes())
+        .map_err(|err| AuthError::Write(path.to_path_buf(), err))?;
+    restrict(path, 0o600)
+}
+
 #[cfg(unix)]
 fn restrict(path: &Path, mode: u32) -> Result<(), AuthError> {
     use std::os::unix::fs::PermissionsExt;

@@ -64,6 +64,15 @@ pub(crate) fn is_broken_pipe(err: &anyhow::Error) -> bool {
 
 /// `run`, writing to an arbitrary sink so tests can capture the report.
 pub fn run_to<W: Write>(out: &mut W, args: &DoctorArgs) -> Result<Exit> {
+    run_at(out, args, &crate::auth::default_path()?)
+}
+
+/// `run_to`, against a named auth store.
+///
+/// A parameter for the same reason `check`, `init` and `auth` take one: the
+/// store is user-level state, and a test reading the real one reports whatever
+/// the developer happens to have stored.
+pub fn run_at<W: Write>(out: &mut W, args: &DoctorArgs, auth_path: &Path) -> Result<Exit> {
     // `canonicalize` can fail (the path does not exist, or a parent is
     // unreadable). An unreadable path is still worth reporting on - the user
     // has typed something and wants to know what drep sees - so fall back to
@@ -88,7 +97,7 @@ pub fn run_to<W: Write>(out: &mut W, args: &DoctorArgs) -> Result<Exit> {
         // one whose languages drep does not register - is exactly where they
         // are most likely to be asking it. Returning here answered it with
         // silence.
-        write_llm_section(out, args, &root)?;
+        write_llm_section(out, args, &root, auth_path)?;
         return Ok(Exit::Clean);
     }
 
@@ -98,7 +107,7 @@ pub fn run_to<W: Write>(out: &mut W, args: &DoctorArgs) -> Result<Exit> {
     // tool - each call stats the config files and walks PATH - and, worse,
     // left room for the summary to disagree with the lines above it.
     let missing = write_tools_section(out, &buckets, &root)?;
-    write_llm_section(out, args, &root)?;
+    write_llm_section(out, args, &root, auth_path)?;
 
     // Deliberately last, after the LLM block: the user reads their coverage
     // report before being told what is wrong with it.
@@ -185,7 +194,12 @@ fn write_tools_section<W: Write>(
 /// exactly when the report is most useful, and `load` fails on an unset
 /// referenced variable. `load` is consulted only to surface problems that are
 /// not the unset variable.
-fn write_llm_section<W: Write>(out: &mut W, args: &DoctorArgs, root: &Path) -> Result<()> {
+fn write_llm_section<W: Write>(
+    out: &mut W,
+    args: &DoctorArgs,
+    root: &Path,
+    auth_path: &Path,
+) -> Result<()> {
     writeln!(out)?;
     writeln!(out, "LLM analysis (required):")?;
 
@@ -282,7 +296,7 @@ fn write_llm_section<W: Write>(out: &mut W, args: &DoctorArgs, root: &Path) -> R
     // Read once for the whole listing. A store that cannot be read is reported
     // rather than fatal: `doctor` exists to describe a broken setup, so failing
     // out here would suppress everything else it had to say.
-    let store = match crate::auth::AuthStore::load_default() {
+    let store = match crate::auth::AuthStore::load(auth_path) {
         Ok(store) => store,
         Err(err) => {
             writeln!(out, "  The auth store could not be read: {err}")?;
@@ -366,9 +380,19 @@ fn key_source_line(entry: &Value, store: &crate::auth::AuthStore) -> String {
     match (source, api_key) {
         // The reference is shown verbatim - that is the whole reason doctor
         // reads the raw tree rather than the loaded config.
-        (crate::auth::KeySource::Config, Some(reference)) => {
+        // Only a `${VAR}` reference is echoed. `api_key` may hold a literal
+        // secret - `config::load` accepts one - and doctor's output is what
+        // people paste into bug reports and CI logs.
+        (crate::auth::KeySource::Config, Some(reference))
+            if !crate::config::env_var_refs_in(&Value::String(reference.to_string()))
+                .is_empty() =>
+        {
             format!("{reference} ({})", crate::auth::KeySource::Config.label())
         }
+        (crate::auth::KeySource::Config, _) => format!(
+            "a literal value ({}) - prefer `${{VAR}}` so the file can be committed",
+            crate::auth::KeySource::Config.label()
+        ),
         (source, _) => source.label().to_string(),
     }
 }

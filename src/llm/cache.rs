@@ -161,17 +161,23 @@ impl Cache {
         write_field(&mut hasher, endpoint.as_bytes());
         write_field(&mut hasher, model.as_bytes());
         write_field(&mut hasher, protocol.as_bytes());
-        // Six decimal places is finer than the resolution of `f32` itself
-        // (~7 decimal digits of precision), so two `f32` values that
-        // round-trip to distinct `f32`s hash differently, while `0.2` and
-        // `0.20` (the same value) hash the same.
+        // `{:?}` on an `f32` is the *shortest string that round-trips*, so two
+        // distinct `f32`s always render differently and `0.2` and `0.20` - the
+        // same value - render the same. That is exactly the property a key
+        // needs.
+        //
+        // This replaced `{:.6}`, whose comment claimed six decimal places were
+        // finer than `f32`'s resolution. They are not: `f32` has ~7 significant
+        // digits, not 7 decimal places, so near 1.0 its ulp is ~1.2e-7 while
+        // six decimals steps by 1e-6 - coarser, and able to collapse two
+        // genuinely different temperatures onto one key.
         //
         // An unset temperature is a *different request* from any set one - the
         // field is absent and the server picks - so it gets a sentinel that no
         // formatted float can collide with, rather than being folded onto some
         // stand-in value.
         let temp_str = match temperature {
-            Some(value) => format!("{value:.6}"),
+            Some(value) => format!("{value:?}"),
             None => "unset".to_string(),
         };
         write_field(&mut hasher, temp_str.as_bytes());

@@ -119,7 +119,10 @@ fn render_one(body: &mut String, choice: &Choice) {
     // preset decides rather than the file inheriting a default.
     match preset.temperature {
         Some(temperature) => {
-            body.push_str(&format!("temperature = {temperature}\n"));
+            // `{:?}` rather than `{}`: Display renders `1.0` as `1`, which TOML
+            // reads as an *integer* and `config::load` then refuses with a type
+            // error - from a file `drep init` had just reported writing.
+            body.push_str(&format!("temperature = {temperature:?}\n"));
         }
         None => {
             body.push_str("# `temperature` is deliberately absent: this model rejects the\n");

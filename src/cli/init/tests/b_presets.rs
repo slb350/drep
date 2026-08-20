@@ -181,15 +181,19 @@ fn every_preset_renders_a_config_that_loads() {
         let model = preset.default_model.unwrap_or("some-model");
         let body = super::support::render_one(preset, model, endpoint);
 
+        // Every `${VAR}` the preset names has to resolve for the load to reach
+        // validation, which is the part under test. Substituted in the rendered
+        // text rather than exported: `std::env::set_var` is `unsafe` in edition
+        // 2024 because a concurrent reader on another thread is a data race,
+        // and `cargo test` is multi-threaded. The substitution proves the same
+        // thing - that the file's *shape* loads - without touching the process.
+        let body = match preset.api_key_env {
+            Some(env) => body.replace(&format!("${{{env}}}"), "substituted-for-the-test"),
+            None => body,
+        };
+
         let path = dir.path().join(format!("{}.toml", preset.key));
         std::fs::write(&path, &body).expect("write");
-
-        // Every `${VAR}` the preset names has to resolve for the load to get as
-        // far as validation, which is the part under test here.
-        if let Some(env) = preset.api_key_env {
-            // SAFETY: single-threaded test process; the variable is scoped to it.
-            unsafe { std::env::set_var(env, "test-key") };
-        }
 
         let config = crate::config::load(&path).unwrap_or_else(|e| {
             panic!("preset `{}` renders an unloadable config: {e}", preset.key)

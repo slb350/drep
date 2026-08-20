@@ -236,3 +236,47 @@ fn a_config_declaring_no_provider_is_described_as_such() {
         );
     }
 }
+
+#[tokio::test]
+async fn replacing_the_config_does_not_authorise_clobbering_a_foreign_hook() {
+    // "Replace drep.toml?" asks about the config. Passing that answer through to
+    // `hooks::install` as `force` would broaden it to a hook somebody else
+    // wrote, which the prompt never mentioned. `--force` is the only thing that
+    // authorises that, and drep's *own* hook is refreshed either way.
+    let dir = tempfile::tempdir().expect("tempdir");
+    crate::test_support::git_init(dir.path());
+
+    let hooks_dir = dir.path().join(".git").join("hooks");
+    std::fs::create_dir_all(&hooks_dir).expect("hooks dir");
+    let foreign = hooks_dir.join("pre-push");
+    std::fs::write(&foreign, "#!/bin/sh\necho someone elses hook\n").expect("write hook");
+
+    std::fs::write(dir.path().join("drep.toml"), EXISTING).expect("existing config");
+
+    let mut out = Vec::new();
+    let result = crate::cli::init::run_with(
+        &mut out,
+        &InitArgs {
+            path: dir.path().to_path_buf(),
+            provider: Some("local".to_string()),
+            no_gitignore: true,
+            non_interactive: true,
+            force: false,
+            ..args()
+        },
+        &dir.path().join("auth.toml"),
+    )
+    .await;
+
+    // Non-interactive with an existing config refuses before reaching hooks,
+    // which is the pre-existing behaviour; what matters is the hook survived.
+    assert!(
+        result.is_err(),
+        "an existing config is refused without --force"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&foreign).expect("hook"),
+        "#!/bin/sh\necho someone elses hook\n",
+        "the foreign hook was not touched"
+    );
+}

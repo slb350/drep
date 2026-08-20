@@ -4,13 +4,15 @@
 //! the strategy ladder from `drep/llm/json_parsing.py` (minus the single-quote
 //! repair and the fuzzy-inference fallback), first success wins:
 //!
-//! 1. Extract a fenced block (with or without a `json` info string) and use
+//! 1. Parse the whole response directly - a response that is already JSON is
+//!    the answer, even if it happens to quote a fence inside a string.
+//! 2. Extract a fenced block (with or without a `json` info string) and use
 //!    its body.
-//! 2. Parse the (possibly fenced) content directly.
-//! 3. Repair trailing commas before `}` or `]` and parse.
-//! 4. Balance unclosed braces/brackets and parse.
+//! 3. Parse the fenced body directly.
+//! 4. Repair trailing commas before `}` or `]` and parse.
+//! 5. Balance unclosed braces/brackets and parse.
 //!
-//! Strategies 1-3 that succeed return [`Extracted::Complete`]. Only strategy 4
+//! Strategies 1-4 that succeed return [`Extracted::Complete`]. Only strategy 5
 //! returns [`Extracted::Truncated`].
 //!
 //! ## Why `Truncated` is a type, not a log line
@@ -168,20 +170,37 @@ pub fn extract_json(content: &str) -> Option<Extracted> {
     // `FENCE_RE` takes the *first* one.
     let content = strip_reasoning_block(content);
 
-    // Strategy 1: extract from a markdown fence if one is present. The fence
-    // path applies even when the body itself fails to parse; strategies 2-4
+    // Strategy 1: parse the whole response first, before looking for a fence.
+    //
+    // The order matters and this is the bug it fixes. A response that is
+    // *already* JSON can still contain a fence inside a string value - a review
+    // of code that discusses code fences says "```" in a finding's message, and
+    // this file's own review is what hit it. `FENCE_RE` then matched that inner
+    // fence, `working` became its body, and strategies 2-4 all ran on prose,
+    // reporting `Unparseable` for a response that was valid JSON from the first
+    // character. drep's own pre-push gate caught it on `json_parsing.rs`.
+    //
+    // Trying the whole thing first costs one `serde_json::from_str` on a string
+    // that is usually not JSON, and cannot mis-fire: if the content parses, it
+    // *is* the answer.
+    if let Ok(value) = serde_json::from_str::<Value>(content.trim()) {
+        return Some(Extracted::Complete(value));
+    }
+
+    // Strategy 2: extract from a markdown fence if one is present. The fence
+    // path applies even when the body itself fails to parse; strategies 3-5
     // then run on the body alone.
     let working = FENCE_RE
         .captures(content)
         .map(|caps| caps.get(1).unwrap().as_str().trim().to_string())
         .unwrap_or_else(|| content.to_string());
 
-    // Strategy 2: direct parse of the (possibly fenced) content.
+    // Strategy 3: direct parse of the fenced body.
     if let Ok(value) = serde_json::from_str::<Value>(&working) {
         return Some(Extracted::Complete(value));
     }
 
-    // Strategy 3: repair trailing commas. This is the only repair we attempt
+    // Strategy 4: repair trailing commas. This is the only repair we attempt
     // - single-quote substitution is deliberately omitted because it
     // corrupts apostrophes inside strings.
     let repaired = strip_trailing_commas(&working);
@@ -189,7 +208,7 @@ pub fn extract_json(content: &str) -> Option<Extracted> {
         return Some(Extracted::Complete(value));
     }
 
-    // Strategy 4: truncation recovery. Count open vs. close braces/brackets
+    // Strategy 5: truncation recovery. Count open vs. close braces/brackets
     // outside of strings, append the missing closers, and parse. Returning
     // `Truncated` is the load-bearing signal: a successful parse here means
     // the response was cut off and the value is a prefix of the intended

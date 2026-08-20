@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [2.1.0] - 2026-08-20
 
 ### Added
 
@@ -88,6 +88,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the 600-line limit.
 
 ### Fixed
+
+- **A response that was already JSON could be mangled by a fence *inside* it.**
+  The extraction ladder tried the fence strategy first, so a valid JSON answer
+  whose finding text quoted "```" had `working` replaced by that inner fence's
+  body, and every later strategy then ran on prose - reporting `Unparseable` for
+  an answer that was JSON from the first character. The whole response is now
+  parsed before any fence is looked for. Found by drep's own pre-push gate,
+  reviewing `json_parsing.rs`, which is the file that does this.
+- **`drep auth`'s store no longer chmods a directory it did not create.**
+  `save` narrowed the parent to 0700 unconditionally, so a `DREP_AUTH_PATH`
+  under `/etc` would have taken `/etc` with it. Only a directory drep creates is
+  narrowed; the file's own 0600 is what guards the key.
+- **The store file is created 0600 rather than written and then chmodded**, so
+  the key is never briefly world-readable, and a key containing a control
+  character is refused at the prompt instead of failing on the first request.
+- **Endpoint normalisation no longer lowercases the URL path.** Scheme and host
+  are case-insensitive; a path is not, so `/API/v1` and `/api/v1` on one host
+  collapsed onto a single entry and could hand one endpoint's key to the other.
+- **`doctor` never prints a literal `api_key`.** A `${VAR}` reference is echoed,
+  because showing which variable is the point; a literal value is reported as
+  present without its contents, since that output is what gets pasted into bug
+  reports and CI logs.
+- **`wizard::Plan` hand-writes `Debug`**, having held pasted keys behind a
+  derived one.
+- **`temperature` is rendered with `{:?}`**: `Display` writes `1.0` as `1`,
+  which TOML reads as an integer and `config::load` then rejects - from a file
+  `drep init` had just reported writing.
+- **The cache key formats temperature as a shortest round-trip float.** Six
+  decimal places is coarser than `f32`'s resolution near 1.0, so two distinct
+  temperatures could share a key.
+- **Answering "Replace drep.toml?" no longer authorises overwriting a foreign
+  git hook.** The interactive answer applies to the config it asked about;
+  `--force` remains the only thing that clobbers a hook drep did not write.
+- **No test writes to the process environment.** `std::env::set_var` is `unsafe`
+  in edition 2024 because a concurrent reader is a data race, and `cargo test`
+  is multi-threaded - the three call sites' "single-threaded test process"
+  safety comments were simply untrue. The auth path and the wizard's
+  environment lookup are now injected instead.
 
 - **A leading `<think>...</think>` block is stripped before the JSON extraction
   ladder runs.** MiniMax's M-series over its OpenAI-compatible endpoint, and

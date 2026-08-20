@@ -137,12 +137,23 @@ pub async fn run_with<W: Write>(out: &mut W, args: &InitArgs, auth_path: &Path) 
 
     let plan = if interactive {
         let mut console = wizard::Terminal::new(out);
-        wizard::run(&mut console, &store, &crate::llm::models::Http).await?
+        wizard::run(
+            &mut console,
+            &store,
+            &crate::llm::models::Http,
+            &wizard::real_env,
+        )
+        .await?
     } else {
         plan_from_flags(args, &store)?
     };
 
-    apply(out, &root, plan, store, auth_path, force).await?;
+    // The interactive answer authorises replacing *the config*, which is what it
+    // asked about. Hooks take the explicit `--force` only: `hooks::install`
+    // already refreshes drep's own hook without it and refuses only a foreign
+    // one, so passing the config's answer here would let "Replace drep.toml?"
+    // silently clobber a hook somebody else wrote.
+    apply(out, &root, plan, store, auth_path, force, args.force).await?;
 
     Ok(Exit::Clean)
 }
@@ -320,7 +331,8 @@ async fn apply<W: Write>(
     plan: wizard::Plan,
     mut store: auth::AuthStore,
     auth_path: &Path,
-    force: bool,
+    config_force: bool,
+    hooks_force: bool,
 ) -> Result<()> {
     if !plan.new_keys.is_empty() {
         for (endpoint, key) in &plan.new_keys {
@@ -335,7 +347,11 @@ async fn apply<W: Write>(
         )?;
     }
 
-    let path = config_file::write(root, &config_file::render_chain(&plan.choices), force)?;
+    let path = config_file::write(
+        root,
+        &config_file::render_chain(&plan.choices),
+        config_force,
+    )?;
 
     let summary = plan
         .choices
@@ -349,7 +365,7 @@ async fn apply<W: Write>(
         gitignore::ensure_to(out, root).await?;
     }
 
-    hooks::install(out, root, plan.hooks, force).await?;
+    hooks::install(out, root, plan.hooks, hooks_force).await?;
 
     // Every variable this config depends on, named whether or not it is set.
     // Naming it unconditionally is the point: the report is what tells a user

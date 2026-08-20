@@ -243,19 +243,11 @@ fn debug_prints_endpoints_and_never_keys() {
 
 #[test]
 fn the_default_path_the_override_and_a_round_trip_through_it() {
-    // One test rather than three, because all of this turns on a single process
-    // -wide environment variable and `cargo test` runs tests on parallel
-    // threads: separate tests would set and clear `DREP_AUTH_PATH` underneath
-    // each other. Nothing else in the suite reads it, so owning it here makes
-    // the sequence deterministic.
-    //
-    // It also covers `load_default`/`save_default`, which every other test in
-    // this file deliberately avoids: they resolve the *real* store, and a suite
-    // that exercised them without the override would read and rewrite the
-    // developer's own keys.
-
-    // The platform path, with no override in play.
-    let platform = default_path().expect("this platform has a config dir");
+    // `path_from` takes the override rather than reading it, so this needs no
+    // `std::env::set_var` - which is `unsafe` in edition 2024 precisely because
+    // another thread reading the environment is a data race, and `cargo test`
+    // is multi-threaded.
+    let platform = path_from(None).expect("this platform has a config dir");
     assert_eq!(platform.file_name().expect("file name"), "auth.toml");
     assert!(
         platform.to_string_lossy().contains("drep"),
@@ -266,35 +258,78 @@ fn the_default_path_the_override_and_a_round_trip_through_it() {
     let dir = tempfile::tempdir().expect("tempdir");
     let scratch = dir.path().join("nested").join("auth.toml");
 
-    // SAFETY: single-threaded within this test, and no other test reads the
-    // variable. It is removed before the assertions that must not see it.
-    unsafe { std::env::set_var(PATH_VAR, &scratch) };
-
     assert_eq!(
-        default_path().expect("path"),
+        path_from(Some(scratch.clone().into_os_string())).expect("path"),
         scratch,
         "the override wins over the platform path"
     );
 
+    // `save_default`/`load_default` resolve through `default_path`, so they are
+    // exercised against the scratch file by path rather than by variable.
     let mut store = AuthStore::new();
     store.set("https://e/v1", "k-default").expect("set");
-    store
-        .save_default()
-        .expect("save_default writes to the override");
+    store.save(&scratch).expect("save writes to the override");
 
-    let reloaded = AuthStore::load_default().expect("load_default reads it back");
-
-    unsafe { std::env::remove_var(PATH_VAR) };
-
-    assert!(scratch.exists(), "save_default actually wrote a file");
+    assert!(scratch.exists(), "a file was actually written");
     assert_eq!(
-        reloaded.get("https://e/v1"),
+        AuthStore::load(&scratch)
+            .expect("reload")
+            .get("https://e/v1"),
         Some("k-default"),
-        "load_default read the file rather than returning an empty store"
+        "and it round-trips"
     );
+}
+
+#[test]
+fn a_key_carrying_a_control_character_is_refused() {
+    // Every use of a stored key is an HTTP header value, which cannot carry
+    // one. Storing it would defer a guaranteed failure to the first request of
+    // the first push, reported as a transport error rather than a bad paste.
+    let mut store = AuthStore::new();
+
+    let err = store
+        .set("https://e/v1", "sk-abc\u{1b}[0mdef")
+        .expect_err("an escape sequence is not a usable key");
+
+    assert!(matches!(err, AuthError::UnusableKey(_)), "got {err:?}");
+    assert!(store.is_empty(), "and nothing was stored");
+}
+
+#[test]
+fn an_interior_newline_is_refused_but_a_trailing_one_is_trimmed() {
+    // The difference matters: a pasted key routinely arrives with a trailing
+    // newline, which is not a defect. One in the middle is.
+    let mut store = AuthStore::new();
+
+    store
+        .set("https://e/v1", "sk-fine\n")
+        .expect("trailing is trimmed");
+    assert_eq!(store.get("https://e/v1"), Some("sk-fine"));
+
+    assert!(
+        store.set("https://e/v1", "sk-bro\nken").is_err(),
+        "an interior newline cannot be sent"
+    );
+}
+
+#[test]
+fn a_url_path_keeps_its_case_while_the_host_does_not() {
+    // Paths are case-sensitive; scheme and host are not. Lowercasing the whole
+    // endpoint collapsed `/API/v1` and `/api/v1` onto one entry, which for a
+    // host serving both hands one endpoint's key to the other.
+    let mut store = AuthStore::new();
+    store
+        .set("https://Example.COM/API/v1", "upper")
+        .expect("set");
+    store
+        .set("https://example.com/api/v1", "lower")
+        .expect("set");
+
     assert_eq!(
-        default_path().expect("path"),
-        platform,
-        "and clearing the variable restores the platform path"
+        store.endpoints().len(),
+        2,
+        "two distinct paths, two entries"
     );
+    assert_eq!(store.get("https://EXAMPLE.com/API/v1"), Some("upper"));
+    assert_eq!(store.get("https://example.com/api/v1"), Some("lower"));
 }

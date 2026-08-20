@@ -22,7 +22,7 @@ async fn run_zai(store: &AuthStore, key_answer: &str) -> (Plan, Scripted) {
         "",         // gitignore
     ];
     let mut console = Scripted::new(&answers);
-    let plan = run(&mut console, store, &Catalog::Unavailable)
+    let plan = run(&mut console, store, &Catalog::Unavailable, &|_| false)
         .await
         .expect("the wizard completes");
     assert!(console.is_drained(), "unused answers: the flow differed");
@@ -101,7 +101,7 @@ async fn a_key_already_in_the_store_is_reused_without_asking() {
 
     let provider = number_of("zai");
     let mut console = Scripted::new(&[provider.as_str(), "", "", "", "", ""]);
-    let plan = run(&mut console, &store, &Catalog::Unavailable)
+    let plan = run(&mut console, &store, &Catalog::Unavailable, &|_| false)
         .await
         .expect("the wizard completes");
 
@@ -127,7 +127,7 @@ async fn a_stored_key_is_found_regardless_of_a_trailing_slash() {
 
     let provider = number_of("zai");
     let mut console = Scripted::new(&[provider.as_str(), "", "", "", "", ""]);
-    let plan = run(&mut console, &store, &Catalog::Unavailable)
+    let plan = run(&mut console, &store, &Catalog::Unavailable, &|_| false)
         .await
         .expect("the wizard completes");
 
@@ -155,9 +155,14 @@ async fn a_key_pasted_earlier_in_the_same_run_is_not_asked_for_twice() {
         "",
     ]);
 
-    let plan = run(&mut console, &AuthStore::new(), &Catalog::Unavailable)
-        .await
-        .expect("the wizard completes");
+    let plan = run(
+        &mut console,
+        &AuthStore::new(),
+        &Catalog::Unavailable,
+        &|_| false,
+    )
+    .await
+    .expect("the wizard completes");
 
     assert!(
         console.is_drained(),
@@ -171,9 +176,14 @@ async fn a_key_pasted_earlier_in_the_same_run_is_not_asked_for_twice() {
 #[tokio::test]
 async fn a_provider_needing_no_key_is_never_asked_for_one() {
     let mut console = Scripted::new(&["1", "", "", "", "", ""]);
-    let plan = run(&mut console, &AuthStore::new(), &Catalog::Unavailable)
-        .await
-        .expect("the wizard completes");
+    let plan = run(
+        &mut console,
+        &AuthStore::new(),
+        &Catalog::Unavailable,
+        &|_| false,
+    )
+    .await
+    .expect("the wizard completes");
 
     assert_eq!(plan.choices[0].preset.key, "local");
     assert!(
@@ -218,16 +228,37 @@ async fn an_already_exported_variable_is_reported_at_the_prompt() {
     // It changes what the empty answer means: with the variable exported,
     // skipping the paste is a complete setup rather than a deferred one.
     //
-    // SAFETY: single-threaded test process, and the variable is removed below.
-    unsafe { std::env::set_var("ZAI_API_KEY", "already-here") };
+    // The lookup is injected, so this states the condition rather than creating
+    // it with `std::env::set_var` - which is `unsafe` in edition 2024 because a
+    // concurrent reader is a data race, and `cargo test` is multi-threaded.
+    let provider = number_of("zai");
+    let mut console = Scripted::new(&[provider.as_str(), "", "", "", "", "", ""]);
 
-    let (_, console) = run_zai(&AuthStore::new(), "").await;
-    let transcript = console.transcript();
-
-    unsafe { std::env::remove_var("ZAI_API_KEY") };
+    run(
+        &mut console,
+        &AuthStore::new(),
+        &Catalog::Unavailable,
+        &|_| true,
+    )
+    .await
+    .expect("the wizard completes");
 
     assert!(
-        transcript.contains("already set in this shell"),
-        "got {transcript}"
+        console.transcript().contains("already set in this shell"),
+        "got {}",
+        console.transcript()
+    );
+}
+
+#[tokio::test]
+async fn an_unset_variable_is_not_claimed_to_be_set() {
+    // The other side of the same branch: reporting a variable as set when it is
+    // not would tell the user their setup is complete when the next push 401s.
+    let (_, console) = run_zai(&AuthStore::new(), "").await;
+
+    assert!(
+        !console.transcript().contains("already set in this shell"),
+        "got {}",
+        console.transcript()
     );
 }

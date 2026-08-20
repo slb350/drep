@@ -31,6 +31,16 @@ use super::presets::{self, LlmPreset};
 use crate::auth::AuthStore;
 use crate::llm::models::{Model, ModelSource};
 
+/// Whether an environment variable is set, in the real process.
+///
+/// The production answer for `run`'s `env_is_set`. Injected rather than read
+/// inline so the wizard's tests need no `std::env::set_var`, which is `unsafe`
+/// in edition 2024 because a concurrent reader on another thread is a data race
+/// - and `cargo test` is multi-threaded.
+pub fn real_env(name: &str) -> bool {
+    std::env::var_os(name).is_some()
+}
+
 /// The terminal, or a scripted stand-in.
 pub trait Console {
     /// Print a line.
@@ -50,7 +60,7 @@ pub trait Console {
 }
 
 /// What the wizard decided, for `init` to carry out.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Plan {
     /// The failover chain, head first.
     pub choices: Vec<Choice>,
@@ -72,6 +82,7 @@ pub async fn run<S: ModelSource>(
     console: &mut dyn Console,
     store: &AuthStore,
     source: &S,
+    env_is_set: &dyn Fn(&str) -> bool,
 ) -> Result<Plan> {
     console.say("Setting up drep. Enter accepts the value in brackets.")?;
     console.say("")?;
@@ -81,7 +92,8 @@ pub async fn run<S: ModelSource>(
 
     loop {
         let position = choices.len() + 1;
-        let (choice, key) = one_provider(console, store, source, &new_keys, position).await?;
+        let (choice, key) =
+            one_provider(console, store, source, env_is_set, &new_keys, position).await?;
         if let Some(pair) = key {
             new_keys.push(pair);
         }
@@ -112,6 +124,29 @@ pub async fn run<S: ModelSource>(
     })
 }
 
+/// Hand-written so a pasted key cannot reach a log.
+///
+/// `new_keys` holds credentials, so a derived `Debug` would print every one of
+/// them from any `{:?}`, `dbg!`, or `expect` message that touched a `Plan`. The
+/// same reason `LlmConfig`, `LlmClient` and `AuthStore` all write theirs.
+impl std::fmt::Debug for Plan {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Plan")
+            .field("choices", &self.choices)
+            .field(
+                "new_keys",
+                &self
+                    .new_keys
+                    .iter()
+                    .map(|(endpoint, _)| endpoint.as_str())
+                    .collect::<Vec<_>>(),
+            )
+            .field("hooks", &self.hooks)
+            .field("gitignore", &self.gitignore)
+            .finish()
+    }
+}
+
 /// Ask for one provider: which, where, which model, and its key.
 ///
 /// Returns the choice and, when the user pasted one, the key to store.
@@ -119,6 +154,7 @@ async fn one_provider<S: ModelSource>(
     console: &mut dyn Console,
     store: &AuthStore,
     source: &S,
+    env_is_set: &dyn Fn(&str) -> bool,
     pending: &[(String, String)],
     position: usize,
 ) -> Result<(Choice, Option<(String, String)>)> {
@@ -128,7 +164,7 @@ async fn one_provider<S: ModelSource>(
 
     // The key is settled *before* the model, which is the whole reason the
     // endpoint can be asked what it serves: a listing needs authenticating.
-    let key = ask_key(console, store, pending, preset, &endpoint)?;
+    let key = ask_key(console, store, env_is_set, pending, preset, &endpoint)?;
     let model = ask_model(console, source, preset, &endpoint, key.usable.as_deref()).await?;
     let endpoint_for_store = endpoint.clone();
 
@@ -268,6 +304,7 @@ fn ask_required(console: &mut dyn Console, label: &str, default: Option<&str>) -
 fn ask_key(
     console: &mut dyn Console,
     store: &AuthStore,
+    env_is_set: &dyn Fn(&str) -> bool,
     pending: &[(String, String)],
     preset: &LlmPreset,
     endpoint: &str,
@@ -305,7 +342,7 @@ fn ask_key(
     // Reported because it changes what the empty answer means: with the
     // variable already exported, skipping is a complete setup rather than a
     // deferred one.
-    if std::env::var_os(env).is_some() {
+    if env_is_set(env) {
         console.say(&format!("  {env} is already set in this shell."))?;
     }
 
@@ -322,6 +359,10 @@ fn ask_key(
         return Ok(KeyChoice {
             in_store: false,
             to_store: None,
+            // Read directly rather than through `env_is_set`, which answers
+            // only whether a value exists. A test injecting a stub reports no
+            // usable key here, which is what it should: there is no value to
+            // authenticate a listing with.
             usable: std::env::var(env).ok(),
         });
     }
