@@ -199,10 +199,7 @@ impl Cache {
         // `duration_since` return `Err`. Treat that as age zero rather
         // than propagating the error: the entry is well within TTL,
         // and the alternative would silently turn every clock-skewed
-        // cache into a miss. The same fallback covers the very-old
-        // case where `duration_since` overflows the representable
-        // duration - those entries are almost certainly expired and
-        // the `> ttl` check below catches them via the comparison.
+        // cache into a miss.
         let age = SystemTime::now()
             .duration_since(mtime)
             .unwrap_or(Duration::ZERO);
@@ -301,6 +298,7 @@ impl Cache {
                 continue;
             }
             let shard_path = shard.path();
+            let shard_name = shard.file_name();
             let entries = match std::fs::read_dir(&shard_path) {
                 Ok(e) => e,
                 Err(_) => continue,
@@ -310,7 +308,17 @@ impl Cache {
                     Ok(e) => e,
                     Err(_) => continue,
                 };
+                if !is_entry_name(&shard_name, &entry.file_name()) {
+                    continue;
+                }
                 let path = entry.path();
+                let file_type = match entry.file_type() {
+                    Ok(file_type) => file_type,
+                    Err(_) => continue,
+                };
+                if !file_type.is_file() {
+                    continue;
+                }
                 let meta = match entry.metadata() {
                     Ok(m) => m,
                     Err(_) => continue,
@@ -355,12 +363,27 @@ struct CacheEntry {
 /// a looser "two characters" check, so a directory named `ab` is a shard and
 /// one named `zz` or `AB` is not.
 fn is_shard_name(name: &std::ffi::OsStr) -> bool {
-    name.to_str().is_some_and(|name| {
-        name.len() == 2
-            && name
-                .bytes()
-                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
-    })
+    name.to_str().is_some_and(|name| is_lower_hex(name, 2))
+}
+
+/// Whether `name` has the exact form written by [`Cache::entry_path`] for
+/// `shard`: 64 lower-case hexadecimal digest characters plus `.json`, with
+/// the digest beginning with the parent shard name.
+fn is_entry_name(shard: &std::ffi::OsStr, name: &std::ffi::OsStr) -> bool {
+    let (Some(shard), Some(name)) = (shard.to_str(), name.to_str()) else {
+        return false;
+    };
+    let Some(digest) = name.strip_suffix(".json") else {
+        return false;
+    };
+    digest.starts_with(shard) && is_lower_hex(digest, 64)
+}
+
+fn is_lower_hex(value: &str, expected_len: usize) -> bool {
+    value.len() == expected_len
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
 /// Write a length-prefixed field to the hasher.

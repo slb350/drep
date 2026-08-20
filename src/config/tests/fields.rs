@@ -123,6 +123,19 @@ fn max_tokens_absent_yields_none_and_present_yields_some() {
     assert_eq!(config.llm[0].max_tokens, Some(8192));
 }
 
+#[test]
+fn zero_timeout_and_zero_output_budget_are_rejected() {
+    for (field, expected) in [
+        ("timeout_secs = 0", "timeout_secs"),
+        ("max_tokens = 0", "max_tokens"),
+    ] {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let path = write_config(&temp, &format!("[[llm]]\n{field}\n"));
+        let err = load(&path).expect_err("a review needs time and output capacity");
+        assert!(err.to_string().contains(expected), "got {err:?}");
+    }
+}
+
 /// A file with no `[[llm]]` at all is rejected, not defaulted.
 ///
 /// The LLM layer is mandatory in 2.x, so a config naming no provider can

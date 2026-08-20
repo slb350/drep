@@ -135,43 +135,67 @@ fn allowed_name(name: &OsStr) -> bool {
     let Some(name) = name.to_str() else {
         return false;
     };
-    if sensitive_name(name) {
+    if !allowed_nonsensitive_name(name, cfg!(windows)) {
         return false;
     }
-    matches!(
-        name,
-        "PATH"
-            | "HOME"
-            | "CODEX_HOME"
-            | "TMPDIR"
-            | "TMP"
-            | "TEMP"
-            | "SSL_CERT_FILE"
-            | "SSL_CERT_DIR"
-            | "REQUESTS_CA_BUNDLE"
-            | "HTTP_PROXY"
-            | "HTTPS_PROXY"
-            | "ALL_PROXY"
-            | "NO_PROXY"
-            | "http_proxy"
-            | "https_proxy"
-            | "all_proxy"
-            | "no_proxy"
-            | "LANG"
-            | "LC_ALL"
-            | "TZ"
-            | "SYSTEMROOT"
-            | "WINDIR"
-            | "USERPROFILE"
-            | "APPDATA"
-            | "LOCALAPPDATA"
-            | "ComSpec"
-            | "PATHEXT"
-    ) || name.starts_with("LC_")
+    !sensitive_name(name)
+}
+
+pub(crate) fn allowed_nonsensitive_name(name: &str, windows: bool) -> bool {
+    const ALLOWED: &[&str] = &[
+        "PATH",
+        "HOME",
+        "CODEX_HOME",
+        "TMPDIR",
+        "TMP",
+        "TEMP",
+        "SSL_CERT_FILE",
+        "SSL_CERT_DIR",
+        "REQUESTS_CA_BUNDLE",
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "ALL_PROXY",
+        "NO_PROXY",
+        "http_proxy",
+        "https_proxy",
+        "all_proxy",
+        "no_proxy",
+        "LANG",
+        "LC_ALL",
+        "TZ",
+        "SYSTEMROOT",
+        "WINDIR",
+        "USERPROFILE",
+        "APPDATA",
+        "LOCALAPPDATA",
+        "ComSpec",
+        "PATHEXT",
+    ];
+    if windows {
+        ALLOWED
+            .iter()
+            .any(|allowed| name.eq_ignore_ascii_case(allowed))
+            || name
+                .get(..3)
+                .is_some_and(|prefix| prefix.eq_ignore_ascii_case("LC_"))
+    } else {
+        ALLOWED.contains(&name) || name.starts_with("LC_")
+    }
 }
 
 /// Secret-bearing environment-name patterns that stay excluded even if a
 /// future allowlist entry accidentally names one.
 pub(crate) fn sensitive_name(name: &str) -> bool {
-    name.starts_with("DREP_") || name.ends_with("_API_KEY")
+    let name = name.to_ascii_uppercase();
+    name.starts_with("DREP_")
+        || [
+            "_API_KEY",
+            "TOKEN",
+            "SECRET",
+            "PASSWORD",
+            "CREDENTIAL",
+            "AUTH",
+        ]
+        .iter()
+        .any(|pattern| name.contains(pattern))
 }

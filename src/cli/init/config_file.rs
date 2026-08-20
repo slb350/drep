@@ -314,36 +314,32 @@ pub fn write(root: &Path, body: &str, force: bool) -> Result<PathBuf> {
     use std::io::Write;
 
     let path = root.join(crate::config::default_config_path());
-
-    // `create_new` rather than `exists()` then `write`. Two reasons, and the
-    // second is the one that bites: the check and the write are not one
-    // operation, and `Path::exists` reports *false* for a dangling symlink
-    // while `fs::write` follows it - so a `drep.toml` symlinked at something
-    // that does not exist yet got the config written through it, to a path
-    // nobody named. `create_new` asks the OS the question and does the write
-    // in the same call, and refuses a symlink outright.
-    let mut options = std::fs::OpenOptions::new();
-    options.write(true);
-    if force {
-        options.create(true).truncate(true);
-    } else {
-        options.create_new(true);
-    }
-
-    let mut file = match options.open(&path) {
-        Ok(file) => file,
-        Err(err) if !force && err.kind() == std::io::ErrorKind::AlreadyExists => {
-            return Err(already_exists(&path));
-        }
-        Err(err) => {
-            return Err(
-                anyhow::Error::new(err).context(format!("could not write {}", path.display()))
-            );
-        }
-    };
-    file.write_all(body.as_bytes())
+    let mut temporary = tempfile::NamedTempFile::new_in(root)
         .with_context(|| format!("could not write {}", path.display()))?;
-    Ok(path)
+    temporary
+        .write_all(body.as_bytes())
+        .with_context(|| format!("could not write {}", path.display()))?;
+    temporary
+        .as_file()
+        .sync_all()
+        .with_context(|| format!("could not write {}", path.display()))?;
+
+    // Publish only a complete file. `persist_noclobber` keeps the no-force
+    // existence check atomic; `persist` replaces the directory entry itself,
+    // so `--force` cannot follow a symlink and overwrite its target.
+    let published = if force {
+        temporary.persist(&path)
+    } else {
+        temporary.persist_noclobber(&path)
+    };
+    match published {
+        Ok(_) => Ok(path),
+        Err(err) => match (force, err.error.kind()) {
+            (false, std::io::ErrorKind::AlreadyExists) => Err(already_exists(&path)),
+            _ => Err(anyhow::Error::new(err.error)
+                .context(format!("could not write {}", path.display()))),
+        },
+    }
 }
 
 #[cfg(test)]

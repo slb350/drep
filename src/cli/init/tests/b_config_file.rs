@@ -157,6 +157,33 @@ fn write_with_force_replaces_contents() {
     assert_eq!(after, "new body\n");
 }
 
+#[cfg(unix)]
+#[test]
+fn force_replaces_a_symlink_without_writing_through_it() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let target = dir.path().join("unrelated.toml");
+    std::fs::write(&target, "must survive\n").expect("target");
+    let config = dir.path().join("drep.toml");
+    std::os::unix::fs::symlink(&target, &config).expect("symlink");
+
+    config_file::write(dir.path(), "new body\n", true).expect("force replaces config path");
+
+    assert_eq!(
+        std::fs::read_to_string(&target).expect("target remains"),
+        "must survive\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&config).expect("new config"),
+        "new body\n"
+    );
+    assert!(
+        !std::fs::symlink_metadata(&config)
+            .expect("metadata")
+            .file_type()
+            .is_symlink()
+    );
+}
+
 /// Every rendered config parses as TOML, whatever is in the model or the
 /// endpoint.
 ///

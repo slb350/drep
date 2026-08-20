@@ -89,6 +89,27 @@ fn mutation_ci_pins_a_compatible_container_and_tool() {
     );
 }
 
+/// A no-argument full sweep must remain a genuinely empty cargo-mutants scope.
+///
+/// `printf '%q' "$@"` prints `''` when the argument list is empty. Embedded
+/// directly in the remote command, that becomes one empty argument and makes
+/// cargo-mutants reject the invocation before its baseline runs.
+#[test]
+fn remote_full_mutation_sweep_passes_no_phantom_argument() {
+    let script = common::without_comments("scripts/mutants-remote.sh");
+
+    assert!(
+        script.contains("if [ \"$#\" -gt 0 ]; then")
+            && script.contains("printf -v REMOTE_ARGS ' %q' \"$@\"")
+            && script.contains("./scripts/mutants-run.sh$REMOTE_ARGS"),
+        "the remote wrapper must append quoted arguments only when at least one exists"
+    );
+    assert!(
+        !script.contains("$(printf '%q ' \"$@\")"),
+        "empty positional parameters must not be formatted into a literal empty argument"
+    );
+}
+
 /// The platforms a release builds for.
 ///
 /// A target that falls out of this list does not fail anything: the installer

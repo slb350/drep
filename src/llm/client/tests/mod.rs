@@ -8,4 +8,5 @@
 
 mod complete_json;
 mod construction;
+mod finish_reasons;
 mod streaming;

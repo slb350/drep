@@ -45,21 +45,17 @@ pub(crate) enum EventError {
 pub(crate) fn parse_jsonl(input: impl Read) -> Result<Value, EventError> {
     let mut final_message: Option<String> = None;
     let mut turn_completed = false;
+    let mut reader = BufReader::new(input);
+    let mut line = Vec::new();
+    let mut line_number = 0usize;
 
-    for (offset, line) in BufReader::new(input).split(b'\n').enumerate() {
-        let line_number = offset + 1;
-        let line = line.map_err(|err| EventError::Read(err.to_string()))?;
-        if line.len() > EVENT_LINE_MAX_BYTES {
-            return Err(EventError::LineTooLarge {
-                line: line_number,
-                limit: EVENT_LINE_MAX_BYTES,
-            });
-        }
+    while read_line(&mut reader, &mut line, line_number + 1)? {
+        line_number += 1;
         if line.iter().all(u8::is_ascii_whitespace) {
             continue;
         }
-        let header: EventHeader<'_> = decode_line(&line, line_number)?;
-        let kind = header
+        let event: Event<'_> = decode_line(&line, line_number)?;
+        let kind = event
             .kind
             .as_deref()
             .ok_or_else(|| EventError::UnknownEvent("(missing)".to_owned()))?;
@@ -74,7 +70,6 @@ pub(crate) fn parse_jsonl(input: impl Read) -> Result<Value, EventError> {
         match kind {
             "thread.started" | "turn.started" => {}
             "item.started" | "item.updated" | "item.completed" => {
-                let event: ItemEvent<'_> = decode_line(&line, line_number)?;
                 let item = event.item;
                 let item_kind = item
                     .as_ref()
@@ -102,7 +97,6 @@ pub(crate) fn parse_jsonl(input: impl Read) -> Result<Value, EventError> {
                 turn_completed = true;
             }
             "error" | "turn.failed" => {
-                let event: ErrorEvent<'_> = decode_line(&line, line_number)?;
                 let message = event
                     .message
                     .or_else(|| event.error.and_then(|error| error.message))
@@ -120,6 +114,41 @@ pub(crate) fn parse_jsonl(input: impl Read) -> Result<Value, EventError> {
     serde_json::from_str(&message).map_err(|err| EventError::MalformedFinal(err.to_string()))
 }
 
+/// Read one JSONL record without ever growing the returned buffer past the
+/// protocol ceiling. `BufRead::split` allocates until it finds a newline, so a
+/// malicious or broken child could force an unbounded allocation before the
+/// old post-read length check ran.
+fn read_line(
+    reader: &mut impl BufRead,
+    line: &mut Vec<u8>,
+    line_number: usize,
+) -> Result<bool, EventError> {
+    line.clear();
+    loop {
+        let available = reader
+            .fill_buf()
+            .map_err(|err| EventError::Read(err.to_string()))?;
+        if available.is_empty() {
+            return Ok(!line.is_empty());
+        }
+
+        let newline = available.iter().position(|byte| *byte == b'\n');
+        let take = newline.unwrap_or(available.len());
+        if line.len().saturating_add(take) > EVENT_LINE_MAX_BYTES {
+            return Err(EventError::LineTooLarge {
+                line: line_number,
+                limit: EVENT_LINE_MAX_BYTES,
+            });
+        }
+        line.extend_from_slice(&available[..take]);
+        let consumed = take + usize::from(newline.is_some());
+        reader.consume(consumed);
+        if newline.is_some() {
+            return Ok(true);
+        }
+    }
+}
+
 fn decode_line<'a, T: Deserialize<'a>>(
     line: &'a [u8],
     line_number: usize,
@@ -131,15 +160,15 @@ fn decode_line<'a, T: Deserialize<'a>>(
 }
 
 #[derive(Deserialize)]
-struct EventHeader<'a> {
+struct Event<'a> {
     #[serde(rename = "type", borrow)]
     kind: Option<Cow<'a, str>>,
-}
-
-#[derive(Deserialize)]
-struct ItemEvent<'a> {
     #[serde(borrow)]
     item: Option<Item<'a>>,
+    #[serde(borrow)]
+    message: Option<Cow<'a, str>>,
+    #[serde(borrow)]
+    error: Option<ErrorDetail<'a>>,
 }
 
 #[derive(Deserialize)]
@@ -148,14 +177,6 @@ struct Item<'a> {
     kind: Option<Cow<'a, str>>,
     #[serde(borrow)]
     text: Option<Cow<'a, str>>,
-}
-
-#[derive(Deserialize)]
-struct ErrorEvent<'a> {
-    #[serde(borrow)]
-    message: Option<Cow<'a, str>>,
-    #[serde(borrow)]
-    error: Option<ErrorDetail<'a>>,
 }
 
 #[derive(Deserialize)]

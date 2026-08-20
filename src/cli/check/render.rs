@@ -67,10 +67,10 @@ fn render_text<W: Write>(out: &mut W, outcome: &CheckOutcome) -> Result<()> {
     // afterwards - as this did - detaches them: with two findings, the first
     // suggestion appears below the second finding and reads as if it belonged
     // to it.
-    let mut by_position: BTreeMap<(String, u32, usize), (String, Option<String>)> = BTreeMap::new();
+    let mut by_position: BTreeMap<(&str, u32, usize), (String, Option<String>)> = BTreeMap::new();
     for (idx, (source, f)) in tagged(outcome).enumerate() {
         by_position.insert(
-            (f.file_path.clone(), f.line, idx),
+            (f.file_path.as_str(), f.line, idx),
             (
                 finding_line(Some(source), f),
                 f.suggestion

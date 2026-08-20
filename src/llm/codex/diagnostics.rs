@@ -1,6 +1,5 @@
 //! Redacted interpretation of `codex doctor --json`.
 
-use std::io::Read;
 use std::path::Path;
 use std::process::Stdio;
 use std::time::{Duration, Instant};
@@ -8,7 +7,7 @@ use std::time::{Duration, Instant};
 use serde::Deserialize;
 use thiserror::Error;
 
-use super::{CodexStatus, command::ChildEnvironment};
+use super::{CodexStatus, capture::BoundedCapture, command::ChildEnvironment};
 
 const DIAGNOSTIC_MAX_BYTES: usize = 1024 * 1024;
 const DIAGNOSTIC_TIMEOUT: Duration = Duration::from_secs(30);
@@ -19,6 +18,8 @@ pub(crate) enum DiagnosticError {
     MissingBinary,
     #[error("could not run the Codex CLI diagnostic")]
     Process,
+    #[error("could not create an isolated Codex CLI diagnostic workspace")]
+    Workspace,
     #[error("Codex CLI diagnostic timed out")]
     Timeout,
     #[error("Codex CLI diagnostic output was too large")]
@@ -36,51 +37,53 @@ pub(crate) fn probe(
     executable: &Path,
     environment: &ChildEnvironment,
 ) -> Result<CodexStatus, DiagnosticError> {
-    let cwd = tempfile::tempdir().map_err(|_| DiagnosticError::Process)?;
+    let cwd = tempfile::tempdir().map_err(|_| DiagnosticError::Workspace)?;
+    let mut output = BoundedCapture::new().map_err(|_| DiagnosticError::Workspace)?;
+    let child_output = output
+        .child_stdio()
+        .map_err(|_| DiagnosticError::Workspace)?;
     let mut command = std::process::Command::new(executable);
     command
         .args(["doctor", "--json"])
         .current_dir(cwd.path())
         .stdin(Stdio::null())
-        .stdout(Stdio::piped())
+        .stdout(child_output)
         .stderr(Stdio::null());
     environment.apply_to_std(&mut command);
     let mut child = command.spawn().map_err(|err| match err.kind() {
         std::io::ErrorKind::NotFound => DiagnosticError::MissingBinary,
         _ => DiagnosticError::Process,
     })?;
-    let mut stdout = child.stdout.take().ok_or(DiagnosticError::Process)?;
-    let reader = std::thread::spawn(move || {
-        let mut bytes = Vec::new();
-        stdout
-            .by_ref()
-            .take((DIAGNOSTIC_MAX_BYTES + 1) as u64)
-            .read_to_end(&mut bytes)
-            .map(|_| bytes)
-    });
-
     let started = Instant::now();
     let status = loop {
-        match child.try_wait().map_err(|_| DiagnosticError::Process)? {
-            Some(status) => break status,
-            None if poll_before_deadline(started.elapsed(), DIAGNOSTIC_TIMEOUT) => {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if poll_before_deadline(started.elapsed(), DIAGNOSTIC_TIMEOUT) => {
+                if output.exceeds(DIAGNOSTIC_MAX_BYTES).unwrap_or(true) {
+                    stop(&mut child);
+                    return Err(DiagnosticError::OutputTooLarge);
+                }
                 std::thread::sleep(Duration::from_millis(10));
             }
-            None => {
-                let _ = child.kill();
-                let _ = child.wait();
-                let _ = reader.join();
+            Ok(None) => {
+                stop(&mut child);
                 return Err(DiagnosticError::Timeout);
+            }
+            Err(_) => {
+                stop(&mut child);
+                return Err(DiagnosticError::Process);
             }
         }
     };
-    let bytes = reader
-        .join()
+    if output
+        .exceeds(DIAGNOSTIC_MAX_BYTES)
         .map_err(|_| DiagnosticError::Process)?
-        .map_err(|_| DiagnosticError::Process)?;
-    if bytes.len() > DIAGNOSTIC_MAX_BYTES {
+    {
         return Err(DiagnosticError::OutputTooLarge);
     }
+    let bytes = output
+        .read_bounded(DIAGNOSTIC_MAX_BYTES)
+        .map_err(|_| DiagnosticError::Process)?;
     // `codex doctor` reports unrelated health checks too and may exit nonzero
     // while still emitting a complete, known authentication document. drep
     // retains only those redacted facts, so a valid document is authoritative;
@@ -89,6 +92,11 @@ pub(crate) fn probe(
         return Err(DiagnosticError::Process);
     }
     parse(bytes.as_slice())
+}
+
+fn stop(child: &mut std::process::Child) {
+    let _ = child.kill();
+    let _ = child.wait();
 }
 
 /// Whether another diagnostic poll fits before the deadline.

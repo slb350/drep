@@ -217,28 +217,27 @@ pub(crate) async fn run_against(
         .await
         .with_context(|| format!("could not resolve input under {}", root.display()))?;
 
-    let mut failures: BTreeMap<PathBuf, FailureReason> = BTreeMap::new();
-    // Disk and size failures from the input layer are the first writer into
-    // the failure map. The orchestrator's first-wins rule means a file that
-    // could not be read stays "unreadable" even if the LLM layer later
-    // reports the same path with a different reason — read failures are
-    // load-bearing, and a later layer's view is not allowed to overwrite
-    // them.
-    union_failures(&mut failures, work.read_failures.clone());
-
     // The two layers share no data - they only both report failures - so they
     // run concurrently. The deterministic leg is pure added latency otherwise:
     // a warm `cargo clippy` on this repo is ~3.5s, and the LLM leg is
     // multi-second regardless, so joining hides essentially all of it.
     let (deterministic_result, llm_result) = tokio::join!(
         deterministic::run(&work, root),
-        run_llm(&work, &providers, cache),
+        run_llm(&work, &providers, cache.clone()),
     );
     let (tool_findings, tool_failures) = deterministic_result;
     let (llm_result, provider_uses) = llm_result?;
 
+    // All concurrent writers have finished, so one oldest-first pass can
+    // enforce the configured disk ceiling without racing another put. Cache
+    // maintenance is best-effort: an unreadable cache must never turn an
+    // otherwise valid review into an unanalyzed file.
+    let _ = cache.evict_if_needed();
+
+    let mut failures: BTreeMap<PathBuf, FailureReason> = BTreeMap::new();
     // Union order is the reporting priority: a file that could not be read
     // keeps that reason over a later layer's view of the same path.
+    union_failures(&mut failures, work.read_failures);
     union_failures(&mut failures, tool_failures);
     union_failures(&mut failures, llm_result.failed_files);
 

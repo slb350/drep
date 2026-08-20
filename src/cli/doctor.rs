@@ -5,10 +5,10 @@
 //! which of their own tools will actually run, and whether the LLM half is
 //! configured.
 //!
-//! **`doctor` never fails.** It always returns `Ok(Exit::Clean)`; it is
-//! diagnosis, and `drep check` is the gate. A pre-push hook pointing at a
-//! half-configured machine is still better than one pointing at nothing - and
-//! the user who wants the actual gate has `drep check` for that.
+//! **Diagnostic findings never fail `doctor`.** A broken provider or missing
+//! tool still returns `Ok(Exit::Clean)`; it is diagnosis, and `drep check` is
+//! the gate. Ordinary I/O failures can still be returned when the report
+//! itself cannot be written or the platform cannot resolve its user paths.
 //!
 //! All output goes through a `&mut dyn std::io::Write` so the command is
 //! testable without spawning a subprocess. The tests call [`run_to`] directly
@@ -42,8 +42,8 @@ pub struct DoctorArgs {
     pub config: Option<PathBuf>,
 }
 
-/// Run the command, writing to stdout. Always returns `Ok(Exit::Clean)` -
-/// `doctor` is diagnosis, not a gate.
+/// Run the command, writing to stdout. Diagnostic findings return
+/// `Ok(Exit::Clean)`; failures to produce the report remain ordinary errors.
 pub fn run(args: &DoctorArgs) -> Result<Exit> {
     let mut out = std::io::stdout().lock();
     match run_to(&mut out, args) {
@@ -271,7 +271,7 @@ fn write_llm_section<W: Write>(
             )?;
             return Ok(());
         }
-        Some(Value::Array(entries)) => entries.clone(),
+        Some(Value::Array(entries)) => entries,
         Some(_) => {
             writeln!(
                 out,
@@ -324,7 +324,7 @@ fn write_llm_section<W: Write>(
 
     let mut enabled_count = 0usize;
     let mut codex_status: Option<Result<crate::llm::codex::CodexStatus, String>> = None;
-    for entry in &providers {
+    for entry in providers {
         let model = entry
             .get("model")
             .and_then(|v| v.as_str())
@@ -491,7 +491,7 @@ fn failover_line(enabled: usize) -> String {
 fn unset_env_vars(value: &toml::Value) -> Vec<String> {
     config::required_env_var_refs(value)
         .into_iter()
-        .filter(|name| std::env::var(name).is_err())
+        .filter(|name| std::env::var_os(name).is_none())
         .collect()
 }
 

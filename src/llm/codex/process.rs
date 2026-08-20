@@ -5,15 +5,16 @@ use std::path::Path;
 use std::process::Stdio;
 use std::time::Duration;
 
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
+use tokio::io::AsyncWriteExt;
 
 use crate::llm::error::LlmError;
 use crate::text::excerpt;
 
-use super::command::ChildEnvironment;
+use super::{capture::BoundedCapture, command::ChildEnvironment};
 
 const STDOUT_MAX_BYTES: usize = 16 * 1024 * 1024;
 const STDERR_MAX_BYTES: usize = 32 * 1024;
+const CAPTURE_FILE_MAX_BYTES: usize = STDOUT_MAX_BYTES;
 const STDERR_EXCERPT_CHARS: usize = 400;
 
 pub(crate) struct ProcessOutput {
@@ -36,13 +37,17 @@ pub(crate) async fn run(
     input: &str,
     timeout: Duration,
 ) -> Result<ProcessOutput, LlmError> {
+    let mut stdout = BoundedCapture::new().map_err(capture_setup_error)?;
+    let mut stderr = BoundedCapture::new().map_err(capture_setup_error)?;
+    let child_stdout = stdout.child_stdio().map_err(capture_setup_error)?;
+    let child_stderr = stderr.child_stdio().map_err(capture_setup_error)?;
     let mut command = tokio::process::Command::new(executable);
     command
         .args(args)
         .current_dir(cwd)
         .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
+        .stdout(child_stdout)
+        .stderr(child_stderr)
         .kill_on_drop(true);
     environment.apply_to(&mut command);
 
@@ -56,55 +61,78 @@ pub(crate) async fn run(
         },
     })?;
     let mut stdin = child.stdin.take().expect("piped stdin");
-    let stdout = child.stdout.take().expect("piped stdout");
-    let stderr = child.stderr.take().expect("piped stderr");
     let send_input = async move {
         stdin.write_all(input.as_bytes()).await?;
         stdin.shutdown().await?;
-        // Close the pipe before waiting for the child: Codex uses EOF as the
-        // end of the stdin payload, and keeping this handle alive deadlocks.
-        drop(stdin);
         Ok::<(), std::io::Error>(())
     };
-    // stderr is diagnostic only. Keep a prefix but continue draining it so a
-    // noisy child cannot fill its pipe and deadlock before exit.
+    // Capture into private files rather than pipes. A direct child can exit
+    // after spawning a grandchild that inherited stdout/stderr; waiting for
+    // pipe EOF then waits for the unrelated grandchild too. Regular files have
+    // no EOF handshake, while the size poll below keeps them bounded.
     let execution = async {
-        tokio::join!(
-            child.wait(),
-            send_input,
-            read_bounded(stdout, STDOUT_MAX_BYTES),
-            read_capped(stderr, STDERR_MAX_BYTES),
-        )
-    };
-    let (status, stdin_result, stdout, stderr) =
-        match tokio::time::timeout(timeout, execution).await {
-            Ok(results) => results,
-            Err(_) => {
-                let _ = child.kill().await;
-                let _ = child.wait().await;
-                return Err(LlmError::Transport {
-                    status: None,
-                    message: format!("Codex CLI timed out after {} seconds", timeout.as_secs()),
-                });
+        let mut completion = std::pin::pin!(async { tokio::join!(child.wait(), send_input) });
+        let mut size_poll = tokio::time::interval(Duration::from_millis(10));
+        size_poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
+        loop {
+            tokio::select! {
+                results = &mut completion => return Ok::<_, LlmError>(results),
+                _ = size_poll.tick() => {
+                    check_capture_size("stdout", &stdout, STDOUT_MAX_BYTES)?;
+                    check_capture_size("stderr", &stderr, CAPTURE_FILE_MAX_BYTES)?;
+                }
             }
-        };
+        }
+    };
+    let (status, stdin_result) = match tokio::time::timeout(timeout, execution).await {
+        Ok(Ok(results)) => results,
+        Ok(Err(err)) => {
+            stop(&mut child).await;
+            return Err(err);
+        }
+        Err(_) => {
+            stop(&mut child).await;
+            return Err(LlmError::Transport {
+                status: None,
+                message: format!("Codex CLI timed out after {} seconds", timeout.as_secs()),
+            });
+        }
+    };
 
     let status = status.map_err(|err| LlmError::Transport {
         status: None,
         message: format!("could not wait for Codex CLI: {err}"),
     })?;
-    let stdout = stdout.map_err(|err| stream_error("stdout", err))?;
-    let stderr = stderr.map_err(|err| stream_error("stderr", err))?;
-    stdin_result.map_err(|err| LlmError::Transport {
-        status: None,
-        message: format!("could not send the review payload to Codex: {err}"),
-    })?;
+    check_capture_size("stdout", &stdout, STDOUT_MAX_BYTES)?;
+    check_capture_size("stderr", &stderr, CAPTURE_FILE_MAX_BYTES)?;
+    let stdout = stdout
+        .read_bounded(STDOUT_MAX_BYTES)
+        .map_err(|err| stream_error("stdout", err))?;
+    let stderr = stderr
+        .read_prefix(STDERR_MAX_BYTES)
+        .map_err(|err| stream_error("stderr", err))?;
+    // A nonzero child status is the authoritative failure: its JSONL/stderr
+    // diagnostic explains why it stopped and closing stdin early is a normal
+    // consequence. On a successful exit, a write failure still proves the
+    // requested payload was not delivered in full.
+    if status.success() {
+        stdin_result.map_err(|err| LlmError::Transport {
+            status: None,
+            message: format!("could not send the review payload to Codex: {err}"),
+        })?;
+    }
 
     Ok(ProcessOutput {
         stdout,
         stderr,
         status,
     })
+}
+
+async fn stop(child: &mut tokio::process::Child) {
+    let _ = child.kill().await;
+    let _ = child.wait().await;
 }
 
 fn stream_error(stream: &str, err: std::io::Error) -> LlmError {
@@ -114,35 +142,22 @@ fn stream_error(stream: &str, err: std::io::Error) -> LlmError {
     }
 }
 
-async fn read_bounded(
-    reader: impl AsyncRead + Unpin,
-    limit: usize,
-) -> Result<Vec<u8>, std::io::Error> {
-    let mut bytes = Vec::new();
-    reader
-        .take((limit + 1) as u64)
-        .read_to_end(&mut bytes)
-        .await?;
-    if bytes.len() > limit {
-        return Err(std::io::Error::other(format!(
-            "Codex output exceeded {limit} bytes"
-        )));
+fn capture_setup_error(err: std::io::Error) -> LlmError {
+    LlmError::Transport {
+        status: None,
+        message: format!("could not create bounded Codex output capture: {err}"),
     }
-    Ok(bytes)
 }
 
-async fn read_capped(
-    mut reader: impl AsyncRead + Unpin,
-    limit: usize,
-) -> Result<Vec<u8>, std::io::Error> {
-    let mut retained = Vec::new();
-    let mut chunk = [0_u8; 8192];
-    loop {
-        let read = reader.read(&mut chunk).await?;
-        if read == 0 {
-            return Ok(retained);
-        }
-        let keep = read.min(limit.saturating_sub(retained.len()));
-        retained.extend_from_slice(&chunk[..keep]);
+fn check_capture_size(stream: &str, file: &BoundedCapture, limit: usize) -> Result<(), LlmError> {
+    if file
+        .exceeds(limit)
+        .map_err(|err| stream_error(stream, err))?
+    {
+        return Err(stream_error(
+            stream,
+            std::io::Error::other(format!("Codex output exceeded {limit} bytes")),
+        ));
     }
+    Ok(())
 }

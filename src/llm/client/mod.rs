@@ -301,9 +301,10 @@ impl LlmClient {
     /// Returns [`Answer::NoJson`] carrying the raw text when the query
     /// produced something we could not parse at all - the SDK's retry layer
     /// sees `Ok` and stops, leaving the decision to `complete_json`. Returns
-    /// `Err(SdkError)` for any transport-level failure, *including an empty
-    /// response*, which the retry layer will retry when the SDK classifies it
-    /// as transient.
+    /// `Err(SdkError)` for a transport-level failure, including an unexplained
+    /// empty response. An empty response with a terminal `Length` or
+    /// `ContentFilter` reason stays [`Answer::NoJson`], because the reason says
+    /// the same request cannot benefit from a retry.
     async fn run_one_query(
         &self,
         prompt: &str,
@@ -352,7 +353,7 @@ impl LlmClient {
         // `Ok(None)` and still does not retry - that is the deterministic case
         // the split was built for, and re-sending it burns a full reasoning
         // call for the same answer.
-        if text.trim().is_empty() {
+        if text.trim().is_empty() && worth_asking_again(&finish) {
             return Err(open_agent::Error::stream(
                 "the model returned an empty response",
             ));

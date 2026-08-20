@@ -1,5 +1,6 @@
 //! ChatGPT-subscription reviews through the separately installed Codex CLI.
 
+mod capture;
 mod command;
 mod diagnostics;
 mod events;

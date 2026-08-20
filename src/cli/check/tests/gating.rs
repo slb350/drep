@@ -112,6 +112,24 @@ async fn clean_run_returns_clean() {
     assert_eq!(exit.code(), 0, "Clean must map to exit 0");
 }
 
+#[tokio::test]
+async fn a_completed_run_enforces_the_cache_size_ceiling() {
+    let (dir, server) = setup_mock(r#"{"issues": []}"#).await;
+    crate::test_support::write_drep_toml(dir.path(), &format!("{}/v1", server.uri()));
+    let source = dir.path().join("lib.py");
+    std::fs::write(&source, "x = 1\n").expect("lib.py");
+    let cache_root = dir.path().join("tiny-cache");
+    let cache = Cache::new(cache_root.clone(), 30, 1);
+
+    let exit = check::run_with(&args(vec![source], None), dir.path(), cache)
+        .await
+        .expect("check succeeds");
+
+    assert_eq!(exit, check::Exit::Clean);
+    let bytes = crate::test_support::two_level_tree_size(&cache_root);
+    assert!(bytes <= 1, "cache retained {bytes} bytes past its ceiling");
+}
+
 // ---------- 13 ----------
 
 /// Criterion 13: a tool finding blocks with no `--fail-on`.

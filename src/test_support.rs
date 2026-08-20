@@ -79,6 +79,10 @@ pub(crate) fn sse_without_finish_reason(parts: &[&str]) -> String {
 /// encoded three times - and a stream that yields no text under an older SDK
 /// yields it silently, so a copy that drifts is not a copy that fails.
 fn sse_chunks(parts: &[&str], last: &str) -> String {
+    assert!(
+        !parts.is_empty(),
+        "an SSE fixture needs a final chunk to carry its finish reason"
+    );
     let mut out = String::new();
     for (i, part) in parts.iter().enumerate() {
         let finish = if i + 1 == parts.len() { last } else { "null" };
@@ -276,6 +280,21 @@ pub(crate) fn write_executable(path: &std::path::Path, contents: impl AsRef<str>
     }
     #[cfg(not(unix))]
     std::fs::write(path, contents.as_ref()).expect("writing the executable must succeed");
+}
+
+/// Sum regular-file bytes one directory level beneath `root`.
+pub(crate) fn two_level_tree_size(root: &std::path::Path) -> u64 {
+    std::fs::read_dir(root)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|directory| std::fs::read_dir(directory.path()).ok())
+        .flatten()
+        .flatten()
+        .filter_map(|entry| entry.metadata().ok())
+        .filter(|metadata| metadata.is_file())
+        .map(|metadata| metadata.len())
+        .sum()
 }
 
 /// Mark a file executable on unix; a no-op elsewhere.

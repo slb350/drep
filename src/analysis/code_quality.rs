@@ -273,15 +273,6 @@ fn parse_response(
         Extracted::Truncated(value) => (value, true),
     };
 
-    // Hoisted: every failure path below names the same file, and every
-    // finding carries the same path string.
-    let path_string = file_path.to_string_lossy().into_owned();
-    let mut malformed_reason: Option<String> = if truncated {
-        Some("response was truncated".to_owned())
-    } else {
-        None
-    };
-
     // The response shape is `{"issues": [...], "summary": "..."}`. Anything
     // else is malformed, and the whole file is unanalyzed.
     let Some(issues) = value.get(ISSUES).and_then(Value::as_array) else {
@@ -296,6 +287,12 @@ fn parse_response(
         result.failed_files.insert(file_path.to_path_buf(), reason);
         return result;
     };
+
+    // Every finding carries the same path string. Allocate it only once the
+    // response has an issues array; the missing-array failure above does not
+    // need it.
+    let path_string = file_path.to_string_lossy().into_owned();
+    let mut failure = truncated.then_some(FailureReason::Truncated);
 
     // `issues: []` is a legitimate clean result: empty findings, no failure.
     for issue in issues {
@@ -312,17 +309,12 @@ fn parse_response(
             // array rather than the one that first told us the response was
             // not understood.
             IssueOutcome::Malformed(detail) => {
-                malformed_reason.get_or_insert(detail);
+                failure.get_or_insert(FailureReason::MalformedFinding(detail));
             }
         }
     }
 
-    if let Some(detail) = malformed_reason {
-        let reason = if truncated {
-            FailureReason::Truncated
-        } else {
-            FailureReason::MalformedFinding(detail)
-        };
+    if let Some(reason) = failure {
         result.failed_files.insert(file_path.to_path_buf(), reason);
     }
     result

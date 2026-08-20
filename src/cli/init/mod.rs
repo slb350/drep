@@ -106,10 +106,10 @@ pub async fn run(args: &InitArgs) -> Result<Exit> {
 pub async fn run_with<W: Write>(out: &mut W, args: &InitArgs, auth_path: &Path) -> Result<Exit> {
     let toplevel = match diff::run_git(&args.path, &["rev-parse", "--show-toplevel"]).await {
         Ok(s) => s,
-        Err(_) => {
+        Err(err) => {
             return Err(anyhow!(
-                "{} is not inside a git repository",
-                args.path.display()
+                "{} is not inside a git repository: {err}",
+                args.path.display(),
             ));
         }
     };

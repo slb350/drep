@@ -122,6 +122,10 @@ fi
 # printf %q, which is bash's dialect, so the remote end must be bash whatever
 # login shell the account uses.
 status=0
+REMOTE_ARGS=
+if [ "$#" -gt 0 ]; then
+  printf -v REMOTE_ARGS ' %q' "$@"
+fi
 # shellcheck disable=SC2087  # local expansion is the point: the remote dir, the
 # job count and the %q-quoted arguments are all known here. \$HOME is escaped so
 # it resolves there.
@@ -130,7 +134,7 @@ set -euo pipefail
 export PATH=\$HOME/.cargo/bin:\$PATH
 cd ~/'$REMOTE_DIR'
 mkdir -p '$MUTANTS_OUT_DIR'
-MUTANTS_JOBS=$JOBS flock -w 1800 '$MUTANTS_OUT_DIR' ./scripts/mutants-run.sh $(printf '%q ' "$@")
+MUTANTS_JOBS=$JOBS flock -w 1800 '$MUTANTS_OUT_DIR' ./scripts/mutants-run.sh$REMOTE_ARGS
 EOF
 
 # Mirror the results back so `missed.txt`, the logs and the diffs of surviving

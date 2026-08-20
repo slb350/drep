@@ -6,7 +6,8 @@ use std::path::Path;
 use crate::analysis::response_contract::output_schema;
 use crate::config::ReasoningEffort;
 use crate::llm::codex::command::{
-    ChildEnvironment, instructions_text, invocation_args, sensitive_name, toml_override,
+    ChildEnvironment, allowed_nonsensitive_name, instructions_text, invocation_args,
+    sensitive_name, toml_override,
 };
 
 #[test]
@@ -168,5 +169,16 @@ fn child_environment_is_an_allowlist_and_never_forwards_api_keys() {
 fn each_secret_name_pattern_is_independently_forbidden() {
     assert!(sensitive_name("DREP_ANYTHING"));
     assert!(sensitive_name("VENDOR_API_KEY"));
+    assert!(sensitive_name("GITHUB_TOKEN"));
+    assert!(sensitive_name("client_secret"));
+    assert!(sensitive_name("DB_PASSWORD"));
+    assert!(sensitive_name("AWS_CREDENTIALS_FILE"));
     assert!(!sensitive_name("PATH"));
+}
+
+#[test]
+fn windows_allowlist_matches_names_and_locale_prefixes_independently() {
+    assert!(allowed_nonsensitive_name("Path", true));
+    assert!(allowed_nonsensitive_name("lc_messages", true));
+    assert!(!allowed_nonsensitive_name("UNRELATED", true));
 }

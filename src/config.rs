@@ -76,6 +76,9 @@ pub enum ConfigError {
     #[error("environment variable `{0}` is not set (referenced by `{1}`)")]
     EnvVarUnset(String, String),
 
+    #[error("environment variable `{0}` is not valid UTF-8 (referenced by `{1}`)")]
+    EnvVarNotUnicode(String, String),
+
     /// The index is the zero-based position in the file; the message renders
     /// it one-based, and says "in file order" because the *chain* numbers only
     /// the enabled entries - with a disabled head the two differ, and
@@ -94,6 +97,12 @@ pub enum ConfigError {
     /// positive value" - is a hang with no message at all.
     #[error("[[llm]] #{} in file order: max_concurrent must be at least 1", index + 1)]
     ZeroConcurrency { index: usize },
+
+    #[error("[[llm]] #{} in file order: timeout_secs must be at least 1", index + 1)]
+    ZeroTimeout { index: usize },
+
+    #[error("[[llm]] #{} in file order: max_tokens must be at least 1 when set", index + 1)]
+    ZeroMaxTokens { index: usize },
 
     /// Rejected rather than defaulted: falling back to `openai` would post
     /// chat-completions bytes to a `/messages` endpoint, and the resulting 404
@@ -247,6 +256,12 @@ fn validate(
 
         if llm.max_concurrent == 0 {
             return Err(ConfigError::ZeroConcurrency { index });
+        }
+        if llm.timeout_secs == 0 {
+            return Err(ConfigError::ZeroTimeout { index });
+        }
+        if llm.max_tokens == Some(0) {
+            return Err(ConfigError::ZeroMaxTokens { index });
         }
 
         if llm.backend != BackendKind::Http {
@@ -505,8 +520,24 @@ fn expand_string(s: &str, source: &Path) -> Result<String, ConfigError> {
                 format!("unterminated `${{` in `{s}`"),
             ));
         }
-        let value = env::var(&name)
-            .map_err(|_| ConfigError::EnvVarUnset(name.clone(), source.display().to_string()))?;
+        if name.is_empty() {
+            return Err(ConfigError::Parse(
+                source.to_path_buf(),
+                format!("empty environment variable reference in `{s}`"),
+            ));
+        }
+        let value = match env::var(&name) {
+            Ok(value) => value,
+            Err(env::VarError::NotPresent) => {
+                return Err(ConfigError::EnvVarUnset(name, source.display().to_string()));
+            }
+            Err(env::VarError::NotUnicode(_)) => {
+                return Err(ConfigError::EnvVarNotUnicode(
+                    name,
+                    source.display().to_string(),
+                ));
+            }
+        };
         out.push_str(&value);
     }
     Ok(out)

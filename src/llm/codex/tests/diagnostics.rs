@@ -75,6 +75,7 @@ fn a_missing_binary_has_actionable_redacted_guidance() {
 }
 
 #[test]
+#[cfg(unix)]
 fn valid_auth_diagnostic_survives_an_unrelated_nonzero_doctor_status() {
     let dir = tempfile::tempdir().expect("tempdir");
     let executable = dir.path().join("fake-codex");
@@ -89,6 +90,7 @@ fn valid_auth_diagnostic_survives_an_unrelated_nonzero_doctor_status() {
 }
 
 #[test]
+#[cfg(unix)]
 fn diagnostic_output_accepts_exactly_one_mebibyte() {
     const EXPECTED_LIMIT: usize = 1024 * 1024;
     let dir = tempfile::tempdir().expect("tempdir");
@@ -100,6 +102,7 @@ fn diagnostic_output_accepts_exactly_one_mebibyte() {
 }
 
 #[test]
+#[cfg(unix)]
 fn diagnostic_output_one_byte_over_the_limit_is_rejected_as_too_large() {
     const EXPECTED_LIMIT: usize = 1024 * 1024;
     let dir = tempfile::tempdir().expect("tempdir");
@@ -112,6 +115,7 @@ fn diagnostic_output_one_byte_over_the_limit_is_rejected_as_too_large() {
 }
 
 #[test]
+#[cfg(unix)]
 fn an_empty_nonzero_diagnostic_is_a_process_failure() {
     let dir = tempfile::tempdir().expect("tempdir");
     let executable = dir.path().join("fake-codex");
@@ -121,6 +125,27 @@ fn an_empty_nonzero_diagnostic_is_a_process_failure() {
         probe(&executable, &ChildEnvironment::default()),
         Err(DiagnosticError::Process)
     ));
+}
+
+#[cfg(unix)]
+#[test]
+fn a_grandchild_inheriting_stdout_cannot_hold_the_diagnostic_open() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let executable = dir.path().join("fake-codex");
+    crate::test_support::write_executable(
+        &executable,
+        format!(
+            "#!/bin/sh\ncapture=$(dirname \"$0\")\nsleep 4 &\nprintf '%s' \"$!\" > \"$capture/grandchild.pid\"\nprintf '%s' '{}'\n",
+            CHATGPT
+        ),
+    );
+
+    let status = probe(&executable, &ChildEnvironment::default()).expect("valid diagnostic");
+    let pid = std::fs::read_to_string(dir.path().join("grandchild.pid")).expect("grandchild pid");
+    let running = super::probe_and_stop_process(&pid);
+
+    assert_eq!(status.cli_version(), "0.148.0");
+    assert!(running, "probe waited for the unrelated grandchild to exit");
 }
 
 #[test]
@@ -174,6 +199,7 @@ fn diagnostic_with_len(length: usize) -> Vec<u8> {
     bytes
 }
 
+#[cfg(unix)]
 fn diagnostic_executable(dir: &std::path::Path, bytes: Vec<u8>) -> std::path::PathBuf {
     let executable = dir.join("fake-codex");
     std::fs::write(dir.join("diagnostic.json"), bytes).expect("diagnostic fixture");

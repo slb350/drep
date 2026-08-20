@@ -48,7 +48,7 @@ pub(crate) fn output_schema() -> serde_json::Value {
 pub(crate) fn output_schema_bytes() -> &'static [u8] {
     static SCHEMA: OnceLock<Vec<u8>> = OnceLock::new();
     SCHEMA.get_or_init(|| {
-        serde_json::to_vec_pretty(&output_schema())
+        serde_json::to_vec(&output_schema())
             .expect("the in-memory response schema is always serializable")
     })
 }

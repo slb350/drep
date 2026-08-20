@@ -318,6 +318,58 @@ async fn a_child_that_closes_stdin_early_is_a_transport_failure() {
     drop(dir);
 }
 
+#[tokio::test]
+async fn a_nonzero_exit_keeps_its_diagnostic_when_stdin_closes_early() {
+    let (dir, client) = fake_client(
+        "#!/bin/sh\nprintf '%s\\n' '{\"type\":\"error\",\"message\":\"terminal detail\"}'\nexit 19\n",
+        5,
+    );
+    let payload = "x".repeat(1024 * 1024);
+
+    let err = client
+        .complete_json("review", &payload)
+        .await
+        .expect_err("the child reported a nonzero exit");
+
+    assert!(
+        matches!(err, LlmError::Backend { kind: BackendErrorKind::UnknownExit, ref message }
+            if message.contains("terminal detail")),
+        "got {err:?}"
+    );
+    drop(dir);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_grandchild_inheriting_output_cannot_hold_a_review_open() {
+    let (dir, client) = fake_client(
+        concat!(
+            "#!/bin/sh\n",
+            "sed -n '1,$p' >/dev/null\n",
+            "capture=$(dirname \"$0\")\n",
+            // Keep the grandchild well beyond the review deadline while
+            // leaving enough startup headroom for a heavily parallel suite.
+            "sleep 30 &\n",
+            "printf '%s' \"$!\" > \"$capture/grandchild.pid\"\n",
+            "printf '%s\\n' \\\n",
+            "  '{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":\"{\\\"issues\\\":[],\\\"summary\\\":\\\"clean\\\"}\"}}' \\\n",
+            "  '{\"type\":\"turn.completed\"}'\n",
+        ),
+        10,
+    );
+
+    let result = client.complete_json("review", "payload").await;
+    let pid = std::fs::read_to_string(dir.path().join("grandchild.pid")).expect("grandchild pid");
+    let running = super::probe_and_stop_process(&pid);
+
+    assert!(result.is_ok(), "got {result:?}");
+    assert!(
+        running,
+        "review waited for the unrelated grandchild to exit"
+    );
+    drop(dir);
+}
+
 #[cfg(unix)]
 #[tokio::test]
 async fn a_signal_terminated_child_is_a_transport_failure() {

@@ -118,6 +118,43 @@ api_key = "${DREP_DEFINITELY_NOT_SET_VAR_XYZ_123}"
 }
 
 #[test]
+fn an_empty_environment_reference_is_a_parse_error() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let path = write_config(&temp, "[[llm]]\napi_key = \"${}\"\n");
+
+    let err = load(&path).expect_err("an empty variable name is not a reference");
+    assert!(
+        matches!(err, ConfigError::Parse(_, ref message) if message.contains("empty environment variable")),
+        "got {err:?}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_non_utf8_environment_value_is_not_reported_as_unset() {
+    use std::os::unix::ffi::OsStringExt;
+
+    let temp = tempfile::tempdir().expect("tempdir");
+    let var = "DREP_TEST_NON_UTF8_ENV_VALUE_XYZ";
+    let path = write_config(&temp, &format!("[[llm]]\napi_key = \"${{{var}}}\"\n"));
+    let previous = env::var_os(var);
+    // SAFETY: this module is the explicitly isolated environment-expansion
+    // suite, and the unique variable is restored before the assertion.
+    unsafe { env::set_var(var, std::ffi::OsString::from_vec(vec![0xff])) };
+    let result = load(&path);
+    match previous {
+        Some(value) => unsafe { env::set_var(var, value) },
+        None => unsafe { env::remove_var(var) },
+    }
+
+    let err = result.expect_err("the value cannot be represented in TOML text");
+    assert!(
+        matches!(err, ConfigError::EnvVarNotUnicode(ref name, _) if name == var),
+        "got {err:?}"
+    );
+}
+
+#[test]
 fn literal_api_key_passes_through_unchanged() {
     let temp = tempfile::tempdir().expect("tempdir");
     let path = write_config(

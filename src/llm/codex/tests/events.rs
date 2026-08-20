@@ -140,12 +140,30 @@ fn oversized_or_malformed_lines_are_rejected_before_lifecycle_checks() {
     let oversized = vec![b'x'; 1024 * 1024 + 1];
     assert!(matches!(
         parse_jsonl(oversized.as_slice()),
-        Err(EventError::LineTooLarge { .. })
+        Err(EventError::LineTooLarge { line: 1, .. })
     ));
     assert!(matches!(
         parse_jsonl(b"not-json\n".as_slice()),
         Err(EventError::MalformedLine { line: 1, .. })
     ));
+}
+
+#[test]
+fn an_oversized_line_stops_reading_near_the_limit() {
+    let mut reader = CountingReader {
+        remaining: 4 * 1024 * 1024,
+        read: 0,
+    };
+
+    assert!(matches!(
+        parse_jsonl(&mut reader),
+        Err(EventError::LineTooLarge { .. })
+    ));
+    assert!(
+        reader.read <= 1024 * 1024 + 8192,
+        "parser buffered the whole oversized line: {} bytes",
+        reader.read
+    );
 }
 
 #[test]
@@ -169,6 +187,21 @@ fn an_event_line_exactly_one_mebibyte_is_accepted() {
 struct Fragmented<'a> {
     bytes: &'a [u8],
     chunk: usize,
+}
+
+struct CountingReader {
+    remaining: usize,
+    read: usize,
+}
+
+impl Read for CountingReader {
+    fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+        let count = self.remaining.min(buffer.len());
+        buffer[..count].fill(b'x');
+        self.remaining -= count;
+        self.read += count;
+        Ok(count)
+    }
 }
 
 impl Read for Fragmented<'_> {

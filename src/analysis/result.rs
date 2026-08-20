@@ -254,7 +254,7 @@ impl ProviderFailure {
 
 impl fmt::Display for FailureReason {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.one_line())
+        f.pad(&self.one_line())
     }
 }
 
@@ -399,6 +399,15 @@ mod tests {
         assert!(
             rendered.contains("429"),
             "rendered line must contain 429, got {rendered:?}"
+        );
+    }
+
+    #[test]
+    fn display_honours_formatter_width_and_alignment() {
+        let reason = FailureReason::Truncated;
+        assert_eq!(
+            format!("{reason:>30}"),
+            format!("{:>30}", reason.one_line())
         );
     }
 }

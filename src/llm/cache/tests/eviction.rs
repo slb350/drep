@@ -61,7 +61,7 @@ fn evict_if_needed_removes_until_under_limit_and_reports_freed() {
         .expect("put k2");
 
     let freed = cache.evict_if_needed().expect("eviction");
-    let remaining: u64 = walk_size(temp.path());
+    let remaining = crate::test_support::two_level_tree_size(temp.path());
 
     assert!(
         remaining <= 60,
@@ -71,30 +71,6 @@ fn evict_if_needed_removes_until_under_limit_and_reports_freed() {
         freed > 0,
         "freed must be positive when eviction ran, was {freed}"
     );
-}
-
-/// Sum the on-disk size of every regular file under `root`.
-fn walk_size(root: &std::path::Path) -> u64 {
-    let mut total = 0u64;
-    let Ok(shards) = std::fs::read_dir(root) else {
-        return 0;
-    };
-    for shard in shards.flatten() {
-        let Ok(ft) = shard.file_type() else { continue };
-        if !ft.is_dir() {
-            continue;
-        }
-        let Ok(entries) = std::fs::read_dir(shard.path()) else {
-            continue;
-        };
-        for entry in entries.flatten() {
-            let Ok(meta) = entry.metadata() else { continue };
-            if meta.is_file() {
-                total += meta.len();
-            }
-        }
-    }
-    total
 }
 
 /// Criterion 19: eviction removes the **oldest** entry first, not an
@@ -231,4 +207,51 @@ fn eviction_ignores_directories_that_are_not_shards() {
         stray_file.exists(),
         "a stray file in the root is not an entry"
     );
+}
+
+/// A valid shard directory can still contain a file the cache did not create.
+/// Eviction recognizes the complete `<digest>.json` layout, not merely the
+/// parent directory name.
+#[test]
+fn eviction_ignores_foreign_files_inside_a_valid_shard() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let cache = Cache::new(temp.path().to_path_buf(), 30, 1);
+    let key = cache.key("sys", "content", "http://e/v1", "model", "openai", None);
+    cache.put(&key, &json!({"a": 1})).expect("cache entry");
+
+    let entry_path = cache.entry_path(&key);
+    let shard = entry_path.parent().expect("shard");
+    let foreign = shard.join("notes.json");
+    std::fs::write(&foreign, vec![0_u8; 4096]).expect("foreign file");
+
+    cache.evict_if_needed().expect("eviction");
+
+    assert!(
+        foreign.exists(),
+        "eviction removed a file it did not create"
+    );
+}
+
+#[test]
+fn eviction_requires_the_digest_to_be_lower_hex_and_match_its_shard() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let cache = Cache::new(temp.path().to_path_buf(), 30, 0);
+
+    let wrong_shard = temp.path().join("ff");
+    std::fs::create_dir_all(&wrong_shard).expect("wrong shard");
+    let wrong_shard_entry = wrong_shard.join(format!("{}.json", "a".repeat(64)));
+    std::fs::write(&wrong_shard_entry, b"x").expect("foreign file");
+
+    let invalid_hex_shard = temp.path().join("ab");
+    std::fs::create_dir_all(&invalid_hex_shard).expect("invalid hex shard");
+    let invalid_hex_entry = invalid_hex_shard.join(format!("ab{}g.json", "a".repeat(61)));
+    std::fs::write(&invalid_hex_entry, b"x").expect("foreign file");
+
+    cache.evict_if_needed().expect("eviction");
+
+    assert!(
+        wrong_shard_entry.exists(),
+        "digest belongs to another shard"
+    );
+    assert!(invalid_hex_entry.exists(), "digest is not lower-case hex");
 }
