@@ -11,6 +11,7 @@
 //! pins the rendering directly via `missing_tools_line`.
 
 use crate::cli::doctor::{DoctorArgs, missing_tools_line, run_to};
+use crate::languages::spec::{LanguageSupport, ToolSpec};
 
 fn args(path: &std::path::Path) -> DoctorArgs {
     DoctorArgs {
@@ -146,5 +147,89 @@ fn a_tool_shared_by_two_languages_is_named_once() {
         line.matches("eslint").count(),
         1,
         "eslint belongs to two languages but is one missing tool; got: {line:?}"
+    );
+}
+
+/// A configured tool that cannot resolve is returned as missing, on any
+/// machine.
+///
+/// The two tests above both branch on whether a real binary happens to be
+/// installed, and both take their "nothing is missing" path when it is - which
+/// is the same path a `write_tools_section` that never records anything takes.
+/// cargo-mutants deleted the `!` from `!missing.contains(&spec.name)`, so the
+/// list could only ever stay empty, and the whole doctor suite still passed.
+///
+/// This asks the question with no dependency on the machine: a language whose
+/// tool is a command name nothing can have, configured by a file that does
+/// exist, must come back named.
+static GHOST_TOOL: ToolSpec = ToolSpec {
+    name: "ghost-linter",
+    command: &["drep-ghost-linter-no-machine-has-this"],
+    local_paths: &[],
+    config_files: &["ghost.config"],
+    output_format: "json",
+    diagnostics_stream: "stdout",
+    accepts_files: true,
+};
+
+static GHOST_LANG: LanguageSupport = LanguageSupport {
+    name: "ghost",
+    display_name: "Ghost",
+    extensions: &[".ghost"],
+    tools: &[&GHOST_TOOL],
+    conventions: &[],
+    vendored_dirs: &[],
+};
+
+/// A second language sharing the same tool, for the deduplication half.
+static SPECTRE_LANG: LanguageSupport = LanguageSupport {
+    name: "spectre",
+    display_name: "Spectre",
+    extensions: &[".spectre"],
+    tools: &[&GHOST_TOOL],
+    conventions: &[],
+    vendored_dirs: &[],
+};
+
+#[test]
+fn a_configured_tool_that_cannot_resolve_is_returned_as_missing() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::write(dir.path().join("ghost.config"), "").expect("config");
+
+    let mut out = Vec::new();
+    let missing =
+        crate::cli::doctor::write_tools_section(&mut out, &[(&GHOST_LANG, Vec::new())], dir.path())
+            .expect("write_tools_section");
+
+    assert_eq!(
+        missing,
+        ["ghost-linter"],
+        "a configured tool that cannot resolve must be reported missing"
+    );
+}
+
+/// The other half of the same condition: one entry, not two.
+///
+/// `eslint` belongs to both JavaScript and TypeScript, and a repo with both
+/// and no eslint binary once reported "2 configured tool(s) are missing:
+/// eslint, eslint". The test that covers this for the real eslint returns
+/// early when eslint is installed, so it cannot be relied on either.
+#[test]
+fn a_tool_shared_by_two_languages_is_returned_once() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::write(dir.path().join("ghost.config"), "").expect("config");
+
+    let mut out = Vec::new();
+    let missing = crate::cli::doctor::write_tools_section(
+        &mut out,
+        &[(&GHOST_LANG, Vec::new()), (&SPECTRE_LANG, Vec::new())],
+        dir.path(),
+    )
+    .expect("write_tools_section");
+
+    assert_eq!(
+        missing,
+        ["ghost-linter"],
+        "one tool shared by two languages is one missing tool"
     );
 }

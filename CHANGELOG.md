@@ -28,6 +28,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   matched. The servers now live for the whole test, and it asserts the two
   endpoints differ before comparing keys. Nothing was wrong with the cache key.
   The same failure took the mutants job with it, as a failing baseline.
+- The first full mutation sweep in CI found a survivor: deleting the `!` from
+  `!missing.contains(&spec.name)` in `doctor::write_tools_section` made the
+  missing-tools list permanently empty, and no test noticed. Both tests that
+  cover it branch on whether a real binary happens to be installed on the
+  machine, and both take their "nothing is missing" path when it is - the same
+  path the broken version takes, which is why it passed on a runner that has
+  `tsc`. Two tests now ask the question with no dependency on the machine,
+  against a language whose tool is a command name nothing can have: one for the
+  list being populated, one for a tool shared by two languages appearing once.
+  Verified by applying the mutation by hand and watching them fail.
 - The mutation sweep tested a tree the commit did not have.
   `scripts/mutants-remote.sh` synced with `--delete`, and an excluded name
   inside a directory protects that directory from removal - so
