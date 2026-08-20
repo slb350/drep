@@ -117,9 +117,46 @@ pub trait ModelSource {
     ) -> Result<Vec<Model>, ListError>;
 }
 
+/// The largest listing drep will read into memory.
+///
+/// A real listing is a few kilobytes - the longest of the four is Kimi's, at
+/// well under one. 8 MB is a margin no honest endpoint approaches, and it is
+/// what stops a mirror, a redirect to something else, or a compromised host
+/// making `drep init` allocate without bound. The timeout does not prevent
+/// that on its own: a fast host can send a great deal inside one.
+const MAX_LISTING_BYTES: u64 = 8 * 1024 * 1024;
+
 /// The real thing: one HTTP GET.
-#[derive(Debug, Default, Clone, Copy)]
-pub struct Http;
+#[derive(Debug, Clone, Copy)]
+pub struct Http {
+    /// The ceiling on the response body. A field rather than a constant read
+    /// directly, so the boundary is reachable from a test without a multi-
+    /// megabyte fixture - the same reason [`crate::llm::quirks::Http`] has one.
+    max_bytes: u64,
+}
+
+impl Http {
+    /// A fetcher with the production ceiling.
+    pub fn new() -> Self {
+        Self {
+            max_bytes: MAX_LISTING_BYTES,
+        }
+    }
+
+    /// The same fetcher with a different size ceiling. For the tests that pin
+    /// the boundary; production always uses [`MAX_LISTING_BYTES`].
+    #[cfg(test)]
+    pub fn with_max_bytes(mut self, max_bytes: u64) -> Self {
+        self.max_bytes = max_bytes;
+        self
+    }
+}
+
+impl Default for Http {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl ModelSource for Http {
     async fn list(
@@ -128,10 +165,7 @@ impl ModelSource for Http {
         api_key: &str,
         protocol: ApiProtocol,
     ) -> Result<Vec<Model>, ListError> {
-        let client = reqwest::Client::builder()
-            .timeout(TIMEOUT)
-            .build()
-            .map_err(|err| ListError::Transport(err.to_string()))?;
+        let client = crate::http::client(TIMEOUT).map_err(ListError::Transport)?;
 
         let request = client.get(url(endpoint));
         let request = match protocol {
@@ -154,10 +188,15 @@ impl ModelSource for Http {
             return Err(classify(status));
         }
 
-        let body = response
-            .text()
+        // Bounded, not `text()`. This is an endpoint the user typed at a
+        // prompt, and drep is holding a key while it asks - so the body has a
+        // ceiling for the same reason the registry document does.
+        let body = crate::http::read_bounded(response, self.max_bytes)
             .await
-            .map_err(|err| ListError::Transport(err.to_string()))?;
+            .map_err(|err| match err {
+                crate::http::ReadError::Transport(msg) => ListError::Transport(msg),
+                crate::http::ReadError::Malformed(msg) => ListError::Malformed(msg),
+            })?;
         parse(&body)
     }
 }

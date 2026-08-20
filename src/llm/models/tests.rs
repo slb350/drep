@@ -239,17 +239,7 @@ mod http {
 
     /// A server answering `GET /v1/models` with `body` and `status`.
     async fn server(status: u16, body: &str) -> MockServer {
-        let server = MockServer::start().await;
-        Mock::given(method("GET"))
-            .and(path("/v1/models"))
-            .respond_with(
-                ResponseTemplate::new(status)
-                    .insert_header("content-type", "application/json")
-                    .set_body_string(body.to_string()),
-            )
-            .mount(&server)
-            .await;
-        server
+        crate::test_support::json_server("/v1/models", status, body).await
     }
 
     #[tokio::test]
@@ -258,7 +248,7 @@ mod http {
         // menu never appears for any endpoint that serves one.
         let server = server(200, ZAI).await;
 
-        let models = Http
+        let models = Http::new()
             .list(
                 &format!("{}/v1", server.uri()),
                 "k",
@@ -283,13 +273,14 @@ mod http {
 
         // The mock only answers when the header matches, so parsing at all is
         // the assertion.
-        Http.list(
-            &format!("{}/v1", server.uri()),
-            "sk-test",
-            ApiProtocol::OpenAiChat,
-        )
-        .await
-        .expect("the bearer header was sent");
+        Http::new()
+            .list(
+                &format!("{}/v1", server.uri()),
+                "sk-test",
+                ApiProtocol::OpenAiChat,
+            )
+            .await
+            .expect("the bearer header was sent");
     }
 
     #[tokio::test]
@@ -303,7 +294,7 @@ mod http {
             .mount(&server)
             .await;
 
-        let models = Http
+        let models = Http::new()
             .list(
                 &format!("{}/v1", server.uri()),
                 "sk-test",
@@ -326,13 +317,14 @@ mod http {
             .mount(&server)
             .await;
 
-        Http.list(
-            &format!("{}/v1", server.uri()),
-            "sk-test",
-            ApiProtocol::Anthropic,
-        )
-        .await
-        .expect("lists");
+        Http::new()
+            .list(
+                &format!("{}/v1", server.uri()),
+                "sk-test",
+                ApiProtocol::Anthropic,
+            )
+            .await
+            .expect("lists");
 
         let requests = server.received_requests().await.expect("records requests");
         assert!(
@@ -345,7 +337,7 @@ mod http {
     async fn a_missing_route_is_reported_as_unsupported() {
         let server = server(404, "not found").await;
 
-        let err = Http
+        let err = Http::new()
             .list(
                 &format!("{}/v1", server.uri()),
                 "k",
@@ -361,7 +353,7 @@ mod http {
     async fn a_rejected_key_is_reported_before_it_is_stored() {
         let server = server(401, "nope").await;
 
-        let err = Http
+        let err = Http::new()
             .list(
                 &format!("{}/v1", server.uri()),
                 "wrong",
@@ -379,7 +371,7 @@ mod http {
         // no listing", the other is "it has one and drep could not read it".
         let server = server(200, "<html>nope</html>").await;
 
-        let err = Http
+        let err = Http::new()
             .list(
                 &format!("{}/v1", server.uri()),
                 "k",
@@ -395,11 +387,41 @@ mod http {
     async fn an_unreachable_endpoint_is_a_transport_failure() {
         // Port 9 refuses immediately. This is the path a local server that is
         // simply not running takes.
-        let err = Http
+        let err = Http::new()
             .list("http://127.0.0.1:9/v1", "k", ApiProtocol::OpenAiChat)
             .await
             .expect_err("nothing is listening");
 
         assert!(matches!(err, ListError::Transport(_)), "got {err:?}");
+    }
+
+    #[tokio::test]
+    async fn an_oversized_listing_is_refused_rather_than_buffered() {
+        // This endpoint is whatever the user typed at a prompt, and drep is
+        // holding a key while it asks. The listing read used to be an
+        // unbounded `text()` while the registry fetch beside it had a ceiling;
+        // a safety property that exists in one of two places is the one that
+        // gets forgotten.
+        let server = server(200, ZAI).await;
+
+        let err = Http::new()
+            .with_max_bytes(4)
+            .list(
+                &format!("{}/v1", server.uri()),
+                "k",
+                ApiProtocol::OpenAiChat,
+            )
+            .await
+            .expect_err("a listing past the ceiling is refused");
+
+        assert!(matches!(err, ListError::Transport(_)), "got {err:?}");
+    }
+
+    #[test]
+    fn the_production_ceiling_is_eight_megabytes() {
+        // Pins the arithmetic, and that `new` is what applies it - a fetcher
+        // built with a zero ceiling would refuse every real listing.
+        assert_eq!(MAX_LISTING_BYTES, 8_388_608);
+        assert_eq!(Http::new().max_bytes, MAX_LISTING_BYTES);
     }
 }

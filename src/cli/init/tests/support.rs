@@ -44,13 +44,7 @@ pub(super) fn render_one(
     model: &str,
     endpoint: &str,
 ) -> String {
-    crate::cli::init::config_file::render_chain(&[crate::cli::init::config_file::Choice {
-        preset,
-        model: model.to_string(),
-        endpoint: endpoint.to_string(),
-        key_in_store: false,
-        quirks: preset.quirks(),
-    }])
+    render_with_quirks(preset, model, endpoint, preset.quirks())
 }
 
 /// [`render_one`] with the per-model quirks supplied rather than taken from the

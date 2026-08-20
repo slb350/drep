@@ -4,7 +4,7 @@
 //! typo or a model outside the plan surfaced as a 404 on the first push.
 
 use super::super::*;
-use super::{Catalog, Quirked, Recording, Scripted, number_of};
+use super::{Catalog, Quirked, Recording, Scripted, deps, number_of};
 
 /// Run the wizard for one `local` provider against `catalog`.
 ///
@@ -18,12 +18,7 @@ async fn run_local(catalog: &Catalog, model_answers: &[&str]) -> (Plan, Scripted
     let mut console = Scripted::new(&answers);
     let plan = run(
         &mut console,
-        Deps {
-            store: &AuthStore::new(),
-            source: catalog,
-            quirks_source: &Quirked::Unavailable,
-            env_is_set: &|_| false,
-        },
+        deps(&AuthStore::new(), catalog, &Quirked::Unavailable),
     )
     .await
     .expect("the wizard completes");
@@ -182,12 +177,7 @@ async fn a_pasted_key_authenticates_the_listing() {
 
     run(
         &mut console,
-        Deps {
-            store: &AuthStore::new(),
-            source: &source,
-            quirks_source: &Quirked::Unavailable,
-            env_is_set: &|_| false,
-        },
+        deps(&AuthStore::new(), &source, &Quirked::Unavailable),
     )
     .await
     .expect("the wizard completes");
@@ -212,17 +202,9 @@ async fn a_key_already_in_the_store_authenticates_the_listing_too() {
     let zai = number_of("zai");
     let mut console = Scripted::new(&[zai.as_str(), "", "1", "", "", ""]);
 
-    run(
-        &mut console,
-        Deps {
-            store: &store,
-            source: &source,
-            quirks_source: &Quirked::Unavailable,
-            env_is_set: &|_| false,
-        },
-    )
-    .await
-    .expect("the wizard completes");
+    run(&mut console, deps(&store, &source, &Quirked::Unavailable))
+        .await
+        .expect("the wizard completes");
 
     assert_eq!(source.calls.borrow()[0].1, "sk-stored");
 }
@@ -236,12 +218,7 @@ async fn a_provider_needing_no_key_lists_unauthenticated() {
 
     run(
         &mut console,
-        Deps {
-            store: &AuthStore::new(),
-            source: &source,
-            quirks_source: &Quirked::Unavailable,
-            env_is_set: &|_| false,
-        },
+        deps(&AuthStore::new(), &source, &Quirked::Unavailable),
     )
     .await
     .expect("the wizard completes");

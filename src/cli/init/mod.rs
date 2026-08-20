@@ -142,12 +142,13 @@ pub async fn run_with<W: Write>(out: &mut W, args: &InitArgs, auth_path: &Path) 
         // to the process environment. Only this branch touches either, which is
         // what keeps the flag path - and every test of it - off the network.
         let quirks = crate::llm::quirks::Cached::new(crate::llm::quirks::default_path());
+        let models = crate::llm::models::Http::new();
         let mut console = wizard::Terminal::new(out);
         wizard::run(
             &mut console,
             wizard::Deps {
                 store: &store,
-                source: &crate::llm::models::Http,
+                source: &models,
                 quirks_source: &quirks,
                 env_is_set: &wizard::real_env,
             },

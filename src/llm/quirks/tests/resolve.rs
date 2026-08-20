@@ -11,21 +11,24 @@ fn registry() -> Registry {
 }
 
 /// The `kimi` preset's own values: no temperature, a required `max_tokens`.
+///
+/// Read from the preset rather than transcribed. Written out as literals these
+/// tests kept asserting against numbers the product had moved on from, and they
+/// stayed green while doing it - the whole point of `resolve` is what it does
+/// to *the preset's* values.
 fn kimi_defaults() -> Quirks {
-    Quirks {
-        temperature: None,
-        max_tokens: Some(200_000),
-        max_tokens_from_registry: false,
-    }
+    preset_quirks("kimi")
 }
 
 /// The `zai` preset's own values: a temperature, no `max_tokens`.
 fn zai_defaults() -> Quirks {
-    Quirks {
-        temperature: Some(0.2),
-        max_tokens: None,
-        max_tokens_from_registry: false,
-    }
+    preset_quirks("zai")
+}
+
+fn preset_quirks(key: &str) -> Quirks {
+    crate::cli::init::presets::preset(key)
+        .expect("the preset exists")
+        .quirks()
 }
 
 #[test]
@@ -127,7 +130,10 @@ fn a_model_that_refuses_temperature_loses_it() {
 
 #[test]
 fn a_model_that_accepts_temperature_keeps_the_presets_value() {
-    let resolved = resolve(Some(&registry()), zai_defaults(), ZAI, "glm-5.3");
+    // `glm-5.2` is the fixture's accepting model on this endpoint, beside
+    // `glm-5.3` which refuses - so both directions are exercised against the
+    // same provider rather than one being inferred from the other.
+    let resolved = resolve(Some(&registry()), zai_defaults(), ZAI, "glm-5.2");
 
     assert_eq!(resolved.temperature, Some(0.2));
 }
@@ -141,7 +147,7 @@ fn the_registry_never_introduces_a_temperature() {
     let mut defaults = zai_defaults();
     defaults.temperature = None;
 
-    let resolved = resolve(Some(&registry()), defaults, ZAI, "glm-5.3");
+    let resolved = resolve(Some(&registry()), defaults, ZAI, "glm-5.2");
 
     assert_eq!(resolved.temperature, None);
 }
@@ -219,17 +225,36 @@ fn two_providers_sharing_an_endpoint_contribute_both_model_lists() {
 }
 
 #[test]
-fn a_published_limit_equal_to_the_fallback_is_not_credited_to_the_registry() {
-    // The boundary of "did the registry lower it". Equal is not lower, so the
-    // rendered comment must not claim the model's own limit supplied a value
-    // the preset already had.
+fn a_published_limit_equal_to_the_fallback_is_still_the_models_own_limit() {
+    // The boundary, and the one case where "did the registry change the value"
+    // and "is this the model's own limit" give different answers. The flag
+    // decides a sentence in a file the user commits; with the number equal on
+    // both sides that sentence is true, and reading the flag off a `<`
+    // comparison made the file say the limit was unknown while printing it.
     let registry = one_model(KIMI, "k3", false, Some(200_000));
 
     let resolved = resolve(Some(&registry), kimi_defaults(), KIMI, "k3");
 
     assert_eq!(resolved.max_tokens, Some(200_000));
     assert!(
+        resolved.max_tokens_from_registry,
+        "the registry named this model's limit, so the comment may say so"
+    );
+}
+
+#[test]
+fn a_model_the_registry_does_not_name_is_never_credited_to_it() {
+    // The other side of the same flag, and what stops `<=` degenerating into
+    // "always true": a model with no published limit at all keeps the preset's
+    // fallback, and the rendered file must not claim that number came from the
+    // model.
+    let registry = one_model(KIMI, "k3", false, None);
+
+    let resolved = resolve(Some(&registry), kimi_defaults(), KIMI, "k3");
+
+    assert_eq!(resolved.max_tokens, Some(200_000));
+    assert!(
         !resolved.max_tokens_from_registry,
-        "equal is not lower: the registry changed nothing"
+        "the registry named no limit, so the fallback is drep's own number"
     );
 }

@@ -47,20 +47,7 @@ pub(crate) fn cfg_for(server: &MockServer, model: &str, max_retries: u32) -> Llm
 /// which is what most of these tests want: the alternative is `Unspecified`,
 /// a distinct answer that drep treats differently.
 pub(crate) fn sse(parts: &[&str]) -> String {
-    let mut out = String::new();
-    for (i, part) in parts.iter().enumerate() {
-        let finish = if i + 1 == parts.len() {
-            "\"stop\""
-        } else {
-            "null"
-        };
-        out.push_str(&format!(
-            "data: {{\"id\":\"1\",\"object\":\"chat.completion.chunk\",\"created\":0,\"model\":\"m\",\"choices\":[{{\"index\":0,\"delta\":{{\"content\":{}}},\"finish_reason\":{finish}}}]}}\n\n",
-            serde_json::to_string(part).expect("string serializes")
-        ));
-    }
-    out.push_str("data: [DONE]\n\n");
-    out
+    sse_chunks(parts, "\"stop\"")
 }
 
 /// Build an SSE body whose final chunk carries `finish` rather than `"stop"`.
@@ -69,20 +56,7 @@ pub(crate) fn sse(parts: &[&str]) -> String {
 /// test about that decision has to be able to set it. [`sse`] is this with
 /// `"stop"`.
 pub(crate) fn sse_finishing_with(parts: &[&str], finish: &str) -> String {
-    let mut out = String::new();
-    for (i, part) in parts.iter().enumerate() {
-        let reason = if i + 1 == parts.len() {
-            format!("\"{finish}\"")
-        } else {
-            "null".to_owned()
-        };
-        out.push_str(&format!(
-            "data: {{\"id\":\"1\",\"object\":\"chat.completion.chunk\",\"created\":0,\"model\":\"m\",\"choices\":[{{\"index\":0,\"delta\":{{\"content\":{}}},\"finish_reason\":{reason}}}]}}\n\n",
-            serde_json::to_string(part).expect("string serializes")
-        ));
-    }
-    out.push_str("data: [DONE]\n\n");
-    out
+    sse_chunks(parts, &format!("\"{finish}\""))
 }
 
 /// Build an SSE body whose chunks all carry `"finish_reason":null`.
@@ -93,10 +67,23 @@ pub(crate) fn sse_finishing_with(parts: &[&str], finish: &str) -> String {
 /// failure - and drep has to keep those apart, since `Unspecified` says
 /// nothing about whether asking again could help.
 pub(crate) fn sse_without_finish_reason(parts: &[&str]) -> String {
+    sse_chunks(parts, "null")
+}
+
+/// One chunk per part, `last` being the raw JSON token for the final chunk's
+/// `finish_reason`. Every earlier chunk reports `null`, which is what the wire
+/// format says about a stream still in progress.
+///
+/// The three builders above differ in that token and in nothing else. Written
+/// out three times, the SDK behaviour recorded in this module's header would be
+/// encoded three times - and a stream that yields no text under an older SDK
+/// yields it silently, so a copy that drifts is not a copy that fails.
+fn sse_chunks(parts: &[&str], last: &str) -> String {
     let mut out = String::new();
-    for part in parts {
+    for (i, part) in parts.iter().enumerate() {
+        let finish = if i + 1 == parts.len() { last } else { "null" };
         out.push_str(&format!(
-            "data: {{\"id\":\"1\",\"object\":\"chat.completion.chunk\",\"created\":0,\"model\":\"m\",\"choices\":[{{\"index\":0,\"delta\":{{\"content\":{}}},\"finish_reason\":null}}]}}\n\n",
+            "data: {{\"id\":\"1\",\"object\":\"chat.completion.chunk\",\"created\":0,\"model\":\"m\",\"choices\":[{{\"index\":0,\"delta\":{{\"content\":{}}},\"finish_reason\":{finish}}}]}}\n\n",
             serde_json::to_string(part).expect("string serializes")
         ));
     }
@@ -106,26 +93,12 @@ pub(crate) fn sse_without_finish_reason(parts: &[&str]) -> String {
 
 /// A server answering 200 with `parts` and no `finish_reason` at all.
 pub(crate) async fn server_without_finish_reason(parts: &[&str]) -> MockServer {
-    let server = MockServer::start().await;
-    mount_sse(
-        &server,
-        ResponseTemplate::new(200)
-            .set_body_raw(sse_without_finish_reason(parts), "text/event-stream"),
-    )
-    .await;
-    server
+    sse_server(sse_without_finish_reason(parts)).await
 }
 
 /// A server answering 200 with `parts` and a final `finish_reason` of `finish`.
 pub(crate) async fn server_finishing_with(parts: &[&str], finish: &str) -> MockServer {
-    let server = MockServer::start().await;
-    mount_sse(
-        &server,
-        ResponseTemplate::new(200)
-            .set_body_raw(sse_finishing_with(parts, finish), "text/event-stream"),
-    )
-    .await;
-    server
+    sse_server(sse_finishing_with(parts, finish)).await
 }
 
 /// How many requests the mock server received.
@@ -165,10 +138,20 @@ pub(crate) fn fast_retry_client(cfg: &LlmConfig) -> LlmClient {
 /// keeps the endpoint path and the content type from drifting between
 /// suites.
 pub(crate) async fn server_returning(parts: &[&str]) -> MockServer {
+    sse_server(sse(parts)).await
+}
+
+/// A server answering 200 at the chat-completions endpoint with `body` as an
+/// event stream.
+///
+/// The three builders above differ only in which SSE body they pass; stating
+/// the status and the content type once is what keeps them from drifting
+/// apart.
+async fn sse_server(body: String) -> MockServer {
     let server = MockServer::start().await;
     mount_sse(
         &server,
-        ResponseTemplate::new(200).set_body_raw(sse(parts), "text/event-stream"),
+        ResponseTemplate::new(200).set_body_raw(body, "text/event-stream"),
     )
     .await;
     server
@@ -193,6 +176,26 @@ pub(crate) async fn mount_sse(server: &MockServer, template: ResponseTemplate) {
         .respond_with(template)
         .mount(server)
         .await;
+}
+
+/// A server answering `GET route` with `status` and `body` as JSON.
+///
+/// The plain-GET counterpart to [`server_returning`], for the two suites that
+/// exercise drep's own fetchers rather than the SDK's: the model listing and
+/// the quirks registry. Both had written this out, identical but for the
+/// route, and the two copies had already diverged in where they sat.
+pub(crate) async fn json_server(route: &str, status: u16, body: &str) -> MockServer {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path(route))
+        .respond_with(
+            ResponseTemplate::new(status)
+                .set_body_string(body)
+                .insert_header("content-type", "application/json"),
+        )
+        .mount(&server)
+        .await;
+    server
 }
 
 /// Build a provider chain through the production `ProviderChain::new`, then
@@ -421,3 +424,74 @@ pub(crate) fn clear_executable(path: &std::path::Path) {
     #[cfg(not(unix))]
     let _ = path;
 }
+
+/// A models.dev-shaped document, cut down to the cases that matter.
+///
+/// Field-for-field the shape of the real one, verified against
+/// `https://models.dev/api.json`: providers keyed by vendor id, each with an
+/// `api` URL that may be null, and models keyed by id carrying `temperature`
+/// and `limit.output` among many fields drep ignores.
+///
+/// One document, not one per suite. The registry tests and the wizard tests
+/// both need one, and written twice the two disagreed about whether `glm-5.3`
+/// accepts a temperature - so a reader could not tell which was the fixture's
+/// claim and which was a typo. `glm-5.3` refuses it and `glm-5.2` accepts, so
+/// both directions are reachable from the same endpoint.
+pub(crate) const MODELS_DEV_DOCUMENT: &str = r#"{
+  "kimi-for-coding": {
+    "id": "kimi-for-coding",
+    "name": "Kimi For Coding",
+    "api": "https://api.kimi.com/coding/v1",
+    "models": {
+      "k3": {
+        "id": "k3",
+        "name": "Kimi K3",
+        "reasoning": true,
+        "temperature": false,
+        "limit": { "context": 262144, "output": 131072 }
+      },
+      "kimi-for-coding": {
+        "id": "kimi-for-coding",
+        "temperature": false,
+        "limit": { "context": 262144, "output": 32768 }
+      }
+    }
+  },
+  "zai-coding-plan": {
+    "id": "zai-coding-plan",
+    "api": "https://api.z.ai/api/coding/paas/v4",
+    "models": {
+      "glm-5.3": {
+        "id": "glm-5.3",
+        "temperature": false,
+        "limit": { "context": 204800, "output": 131072 }
+      },
+      "glm-5.2": {
+        "id": "glm-5.2",
+        "temperature": true,
+        "limit": { "context": 204800, "output": 131072 }
+      }
+    }
+  },
+  "openai": {
+    "id": "openai",
+    "api": null,
+    "models": {
+      "gpt-5.6-sol": {
+        "id": "gpt-5.6-sol",
+        "temperature": false,
+        "limit": { "context": 400000, "output": 128000 }
+      }
+    }
+  },
+  "blank-endpoint": {
+    "id": "blank-endpoint",
+    "api": "   ",
+    "models": { "nowhere": { "id": "nowhere", "temperature": false } }
+  },
+  "quiet-vendor": {
+    "id": "quiet-vendor",
+    "api": "https://quiet.example/v1",
+    "models": { "unspecified": { "id": "unspecified" } }
+  }
+}"#;

@@ -37,18 +37,42 @@ fn repo() -> tempfile::TempDir {
 
 /// Write a cache the quirks registry will accept as fresh, and return its path.
 ///
-/// Empty of providers on purpose: what these tests exercise is the wiring
-/// around the wizard, not the registry, and every model they configure is
-/// therefore one it does not name - which is the documented fallback to the
-/// preset's own values. Stamped with the current wall clock so it is inside
-/// the one-week freshness window and no fetch is attempted.
+/// It names one endpoint nothing here configures, so every model these tests
+/// pick is one the registry does not name - the documented fallback to the
+/// preset's own values. What they exercise is the wiring around the wizard,
+/// not the registry.
+///
+/// Written through `Registry::save` rather than as hand-rolled TOML. The file
+/// has to parse or `Registry::load` reports no cache, the wizard fetches, and
+/// these tests start making live 4 MB requests to models.dev - passing while
+/// they do it, since the fallback they assert on is the same either way. Going
+/// through the type the loader uses is what makes a schema change a build
+/// failure instead of a silent trip to the network.
+///
+/// Stamped with the current wall clock so it is inside the one-week freshness
+/// window and no fetch is attempted.
 fn seed_quirks_cache(dir: &tempfile::TempDir) -> std::path::PathBuf {
     let path = dir.path().join("model-quirks.toml");
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .expect("a clock after 1970")
         .as_secs();
-    std::fs::write(&path, format!("fetched_at = {now}\n")).expect("seed the quirks cache");
+    drep::llm::quirks::Registry::distil(
+        r#"{"elsewhere": {"api": "https://nothing-here.example/v1", "models": {}}}"#,
+        now,
+    )
+    .expect("the seed document distils")
+    .save(&path)
+    .expect("seed the quirks cache");
+
+    // Proved rather than assumed. A cache that does not load is
+    // indistinguishable from a fresh one in every assertion these tests make,
+    // because both end at the preset's values - the difference is only whether
+    // a 4 MB request went out first.
+    assert!(
+        drep::llm::quirks::Registry::load(&path).is_some_and(|registry| !registry.is_stale(now)),
+        "the seeded cache must load and read as fresh, or these tests fetch"
+    );
     path
 }
 

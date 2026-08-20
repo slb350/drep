@@ -2,7 +2,7 @@
 //! `.gitignore`.
 
 use super::super::*;
-use super::{Catalog, Quirked, Scripted, number_of};
+use super::{Catalog, Quirked, Scripted, deps, number_of};
 
 /// Run the wizard against `answers` with an empty store.
 ///
@@ -13,12 +13,11 @@ async fn run_with(answers: &[&str]) -> (Plan, Scripted) {
     let mut console = Scripted::new(answers);
     let plan = run(
         &mut console,
-        Deps {
-            store: &AuthStore::new(),
-            source: &Catalog::Unavailable,
-            quirks_source: &Quirked::Unavailable,
-            env_is_set: &|_| false,
-        },
+        deps(
+            &AuthStore::new(),
+            &Catalog::Unavailable,
+            &Quirked::Unavailable,
+        ),
     )
     .await
     .expect("the wizard completes");

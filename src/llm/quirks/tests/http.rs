@@ -8,23 +8,13 @@
 use super::super::{Fetch, Http, QuirksError, Registry};
 use super::DOCUMENT;
 use crate::llm::quirks::MAX_DOCUMENT_BYTES;
+use crate::test_support::json_server;
 
-use wiremock::matchers::{method, path};
-use wiremock::{Mock, MockServer, ResponseTemplate};
+use wiremock::MockServer;
 
 /// A server answering `GET /api.json` with `body` and `status`.
 async fn server(status: u16, body: &str) -> MockServer {
-    let server = MockServer::start().await;
-    Mock::given(method("GET"))
-        .and(path("/api.json"))
-        .respond_with(
-            ResponseTemplate::new(status)
-                .insert_header("content-type", "application/json")
-                .set_body_string(body.to_string()),
-        )
-        .mount(&server)
-        .await;
-    server
+    json_server("/api.json", status, body).await
 }
 
 #[tokio::test]
@@ -75,57 +65,19 @@ async fn an_unreachable_host_is_a_transport_failure() {
 }
 
 #[tokio::test]
-async fn a_body_at_the_limit_is_accepted_and_one_byte_over_is_not() {
-    // The boundary, asserted from both sides. A production-sized check would
-    // need a 32 MB body, which is why the ceiling is a field.
-    let document = r#"{"p": {"api": "https://e/v1", "models": {}}}"#;
-    let size = document.len() as u64;
-
-    let server = MockServer::start().await;
-    Mock::given(method("GET"))
-        .and(path("/api.json"))
-        .respond_with(ResponseTemplate::new(200).set_body_string(document.to_string()))
-        .mount(&server)
-        .await;
-    let url = format!("{}/api.json", server.uri());
-
-    // Exactly at the limit: allowed. `>` and not `>=`.
-    Http::new(&url)
-        .with_max_bytes(size)
-        .document()
-        .await
-        .expect("a body exactly at the limit is within it");
-
-    // One byte under the body's size: refused.
-    let err = Http::new(&url)
-        .with_max_bytes(size - 1)
-        .document()
-        .await
-        .expect_err("a body past the limit is refused");
-    assert!(matches!(err, QuirksError::Transport(_)), "got {err:?}");
-}
-
-#[tokio::test]
-async fn a_response_declaring_no_length_is_still_bounded() {
-    // Chunked transfer encoding sends no `Content-Length`, so the header check
-    // cannot be the only bound - the streaming read has to enforce it too.
-    let document = r#"{"p": {"api": "https://e/v1", "models": {}}}"#;
-    let server = MockServer::start().await;
-    Mock::given(method("GET"))
-        .and(path("/api.json"))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .set_body_string(document.to_string())
-                .append_header("transfer-encoding", "chunked"),
-        )
-        .mount(&server)
-        .await;
+async fn a_body_past_the_ceiling_is_a_transport_failure() {
+    // The boundary itself belongs to `crate::http`, which owns the ceiling and
+    // tests it from both sides. What is this module's to prove is the mapping:
+    // an oversized body has to arrive as `QuirksError::Transport` and not as
+    // `Malformed`, because the two are handled differently - one is a host drep
+    // could not read from, the other a document it read and could not use.
+    let server = server(200, DOCUMENT).await;
 
     let err = Http::new(&format!("{}/api.json", server.uri()))
         .with_max_bytes(4)
         .document()
         .await
-        .expect_err("the streaming read enforces the limit too");
+        .expect_err("a body past the limit is refused");
 
     assert!(matches!(err, QuirksError::Transport(_)), "got {err:?}");
 }

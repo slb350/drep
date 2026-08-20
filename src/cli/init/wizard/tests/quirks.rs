@@ -3,31 +3,21 @@
 //! The preset's values are a provider-scoped guess: right for its default model
 //! and unverified for every other model that endpoint serves - which is exactly
 //! what the wizard lets the user pick.
+//!
+//! What belongs here is the *wiring*: that the model the user picked is the one
+//! consulted, that the registry is fetched once for a chain, that a failure is
+//! reported and stepped past, and that the resolved values reach the written
+//! file. What `resolve` does to a given pair of inputs is settled in
+//! `llm::quirks::tests::resolve`, against the same fixture and without a
+//! seven-answer script in the way.
 
 use super::super::*;
-use super::{Catalog, Quirked, Scripted, number_of};
+use super::{Catalog, Quirked, Scripted, deps, number_of};
 
-/// A models.dev-shaped document covering the two subscription endpoints these
-/// tests configure.
-///
-/// `glm-5.3` is given `temperature: false` deliberately, so the "the registry
-/// withdrew it" case is distinguishable from the `zai` preset's own `Some(0.2)`.
-const FIXTURE: &str = r#"{
-  "kimi-for-coding": {
-    "api": "https://api.kimi.com/coding/v1",
-    "models": {
-      "k3": { "temperature": false, "limit": { "context": 262144, "output": 131072 } },
-      "kimi-for-coding": { "temperature": false, "limit": { "context": 262144, "output": 32768 } }
-    }
-  },
-  "zai-coding-plan": {
-    "api": "https://api.z.ai/api/coding/paas/v4",
-    "models": {
-      "glm-5.3": { "temperature": false, "limit": { "context": 204800, "output": 131072 } },
-      "glm-5.2": { "temperature": true, "limit": { "context": 204800, "output": 131072 } }
-    }
-  }
-}"#;
+/// The shared models.dev fixture: `glm-5.3` refuses a temperature and
+/// `glm-5.2` accepts, so both directions are reachable on one endpoint. It was
+/// written out here as well until the two copies disagreed about which.
+use crate::test_support::MODELS_DEV_DOCUMENT as FIXTURE;
 
 /// Run the wizard for one provider that needs a key, against `quirks`.
 ///
@@ -41,17 +31,9 @@ async fn run_one(
 ) -> (Plan, Scripted) {
     let number = number_of(provider);
     let mut console = Scripted::new(&[number.as_str(), "", "sk-pasted", model_answer, "", "", ""]);
-    let plan = run(
-        &mut console,
-        Deps {
-            store: &AuthStore::new(),
-            source: catalog,
-            quirks_source: quirks,
-            env_is_set: &|_| false,
-        },
-    )
-    .await
-    .expect("the wizard completes");
+    let plan = run(&mut console, deps(&AuthStore::new(), catalog, quirks))
+        .await
+        .expect("the wizard completes");
     assert!(console.is_drained(), "unused answers: the flow differed");
     (plan, console)
 }
@@ -68,18 +50,6 @@ async fn the_chosen_models_own_limit_replaces_the_presets_required_max_tokens() 
     assert_eq!(plan.choices[0].model, "kimi-for-coding");
     assert_eq!(plan.choices[0].quirks.max_tokens, Some(32_768));
     assert!(plan.choices[0].quirks.max_tokens_from_registry);
-}
-
-#[tokio::test]
-async fn a_different_model_on_the_same_endpoint_gets_a_different_limit() {
-    // The pair is the point: one preset, two models, two answers. A single
-    // provider-scoped value cannot produce both.
-    let catalog = Catalog::of(&["k3", "kimi-for-coding"]);
-
-    let (plan, _) = run_one("kimi", &catalog, &Quirked::from_json(FIXTURE), "1").await;
-
-    assert_eq!(plan.choices[0].model, "k3");
-    assert_eq!(plan.choices[0].quirks.max_tokens, Some(131_072));
 }
 
 #[tokio::test]
@@ -138,12 +108,7 @@ async fn the_registry_is_consulted_once_for_the_whole_chain() {
 
     run(
         &mut console,
-        Deps {
-            store: &AuthStore::new(),
-            source: &catalog,
-            quirks_source: &Quirked::Unavailable,
-            env_is_set: &|_| false,
-        },
+        deps(&AuthStore::new(), &catalog, &Quirked::Unavailable),
     )
     .await
     .expect("the wizard completes");
@@ -156,29 +121,6 @@ async fn the_registry_is_consulted_once_for_the_whole_chain() {
             .count(),
         1
     );
-}
-
-#[tokio::test]
-async fn a_model_that_refuses_temperature_loses_it_even_when_the_preset_sends_one() {
-    // `zai` sends 0.2, because `glm-5.3` accepted it when the preset was
-    // written. A model on the same plan that refuses it would answer a 400, and
-    // a 400 neither fails over nor retries.
-    let catalog = Catalog::of(&["glm-5.3", "glm-5.2"]);
-
-    let (plan, _) = run_one("zai", &catalog, &Quirked::from_json(FIXTURE), "1").await;
-
-    assert_eq!(plan.choices[0].model, "glm-5.3");
-    assert_eq!(plan.choices[0].quirks.temperature, None);
-}
-
-#[tokio::test]
-async fn a_model_that_accepts_temperature_keeps_the_presets_value() {
-    let catalog = Catalog::of(&["glm-5.3", "glm-5.2"]);
-
-    let (plan, _) = run_one("zai", &catalog, &Quirked::from_json(FIXTURE), "2").await;
-
-    assert_eq!(plan.choices[0].model, "glm-5.2");
-    assert_eq!(plan.choices[0].quirks.temperature, Some(0.2));
 }
 
 #[tokio::test]

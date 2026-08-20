@@ -171,6 +171,10 @@ pub trait Fetch {
 /// So a caller can keep the fetcher and inspect it afterwards - which is how a
 /// test tells "the cache answered" from "the cache was ignored and the answer
 /// happened to match" - rather than handing ownership to [`Cached`].
+///
+/// Only [`Cached::at`] instantiates it, and that is `cfg(test)` too. Shipping
+/// it would be a public impl nothing outside the suite can reach.
+#[cfg(test)]
 impl<F: Fetch> Fetch for &F {
     async fn document(&self) -> Result<String, QuirksError> {
         (*self).document().await
@@ -216,10 +220,7 @@ impl Http {
 
 impl Fetch for Http {
     async fn document(&self) -> Result<String, QuirksError> {
-        let client = reqwest::Client::builder()
-            .timeout(TIMEOUT)
-            .build()
-            .map_err(|err| QuirksError::Transport(err.to_string()))?;
+        let client = crate::http::client(TIMEOUT).map_err(QuirksError::Transport)?;
 
         let response = client
             .get(&self.url)
@@ -227,6 +228,11 @@ impl Fetch for Http {
             .await
             .map_err(|err| QuirksError::Transport(err.to_string()))?;
 
+        // Checked here rather than in `crate::http`, because what a status
+        // means is the caller's question: a 404 is an ordinary answer for a
+        // model listing and a fault for the registry. A CDN error page is
+        // valid JSON often enough that parsing it first would produce a
+        // "registry" of nothing, cached for a week.
         if !response.status().is_success() {
             return Err(QuirksError::Transport(format!(
                 "HTTP {}",
@@ -234,38 +240,12 @@ impl Fetch for Http {
             )));
         }
 
-        // A `Content-Length` well past anything the real document could be is
-        // refused before a byte of it is read. The timeout is not a size bound:
-        // a fast host can stream far more than this within it, and the body is
-        // buffered whole.
-        if let Some(len) = response.content_length()
-            && len > self.max_bytes
-        {
-            return Err(QuirksError::Transport(format!(
-                "the registry document is {len} bytes, past the {}-byte limit",
-                self.max_bytes
-            )));
-        }
-
-        // Read in chunks rather than `text()`, so a response that declares no
-        // length - chunked transfer encoding does not - is still bounded.
-        let mut body = Vec::new();
-        let mut stream = response;
-        while let Some(chunk) = stream
-            .chunk()
+        crate::http::read_bounded(response, self.max_bytes)
             .await
-            .map_err(|err| QuirksError::Transport(err.to_string()))?
-        {
-            body.extend_from_slice(&chunk);
-            if body.len() as u64 > self.max_bytes {
-                return Err(QuirksError::Transport(format!(
-                    "the registry document exceeded the {}-byte limit",
-                    self.max_bytes
-                )));
-            }
-        }
-        String::from_utf8(body)
-            .map_err(|err| QuirksError::Malformed(crate::text::excerpt(&err.to_string(), 120)))
+            .map_err(|err| match err {
+                crate::http::ReadError::Transport(msg) => QuirksError::Transport(msg),
+                crate::http::ReadError::Malformed(msg) => QuirksError::Malformed(msg),
+            })
     }
 }
 
@@ -275,7 +255,7 @@ impl Fetch for Http {
 /// environment inside, for the reason `auth` has no `load_default`: a function
 /// that resolves its own path cannot be tested without writing to the process
 /// environment, and the mutation gate reports it as an undetectable survivor.
-pub struct Cached<F = Http> {
+pub struct Cached<F> {
     path: Option<PathBuf>,
     fetcher: F,
     now: u64,
@@ -412,28 +392,21 @@ impl Registry {
             let Some(api) = provider.api.filter(|api| !api.trim().is_empty()) else {
                 continue;
             };
-            let models: BTreeMap<String, ModelFacts> = provider
-                .models
-                .into_iter()
-                .map(|(id, model)| {
-                    (
-                        id,
-                        ModelFacts {
-                            temperature: model.temperature,
-                            output_limit: model.limit.and_then(|limit| limit.output),
-                        },
-                    )
-                })
-                .collect();
             // Merged, not inserted. Two providers can publish the same `api`
             // URL - `minimax` and `minimax-coding-plan` both publish
             // `https://api.minimax.io/anthropic/v1`, which is drep's own
             // MINIMAX preset - and `insert` would silently discard whichever
             // arrived first, taking its models with it.
-            providers
-                .entry(crate::auth::normalise(&api))
-                .or_default()
-                .extend(models);
+            let entry = providers.entry(crate::auth::normalise(&api)).or_default();
+            for (id, model) in provider.models {
+                entry.insert(
+                    id,
+                    ModelFacts {
+                        temperature: model.temperature,
+                        output_limit: model.limit.and_then(|limit| limit.output),
+                    },
+                );
+            }
         }
 
         if providers.is_empty() {
@@ -478,14 +451,18 @@ pub fn resolve(
         // not tested, and raising a required ceiling is the direction that
         // yields a 400 - which by invariant neither fails over nor retries.
         // Lowering only ever costs a shorter answer.
-        max_tokens: defaults.max_tokens.map(|fallback| {
-            facts
-                .output_limit
-                .map_or(fallback, |limit| limit.min(fallback))
-        }),
+        max_tokens: defaults
+            .max_tokens
+            .map(|fallback| facts.output_limit.unwrap_or(fallback).min(fallback)),
+        // `<=`, not `<`. The question the rendered comment asks is whether the
+        // number written is the model's own published limit, and a model whose
+        // limit is exactly the preset's fallback answers yes - the value is
+        // both. Testing `<` reads the provenance off a comparison of the two
+        // values instead, which makes the file claim the limit is unknown
+        // while naming it exactly.
         max_tokens_from_registry: defaults
             .max_tokens
-            .is_some_and(|fallback| facts.output_limit.is_some_and(|limit| limit < fallback)),
+            .is_some_and(|fallback| facts.output_limit.is_some_and(|limit| limit <= fallback)),
     }
 }
 

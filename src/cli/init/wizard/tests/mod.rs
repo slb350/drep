@@ -11,6 +11,6 @@ mod models;
 mod quirks;
 mod support;
 
-#[allow(unused_imports)]
-pub(crate) use support::{Catalog, Quirked, Recording};
-pub(crate) use support::{Scripted, number_of};
+pub(crate) use support::{
+    Catalog, Quirked, Recording, Scripted, deps, deps_with_env_set, number_of,
+};

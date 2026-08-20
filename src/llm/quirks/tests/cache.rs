@@ -271,14 +271,30 @@ fn saving_reports_a_directory_it_cannot_create() {
 }
 
 #[test]
-fn the_cache_is_a_fraction_of_the_document_it_came_from() {
+fn the_cache_keeps_only_the_two_facts_drep_reads() {
     // The reason the document is distilled rather than stored: models.dev is
-    // ~4 MB, and drep reads a boolean and an integer per model.
+    // ~4 MB against the 600 KB this writes, and drep reads a boolean and an
+    // integer per model. Everything else the vendors publish is dropped.
+    //
+    // Asserted as "the ignored fields are gone" rather than as a size ratio.
+    // A ratio over a cut-down fixture measures how verbose the fixture is -
+    // adding one model to it moved the number - while what distillation has to
+    // guarantee is which fields survive.
     let body = toml::to_string(&Registry::distil(DOCUMENT, 0).expect("distils")).expect("toml");
 
+    for dropped in ["context", "reasoning", "\"name\"", "Kimi K3"] {
+        assert!(
+            !body.contains(dropped),
+            "`{dropped}` is not a fact drep reads, so it must not reach the cache:\n{body}"
+        );
+    }
     assert!(
-        body.len() * 3 < DOCUMENT.len(),
-        "{} bytes from {}",
+        body.contains("output_limit") && body.contains("temperature"),
+        "and the two that are read must survive:\n{body}"
+    );
+    assert!(
+        body.len() < DOCUMENT.len(),
+        "distilling must not grow the document: {} bytes from {}",
         body.len(),
         DOCUMENT.len()
     );

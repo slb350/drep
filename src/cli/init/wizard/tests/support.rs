@@ -196,3 +196,47 @@ impl crate::llm::quirks::QuirksSource for Quirked {
         }
     }
 }
+
+/// An environment lookup answering "not set" for every variable.
+///
+/// A `static` rather than a closure at each call site, so the reference handed
+/// to `Deps` outlives the call and every test states the same condition the
+/// same way. The lookup is injected in the first place because
+/// `std::env::set_var` is `unsafe` in edition 2024 - a concurrent reader on
+/// another thread is a data race, and `cargo test` is multi-threaded.
+pub(crate) static NEVER_SET: fn(&str) -> bool = |_| false;
+
+/// An environment lookup answering "set" for every variable.
+pub(crate) static ALWAYS_SET: fn(&str) -> bool = |_| true;
+
+/// The wizard's dependencies for a test: no network, no process environment,
+/// and whatever credential store the caller supplies.
+///
+/// Written out at each call site, the four fields were spelled thirteen times,
+/// eleven of them identical but for one. Adding a field to `Deps` then means
+/// editing thirteen unrelated tests, which is what happened when the quirks
+/// source arrived.
+pub(crate) fn deps<'a, S, Q>(
+    store: &'a crate::auth::AuthStore,
+    source: &'a S,
+    quirks_source: &'a Q,
+) -> super::super::Deps<'a, S, Q> {
+    super::super::Deps {
+        store,
+        source,
+        quirks_source,
+        env_is_set: &NEVER_SET,
+    }
+}
+
+/// [`deps`], with every environment variable reported as already set.
+pub(crate) fn deps_with_env_set<'a, S, Q>(
+    store: &'a crate::auth::AuthStore,
+    source: &'a S,
+    quirks_source: &'a Q,
+) -> super::super::Deps<'a, S, Q> {
+    super::super::Deps {
+        env_is_set: &ALWAYS_SET,
+        ..deps(store, source, quirks_source)
+    }
+}

@@ -75,7 +75,7 @@ rpassword = "7.5"
 # One GET, no streaming and no retry, which is why it does not go through
 # open-agent-sdk - that crate owns the completion path and its retry policy.
 # Already present transitively via the SDK, so this costs no new build.
-reqwest = { version = "0.12", features = ["json"] }
+reqwest = { version = "0.12", features = ["json", "gzip"] }
 
 [dev-dependencies]
 assert_cmd = "2.2"

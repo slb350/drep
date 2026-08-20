@@ -17,65 +17,11 @@ mod resolve;
 
 use super::{Fetch, QuirksError};
 
-/// A models.dev-shaped document, cut down to the cases that matter.
-///
-/// Field-for-field the shape of the real one, verified against
-/// `https://models.dev/api.json`: providers keyed by vendor id, each with an
-/// `api` URL that may be null, and models keyed by id carrying `temperature`
-/// and `limit.output` among many fields drep ignores.
-pub(crate) const DOCUMENT: &str = r#"{
-  "kimi-for-coding": {
-    "id": "kimi-for-coding",
-    "name": "Kimi For Coding",
-    "api": "https://api.kimi.com/coding/v1",
-    "models": {
-      "k3": {
-        "id": "k3",
-        "name": "Kimi K3",
-        "reasoning": true,
-        "temperature": false,
-        "limit": { "context": 262144, "output": 131072 }
-      },
-      "kimi-for-coding": {
-        "id": "kimi-for-coding",
-        "temperature": false,
-        "limit": { "context": 262144, "output": 32768 }
-      }
-    }
-  },
-  "zai-coding-plan": {
-    "id": "zai-coding-plan",
-    "api": "https://api.z.ai/api/coding/paas/v4",
-    "models": {
-      "glm-5.3": {
-        "id": "glm-5.3",
-        "temperature": true,
-        "limit": { "context": 204800, "output": 131072 }
-      }
-    }
-  },
-  "openai": {
-    "id": "openai",
-    "api": null,
-    "models": {
-      "gpt-5.6-sol": {
-        "id": "gpt-5.6-sol",
-        "temperature": false,
-        "limit": { "context": 400000, "output": 128000 }
-      }
-    }
-  },
-  "blank-endpoint": {
-    "id": "blank-endpoint",
-    "api": "   ",
-    "models": { "nowhere": { "id": "nowhere", "temperature": false } }
-  },
-  "quiet-vendor": {
-    "id": "quiet-vendor",
-    "api": "https://quiet.example/v1",
-    "models": { "unspecified": { "id": "unspecified" } }
-  }
-}"#;
+/// The shared models.dev fixture. Re-exported under the name these files have
+/// always used; it lives in `test_support` because the wizard's tests need the
+/// same document, and two copies of it disagreed about whether `glm-5.3`
+/// accepts a temperature.
+pub(crate) use crate::test_support::MODELS_DEV_DOCUMENT as DOCUMENT;
 
 /// A document whose providers all lack an endpoint, so nothing can be joined.
 pub(crate) const NO_ENDPOINTS: &str = r#"{

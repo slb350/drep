@@ -59,9 +59,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   quirks cache. The two files sit in the same directory, so a second copy that
   only called `create_dir_all` would have left the credential store's own
   directory world-readable whenever the cache happened to be written first.
+- The registry document is fetched compressed. models.dev serves it gzipped at
+  399 KB against 4.01 MB uncompressed, and `reqwest` was built without the
+  feature, so drep asked for the whole thing. On a 2 Mbit link that is 16
+  seconds of an interactive command against a 20-second timeout. One
+  consequence is deliberate: `reqwest` strips `Content-Length` from a response
+  it decodes, so the header check is now a shortcut and the streaming cap is
+  the bound - and it counts decoded bytes, which is what gets allocated.
+- `crate::http` holds the one bounded GET. `drep init` makes two plain requests
+  of its own, for the model listing and the registry document, and each had
+  written its own client and body read.
+- One models.dev fixture, in `test_support`, instead of one per suite. The two
+  copies disagreed about whether `glm-5.3` accepts a temperature, so neither
+  was readable as the fixture's claim. It now refuses one and `glm-5.2`
+  accepts, which puts both directions on the same endpoint.
 
 ### Fixed
 
+- **The model listing was read without a size ceiling.** `drep init` asks an
+  endpoint the user has just typed which models it serves, holding a key while
+  it does, and buffered whatever came back. The registry fetch written beside
+  it had a ceiling and a chunked read from the start; the older listing call
+  kept `text()`. Both now go through `crate::http::read_bounded`, which is the
+  point of having one of it.
+- **A rendered `drep.toml` claimed a model's output limit was unknown while
+  printing it.** The comment above `max_tokens` is decided by whether the
+  registry named the model's own limit, and that was read off `limit <
+  fallback` - so a model publishing exactly the preset's fallback got the
+  "not known here" wording for a number the registry had named.
+- A failed hook rename left its temporary file behind. `drep init` is a command
+  people re-run, so a repeatedly-failing install accumulated one file per
+  attempt in `.git/hooks`. The quirks cache already cleaned up after itself.
 - **`the_required_max_tokens_leaves_headroom_against_the_models_window`
   asserted something untrue.** `k3` publishes an output ceiling of 131,072 and
   `kimi-for-coding` 32,768, so the preset's 200,000 was above both rather than

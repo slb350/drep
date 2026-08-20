@@ -23,7 +23,7 @@
 //! same functions the flag path uses, so an answer given interactively cannot
 //! reach a different code path than the equivalent flag.
 
-use anyhow::{Result, anyhow};
+use anyhow::Result;
 
 use super::config_file::Choice;
 use super::hooks::HookKind;
@@ -40,24 +40,6 @@ use crate::llm::quirks::{self, QuirksSource, Registry};
 /// - and `cargo test` is multi-threaded.
 pub fn real_env(name: &str) -> bool {
     std::env::var_os(name).is_some()
-}
-
-/// The terminal, or a scripted stand-in.
-pub trait Console {
-    /// Print a line.
-    fn say(&mut self, line: &str) -> Result<()>;
-
-    /// Ask a question and read one line.
-    ///
-    /// `default` is shown in the prompt and returned when the answer is empty,
-    /// so pressing Enter accepts it.
-    fn ask(&mut self, question: &str, default: Option<&str>) -> Result<String>;
-
-    /// Ask for a secret and read one line without echoing it.
-    ///
-    /// An empty answer is legitimate and means "skip", so this cannot signal
-    /// refusal by returning an error.
-    fn ask_secret(&mut self, question: &str) -> Result<String>;
 }
 
 /// What the wizard decided, for `init` to carry out.
@@ -161,7 +143,11 @@ impl std::fmt::Debug for Plan {
 /// can supply a stand-in - the model listing, the quirks registry, and whether
 /// an environment variable is set are the three things that would otherwise
 /// reach the network or the process environment from inside a unit test.
-pub struct Deps<'a, S: ModelSource, Q: QuirksSource> {
+///
+/// The bounds sit on the functions that use the fields rather than on the
+/// struct: a bound on a data declaration has to be repeated at every mention
+/// of the type without constraining anything the fields do.
+pub struct Deps<'a, S, Q> {
     /// Keys already held for this machine.
     pub store: &'a AuthStore,
     /// What models an endpoint serves.
@@ -222,26 +208,34 @@ async fn one_provider<S: ModelSource, Q: QuirksSource>(
     pending: &[(String, String)],
     position: usize,
 ) -> Result<(Choice, Option<(String, String)>)> {
-    let Deps {
-        store,
-        source,
-        quirks_source,
-        env_is_set,
-    } = deps;
     let preset = ask_provider(console, position)?;
 
     let endpoint = ask_required(console, "Endpoint", preset.endpoint)?;
 
     // The key is settled *before* the model, which is the whole reason the
     // endpoint can be asked what it serves: a listing needs authenticating.
-    let key = ask_key(console, store, *env_is_set, pending, preset, &endpoint)?;
-    let model = ask_model(console, *source, preset, &endpoint, key.usable.as_deref()).await?;
+    let key = ask_key(
+        console,
+        deps.store,
+        deps.env_is_set,
+        pending,
+        preset,
+        &endpoint,
+    )?;
+    let model = ask_model(
+        console,
+        deps.source,
+        preset,
+        &endpoint,
+        key.usable.as_deref(),
+    )
+    .await?;
 
     // The chosen model, not the preset, decides `temperature` and `max_tokens`.
     // Nothing here can fail: an absent registry, or one that does not name this
     // model, yields the preset's values unchanged.
     let quirks = quirks::resolve(
-        registry.get(console, *quirks_source).await,
+        registry.get(console, deps.quirks_source).await,
         preset.quirks(),
         &endpoint,
         &model,
@@ -518,77 +512,8 @@ pub fn confirm(console: &mut dyn Console, question: &str, default_yes: bool) -> 
     }
 }
 
-/// The real terminal.
-///
-/// Reads lines from stdin and secrets through `rpassword`, which turns echo off
-/// for the duration of the read. A pasted key would otherwise sit in the
-/// terminal's scrollback, which is the one place drep takes care not to put a
-/// credential anywhere else - `LlmConfig`, `LlmClient` and `AuthStore` all
-/// hand-write `Debug` for the same reason.
-pub struct Terminal<'a, W: std::io::Write> {
-    out: &'a mut W,
-}
-
-impl<'a, W: std::io::Write> Terminal<'a, W> {
-    /// Wrap `out` as the wizard's console.
-    pub fn new(out: &'a mut W) -> Self {
-        Self { out }
-    }
-}
-
-impl<W: std::io::Write> Console for Terminal<'_, W> {
-    fn say(&mut self, line: &str) -> Result<()> {
-        writeln!(self.out, "{line}")?;
-        Ok(())
-    }
-
-    fn ask(&mut self, question: &str, default: Option<&str>) -> Result<String> {
-        match default {
-            Some(value) => write!(self.out, "{question} [{value}]: ")?,
-            None => write!(self.out, "{question}: ")?,
-        }
-        self.out.flush()?;
-
-        let mut line = String::new();
-        let read = std::io::stdin().read_line(&mut line)?;
-        // End of input mid-wizard. Returning the default would silently accept
-        // choices nobody made, so it is an error naming what happened.
-        if read == 0 {
-            return Err(anyhow!("input ended while `drep init` was still asking"));
-        }
-
-        let answer = line.trim();
-        Ok(match (answer.is_empty(), default) {
-            (true, Some(value)) => value.to_string(),
-            _ => answer.to_string(),
-        })
-    }
-
-    fn ask_secret(&mut self, question: &str) -> Result<String> {
-        use std::io::IsTerminal;
-
-        write!(self.out, "{question}: ")?;
-        self.out.flush()?;
-
-        // `rpassword` turns echo off on the controlling terminal, which means
-        // opening `/dev/tty` - and that fails outright when there is none,
-        // rather than degrading. A piped stdin has nothing to echo in the first
-        // place: the data is not being typed, so there is no echo to suppress
-        // and a plain read is both correct and the only thing that works.
-        let secret = if std::io::stdin().is_terminal() {
-            rpassword::read_password()?
-        } else {
-            let mut line = String::new();
-            std::io::stdin().read_line(&mut line)?;
-            line.trim_end_matches(['\n', '\r']).to_string()
-        };
-
-        // The typed newline was consumed by whichever branch ran, so the next
-        // line would otherwise start on the same row as the prompt.
-        writeln!(self.out)?;
-        Ok(secret)
-    }
-}
+mod console;
+pub use console::{Console, Terminal};
 
 #[cfg(test)]
 pub(crate) mod tests;
