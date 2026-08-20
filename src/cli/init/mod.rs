@@ -136,12 +136,22 @@ pub async fn run_with<W: Write>(out: &mut W, args: &InitArgs, auth_path: &Path) 
     };
 
     let plan = if interactive {
+        // Constructed here rather than inside the wizard for the same reason
+        // `auth_path` is a parameter: a function that resolves its own path
+        // reads the environment, and nothing can then test it without writing
+        // to the process environment. Only this branch touches either, which is
+        // what keeps the flag path - and every test of it - off the network.
+        let quirks = crate::llm::quirks::Cached::new(crate::llm::quirks::default_path());
+        let models = crate::llm::models::Http::new();
         let mut console = wizard::Terminal::new(out);
         wizard::run(
             &mut console,
-            &store,
-            &crate::llm::models::Http,
-            &wizard::real_env,
+            wizard::Deps {
+                store: &store,
+                source: &models,
+                quirks_source: &quirks,
+                env_is_set: &wizard::real_env,
+            },
         )
         .await?
     } else {
@@ -311,6 +321,11 @@ pub(crate) fn plan_from_flags(args: &InitArgs, store: &auth::AuthStore) -> Resul
             key_in_store: store.get(&endpoint).is_some(),
             model,
             endpoint,
+            // The preset's own values, unnarrowed: this path has no prompt, so
+            // it makes no network call either, and a flag run that reached for
+            // models.dev would be a `drep init --provider local` that needs the
+            // internet.
+            quirks: preset.quirks(),
         }],
         new_keys: Vec::new(),
         hooks: args.hooks,

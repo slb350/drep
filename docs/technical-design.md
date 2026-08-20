@@ -48,11 +48,14 @@ source, `files::is_markdown` is markdown, and nothing satisfies both.
 | `llm/cache.rs` | content-addressed response cache |
 | `llm/concurrency.rs` | the permit limiter |
 | `llm/json_parsing.rs` | tolerant extraction of JSON from a model response |
+| `llm/models.rs` | asking an endpoint which models it serves |
+| `llm/quirks.rs` | the cached model-quirks registry, distilled from models.dev |
 | `analysis/payload.rs` | rendering a file or hunk set into the prompt payload |
 | `analysis/code_quality.rs` | the semantic pass |
 | `analysis/findings.rs` | `Severity` and its ordering |
 | `docs/` | the markdown checks: `fence`, `lines`, `links`, `blocks` |
 | `config.rs` | `drep.toml`: parse, `${VAR}` expansion, validation |
+| `auth.rs` | the per-machine credential store, keyed by endpoint |
 | `text.rs` | `excerpt`, the only bounding of text drep did not write |
 
 ## Two layers, split by source

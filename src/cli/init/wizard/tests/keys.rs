@@ -2,7 +2,7 @@
 //! environment.
 
 use super::super::*;
-use super::{Catalog, Scripted, number_of};
+use super::{Catalog, Quirked, Scripted, deps, deps_with_env_set, number_of};
 
 /// Run the wizard for one `zai` provider, with `key_answer` given at the paste
 /// prompt, against `store`.
@@ -22,9 +22,12 @@ async fn run_zai(store: &AuthStore, key_answer: &str) -> (Plan, Scripted) {
         "",         // gitignore
     ];
     let mut console = Scripted::new(&answers);
-    let plan = run(&mut console, store, &Catalog::Unavailable, &|_| false)
-        .await
-        .expect("the wizard completes");
+    let plan = run(
+        &mut console,
+        deps(store, &Catalog::Unavailable, &Quirked::Unavailable),
+    )
+    .await
+    .expect("the wizard completes");
     assert!(console.is_drained(), "unused answers: the flow differed");
     (plan, console)
 }
@@ -101,9 +104,12 @@ async fn a_key_already_in_the_store_is_reused_without_asking() {
 
     let provider = number_of("zai");
     let mut console = Scripted::new(&[provider.as_str(), "", "", "", "", ""]);
-    let plan = run(&mut console, &store, &Catalog::Unavailable, &|_| false)
-        .await
-        .expect("the wizard completes");
+    let plan = run(
+        &mut console,
+        deps(&store, &Catalog::Unavailable, &Quirked::Unavailable),
+    )
+    .await
+    .expect("the wizard completes");
 
     assert!(console.is_drained(), "no paste prompt was answered");
     assert!(
@@ -127,9 +133,12 @@ async fn a_stored_key_is_found_regardless_of_a_trailing_slash() {
 
     let provider = number_of("zai");
     let mut console = Scripted::new(&[provider.as_str(), "", "", "", "", ""]);
-    let plan = run(&mut console, &store, &Catalog::Unavailable, &|_| false)
-        .await
-        .expect("the wizard completes");
+    let plan = run(
+        &mut console,
+        deps(&store, &Catalog::Unavailable, &Quirked::Unavailable),
+    )
+    .await
+    .expect("the wizard completes");
 
     assert!(console.secrets_asked.is_empty());
     assert!(plan.choices[0].key_in_store);
@@ -157,9 +166,11 @@ async fn a_key_pasted_earlier_in_the_same_run_is_not_asked_for_twice() {
 
     let plan = run(
         &mut console,
-        &AuthStore::new(),
-        &Catalog::Unavailable,
-        &|_| false,
+        deps(
+            &AuthStore::new(),
+            &Catalog::Unavailable,
+            &Quirked::Unavailable,
+        ),
     )
     .await
     .expect("the wizard completes");
@@ -178,9 +189,11 @@ async fn a_provider_needing_no_key_is_never_asked_for_one() {
     let mut console = Scripted::new(&["1", "", "", "", "", ""]);
     let plan = run(
         &mut console,
-        &AuthStore::new(),
-        &Catalog::Unavailable,
-        &|_| false,
+        deps(
+            &AuthStore::new(),
+            &Catalog::Unavailable,
+            &Quirked::Unavailable,
+        ),
     )
     .await
     .expect("the wizard completes");
@@ -236,9 +249,11 @@ async fn an_already_exported_variable_is_reported_at_the_prompt() {
 
     run(
         &mut console,
-        &AuthStore::new(),
-        &Catalog::Unavailable,
-        &|_| true,
+        deps_with_env_set(
+            &AuthStore::new(),
+            &Catalog::Unavailable,
+            &Quirked::Unavailable,
+        ),
     )
     .await
     .expect("the wizard completes");

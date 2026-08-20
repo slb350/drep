@@ -393,7 +393,6 @@ async fn ensure_chainer<W: Write>(out: &mut W, dir: &Path, name: &str) -> Result
     Ok(())
 }
 
-/// Write `body` to `path`, then make it executable.
 /// Write `body` to `path` and make it executable, atomically.
 ///
 /// Via a sibling temp file and a rename, because `fs::write` truncates in
@@ -406,8 +405,14 @@ fn write_executable(path: &Path, body: &str) -> Result<()> {
     std::fs::write(&temp, body)
         .with_context(|| format!("could not write hook {}", temp.display()))?;
     set_executable(&temp)?;
-    std::fs::rename(&temp, path)
-        .with_context(|| format!("could not install hook {}", path.display()))?;
+    std::fs::rename(&temp, path).map_err(|err| {
+        // A failed rename leaves the temporary behind, and `drep init` is a
+        // command people re-run - so without this a repeatedly-failing install
+        // litters `.git/hooks` with one file per attempt. The quirks cache's
+        // write does the same thing for the same reason.
+        let _ = std::fs::remove_file(&temp);
+        anyhow::Error::new(err).context(format!("could not install hook {}", path.display()))
+    })?;
     Ok(())
 }
 

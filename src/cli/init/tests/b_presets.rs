@@ -63,12 +63,59 @@ fn only_a_preset_whose_endpoint_requires_max_tokens_renders_one() {
 }
 
 #[test]
-fn the_required_max_tokens_leaves_headroom_against_the_models_window() {
-    // A cap set below what the model can produce would truncate an answer, which
-    // is the failure the no-max_tokens rule exists to prevent. The value is set
-    // well above any review-sized response so the required field cannot bite.
+fn the_required_max_tokens_is_a_fallback_the_endpoint_is_known_to_accept() {
+    // Not a headroom claim, which is what this used to assert: k3's own
+    // published ceiling is 131,072 and `kimi-for-coding`'s is 32,768, so 200,000
+    // is above both. It is the value written when the quirks registry cannot
+    // name the chosen model, and what it has to be is *accepted by the
+    // endpoint*, which it is - verified live. For a model the registry does
+    // name, the model's own limit is written instead.
     let kimi = presets::preset("kimi").expect("kimi preset");
     assert_eq!(kimi.max_tokens, Some(200_000));
+}
+
+#[test]
+fn a_presets_quirks_are_its_own_declared_values() {
+    // The bridge every path that cannot consult the registry uses: the
+    // `--provider` flag path, an offline wizard, and any model models.dev does
+    // not list. A version that invented a value here would put a completion cap
+    // on providers that never had one.
+    for preset in presets::PRESETS {
+        let quirks = preset.quirks();
+        assert_eq!(quirks.temperature, preset.temperature, "{}", preset.key);
+        assert_eq!(quirks.max_tokens, preset.max_tokens, "{}", preset.key);
+        assert!(
+            !quirks.max_tokens_from_registry,
+            "`{}` claims a registry it never consulted",
+            preset.key
+        );
+    }
+}
+
+#[test]
+fn the_registry_can_replace_the_required_value_but_not_the_requirement() {
+    // Whether the field is required stays a property of the *endpoint*, so a
+    // resolved value is written for kimi and for nobody else. Only the number
+    // moves.
+    use crate::cli::init::presets::PRESETS;
+    use crate::llm::quirks::Quirks;
+
+    for preset in PRESETS {
+        let resolved = Quirks {
+            temperature: preset.temperature,
+            max_tokens: preset.max_tokens.map(|_| 42_000),
+            max_tokens_from_registry: preset.max_tokens.is_some(),
+        };
+        let body = super::support::render_with_quirks(preset, "m", "http://e/v1", resolved);
+        let line = body
+            .lines()
+            .find(|line| line.trim_start().starts_with("max_tokens ="));
+
+        match preset.max_tokens {
+            Some(_) => assert_eq!(line, Some("max_tokens = 42000"), "preset `{}`", preset.key),
+            None => assert_eq!(line, None, "preset `{}`", preset.key),
+        }
+    }
 }
 
 #[test]
@@ -200,6 +247,76 @@ fn every_preset_renders_a_config_that_loads() {
         });
         assert_eq!(config.providers().len(), 1, "preset `{}`", preset.key);
     }
+}
+
+#[test]
+fn a_model_that_refuses_temperature_writes_no_temperature_line_whatever_the_preset_says() {
+    // The narrowing that keeps a provider working: `zai` sends 0.2 because
+    // `glm-5.3` accepted it, and a model on the same plan that refuses it would
+    // answer a 400 that neither fails over nor retries.
+    use crate::llm::quirks::Quirks;
+
+    let zai = presets::preset("zai").expect("zai");
+    assert_eq!(zai.temperature, Some(0.2), "the preset still sends one");
+
+    let body = super::support::render_with_quirks(
+        zai,
+        "glm-fussy",
+        "http://e/v1",
+        Quirks {
+            temperature: None,
+            ..zai.quirks()
+        },
+    );
+
+    assert!(
+        !body
+            .lines()
+            .any(|l| l.trim_start().starts_with("temperature =")),
+        "got {body}"
+    );
+    assert!(
+        body.contains("this model rejects the"),
+        "and says why: {body}"
+    );
+}
+
+#[test]
+fn the_rendered_comment_says_whether_the_limit_is_the_models_own() {
+    // The comment lands in a file the user commits, so "this is the model's own
+    // limit" has to be false whenever the number came from the preset instead.
+    use crate::llm::quirks::Quirks;
+
+    let kimi = presets::preset("kimi").expect("kimi");
+
+    let from_registry = super::support::render_with_quirks(
+        kimi,
+        "k3",
+        "http://e/v1",
+        Quirks {
+            max_tokens: Some(131_072),
+            max_tokens_from_registry: true,
+            ..kimi.quirks()
+        },
+    );
+    assert!(
+        from_registry.contains("the model's own published output limit"),
+        "got {from_registry}"
+    );
+    assert!(
+        !from_registry.contains("is not known here"),
+        "got {from_registry}"
+    );
+
+    let from_preset = super::support::render_one(kimi, "k4-preview", "http://e/v1");
+    assert!(
+        from_preset.contains("is not known here"),
+        "got {from_preset}"
+    );
+    assert!(
+        !from_preset.contains("the model's own published output limit"),
+        "got {from_preset}"
+    );
 }
 
 #[test]

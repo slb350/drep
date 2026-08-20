@@ -16,6 +16,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, anyhow};
 
 use super::presets::LlmPreset;
+use crate::llm::quirks::Quirks;
 
 /// One provider the user chose, ready to render.
 ///
@@ -24,7 +25,7 @@ use super::presets::LlmPreset;
 /// the renderer never has to decide what "no model" means.
 #[derive(Debug, Clone)]
 pub struct Choice {
-    /// The preset this came from - it supplies the protocol, the ceilings and
+    /// The preset this came from - it supplies the protocol, the timeout and
     /// the environment variable name.
     pub preset: &'static LlmPreset,
     /// The model to ask for.
@@ -38,6 +39,15 @@ pub struct Choice {
     /// the user never set, and an explicit `api_key` wins over the store - so
     /// the file would override the very key `drep init` had just saved.
     pub key_in_store: bool,
+    /// What to write for `temperature` and `max_tokens`.
+    ///
+    /// Resolved before the choice is built, not derived here, because the
+    /// answer depends on the model the user picked rather than on the preset
+    /// alone - and the renderer is reached by two paths that resolve it
+    /// differently. The wizard narrows the preset's values against the quirks
+    /// registry; the `--provider` flag path, which has no prompt and makes no
+    /// network call, uses [`LlmPreset::quirks`] unchanged.
+    pub quirks: Quirks,
 }
 
 /// Render the whole `drep.toml`, comments included, for a failover chain.
@@ -106,18 +116,29 @@ fn render_one(body: &mut String, choice: &Choice) {
 
     // Written only for an endpoint that refuses a request without it. Everywhere
     // else an unset cap is what stops a reasoning model being truncated mid-thought.
-    if let Some(max_tokens) = preset.max_tokens {
+    //
+    // The second comment line says where the number came from, because "this is
+    // the model's own limit" is a claim in a file the user commits, and it is
+    // false whenever the registry could not name the model.
+    if let Some(max_tokens) = choice.quirks.max_tokens {
         body.push_str("# Required by this endpoint: it refuses a request that omits the field.\n");
-        body.push_str(
-            "# Set well above any review-sized response, so it is not a ceiling in practice.\n",
-        );
+        if choice.quirks.max_tokens_from_registry {
+            body.push_str(
+                "# This is the model's own published output limit, not a cap drep chose.\n",
+            );
+        } else {
+            body.push_str(
+                "# This model's own limit is not known here, so it is the provider's fallback:\n\
+                 # set well above any review-sized response.\n",
+            );
+        }
         body.push_str(&format!("max_tokens = {max_tokens}\n"));
     }
 
     // Absent means the parameter is omitted from the request entirely, which is what
     // a model that rejects it requires. That is a property of the model, so the
-    // preset decides rather than the file inheriting a default.
-    match preset.temperature {
+    // chosen model decides rather than the file inheriting a default.
+    match choice.quirks.temperature {
         Some(temperature) => {
             // `{:?}` rather than `{}`: Display renders `1.0` as `1`, which TOML
             // reads as an *integer* and `config::load` then refuses with a type
@@ -137,7 +158,7 @@ fn render_one(body: &mut String, choice: &Choice) {
         body.push_str(&format!("timeout_secs = {timeout}\n"));
     }
 
-    if preset.max_tokens.is_none() {
+    if choice.quirks.max_tokens.is_none() {
         body.push_str(
             "# max_tokens is deliberately unset: with no completion cap, a reasoning model\n",
         );

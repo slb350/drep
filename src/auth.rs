@@ -203,17 +203,7 @@ impl AuthStore {
         // A bare filename has `Some("")` as its parent, which is not a
         // directory anything can create.
         if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
-            // Only a directory drep creates is narrowed. `DREP_AUTH_PATH` can
-            // name any path, so chmodding whatever happens to be its parent
-            // would let `/etc/drep.toml` turn `/etc` into 0700 - breaking the
-            // system to protect one file. An existing directory is the user's,
-            // and the file's own 0600 is what actually guards the key.
-            let existed = parent.exists();
-            std::fs::create_dir_all(parent)
-                .map_err(|err| AuthError::Write(parent.to_path_buf(), err))?;
-            if !existed {
-                restrict(parent, 0o700)?;
-            }
+            ensure_dir_private(parent)?;
         }
 
         let body =
@@ -362,11 +352,27 @@ pub fn source_of(
     }
 }
 
-/// Narrow `path` to `mode` on Unix. A no-op elsewhere.
+/// Create `dir` if it is missing, narrowing it to 0700 only when drep made it.
 ///
-/// Windows has no mode bits and `directories` puts the file under the user's
-/// roaming profile, which is already user-scoped; failing the save there would
-/// refuse to store a key for no gain.
+/// Only a directory drep creates is narrowed. `DREP_AUTH_PATH` can name any
+/// path, so chmodding whatever happens to be its parent would let
+/// `/etc/drep.toml` turn `/etc` into 0700 - breaking the system to protect one
+/// file. An existing directory is the user's, and the store file's own 0600 is
+/// what actually guards the key.
+///
+/// Shared with the model-quirks cache, which sits in the same directory: a
+/// second copy of this rule that only called `create_dir_all` would leave the
+/// credential store's directory world-readable whenever the cache happened to
+/// be written first.
+pub(crate) fn ensure_dir_private(dir: &Path) -> Result<(), AuthError> {
+    let existed = dir.exists();
+    std::fs::create_dir_all(dir).map_err(|err| AuthError::Write(dir.to_path_buf(), err))?;
+    if !existed {
+        restrict(dir, 0o700)?;
+    }
+    Ok(())
+}
+
 /// Write `body` to `path`, creating it readable only by its owner.
 ///
 /// `File::create` plus a later `chmod` leaves the key in a 0644 file for the
@@ -399,6 +405,11 @@ fn write_private(path: &Path, body: &str) -> Result<(), AuthError> {
     restrict(path, 0o600)
 }
 
+/// Narrow `path` to `mode` on Unix. A no-op elsewhere.
+///
+/// Windows has no mode bits and `directories` puts the file under the user's
+/// roaming profile, which is already user-scoped; failing the save there would
+/// refuse to store a key for no gain.
 #[cfg(unix)]
 fn restrict(path: &Path, mode: u32) -> Result<(), AuthError> {
     use std::os::unix::fs::PermissionsExt;

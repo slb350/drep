@@ -35,15 +35,31 @@ pub(super) fn auth_path(dir: &tempfile::TempDir) -> std::path::PathBuf {
 /// The tests used to call a `render` overload that existed only for them, and
 /// which hardcoded `key_in_store: false` - so they could not see the flag
 /// path's real behaviour. This builds the same `Choice` production builds.
+///
+/// The quirks are the preset's own, which is what the flag path uses: narrowing
+/// them against a registry is the wizard's job, and `render_with_quirks` is how
+/// the tests that care exercise it.
 pub(super) fn render_one(
     preset: &'static crate::cli::init::presets::LlmPreset,
     model: &str,
     endpoint: &str,
+) -> String {
+    render_with_quirks(preset, model, endpoint, preset.quirks())
+}
+
+/// [`render_one`] with the per-model quirks supplied rather than taken from the
+/// preset, for the cases where the registry narrowed them.
+pub(super) fn render_with_quirks(
+    preset: &'static crate::cli::init::presets::LlmPreset,
+    model: &str,
+    endpoint: &str,
+    quirks: crate::llm::quirks::Quirks,
 ) -> String {
     crate::cli::init::config_file::render_chain(&[crate::cli::init::config_file::Choice {
         preset,
         model: model.to_string(),
         endpoint: endpoint.to_string(),
         key_in_store: false,
+        quirks,
     }])
 }

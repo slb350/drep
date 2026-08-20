@@ -8,7 +8,14 @@
 //! ## What is deliberately delegated to the SDK
 //!
 //! - **Streaming.** `open-agent-sdk` parses the SSE stream; drep concatenates
-//!   the `ContentBlock::Text` blocks it emits and ignores the rest.
+//!   the `ContentBlock::Text` blocks it emits and ignores the rest. Since
+//!   0.10.0 those blocks are *fragments* - one event per delta, delivered
+//!   while the stream is open, where 0.9.x emitted the whole response as a
+//!   single block at the end. The types are identical either way, so nothing
+//!   here failed to compile and nothing here changed: the join in
+//!   `run_one_query` is what makes the assembled text independent of where
+//!   the deltas fall. Reading one block as the whole answer would now return a
+//!   prefix, and `src/llm/client/tests/streaming.rs` is what would notice.
 //! - **Transport retry.** `retry_with_backoff_conditional` decides per error
 //!   whether to retry (5xx, timeout, stream error) or fail fast (4xx, config
 //!   errors). drep adds no retry layer on top.

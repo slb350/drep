@@ -35,6 +35,47 @@ fn repo() -> tempfile::TempDir {
     dir
 }
 
+/// Write a cache the quirks registry will accept as fresh, and return its path.
+///
+/// It names one endpoint nothing here configures, so every model these tests
+/// pick is one the registry does not name - the documented fallback to the
+/// preset's own values. What they exercise is the wiring around the wizard,
+/// not the registry.
+///
+/// Written through `Registry::save` rather than as hand-rolled TOML. The file
+/// has to parse or `Registry::load` reports no cache, the wizard fetches, and
+/// these tests start making live 4 MB requests to models.dev - passing while
+/// they do it, since the fallback they assert on is the same either way. Going
+/// through the type the loader uses is what makes a schema change a build
+/// failure instead of a silent trip to the network.
+///
+/// Stamped with the current wall clock so it is inside the one-week freshness
+/// window and no fetch is attempted.
+fn seed_quirks_cache(dir: &tempfile::TempDir) -> std::path::PathBuf {
+    let path = dir.path().join("model-quirks.toml");
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("a clock after 1970")
+        .as_secs();
+    drep::llm::quirks::Registry::distil(
+        r#"{"elsewhere": {"api": "https://nothing-here.example/v1", "models": {}}}"#,
+        now,
+    )
+    .expect("the seed document distils")
+    .save(&path)
+    .expect("seed the quirks cache");
+
+    // Proved rather than assumed. A cache that does not load is
+    // indistinguishable from a fresh one in every assertion these tests make,
+    // because both end at the preset's values - the difference is only whether
+    // a 4 MB request went out first.
+    assert!(
+        drep::llm::quirks::Registry::load(&path).is_some_and(|registry| !registry.is_stale(now)),
+        "the seeded cache must load and read as fresh, or these tests fetch"
+    );
+    path
+}
+
 /// An endpoint nothing listens on.
 ///
 /// Every wizard script here names one explicitly rather than accepting a
@@ -86,7 +127,15 @@ fn run_init(
         .stderr(Stdio::piped())
         // A store inside the temp dir, so the run cannot read or rewrite the
         // developer's real keys.
-        .env("DREP_AUTH_PATH", dir.path().join("auth.toml"));
+        .env("DREP_AUTH_PATH", dir.path().join("auth.toml"))
+        // And a model-quirks cache inside it too, seeded fresh by
+        // `seed_quirks_cache`. Without this the interactive runs below fetch
+        // 4 MB from models.dev and write the result into the developer's real
+        // config directory - beside `auth.toml`, and creating that directory
+        // if it did not exist. Same reason as the line above, and the same
+        // reason this file names a dead endpoint: a test issues no live
+        // request to a third party.
+        .env("DREP_QUIRKS_PATH", seed_quirks_cache(dir));
 
     match answers {
         None => {

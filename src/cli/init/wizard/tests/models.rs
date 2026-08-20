@@ -4,7 +4,7 @@
 //! typo or a model outside the plan surfaced as a 404 on the first push.
 
 use super::super::*;
-use super::{Catalog, Recording, Scripted, number_of};
+use super::{Catalog, Quirked, Recording, Scripted, deps, number_of};
 
 /// Run the wizard for one `local` provider against `catalog`.
 ///
@@ -16,9 +16,12 @@ async fn run_local(catalog: &Catalog, model_answers: &[&str]) -> (Plan, Scripted
     answers.extend_from_slice(&["", "", ""]);
 
     let mut console = Scripted::new(&answers);
-    let plan = run(&mut console, &AuthStore::new(), catalog, &|_| false)
-        .await
-        .expect("the wizard completes");
+    let plan = run(
+        &mut console,
+        deps(&AuthStore::new(), catalog, &Quirked::Unavailable),
+    )
+    .await
+    .expect("the wizard completes");
     assert!(console.is_drained(), "unused answers: the flow differed");
     (plan, console)
 }
@@ -172,9 +175,12 @@ async fn a_pasted_key_authenticates_the_listing() {
         "",
     ]);
 
-    run(&mut console, &AuthStore::new(), &source, &|_| false)
-        .await
-        .expect("the wizard completes");
+    run(
+        &mut console,
+        deps(&AuthStore::new(), &source, &Quirked::Unavailable),
+    )
+    .await
+    .expect("the wizard completes");
 
     let calls = source.calls.borrow();
     assert_eq!(calls.len(), 1, "one listing per provider");
@@ -196,7 +202,7 @@ async fn a_key_already_in_the_store_authenticates_the_listing_too() {
     let zai = number_of("zai");
     let mut console = Scripted::new(&[zai.as_str(), "", "1", "", "", ""]);
 
-    run(&mut console, &store, &source, &|_| false)
+    run(&mut console, deps(&store, &source, &Quirked::Unavailable))
         .await
         .expect("the wizard completes");
 
@@ -210,9 +216,12 @@ async fn a_provider_needing_no_key_lists_unauthenticated() {
     let source = Recording::new(Catalog::of(&["qwen3-30b-a3b"]));
     let mut console = Scripted::new(&["1", "", "1", "", "", ""]);
 
-    run(&mut console, &AuthStore::new(), &source, &|_| false)
-        .await
-        .expect("the wizard completes");
+    run(
+        &mut console,
+        deps(&AuthStore::new(), &source, &Quirked::Unavailable),
+    )
+    .await
+    .expect("the wizard completes");
 
     assert_eq!(source.calls.borrow()[0].1, "");
 }
