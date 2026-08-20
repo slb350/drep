@@ -5,6 +5,70 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **`drep init` writes `temperature` and `max_tokens` for the model you picked,
+  not for its provider.** Both are properties of a model, and the presets held
+  one value each: `kimi` sent no temperature because `k3` refuses one, and a
+  required `max_tokens` of 200,000 because that is a number the endpoint
+  accepts. The wizard now consults a distilled, weekly-refreshed copy of
+  [models.dev](https://models.dev) - the one index publishing `temperature` and
+  `limit.output` per model - so `k3` gets its own 131,072 and
+  `kimi-for-coding` gets 32,768, where one provider-scoped number could not
+  have been right for both. `GET /models` cannot answer this: it carries ids
+  and nothing else.
+
+  The registry only ever narrows. It may withdraw a `temperature` and may lower
+  a *required* `max_tokens`; it never introduces either, because sending a
+  parameter drep would have omitted is the direction that produces a 400, and a
+  400 neither fails over nor retries. An index that disagrees with an endpoint
+  therefore cannot break a provider that worked before this existed.
+
+  Nothing about it can stop `drep init`. A missing, unreadable, unparseable or
+  wrongly-shaped cache means "refetch"; a failed fetch falls back to a stale
+  copy, or to the preset's own values; a model the registry does not name keeps
+  the preset's values, which is what `drep init` wrote before. `--provider`
+  runs do not consult it at all, so a scripted setup still needs no network.
+  `DREP_QUIRKS_PATH` relocates the cache, which otherwise sits beside
+  `auth.toml`.
+
+  The rendered `drep.toml` says which of the two it wrote, because "this is the
+  model's own limit" is a claim in a file you commit.
+
+### Changed
+
+- **open-agent-sdk 0.10.0.** Streamed text now reaches drep one `StreamEvent`
+  per delta while the stream is open, where 0.9.x concatenated the whole
+  response into a single block at its end. `run_one_query` already appended
+  every text block it received, so the assembled response is byte-identical and
+  nothing failed to compile - which is the hazard, since the types are
+  unchanged and only the event count differs. `src/llm/client/tests/streaming.rs`
+  now delivers the same bytes as one delta and as nine, splitting inside a JSON
+  key and inside a number, and asserts the extracted value is the same; it
+  fails against a client that keeps the first block, keeps the last, or joins
+  the fragments with a separator.
+- `a_response_with_no_finish_reason_is_retried` finally tests what it is named.
+  Its fixture reported `"stop"`, because under 0.9.x a stream that never sent a
+  `finish_reason` yielded no text at all and the case could not be written.
+  0.10.0 delivers the text and finishes as `Unspecified`, so
+  `test_support::sse_without_finish_reason` builds the real thing.
+- `auth::ensure_dir_private` is now the single definition of "create this
+  directory, and narrow it to 0700 only if drep made it", shared with the
+  quirks cache. The two files sit in the same directory, so a second copy that
+  only called `create_dir_all` would have left the credential store's own
+  directory world-readable whenever the cache happened to be written first.
+
+### Fixed
+
+- **`the_required_max_tokens_leaves_headroom_against_the_models_window`
+  asserted something untrue.** `k3` publishes an output ceiling of 131,072 and
+  `kimi-for-coding` 32,768, so the preset's 200,000 was above both rather than
+  below either. The value stays - the endpoint is verified to accept it, and it
+  is now only the fallback for a model the registry cannot name - and the test
+  says what it actually pins.
+
 ## [2.1.0] - 2026-08-20
 
 ### Added
@@ -1058,7 +1122,8 @@ behavior changes.
 - Rate limiting considerations
 - Sanitized LLM prompts to prevent injection
 
-[Unreleased]: https://github.com/slb350/drep/compare/v2.0.0...HEAD
+[Unreleased]: https://github.com/slb350/drep/compare/v2.1.0...HEAD
+[2.1.0]: https://github.com/slb350/drep/compare/v2.0.0...v2.1.0
 [2.0.0]: https://github.com/slb350/drep/compare/v1.3.0...v2.0.0
 [1.3.0]: https://github.com/slb350/drep/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/slb350/drep/compare/v1.1.3...v1.2.0

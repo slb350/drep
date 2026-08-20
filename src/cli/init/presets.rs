@@ -16,7 +16,19 @@
 //! **`max_tokens` is deliberately absent.** The Python presets set it to
 //! 100,000 for reasoning models. In 2.0 no cap is sent unless the user sets
 //! one - see the `max_tokens` note in [`crate::config`]. A preset that set one
-//! would reintroduce exactly the coupling that was removed.
+//! would reintroduce exactly the coupling that was removed. The one exception
+//! is an endpoint that *refuses a request without the field*, where the preset
+//! records that requirement and a value to fall back on.
+//!
+//! **`temperature` and `max_tokens` are properties of a model, not a
+//! provider**, so what a preset holds for them is a starting point rather than
+//! an answer. [`LlmPreset::quirks`] turns the pair into a
+//! [`Quirks`](crate::llm::quirks::Quirks), which
+//! [`quirks::resolve`](crate::llm::quirks::resolve) then narrows against the
+//! model the user actually chose. The preset's values are what a run falls back
+//! to whenever the registry cannot name that model - which is every offline
+//! run, every `--provider` run, and every model released since the cache was
+//! written.
 
 /// One named way to reach a model.
 #[derive(Debug, Clone, Copy)]
@@ -47,15 +59,18 @@ pub struct LlmPreset {
     /// wrong link here is worse than no link, since it sends someone to the
     /// metered console of a provider whose subscription key lives elsewhere.
     pub key_url: Option<&'static str>,
-    /// Completion ceiling, or `None` to send none.
+    /// Whether this endpoint requires a completion ceiling, and what to send
+    /// when the model's own limit is unknown.
     ///
     /// Normally `None`: an unset cap is what stops a reasoning model being
     /// truncated mid-thought, and inventing one per provider is the coupling
     /// 2.0 removed. The exception is an endpoint that *requires* the field -
     /// `api.kimi.com/coding/v1` answers a bare `invalid_request_error` 400
-    /// without it, verified against the live endpoint - where the value is set
-    /// to the model's own output limit, so it is a required field rather than a
-    /// ceiling anyone will hit.
+    /// without it, verified against the live endpoint.
+    ///
+    /// `is_some()` is the requirement and stays a property of the endpoint. The
+    /// *value* is a fallback: when the quirks registry knows the chosen model,
+    /// its published output limit is written instead.
     pub max_tokens: Option<u32>,
     /// Sampling temperature, or `None` to send none at all.
     ///
@@ -63,6 +78,10 @@ pub struct LlmPreset {
     /// *model*: `k3` and `gpt-5.6-sol` reject the parameter outright, and a 400
     /// neither fails over nor retries. A preset that guessed would be the
     /// difference between a provider that works and one that never answers.
+    ///
+    /// The registry may withdraw it for a model that refuses it. It never adds
+    /// one here, because sending a parameter drep would have omitted is the
+    /// direction that produces a 400.
     pub temperature: Option<f32>,
 }
 
@@ -166,9 +185,10 @@ pub static KIMI: LlmPreset = LlmPreset {
     timeout_secs: Some(1800),
     protocol: Some("anthropic"),
     // Required by this endpoint, not a ceiling: without it the request is refused
-    // with a bare `invalid_request_error` 400 that names no field. Set below the
-    // model's window with room to spare, so the required field can never be what
-    // truncates an answer.
+    // with a bare `invalid_request_error` 400 that names no field. This value is
+    // only the fallback for a model the quirks registry cannot name; for one it
+    // can, the model's own published output limit is written instead. Verified
+    // accepted by the live endpoint, which is what a fallback has to be.
     max_tokens: Some(200_000),
     // k3 answers `only temperature 1 is allowed for this model` with a 400, which
     // neither fails over nor retries. Sending none is the only value that works.
@@ -191,6 +211,19 @@ pub static CUSTOM: LlmPreset = LlmPreset {
 };
 
 impl LlmPreset {
+    /// This preset's starting point for the per-model parameters.
+    ///
+    /// What `drep init` wrote before the quirks registry existed, and what
+    /// every path that cannot consult it still writes: the `--provider` flag
+    /// path, an offline run, and any model the registry does not name.
+    pub fn quirks(&self) -> crate::llm::quirks::Quirks {
+        crate::llm::quirks::Quirks {
+            temperature: self.temperature,
+            max_tokens: self.max_tokens,
+            max_tokens_from_registry: false,
+        }
+    }
+
     /// The wire protocol this preset's endpoint speaks.
     ///
     /// The table stores a string because that is what `drep.toml` carries and

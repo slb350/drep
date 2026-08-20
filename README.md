@@ -66,6 +66,15 @@ export OPENROUTER_API_KEY='...'
 The default is a pre-push hook; `--hooks pre-commit` or `--hooks both` if you
 want the gate earlier, `--hooks none` for the config alone.
 
+The interactive path fills in `temperature` and `max_tokens` for the model you
+picked rather than for its provider, using a weekly-refreshed copy of
+[models.dev](https://models.dev). It only ever removes a parameter or lowers a
+required ceiling, never the reverse, so a model that refuses `temperature` gets
+no `temperature` line and `k3` gets its own 131,072 instead of a number chosen
+for the endpoint. Offline, or for a model too new to be listed, the provider's
+defaults are written and setup carries on. `DREP_QUIRKS_PATH` points drep at a
+different cache.
+
 It writes native git hooks rather than a pre-commit entry, and it handles
 `core.hooksPath`: if you have a global hooks directory, a repository-local hook
 would otherwise never fire, silently.
@@ -254,6 +263,10 @@ interactive use.
 models require — `k3` and `gpt-5.6-sol` reject any value), `max_tokens` (unset
 by default, so a reasoning model is never truncated mid-thought; a few endpoints
 refuse a request without it), `max_retries`, `max_concurrent`.
+
+Both are properties of the model rather than the endpoint, which is why the
+wizard resolves them per model. Editing either by hand always wins: drep reads
+the file as written and never revisits it.
 
 ## Development
 

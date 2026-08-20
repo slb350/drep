@@ -7,11 +7,16 @@
 //! is the paragraph recording a real bug. Two copies of the SSE builder in
 //! particular is a trap: it encodes an SDK behaviour that fails silently.
 //!
-//! The SSE builder here is the one piece that cannot be guessed: the SDK
-//! buffers text deltas and only emits `ContentBlock`s when a chunk carries a
-//! non-null `finish_reason`. A stream where every chunk has `"finish_reason":
-//! null` yields ZERO blocks, with no error and no warning, because the empty
-//! result is silently dropped.
+//! The SSE builders here are the one piece that cannot be guessed, because
+//! what they encode is an SDK behaviour rather than the wire format. Since
+//! open-agent-sdk 0.10.0 each delta reaches the caller as its own
+//! `StreamEvent` as it arrives, and the terminating `Finish` is emitted when
+//! the transport ends whether or not a chunk ever carried a `finish_reason` -
+//! so a stream that never reports one yields its text and finishes as
+//! `Unspecified`. Under 0.9.x the same stream yielded ZERO blocks, silently:
+//! text was held until a non-null `finish_reason` arrived and dropped if none
+//! ever did, which is why [`sse`] sets one on its last chunk and why
+//! [`sse_without_finish_reason`] could not be written at all.
 
 use std::time::Duration;
 
@@ -37,8 +42,10 @@ pub(crate) fn cfg_for(server: &MockServer, model: &str, max_retries: u32) -> Llm
 
 /// Build an SSE body the SDK will parse into `parts` concatenated.
 ///
-/// The final chunk carries `"finish_reason":"stop"`; without it the SDK emits
-/// nothing at all.
+/// One chunk per part, so a multi-part `parts` is what a fragmented response
+/// looks like on the wire. The final chunk carries `"finish_reason":"stop"`,
+/// which is what most of these tests want: the alternative is `Unspecified`,
+/// a distinct answer that drep treats differently.
 pub(crate) fn sse(parts: &[&str]) -> String {
     let mut out = String::new();
     for (i, part) in parts.iter().enumerate() {
@@ -76,6 +83,37 @@ pub(crate) fn sse_finishing_with(parts: &[&str], finish: &str) -> String {
     }
     out.push_str("data: [DONE]\n\n");
     out
+}
+
+/// Build an SSE body whose chunks all carry `"finish_reason":null`.
+///
+/// llama.cpp, vLLM and several local gateways stream content and then close
+/// the connection without ever reporting a reason. The SDK finishes such a
+/// stream as `FinishReason::Unspecified`, which is neither `Stop` nor a
+/// failure - and drep has to keep those apart, since `Unspecified` says
+/// nothing about whether asking again could help.
+pub(crate) fn sse_without_finish_reason(parts: &[&str]) -> String {
+    let mut out = String::new();
+    for part in parts {
+        out.push_str(&format!(
+            "data: {{\"id\":\"1\",\"object\":\"chat.completion.chunk\",\"created\":0,\"model\":\"m\",\"choices\":[{{\"index\":0,\"delta\":{{\"content\":{}}},\"finish_reason\":null}}]}}\n\n",
+            serde_json::to_string(part).expect("string serializes")
+        ));
+    }
+    out.push_str("data: [DONE]\n\n");
+    out
+}
+
+/// A server answering 200 with `parts` and no `finish_reason` at all.
+pub(crate) async fn server_without_finish_reason(parts: &[&str]) -> MockServer {
+    let server = MockServer::start().await;
+    mount_sse(
+        &server,
+        ResponseTemplate::new(200)
+            .set_body_raw(sse_without_finish_reason(parts), "text/event-stream"),
+    )
+    .await;
+    server
 }
 
 /// A server answering 200 with `parts` and a final `finish_reason` of `finish`.

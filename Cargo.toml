@@ -55,8 +55,11 @@ ignore = "0.4"
 # is `open_agent`.
 # 0.9.0 adds the Anthropic `/messages` protocol and makes `temperature`
 # omittable, both of which drep requires: `kimi` and `minimax` speak Anthropic,
-# and `k3` rejects any temperature at all.
-open-agent-sdk = "0.9.0"
+# and `k3` rejects any temperature at all. 0.10.0 delivers streamed text one
+# event per delta instead of one block at the end of the stream; drep
+# concatenates every text block it receives, so the assembled response is
+# unchanged - see `run_one_query` in src/llm/client/mod.rs.
+open-agent-sdk = "0.10.0"
 futures = "0.3"
 serde = { version = "1.0", features = ["derive"] }
 thiserror = "2.0"

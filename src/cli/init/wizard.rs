@@ -30,6 +30,7 @@ use super::hooks::HookKind;
 use super::presets::{self, LlmPreset};
 use crate::auth::AuthStore;
 use crate::llm::models::{Model, ModelSource};
+use crate::llm::quirks::{self, QuirksSource, Registry};
 
 /// Whether an environment variable is set, in the real process.
 ///
@@ -76,15 +77,22 @@ pub struct Plan {
     pub gitignore: bool,
 }
 
-/// Run the wizard against `console`, consulting `store` for keys already held
-/// and `source` for what each endpoint actually serves.
-pub async fn run<S: ModelSource>(
+/// Run the wizard against `console`, consulting `store` for keys already held,
+/// `source` for what each endpoint actually serves and `quirks_source` for what
+/// the chosen model accepts.
+pub async fn run<S: ModelSource, Q: QuirksSource>(
     console: &mut dyn Console,
-    store: &AuthStore,
-    source: &S,
-    env_is_set: &dyn Fn(&str) -> bool,
+    deps: Deps<'_, S, Q>,
 ) -> Result<Plan> {
     console.say("Setting up drep. Enter accepts the value in brackets.")?;
+
+    // Fetched on first use, not here. Every provider needs it and it is one
+    // document rather than one per endpoint, so it is fetched at most once - but
+    // doing it before the first prompt meant an offline `drep init` sat through
+    // the whole timeout and then opened with an error about a service the user
+    // may never reach. Deferring it puts any wait after the questions the user
+    // came to answer, and a warm cache makes it invisible either way.
+    let mut registry = LazyRegistry::new();
     console.say("")?;
 
     let mut choices = Vec::new();
@@ -93,7 +101,7 @@ pub async fn run<S: ModelSource>(
     loop {
         let position = choices.len() + 1;
         let (choice, key) =
-            one_provider(console, store, source, env_is_set, &new_keys, position).await?;
+            one_provider(console, &deps, &mut registry, &new_keys, position).await?;
         if let Some(pair) = key {
             new_keys.push(pair);
         }
@@ -147,25 +155,97 @@ impl std::fmt::Debug for Plan {
     }
 }
 
+/// What the wizard needs from the outside world.
+///
+/// Bundled rather than threaded one by one: every field here exists so a test
+/// can supply a stand-in - the model listing, the quirks registry, and whether
+/// an environment variable is set are the three things that would otherwise
+/// reach the network or the process environment from inside a unit test.
+pub struct Deps<'a, S: ModelSource, Q: QuirksSource> {
+    /// Keys already held for this machine.
+    pub store: &'a AuthStore,
+    /// What models an endpoint serves.
+    pub source: &'a S,
+    /// What quirks a chosen model has.
+    pub quirks_source: &'a Q,
+    /// Whether an environment variable is set.
+    pub env_is_set: &'a dyn Fn(&str) -> bool,
+}
+
+/// The registry, fetched at most once and only when something needs it.
+///
+/// `None` after a failed attempt is remembered, so a provider chain does not
+/// retry a fetch that already failed once per entry - and does not report the
+/// same failure repeatedly.
+struct LazyRegistry {
+    fetched: bool,
+    registry: Option<Registry>,
+}
+
+impl LazyRegistry {
+    fn new() -> Self {
+        Self {
+            fetched: false,
+            registry: None,
+        }
+    }
+
+    /// The registry, fetching it the first time and reporting a failure once.
+    async fn get<Q: QuirksSource>(
+        &mut self,
+        console: &mut dyn Console,
+        source: &Q,
+    ) -> Option<&Registry> {
+        if !self.fetched {
+            self.fetched = true;
+            match source.registry().await {
+                Ok(registry) => self.registry = Some(registry),
+                Err(err) => {
+                    // Said, never returned: nothing about model quirks may stop
+                    // `drep init`.
+                    let _ = console.say(&format!("  Could not check model quirks: {err}"));
+                    let _ = console.say("  Falling back to this provider's own defaults.");
+                }
+            }
+        }
+        self.registry.as_ref()
+    }
+}
+
 /// Ask for one provider: which, where, which model, and its key.
 ///
 /// Returns the choice and, when the user pasted one, the key to store.
-async fn one_provider<S: ModelSource>(
+async fn one_provider<S: ModelSource, Q: QuirksSource>(
     console: &mut dyn Console,
-    store: &AuthStore,
-    source: &S,
-    env_is_set: &dyn Fn(&str) -> bool,
+    deps: &Deps<'_, S, Q>,
+    registry: &mut LazyRegistry,
     pending: &[(String, String)],
     position: usize,
 ) -> Result<(Choice, Option<(String, String)>)> {
+    let Deps {
+        store,
+        source,
+        quirks_source,
+        env_is_set,
+    } = deps;
     let preset = ask_provider(console, position)?;
 
     let endpoint = ask_required(console, "Endpoint", preset.endpoint)?;
 
     // The key is settled *before* the model, which is the whole reason the
     // endpoint can be asked what it serves: a listing needs authenticating.
-    let key = ask_key(console, store, env_is_set, pending, preset, &endpoint)?;
-    let model = ask_model(console, source, preset, &endpoint, key.usable.as_deref()).await?;
+    let key = ask_key(console, store, *env_is_set, pending, preset, &endpoint)?;
+    let model = ask_model(console, *source, preset, &endpoint, key.usable.as_deref()).await?;
+
+    // The chosen model, not the preset, decides `temperature` and `max_tokens`.
+    // Nothing here can fail: an absent registry, or one that does not name this
+    // model, yields the preset's values unchanged.
+    let quirks = quirks::resolve(
+        registry.get(console, *quirks_source).await,
+        preset.quirks(),
+        &endpoint,
+        &model,
+    );
     let endpoint_for_store = endpoint.clone();
 
     Ok((
@@ -174,6 +254,7 @@ async fn one_provider<S: ModelSource>(
             model,
             endpoint,
             key_in_store: key.in_store,
+            quirks,
         },
         key.to_store.map(|stored| (endpoint_for_store, stored)),
     ))

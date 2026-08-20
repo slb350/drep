@@ -161,3 +161,38 @@ pub(crate) fn number_of(key: &str) -> String {
         .unwrap_or_else(|| panic!("no preset named `{key}`"));
     (index + 1).to_string()
 }
+
+/// A [`QuirksSource`](crate::llm::quirks::QuirksSource) driven by a canned
+/// registry.
+///
+/// Built from a models.dev-shaped JSON literal rather than from a hand-made
+/// `Registry`, so the distillation the wizard depends on is the one under test
+/// here too - and so no test in this crate reaches models.dev.
+pub(crate) enum Quirked {
+    /// models.dev could not be reached and no cache could stand in for it.
+    Unavailable,
+    /// The registry drep would have distilled from this document.
+    Knows(crate::llm::quirks::Registry),
+}
+
+impl Quirked {
+    /// A registry distilled from a models.dev-shaped document.
+    pub fn from_json(body: &str) -> Self {
+        Self::Knows(
+            crate::llm::quirks::Registry::distil(body, 0).expect("the fixture document distils"),
+        )
+    }
+}
+
+impl crate::llm::quirks::QuirksSource for Quirked {
+    async fn registry(
+        &self,
+    ) -> Result<crate::llm::quirks::Registry, crate::llm::quirks::QuirksError> {
+        match self {
+            Self::Unavailable => Err(crate::llm::quirks::QuirksError::Transport(
+                "the stub is offline".to_string(),
+            )),
+            Self::Knows(registry) => Ok(registry.clone()),
+        }
+    }
+}

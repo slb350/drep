@@ -13,7 +13,7 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 use crate::llm::client::{Extracted, LlmClient, LlmError};
 use crate::test_support::{
     cfg_for, fast_retry_client, mount_sse, request_count, server_finishing_with, server_returning,
-    sse,
+    server_without_finish_reason, sse,
 };
 
 /// Criterion 22: a 200 response with a fenced JSON body yields `Complete`.
@@ -550,9 +550,14 @@ async fn a_model_that_stopped_without_json_is_still_retried() {
 /// `Unspecified` means "no information", which several OpenAI-compatible
 /// servers give by default. It must not be read as `Stop` - but it must not
 /// stop the retry either, because nothing rules a different answer out.
+///
+/// The fixture reports no reason on any chunk, which is what the name says
+/// and what only open-agent-sdk 0.10.0 makes expressible: under 0.9.x such a
+/// stream yielded no text at all, so the test had to settle for a `"stop"`
+/// body and was pinning `Stop` while claiming to pin `Unspecified`.
 #[tokio::test]
 async fn a_response_with_no_finish_reason_is_retried() {
-    let server = server_returning(&["still not JSON"]).await;
+    let server = server_without_finish_reason(&["still not JSON"]).await;
     let client = fast_retry_client(&cfg_for(&server, "m", 1));
 
     let err = client

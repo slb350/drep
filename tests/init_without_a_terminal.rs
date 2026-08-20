@@ -35,6 +35,23 @@ fn repo() -> tempfile::TempDir {
     dir
 }
 
+/// Write a cache the quirks registry will accept as fresh, and return its path.
+///
+/// Empty of providers on purpose: what these tests exercise is the wiring
+/// around the wizard, not the registry, and every model they configure is
+/// therefore one it does not name - which is the documented fallback to the
+/// preset's own values. Stamped with the current wall clock so it is inside
+/// the one-week freshness window and no fetch is attempted.
+fn seed_quirks_cache(dir: &tempfile::TempDir) -> std::path::PathBuf {
+    let path = dir.path().join("model-quirks.toml");
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("a clock after 1970")
+        .as_secs();
+    std::fs::write(&path, format!("fetched_at = {now}\n")).expect("seed the quirks cache");
+    path
+}
+
 /// An endpoint nothing listens on.
 ///
 /// Every wizard script here names one explicitly rather than accepting a
@@ -86,7 +103,15 @@ fn run_init(
         .stderr(Stdio::piped())
         // A store inside the temp dir, so the run cannot read or rewrite the
         // developer's real keys.
-        .env("DREP_AUTH_PATH", dir.path().join("auth.toml"));
+        .env("DREP_AUTH_PATH", dir.path().join("auth.toml"))
+        // And a model-quirks cache inside it too, seeded fresh by
+        // `seed_quirks_cache`. Without this the interactive runs below fetch
+        // 4 MB from models.dev and write the result into the developer's real
+        // config directory - beside `auth.toml`, and creating that directory
+        // if it did not exist. Same reason as the line above, and the same
+        // reason this file names a dead endpoint: a test issues no live
+        // request to a third party.
+        .env("DREP_QUIRKS_PATH", seed_quirks_cache(dir));
 
     match answers {
         None => {
