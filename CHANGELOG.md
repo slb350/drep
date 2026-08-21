@@ -15,7 +15,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   The persistent runner keeps only `target/` between sweeps and fails closed
   on any other ignored or untracked workspace state. Its dedicated no-login
   account is isolated from user homes and private-network egress, and every
-  external contributor's fork workflow requires maintainer approval.
+  external contributor's fork workflow requires maintainer approval. The job
+  retains a 90-minute stuck-run ceiling, with enough headroom for the measured
+  full sweep to finish when Strix is serving another repository concurrently.
+- Source-file discovery now delegates directly to the allocation-free language
+  registry lookup instead of allocating lowercase and dotted extension strings
+  for every path visited by the repository walk.
 
 ## [2.5.0] - 2026-08-21
 
