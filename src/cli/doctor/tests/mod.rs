@@ -1,9 +1,8 @@
 //! Acceptance tests for `drep doctor` (Part A).
 //!
-//! Every criterion in PHASE_SPEC.md becomes one `#[test]`. Each test runs
-//! `run_to` against a `TempDir` and asserts on the captured string. No
-//! subprocess - the command takes a `&mut dyn Write` precisely so the
-//! tests can read what would otherwise go to stdout.
+//! Each test runs `run_to` against a `TempDir` and asserts on the captured
+//! string. No subprocess - the command takes a `&mut dyn Write` precisely so
+//! the tests can read what would otherwise go to stdout.
 
 mod a_codex;
 mod a_languages;

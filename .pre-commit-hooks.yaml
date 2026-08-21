@@ -9,8 +9,7 @@
 # `language: rust` so pre-commit builds the binary from this repository
 # (`cargo install --path .`) into its own environment. With `language: system`
 # the consumer has to install drep themselves first and the hook simply fails
-# if they have not; `language: python` was the 1.x answer and installs a PyPI
-# package that 2.0 does not publish.
+# if they have not.
 #
 # types_or covers every language the registry knows: with `types: [python]`
 # these hooks never fired in a Go or TypeScript repo.

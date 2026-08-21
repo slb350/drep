@@ -151,9 +151,8 @@ model = "third"
 
 /// A disabled *head* means the next enabled entry leads the chain.
 ///
-/// This is the case the phase existed to fix: parking the local model was
-/// supposed to fall through to the cloud entry below, and instead produced
-/// `NotConfigured` because the head was consulted regardless of `enabled`.
+/// Parking the local model must fall through to the cloud entry below rather
+/// than producing `NotConfigured` from the disabled head.
 #[test]
 fn a_disabled_head_falls_through_to_the_next_enabled_entry() {
     let temp = tempfile::tempdir().expect("tempdir");

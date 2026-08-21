@@ -204,8 +204,8 @@ fn ancestors_within(start: &Path, root: &Path) -> Vec<PathBuf> {
         .collect()
 }
 
-/// Look up `command` on PATH, mirroring `shutil.which` from the Python
-/// reference (which `std::process::Command` does not expose directly).
+/// Look up `command` on PATH; `std::process::Command` does not expose this
+/// resolution directly.
 ///
 /// Crucially checks executability, not just existence: a half-installed
 /// shim on PATH that is not executable would otherwise be reported as `Ok`
@@ -509,9 +509,7 @@ fn normalize_path(path: &str) -> &str {
 
 /// Truncate a string to at most `max` bytes, on a char boundary.
 ///
-/// The Python reference uses `s.strip()[:200]`, which slices bytes. For
-/// ASCII that is identical; for multibyte UTF-8 we still need to land on
-/// a boundary to keep the result valid.
+/// Multibyte UTF-8 must land on a character boundary to keep the result valid.
 pub(crate) fn truncate(s: &str, max: usize) -> String {
     if s.len() <= max {
         return s.to_owned();

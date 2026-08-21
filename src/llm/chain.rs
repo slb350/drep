@@ -1,11 +1,8 @@
 //! The provider chain: an ordered list of LLM providers, tried in turn.
 //!
-//! drep 2.0 dropped the circuit breaker and the rate limiter as server-shaped
-//! complexity. Failover is the same category of machinery and is taken anyway,
-//! for one specific failure that happens in practice: a local endpoint that is
-//! off blocks **every** commit, because "could not analyze" is a hard stop by
-//! design. The bar it had to clear is recorded in `docs/rust-migration.md`
-//! rather than left implicit here.
+//! Failover handles one common local-gate failure: an unavailable local
+//! endpoint otherwise blocks **every** commit because "could not analyze" is a
+//! hard stop by design.
 //!
 //! ## Two independent questions about a failure
 //!

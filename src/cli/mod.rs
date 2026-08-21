@@ -1,11 +1,9 @@
 //! Command-line surface.
 //!
-//! Six commands, two triggers (pre-commit and pre-push). Anything that needs
-//! a platform API, a webhook or a database was dropped in 2.0 - see
-//! `docs/rust-migration.md`.
+//! Six commands and two git-hook triggers: pre-commit and pre-push.
 //!
 //! Each command owns its arguments in its own module, so a command's contract
-//! and its behaviour stay together as the later phases fill them in.
+//! and its behaviour stay together.
 
 pub mod acknowledge;
 pub mod auth;
@@ -220,13 +218,11 @@ mod tests {
 
     #[test]
     fn every_command_dispatches_to_an_implementation() {
-        // The last stub (`lint-docs`) landed in Phase 6, so there is no
-        // `unimplemented` arm left to pin. What replaces that test is the
-        // guarantee it was really protecting: no subcommand may reach `run`
-        // and fall through to a clean exit. `run`'s match is exhaustive over
-        // `Command`, so the compiler enforces it - this asserts the enum is
-        // still the commands the contract names, so one added without an arm
-        // is a compile error rather than a silent pass.
+        // No subcommand may reach `run` and fall through to a clean exit.
+        // `run`'s match is exhaustive over `Command`, so the compiler enforces
+        // it - this asserts the enum is still the commands the contract names,
+        // so one added without an arm is a compile error rather than a silent
+        // pass.
         let names: Vec<String> = Cli::command()
             .get_subcommands()
             .map(|c| c.get_name().to_owned())

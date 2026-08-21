@@ -68,13 +68,9 @@ async fn prose_without_json_yields_unparseable() {
 
 /// An empty response body is **retried**, and surfaces as `Transport`.
 ///
-/// This test asserted the opposite until drep's own first gated push
-/// disproved it: 7 of 49 files came back with no parseable JSON, and
-/// re-running one immediately afterwards succeeded with findings. "The model
-/// returned nothing" is provider flakiness, not a deterministic property of
-/// the prompt - the same `finish_reason='error'` that blocked three
-/// consecutive pushes under 1.x, where a single `max_retries` governed both
-/// failure classes.
+/// "The model returned nothing" is provider flakiness, not a deterministic
+/// property of the prompt; repeating the same request can immediately succeed
+/// with findings.
 ///
 /// The request count is the load-bearing assertion. Without it, a
 /// implementation that classified the empty body correctly but still refused

@@ -109,8 +109,7 @@ fn a_model_whose_endpoint_publishes_no_limit_keeps_the_presets_fallback() {
 #[test]
 fn the_registry_never_introduces_a_max_tokens() {
     // `glm-5.3` publishes an output limit, and z.ai does not require the field.
-    // Writing one would put a completion cap on a reasoning model, which is the
-    // coupling 2.0 removed.
+    // Writing one would put an arbitrary completion cap on a reasoning model.
     let resolved = resolve(Some(&registry()), zai_defaults(), ZAI, "glm-5.3");
 
     assert_eq!(resolved.max_tokens, None);

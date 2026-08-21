@@ -3,7 +3,7 @@
 //! One boundary: `LlmClient::complete_json` takes a system prompt and a user
 //! payload, sends them to the configured OpenAI-compatible endpoint, and
 //! returns the JSON value the model produced. Cache and concurrency limiting
-//! arrive in Phase 3b; this phase owns the request itself.
+//! live above this single-provider request boundary.
 //!
 //! ## What is deliberately delegated to the SDK
 //!
@@ -338,15 +338,9 @@ impl LlmClient {
 
         // An empty body is a **transport** failure, not a parse failure.
         //
-        // This distinction was learned the expensive way. Both cases used to
-        // return `Ok(None)` and become a non-retrying `Unparseable`, on the
-        // stated reasoning that "the model returned nothing" repeats
-        // deterministically for the same prompt. It does not: on drep's own
-        // first gated push, 7 of 49 files came back with no parseable JSON,
-        // and re-running one of them immediately afterwards succeeded with
-        // findings and exit 0. The provider had simply returned nothing that
-        // time - which is exactly the `finish_reason='error'` flakiness that
-        // blocked three consecutive pushes under 1.x.
+        // An empty response is provider flakiness, not a deterministic parse
+        // failure for the prompt. Repeating the same request can immediately
+        // succeed with findings.
         //
         // `Error::stream` is classified retryable by the SDK, which is both
         // accurate (the stream completed carrying no content) and nearly free:

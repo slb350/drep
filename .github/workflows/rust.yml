@@ -2,7 +2,7 @@ name: rust
 
 on:
   push:
-    branches: [main, rust-rewrite]
+    branches: [main]
   pull_request:
 
 env:
@@ -43,15 +43,9 @@ jobs:
 
       - run: cargo test --all-targets --all-features
 
-  # The family Gitea instance has only the Strix Linux runner. Its macOS
-  # runners belong to the separate novels instance, while GitHub supplies this
-  # hosted lane. Gitea evaluates a job-level `if` only after label matching, so
-  # give its guarded skip a claimable Linux label; GitHub still resolves this
-  # expression to native macOS.
   test-macos:
     name: test (macos-latest)
-    if: ${{ github.server_url == 'https://github.com' }}
-    runs-on: ${{ github.server_url == 'https://github.com' && 'macos-latest' || 'ubuntu-latest' }}
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v5
 

@@ -1,4 +1,4 @@
-# Technical design: drep 2.0
+# Technical design: drep
 
 drep is one binary. It reads files, runs the tools the repository configures,
 asks a model about the code that changed, and exits 0, 1, 2 or 3. There is no
@@ -171,8 +171,8 @@ because files run concurrently and a check taken only before acquiring a permit
 stops nothing that had already started.
 
 A one-provider chain collapses to that provider's own `FailureReason`;
-`ChainFailed` appears only for a chain of two or more, so the config
-`drep init` writes reports exactly what it did before failover existed.
+`ChainFailed` appears only for a chain of two or more, keeping single-provider
+errors direct while preserving per-provider detail for a failed chain.
 
 ### Responses
 
@@ -215,11 +215,12 @@ Three response outcomes, three rules:
 |---|---|---|---|
 | Empty body | transport | yes | yes |
 | Parsed only after brace-balancing (`Truncated`) | deterministic | no | no |
-| No JSON at all | `Unparseable` | up to `NO_JSON_ATTEMPTS` | no |
+| No JSON at all | `Unparseable` | up to `NO_JSON_ATTEMPTS` | yes |
 
 The no-JSON retry lives in `complete_json`, not in the SDK's retry layer:
 returning `Err` there would surface it as `Transport` once attempts ran out,
-which would fail over and demote a provider over a prose preamble.
+which would misclassify a model-response problem as transport. A final
+`Unparseable` may fail over for that file but never demotes the provider.
 
 ### Cache
 
@@ -278,8 +279,7 @@ Severity answers whether the finding changes how the document renders, which is
 what keeps `--fail-on` calibratable. `unclosed_code_fence` alone is `error`.
 
 `lint-docs` touches `docs` and `files` and nothing else: no config file, no
-provider chain, no cache. The 1.x equivalent paid 190 ms of sqlalchemy and
-GitPython on every commit.
+provider chain, and no cache.
 
 ## Configuration
 
@@ -288,7 +288,7 @@ environment variable rather than holding a secret, and `config::env_var_refs_in`
 is the single definition of a `${VAR}` reference, shared by the substituter and
 by `doctor`.
 
-`backend` defaults to `http`, preserving every pre-existing file. HTTP entries
+`backend` defaults to `http`. HTTP entries
 accept `endpoint`, `api_key`, `protocol`, `temperature`, `max_tokens` and
 `max_retries`; they reject the Codex-only `reasoning_effort`. A `codex` entry
 requires `model`, accepts an optional `reasoning_effort`, and rejects every
@@ -307,20 +307,16 @@ its key to be set. `LlmConfig` hand-writes `Debug` to redact `api_key`.
 
 `dist-workspace.toml` drives cargo-dist. Four targets, each built on a runner
 of its own architecture, plus a shell installer and a Homebrew formula pushed
-to `slb350/homebrew-tap`. `.github/workflows/release.yml` is generated from that
-config, with one tested compatibility override pinning the artifact actions to
-the v4 protocol supported by family Gitea. `allow-dirty = ["ci"]` declares that
-override to cargo-dist. The same workflow creates the GitHub release and
-publishes Homebrew; crates.io is a separate `cargo publish --locked` step
-because cargo-dist does not publish Rust crates.
+to `slb350/homebrew-tap`. `.github/workflows/release.yml` is generated directly
+from that config and creates the GitHub release and Homebrew publication.
+crates.io remains a separate `cargo publish --locked` operation because
+cargo-dist does not publish Rust crates.
 
-CI (`.github/workflows/rust.yml`) runs fmt and clippy once, an MSRV check at
-1.88, and a full `cargo mutants` sweep. GitHub runs the test suite on Linux and
-macOS; the family Gitea instance runs Linux only because it has no macOS runner.
-Gitea 1.25.1 matches a runner before evaluating a job guard, so the guarded
-macOS job resolves to `ubuntu-latest` on Gitea, where Strix can claim and skip
-it, while GitHub resolves the same expression to `macos-latest`.
-The hosted mutation job pins `cargo-mutants` 27.1.0 inside `node:22-trixie` so
-its glibc 2.39 requirement does not depend on the family runner's older default
-job image. The sweep is local to the runner because a GitHub runner cannot reach
-the LAN host the pre-commit hook offloads to.
+GitHub CI is split by cost and runner. `.github/workflows/rust.yml` runs fmt and
+clippy once, checks the 1.88 MSRV, and runs the test suite on hosted Linux and
+macOS runners. `.github/workflows/mutants.yml` runs the full mutation sweep only
+after pushes to `main`, on the repository-scoped Strix runner labelled
+`drep-mutants`. Pull requests never execute on the homelab runner. The mutation
+workflow keeps `target/` warm, rejects any other persistent workspace state,
+and pins `cargo-mutants` 27.1.0; `scripts/mutants-run.sh` remains the single
+definition of the mutation verdict.

@@ -18,9 +18,8 @@ use crate::docs::{Check, LONG_LINE_MAX, Line, finding};
 ///   paragraph that needs wrapping.
 /// - Tabs: "replace tabs with spaces" is *wrong* inside a fence. A ```` ```make ````
 ///   sample whose recipe lines are indented with tabs stops being a Makefile if
-///   you follow the advice. 1.x flagged tabs everywhere; this is a deliberate
-///   divergence, on the grounds that a check which cannot give correct advice
-///   about a line should not fire on it.
+///   you follow the advice. A check which cannot give correct advice about a
+///   line should not fire on it.
 /// - Trailing whitespace: fires everywhere, because its advice is right
 ///   everywhere. Whitespace before a newline is junk in prose and junk in a
 ///   code sample alike, and unlike a tab it carries no meaning in either.

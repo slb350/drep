@@ -287,11 +287,9 @@ fn write_llm_section<W: Write>(
     };
 
     // The three cases are distinguished, not collapsed. Folding "not an array"
-    // into "absent" made `[llm]` (the pre-2.0 single-table shape) report as
-    // "declares no `[[llm]]` provider. Run `drep init`." and return early - so
-    // the `config::load` check below, which would have named the actual type
-    // mismatch, was never reached, and the user was pointed at a command that
-    // would refuse to overwrite their file.
+    // into "absent" reports a type mismatch as "declares no `[[llm]]`
+    // provider" and returns early, skipping the `config::load` check that names
+    // the real problem and pointing at a command that will not overwrite it.
     let providers = match value.get("llm") {
         None => {
             writeln!(

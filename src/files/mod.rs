@@ -22,20 +22,9 @@ use ignore::{DirEntry, WalkBuilder};
 
 use crate::languages;
 
-/// True iff `path`'s lowercased extension matches `target_without_dot`.
-///
-/// `target` is e.g. `"py"`; `"FOO.PY"` matches, `"py"` (no extension) does not.
-fn extension_is(path: &Path, target: &str) -> bool {
-    match path.extension() {
-        None => false,
-        Some(ext) => ext.eq_ignore_ascii_case(target),
-    }
-}
-
 /// True iff `path`'s lowercased extension appears in `targets_with_dots`.
 ///
-/// Used by the walkers; the inline `extension_is` is for single-suffix
-/// predicates where allocation-free comparison is clearer.
+/// Used by the walkers for the registered language suffix set.
 fn extension_in(path: &Path, targets_with_dots: &[&str]) -> bool {
     let Some(ext) = path.extension().and_then(|e| e.to_str()) else {
         return false;
@@ -47,31 +36,20 @@ fn extension_in(path: &Path, targets_with_dots: &[&str]) -> bool {
 
 /// Any registered language's source file - the file class `drep check` reads.
 ///
-/// Markdown is **not** here, and that is the point. It used to be, because 1.x
-/// ran one scan over everything; the consequence was that `drep check
-/// README.md` accepted the file, found no deterministic tool and no LLM
-/// language for it, and printed "No issues found." A file drep declined to
-/// analyze, reported as clean, on a path the user named explicitly.
-///
-/// Each command now owns one file class: `check` reads code through this
-/// predicate, `lint-docs` reads markdown through [`is_markdown`]. A path the
-/// user names that falls outside the running command's class is a
+/// Markdown is **not** here, and that is the point. Each command owns one file
+/// class: `check` reads code through this predicate, while `lint-docs` reads
+/// markdown through [`is_markdown`]. A path the user names that falls outside
+/// the running command's class is a
 /// [`crate::analysis::result::FailureReason::Unsupported`] pointing at the
 /// other command - never a silent skip.
 pub fn is_scan_target(path: &Path) -> bool {
     extension_in(path, languages::source_extensions())
 }
 
-/// Python source file. Kept distinct from `is_scan_target` because the
-/// docstring pass runs `ast.parse`, and adding a language must never widen
-/// that filter.
-pub fn is_python_source(path: &Path) -> bool {
-    extension_is(path, "py")
-}
-
 /// Markdown document.
 pub fn is_markdown(path: &Path) -> bool {
-    extension_is(path, "md")
+    path.extension()
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("md"))
 }
 
 /// Hardcoded ignored dirs that belong to no single language: VCS metadata,

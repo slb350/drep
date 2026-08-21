@@ -1,7 +1,7 @@
 //! The code-quality analyzer: render a payload, ask the LLM, turn the
 //! response into findings — and never report an unanalyzed file as clean.
 //!
-//! The contract this type implements is the Phase 4b spec verbatim:
+//! The analyzer enforces these contracts:
 //!
 //! 1. No language, no analysis. drep has no opinion on a file type it does
 //!    not claim, and silently returning an empty result is the correct

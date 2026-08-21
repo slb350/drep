@@ -1,20 +1,19 @@
 //! [`Check`] itself: the wire names, the severity rule, the suggestions.
 //!
-//! These are the user-visible contract. A user who scripted against 1.x's
-//! `type=` strings must keep working, and `--strict` gates on the severity, so
-//! a variant silently changing tier changes which commits are blocked.
+//! These are the user-visible contract. `--strict` gates on severity, so a
+//! variant silently changing tier changes which commits are blocked.
 
 use std::collections::BTreeSet;
 
 use crate::analysis::findings::Severity;
 use crate::docs::Check;
 
-/// The exact ten strings the 1.x Python analyzer emitted.
+/// The exact ten stable output strings.
 ///
 /// Written out rather than derived: this is the compatibility contract, so the
 /// test has to hold a second, independent copy of it. Deriving it from
 /// `Check::as_str` would assert only that the function equals itself.
-const PYTHON_TYPES: [&str; 10] = [
+const CHECK_TYPES: [&str; 10] = [
     "bare_url",
     "empty_heading",
     "link_syntax_invalid",
@@ -28,9 +27,9 @@ const PYTHON_TYPES: [&str; 10] = [
 ];
 
 #[test]
-fn wire_names_are_exactly_the_ten_python_emitted() {
+fn wire_names_are_exactly_the_stable_vocabulary() {
     let ours: BTreeSet<&str> = Check::ALL.iter().map(|c| c.as_str()).collect();
-    let theirs: BTreeSet<&str> = PYTHON_TYPES.into_iter().collect();
+    let theirs: BTreeSet<&str> = CHECK_TYPES.into_iter().collect();
     assert_eq!(ours, theirs);
 }
 
@@ -40,7 +39,7 @@ fn all_lists_every_variant_exactly_once() {
     // it would make every other test in this module silently narrower.
     let unique: BTreeSet<Check> = Check::ALL.into_iter().collect();
     assert_eq!(unique.len(), Check::ALL.len());
-    assert_eq!(unique.len(), PYTHON_TYPES.len());
+    assert_eq!(unique.len(), CHECK_TYPES.len());
 }
 
 #[test]

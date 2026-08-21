@@ -1,48 +1,44 @@
-//! The hooks other repositories consume, checked against what 2.0 actually is.
+//! The hooks other repositories consume, checked against the current binary.
 //!
 //! `.pre-commit-hooks.yaml` is the one file in this repository whose consumer
 //! is somebody else's commit gate. Nothing in the Rust suite reads it, so a
-//! flag that stopped being right - or a `language` naming a package that no
-//! longer exists - fails in their repository rather than ours. These assertions
-//! are deliberately textual: adding a YAML parser to state four facts about a
-//! 40-line file is a dependency for no gain.
+//! stale flag or invalid build language fails in their repository rather than
+//! ours. These assertions are deliberately textual: adding a YAML parser to
+//! state four facts about a 40-line file is a dependency for no gain.
 
 mod common;
 
 /// The file with its comments stripped.
 ///
-/// The comments explain what each setting replaced - `language: python`,
-/// `--strict` - so asserting over the raw text matches the explanation of the
-/// old value as if it were still in force.
+/// Comments may mention rejected alternatives, so assertions inspect only live
+/// configuration.
 fn hooks_yaml() -> String {
     common::without_comments(".pre-commit-hooks.yaml")
 }
 
-/// 2.0 is a Rust binary. `language: python` builds an isolated environment
-/// from the PyPI package that Phase 8 deleted, so a consumer's hook would fail
-/// at install time with a pip error naming a package this repository no longer
-/// publishes.
+/// Published hooks build this repository's Rust binary.
 #[test]
-fn no_published_hook_installs_the_python_package() {
+fn published_hooks_build_the_rust_binary() {
     let yaml = hooks_yaml();
+    let languages: Vec<&str> = yaml
+        .lines()
+        .filter_map(|line| line.trim().strip_prefix("language: "))
+        .collect();
     assert!(
-        !yaml.contains("language: python"),
-        "a published hook still installs drep as a Python package"
+        !languages.is_empty(),
+        "every published hook must declare its build language"
     );
     assert!(
-        yaml.contains("language: rust"),
-        "the published hooks must build the Rust binary"
+        languages.iter().all(|language| *language == "rust"),
+        "every published hook must build the Rust binary, found {languages:?}"
     );
 }
 
 /// The markdown hook blocks on `error` severity, not on everything.
 ///
-/// The entry was written against 1.x, where the doc checks carried no
-/// severity, so `--strict` was the only way to make the hook block. Under the
-/// 2.0 scale `--strict` means `--fail-on info`, and over a real repository
-/// that is dominated by line length and trailing whitespace - measured at 75
-/// findings on this tree, none above `info`. A consumer adopting that hook has
-/// commits blocked by line length, and deletes the hook.
+/// `--strict` means `--fail-on info`, which is dominated by line length and
+/// trailing whitespace in real repositories. The published gate reserves
+/// blocking for rendering-breaking errors.
 #[test]
 fn the_markdown_hook_blocks_only_on_error_severity() {
     let yaml = hooks_yaml();

@@ -72,9 +72,8 @@ fn parse_lines(spec: &ToolSpec, output: &str) -> Vec<Finding> {
         .filter(|line| !line.trim().is_empty())
         .map(|line| {
             let path = line.trim();
-            // The Python reference builds the suggestion from `command`
-            // minus its last element, then `-w {path}`. For gofmt the last
-            // element is `-l`, so we get `gofmt -w {path}`.
+            // Build the suggestion from `command` minus its last element, then
+            // append `-w {path}`. For gofmt the removed element is `-l`.
             let suggest = format!(
                 "Run `{base} -w {path}`",
                 base = spec.command[..spec.command.len() - 1].join(" "),
@@ -180,10 +179,8 @@ fn parse_cargo(spec: &ToolSpec, output: &str) -> Result<Vec<Finding>, ToolOutput
         }
 
         let message = event.get("message").cloned().unwrap_or(Value::Null);
-        // First primary span. With cargo's emit, exactly one span per
-        // diagnostic is primary, but ordering in the array is preserved, so
-        // `find` is equivalent to the Python `[s for s in spans if
-        // s.is_primary][0]`.
+        // First primary span. With cargo's output exactly one span per
+        // diagnostic is primary, and array order is preserved.
         let primary = message
             .get("spans")
             .and_then(Value::as_array)

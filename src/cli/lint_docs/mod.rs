@@ -3,9 +3,7 @@
 //! This command runs on every commit, so its startup path is load-bearing. It
 //! touches [`crate::docs`], [`crate::files`] and - in `--staged` mode only -
 //! [`crate::diff`], and nothing else: no config file is read, no provider
-//! chain is built, no response cache is opened. The 1.x equivalent imported
-//! its workflows at module scope and paid 190 ms of sqlalchemy and GitPython
-//! on every commit for a command that needs neither.
+//! chain is built, and no response cache is opened.
 //!
 //! Two exit rules, and they are independent:
 //!

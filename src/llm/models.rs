@@ -11,13 +11,12 @@
 //!
 //! ## Why not a registry
 //!
-//! A vendored catalogue would go stale exactly as the hardcoded defaults do,
-//! and would additionally have to be noticed and updated - `glm-5.3` and
-//! `MiniMax-M3` did not exist when 2.0 shipped. A third-party index (models.dev)
-//! covers every provider at once, but it describes what a *vendor* publishes
-//! rather than what *this account's plan* serves, and it is a 4 MB network
-//! dependency on somebody else's uptime. The endpoint is authoritative for the
-//! only question being asked.
+//! A vendored catalogue would go stale exactly as the hardcoded defaults do
+//! and would additionally have to be noticed and updated. A third-party index
+//! (models.dev) covers every provider at once, but describes what a *vendor*
+//! publishes rather than what *this account's plan* serves, and it is a 4 MB
+//! network dependency on somebody else's uptime. The endpoint is authoritative
+//! for the only question being asked.
 //!
 //! ## One shape, three vendors
 //!

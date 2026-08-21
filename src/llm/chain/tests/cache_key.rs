@@ -1,8 +1,8 @@
 //! The cache key moves with the provider.
 //!
-//! This is the file the phase turns on. A test that mounts a dead provider A
-//! and a healthy provider B proves the loop advances; it proves nothing about
-//! whether the key advanced with it. If it did not, provider B's answer is
+//! A test that mounts a dead provider A and a healthy provider B proves the
+//! loop advances; it proves nothing about whether the key advanced with it. If
+//! it did not, provider B's answer is
 //! filed under provider A's key, and the next run - with A back up - gets a
 //! hit that never came from A. That bug ships green under every test in
 //! `failover.rs`.

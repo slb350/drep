@@ -1,3 +1,11 @@
 self-hosted-runner:
   labels:
     - drep-mutants
+
+# cargo-dist owns release.yml. Keep actionlint's workflow and expression checks,
+# but suppress the generator's advisory-only ShellCheck findings rather than
+# hand-editing output that `dist init` will replace.
+paths:
+  .github/workflows/release.yml:
+    ignore:
+      - 'shellcheck reported issue in this script: SC(2001|2086|2129):.+'

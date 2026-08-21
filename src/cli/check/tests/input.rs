@@ -456,10 +456,9 @@ async fn bare_check_with_no_paths_expands_the_root_instead_of_reading_a_director
 /// A path the user named explicitly that does not exist is a failure, not a
 /// clean run.
 ///
-/// `files::expand_paths` silently skips missing paths - a contract inherited
-/// from 1.x's `scan`, where a stale argument was not worth failing over. Behind
-/// a gate whose whole thesis is that unanalyzed is never clean, it is:
-/// `drep check typo.rs` would otherwise resolve to zero targets and print
+/// `files::expand_paths` silently skips missing paths, but behind a gate whose
+/// whole thesis is that unanalyzed is never clean, an explicit missing path is
+/// a failure: `drep check typo.rs` must not resolve to zero targets and print
 /// "No issues found."
 #[tokio::test]
 async fn an_explicitly_named_missing_path_is_a_failure_not_a_clean_run() {

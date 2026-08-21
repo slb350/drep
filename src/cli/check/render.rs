@@ -215,8 +215,8 @@ fn failure_kind(reason: &FailureReason) -> &'static str {
 /// same human line the text format prints, and `status` appears only when the
 /// failure carried an HTTP code. The reason used to be the *only* key, which
 /// meant a consumer wanting to tell a rate limit from a dead endpoint had to
-/// pattern-match English — and phase 5c's failover has to make exactly that
-/// distinction, because a 429 should fail over and a 401 must not.
+/// pattern-match English. Failover must make exactly that distinction because
+/// a 429 should fail over and a 401 must not.
 ///
 /// `status` is omitted rather than emitted as `null` so its presence is itself
 /// the signal that the failure was an HTTP one.

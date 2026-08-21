@@ -71,8 +71,7 @@ fn lint_docs_is_report_only_by_default_and_gates_under_strict() {
 #[test]
 fn a_named_file_no_command_can_analyze_never_exits_clean() {
     // The failure a commit gate must never have: exiting 0 without analyzing.
-    // Both directions of the file-class split, through the real binary. Before
-    // Phase 6 the first of these printed "No issues found." and exited 0.
+    // Both directions of the file-class split, through the real binary.
     let dir = repo_with("README.md", "# T\n\nprose\n");
     std::fs::write(dir.path().join("main.rs"), "fn main() {}\n").expect("write");
     with_config(&dir);

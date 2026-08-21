@@ -362,13 +362,6 @@ cargo mutants                                 # a green suite is not a discrimin
 `docs/technical-design.md` is the architecture. `CLAUDE.md` carries the
 invariants, each with the defect that produced it.
 
-## History
-
-Versions up to 1.3.0 were a Python package (`drep-ai` on PyPI) that also ran a
-webhook server, posted reviews to Gitea, GitHub and GitLab, generated
-docstrings and kept a SQLite cache. 2.0 is a rewrite in Rust and keeps only the
-local gate. The PyPI releases stay up; nothing new is published there.
-
 ## License
 
 MIT. See [LICENSE](LICENSE).

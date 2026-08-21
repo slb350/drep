@@ -3,8 +3,7 @@
 //! Ten checks over the text of a markdown file, run by `drep lint-docs`. This
 //! module deliberately imports nothing from `llm`, `config` or `analysis`
 //! beyond the [`Finding`] vocabulary: `lint-docs` runs on every commit, and
-//! the 1.x equivalent paid 190 ms of startup for a provider chain, a response
-//! cache and a database it never touched.
+//! must not construct a provider chain or open a response cache.
 //!
 //! Structure:
 //!
@@ -43,9 +42,8 @@ pub const BLANK_RUN_MAX: usize = 2;
 
 /// The ten checks.
 ///
-/// The wire names are the `type=` strings the 1.x Python analyzer emitted, so
-/// a user who scripted against `drep lint-docs` output does not have to relearn
-/// them. [`Check::as_str`] is the only place a name is written.
+/// The wire names are a stable output contract. [`Check::as_str`] is the only
+/// place a name is written.
 ///
 /// [`Check::ALL`] is what the tests iterate, and it is a hand-maintained list:
 /// Rust cannot enumerate an enum without a derive macro, so nothing makes a
@@ -130,10 +128,8 @@ impl Check {
 
     /// What to do about it. Advice, never a literal replacement.
     ///
-    /// 1.x carried a `replacement` field that was sometimes a rewritten line
-    /// and sometimes a sentence of prose, because a draft-PR autofix consumed
-    /// it. 2.0 has no autofix, so a field that is a literal half the time is a
-    /// trap for whoever next tries to apply one.
+    /// A literal replacement would be misleading for checks whose fix requires
+    /// judgment, so this field consistently describes the intended result.
     pub const fn suggestion(self) -> &'static str {
         match self {
             Check::BareUrl => "wrap it as [text](url)",
@@ -195,9 +191,8 @@ pub(crate) fn finding(
 ///
 /// Findings come back sorted by position, then by check name, so the output of
 /// two runs over the same file is byte-identical and a reader follows the file
-/// top to bottom. The checks themselves run in whatever order is convenient -
-/// grouping the output by check, as the 1.x implementation's append order did,
-/// makes a reader jump around the file.
+/// top to bottom. The checks themselves run in whatever order is convenient;
+/// grouping output by check would make a reader jump around the file.
 pub fn analyze(path: &Path, content: &str) -> Vec<Finding> {
     let file_path = path.to_string_lossy().into_owned();
     let raw: Vec<&str> = content.lines().collect();
