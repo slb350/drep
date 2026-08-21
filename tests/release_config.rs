@@ -19,6 +19,10 @@ fn rust_workflow() -> String {
     common::without_comments(".github/workflows/rust.yml")
 }
 
+fn mutation_workflow() -> String {
+    common::without_comments(".github/workflows/mutants.yml")
+}
+
 fn release_workflow() -> String {
     common::without_comments(".github/workflows/release.yml")
 }
@@ -73,23 +77,57 @@ fn family_ci_runs_linux_without_queueing_hosted_macos() {
     );
 }
 
-/// The prebuilt mutation tool and its Linux userspace move together.
+/// Full mutation testing runs once, on the trusted homelab runner.
 ///
-/// Strix maps `ubuntu-latest` to Debian 12, whose glibc is older than the one
-/// cargo-mutants 27.1.0 requires. A per-job Debian 13 container fixes that
-/// compatibility boundary without changing every family-runner workload, and
-/// pinning the tool prevents an unrelated latest release moving it again.
+/// A staged sweep cannot notice a test-only change weakening coverage of
+/// production code outside the diff, so the full sweep remains an automated
+/// main-branch gate. The public repository must never route pull-request code
+/// to Strix, and the hosted workflow must not duplicate its hours of work.
 #[test]
-fn mutation_ci_pins_a_compatible_container_and_tool() {
-    let workflow = rust_workflow();
+fn mutation_ci_is_main_only_on_the_pinned_homelab_runner() {
+    let hosted = rust_workflow();
+    assert!(
+        !hosted.contains("\n  mutants:\n"),
+        "the shared hosted workflow must not duplicate the homelab full sweep"
+    );
+
+    let workflow = mutation_workflow();
+    let trigger = workflow
+        .split_once("\njobs:")
+        .map(|(trigger, _)| trigger)
+        .expect("the mutation workflow must declare jobs");
+    assert!(
+        trigger.contains("push:\n    branches: [main]"),
+        "full mutation CI must run for pushes to main"
+    );
+    assert!(
+        !trigger.contains("pull_request") && !trigger.contains("workflow_dispatch"),
+        "public or manually selected code must never be routed to the homelab runner"
+    );
+
     let mutants = workflow_job(&workflow, "mutants");
     assert!(
-        mutants.contains("container: node:22-trixie"),
-        "cargo-mutants needs the Debian 13 glibc supplied by node:22-trixie"
+        mutants.contains("runs-on: [self-hosted, linux, x64, drep-mutants]"),
+        "the full sweep must require the repository-scoped Strix label"
+    );
+    assert!(
+        mutants.contains("timeout-minutes: 45"),
+        "a wedged mutation run must release the homelab runner"
     );
     assert!(
         mutants.contains("tool: cargo-mutants@27.1.0"),
-        "the mutation gate must pin the binary whose glibc contract was verified"
+        "the mutation gate must retain its verified cargo-mutants version"
+    );
+    assert!(
+        mutants.contains("clean: false")
+            && mutants
+                .contains("git status --porcelain=v1 --untracked-files=all --ignored=matching")
+            && mutants.contains("^!! target/$"),
+        "the warm target cache must be retained only behind a fail-closed workspace check"
+    );
+    assert!(
+        mutants.contains("./scripts/mutants-run.sh"),
+        "homelab CI and local hooks must share one mutation verdict implementation"
     );
 }
 

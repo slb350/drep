@@ -1,0 +1,57 @@
+name: mutants
+
+# This repository is public. Never add pull_request or workflow_dispatch here:
+# only reviewed code that has landed on main may execute on the homelab runner.
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mutants-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # A full sweep catches coverage weakened by test-only changes outside the
+  # production diff. The pre-commit hook remains staged for fast local feedback;
+  # this main-only lane is the comprehensive backstop.
+  mutants:
+    runs-on: [self-hosted, linux, x64, drep-mutants]
+    timeout-minutes: 45
+    steps:
+      # Keeping target/ makes the 32-thread Strix run take minutes instead of
+      # hours. Everything else must still be an exact checkout: unexpected
+      # ignored or untracked state fails closed rather than influencing a sweep.
+      - uses: actions/checkout@v5
+        with:
+          clean: false
+          persist-credentials: false
+
+      - name: Verify persistent workspace hygiene
+        shell: bash
+        run: |
+          set -euo pipefail
+          unexpected="$(
+            git status --porcelain=v1 --untracked-files=all --ignored=matching |
+              grep -Ev '^!! target/$' || true
+          )"
+          if [ -n "$unexpected" ]; then
+            echo "unexpected persistent runner state:" >&2
+            echo "$unexpected" >&2
+            exit 1
+          fi
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-mutants@27.1.0
+
+      # scripts/mutants-run.sh owns the verdict, including the distinction
+      # between a detected timeout and a genuinely missed mutant.
+      - run: ./scripts/mutants-run.sh

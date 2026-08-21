@@ -274,7 +274,7 @@ may reach a fallback — distinctions the Python conflated.
 | Failure | Deterministic? | Retry? |
 |---|---|---|
 | Truncated at `max_tokens` | Yes; repeats identically | **No.** Re-burns a full model call |
-| Non-empty response with no parseable JSON | Sometimes model-side garbling | **Three attempts, then fallback.** Do not demote the provider |
+| Unparseable non-empty response | Sometimes model-side | **Three attempts, then fallback.** Keep provider active |
 | 429, 5xx, reset, timeout | No; transient | **Yes.** No output tokens, so retry is nearly free |
 
 `config.yaml` sets `max_retries: 1` with the comment "a 'length' failure repeats

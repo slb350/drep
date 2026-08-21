@@ -61,36 +61,6 @@ jobs:
 
       - run: cargo test --all-targets --all-features
 
-  # Whether the tests would notice if the code were wrong. A surviving mutant is
-  # a test that asserts correct behaviour without being able to distinguish it
-  # from incorrect behaviour. Exits 2 when any mutant survives, which fails the
-  # job. Full sweep here; the pre-commit hook scopes to the staged diff.
-  mutants:
-    runs-on: ubuntu-latest
-    # Strix maps the label above to Debian 12 (glibc 2.36), while the verified
-    # cargo-mutants 27.1.0 binary requires glibc 2.39. Override only this job
-    # with Debian 13 (glibc 2.41), leaving every other family workload alone.
-    container: node:22-trixie
-    steps:
-      - uses: actions/checkout@v5
-
-      - uses: dtolnay/rust-toolchain@stable
-
-      - uses: Swatinem/rust-cache@v2
-
-      - uses: taiki-e/install-action@v2
-        with:
-          tool: cargo-mutants@27.1.0
-
-      # Survivors are printed as `MISSED <file>:<line>: <mutation>` lines, so the
-      # job log is already the actionable report - no artifact upload needed.
-      #
-      # Through the same script the pre-commit hook uses, so CI and the hook
-      # cannot disagree about what counts as a failure. It owns the timeout
-      # rule in particular, which neither caller had right: see the comment in
-      # scripts/mutants-run.sh. No arguments means the full sweep.
-      - run: ./scripts/mutants-run.sh
-
   msrv:
     name: msrv (1.88)
     runs-on: ubuntu-latest

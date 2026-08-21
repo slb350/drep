@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Full mutation CI now runs on the repository-scoped Strix GitHub Actions
+  runner for pushes to `main` only. Hosted Linux, macOS, lint and MSRV lanes
+  remain unchanged; the duplicate multi-hour hosted mutation job is gone.
+  The persistent runner keeps only `target/` between sweeps and fails closed
+  on any other ignored or untracked workspace state. Its dedicated no-login
+  account is isolated from user homes and private-network egress, and every
+  external contributor's fork workflow requires maintainer approval.
+
 ## [2.5.0] - 2026-08-21
 
 ### Added
