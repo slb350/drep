@@ -62,6 +62,7 @@ use crate::llm::json_parsing::Extracted;
 pub struct CodeQualityAnalyzer {
     pub(crate) chain: ProviderChain,
     pub(crate) cache: Cache,
+    cache_only: bool,
 }
 
 impl CodeQualityAnalyzer {
@@ -73,7 +74,18 @@ impl CodeQualityAnalyzer {
     /// independent of the `Cache` root (see [`Cache::key`]) and a test can
     /// point it at a `TempDir`.
     pub fn new(chain: ProviderChain, cache: Cache) -> Self {
-        Self { chain, cache }
+        Self {
+            chain,
+            cache,
+            cache_only: false,
+        }
+    }
+
+    /// Select a cache-only pass. The analyzer keeps parsing cached responses
+    /// through the normal schema path; only the backend request is forbidden.
+    pub fn with_cache_only(mut self, cache_only: bool) -> Self {
+        self.cache_only = cache_only;
+        self
     }
 
     /// The provider chain, for a caller reporting which providers served.
@@ -88,6 +100,10 @@ impl CodeQualityAnalyzer {
     /// bare `Vec<Finding>`; the failure axis is part of the return type so
     /// the caller cannot forget it.
     pub async fn analyze_file(&self, hunks: &[Hunk]) -> AnalysisResult {
+        self.analyze_file_in_mode(hunks, self.cache_only).await
+    }
+
+    async fn analyze_file_in_mode(&self, hunks: &[Hunk], cache_only: bool) -> AnalysisResult {
         // Rule 1: no language, no analysis. `languages::detect` on the
         // first hunk's file path is enough because every hunk in `by_file`
         // shares a path (the diff module groups by file).
@@ -131,11 +147,26 @@ impl CodeQualityAnalyzer {
         // slot represents in-flight HTTP work), and the key comes back naming
         // whoever answered. Computing a key here would be computing it for a
         // provider that may not be the one that serves the file.
-        match self
-            .chain
-            .complete_json(&system_prompt, &payload.text, &self.cache)
-            .await
-        {
+        let served = if cache_only {
+            match self
+                .chain
+                .cached_json(&system_prompt, &payload.text, &self.cache)
+            {
+                Some(served) => Ok(served),
+                None => {
+                    return AnalysisResult::failed(
+                        first.file_path.clone(),
+                        FailureReason::CacheMiss,
+                    );
+                }
+            }
+        } else {
+            self.chain
+                .complete_json(&system_prompt, &payload.text, &self.cache)
+                .await
+        };
+
+        match served {
             // Rule 6: complete → parse, store in the cache.
             // Rules 6 and 7 in one arm. Both never-cache rules live in the
             // `if let` below rather than being split across two arms, where
@@ -177,7 +208,28 @@ impl CodeQualityAnalyzer {
     /// in-flight requests, so we spawn them all and let it queue. The
     /// per-file results are merged with [`AnalysisResult::merge`].
     pub async fn analyze_files(&self, by_file: &[Vec<Hunk>]) -> AnalysisResult {
-        let futures = by_file.iter().map(|hunks| self.analyze_file(hunks));
+        self.analyze_files_in_mode(by_file.iter().map(Vec::as_slice), self.cache_only)
+            .await
+    }
+
+    /// Analyze selected cache misses without rebuilding the provider chain.
+    ///
+    /// Push-gate mode uses this after its cache-only pass, preserving sticky
+    /// demotion and backend diagnostics while avoiding a second pass over
+    /// every cache hit in the diff.
+    pub async fn analyze_files_live(&self, by_file: &[&[Hunk]]) -> AnalysisResult {
+        self.analyze_files_in_mode(by_file.iter().copied(), false)
+            .await
+    }
+
+    async fn analyze_files_in_mode<'a>(
+        &self,
+        by_file: impl IntoIterator<Item = &'a [Hunk]>,
+        cache_only: bool,
+    ) -> AnalysisResult {
+        let futures = by_file
+            .into_iter()
+            .map(|hunks| self.analyze_file_in_mode(hunks, cache_only));
         let results = join_all(futures).await;
         let mut merged = AnalysisResult::default();
         for result in results {

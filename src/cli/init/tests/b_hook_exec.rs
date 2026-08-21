@@ -30,7 +30,14 @@ fn pre_push_hook_invokes_drep_check_diff_with_the_remote_oid() {
 
     assert_eq!(
         recorded,
-        vec!["check", "--diff", remote_oid, "--tip", local_oid],
+        vec![
+            "check",
+            "--push-gate",
+            "--diff",
+            remote_oid,
+            "--tip",
+            local_oid,
+        ],
         "the remote oid is the base, and the *pushed* oid is the tip - not HEAD"
     );
 }
@@ -64,12 +71,29 @@ fn run_pre_push_status(
     include_real_path: bool,
     stub_exit: i32,
 ) -> (Option<i32>, Vec<String>) {
+    run_pre_push_with_stub(
+        dir,
+        stdin,
+        include_real_path,
+        &format!("exit {stub_exit}\n"),
+    )
+}
+
+/// The one pre-push execution fixture. `stub_body` runs after every argument
+/// has been logged, so a test can vary provider status without duplicating the
+/// hook, PATH, stdin, or child-process plumbing.
+fn run_pre_push_with_stub(
+    dir: &Path,
+    stdin: &str,
+    include_real_path: bool,
+    stub_body: &str,
+) -> (Option<i32>, Vec<String>) {
     let bin_dir = dir.join("bin");
     std::fs::create_dir_all(&bin_dir).expect("bin dir");
     let args_log = dir.join("args.log");
     let stub = format!(
-        "#!/bin/sh\nfor a in \"$@\"; do printf '%s\\n' \"$a\" >> {}; done\nexit {stub_exit}\n",
-        args_log.to_string_lossy()
+        "#!/bin/sh\nfor a in \"$@\"; do printf '%s\\n' \"$a\" >> {}; done\n{stub_body}",
+        args_log.to_string_lossy(),
     );
     let stub_path = bin_dir.join("drep");
     crate::test_support::write_executable(&stub_path, stub);
@@ -152,18 +176,19 @@ fn a_new_branch_falls_back_to_a_real_base_rather_than_the_zero_oid() {
         Some("check"),
         "recorded: {recorded:?}"
     );
-    assert_eq!(recorded.get(1).map(String::as_str), Some("--diff"));
+    assert_eq!(recorded.get(1).map(String::as_str), Some("--push-gate"));
+    assert_eq!(recorded.get(2).map(String::as_str), Some("--diff"));
     assert_eq!(
-        recorded.get(3).map(String::as_str),
+        recorded.get(4).map(String::as_str),
         Some("--tip"),
         "recorded: {recorded:?}"
     );
     assert_eq!(
-        recorded.get(4).map(String::as_str),
+        recorded.get(5).map(String::as_str),
         Some(head.as_str()),
         "the tip is the ref being pushed"
     );
-    let base = recorded.get(2).expect("a base ref");
+    let base = recorded.get(3).expect("a base ref");
     assert_ne!(
         base, ZEROS,
         "the all-zero oid must never be passed through as a git ref"
@@ -199,10 +224,11 @@ fn a_branch_deletion_does_not_invoke_drep() {
 /// This is the hook's entire reason for existing, and nothing observed it: a
 /// body ending `drep check … || true` then `exit 0` passed every other test
 /// here. Both exit codes are checked because they mean different things
-/// downstream - 1 is "found issues", 2 is "could not analyze".
+/// downstream - 1 is "found issues", 2 is "could not analyze", and 3 is
+/// "review cached; reconnect and push again".
 #[test]
 fn a_failing_check_aborts_the_push() {
-    for expected in [1, 2] {
+    for expected in [1, 2, 3] {
         let dir = tempfile::tempdir().expect("tempdir");
         crate::test_support::git_init(dir.path());
         let stdin = "refs/heads/x 1111111111111111111111111111111111111111 refs/heads/x \
@@ -216,65 +242,41 @@ fn a_failing_check_aborts_the_push() {
     }
 }
 
-/// With several refs, the **highest** exit code wins, not the last.
+/// With several refs, failure severity wins rather than numeric or temporal
+/// order: could-not-analyze (2), findings (1), reconnect (3), clean (0).
 ///
-/// 2 means "could not analyze" and 1 means "analyzed, found issues"; a later
-/// ref that merely had findings must not downgrade an earlier ref that went
-/// unanalyzed. Last-writer-wins is the natural way to write this loop and is
-/// wrong, so the ordering here puts the 2 first.
+/// Exit 3 is numerically highest but semantically lowest among the stopping
+/// statuses: it says the review succeeded and only Git's connection is stale.
+/// Last-writer-wins and numeric-max both lose information, so the cases pin
+/// the whole ordering.
 #[test]
-fn the_highest_exit_code_across_refs_wins() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    crate::test_support::git_init(dir.path());
+fn failure_precedence_across_refs_is_semantic_not_numeric() {
+    for (first, second, expected) in [(2, 1, 2), (2, 3, 2), (1, 3, 1)] {
+        let dir = tempfile::tempdir().expect("tempdir");
+        crate::test_support::git_init(dir.path());
+        let counter = dir.path().join("count");
+        let stub_body = format!(
+            "if [ -f {c} ]; then exit {second}; else : > {c}; exit {first}; fi\n",
+            c = counter.to_string_lossy()
+        );
+        let stdin = "refs/heads/a 1111111111111111111111111111111111111111 refs/heads/a \
+                     2222222222222222222222222222222222222222\n\
+                     refs/heads/b 3333333333333333333333333333333333333333 refs/heads/b \
+                     4444444444444444444444444444444444444444\n";
+        let (status, recorded) = run_pre_push_with_stub(dir.path(), stdin, false, &stub_body);
 
-    // A stub that exits 2 for the first ref and 1 for the second, driven off a
-    // counter file so the ordering is the one described above.
-    let bin_dir = dir.path().join("bin");
-    std::fs::create_dir_all(&bin_dir).expect("bin dir");
-    let counter = dir.path().join("count");
-    let stub = format!(
-        "#!/bin/sh\nif [ -f {c} ]; then exit 1; else : > {c}; exit 2; fi\n",
-        c = counter.to_string_lossy()
-    );
-    let stub_path = bin_dir.join("drep");
-    crate::test_support::write_executable(&stub_path, stub);
-
-    let hook_path = dir.path().join("pre-push");
-    crate::test_support::write_executable(&hook_path, hook_body("pre-push").expect("known"));
-
-    let stdin = "refs/heads/a 1111111111111111111111111111111111111111 refs/heads/a \
-                 2222222222222222222222222222222222222222\n\
-                 refs/heads/b 3333333333333333333333333333333333333333 refs/heads/b \
-                 4444444444444444444444444444444444444444\n";
-
-    let path = std::env::join_paths([bin_dir.as_path()]).expect("join paths");
-    let mut child = Command::new("/bin/sh")
-        .arg(&hook_path)
-        .env("PATH", &path)
-        .current_dir(dir.path())
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .expect("spawn hook");
-    use std::io::Write;
-    child
-        .stdin
-        .take()
-        .expect("stdin")
-        .write_all(stdin.as_bytes())
-        .expect("write stdin");
-    let result = child.wait_with_output().expect("wait");
-
-    assert!(
-        counter.exists(),
-        "both refs must be processed, so the loop must read every line"
-    );
-    assert_eq!(
-        result.status.code(),
-        Some(2),
-        "exit 2 (could not analyze) must not be downgraded to 1 by a later ref"
-    );
+        assert!(counter.exists(), "both refs must be processed");
+        assert_eq!(
+            recorded.iter().filter(|arg| *arg == "check").count(),
+            2,
+            "both refs must invoke drep: {recorded:?}"
+        );
+        assert_eq!(
+            status,
+            Some(expected),
+            "statuses {first}, {second} must resolve to {expected}"
+        );
+    }
 }
 
 /// `drep` missing from `PATH` blocks rather than letting the push through.

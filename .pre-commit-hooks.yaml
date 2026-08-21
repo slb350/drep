@@ -26,7 +26,7 @@
 - id: drep-check-push
   name: drep code quality check (pre-push)
   description: Check the files an outgoing push touches
-  entry: drep check
+  entry: drep check --push-gate
   language: rust
   # Filenames come from pre-commit, which at the pre-push stage resolves them
   # to what the outgoing commits touch. `--staged` would be wrong here: nothing

@@ -5,7 +5,8 @@
 //! - Exit 0 (`Clean`): no failures, no blocking findings.
 //! - Exit 1 (`FoundIssues`): tool findings always block; LLM findings block
 //!   when `--fail-on` admits their severity and is set.
-//! - Exit 2 (`Unanalyzed`): any failure outranks any finding.
+//! - Exit 2 (`Unanalyzed`): any non-cache failure outranks any finding.
+//! - Exit 3 (`CacheMiss`): cache-only review found uncached files.
 //!
 //! Tests 12-17 are in-process: they call `check::run` directly and assert
 //! only on the returned `Exit`. Tests 14 and 18 also assert on the
@@ -51,6 +52,8 @@ fn args(paths: Vec<std::path::PathBuf>, fail_on: Option<Severity>) -> CheckArgs 
         tip: None,
         format: OutputFormat::Text,
         fail_on,
+        cache_only: false,
+        push_gate: false,
     }
 }
 
@@ -128,6 +131,71 @@ async fn a_completed_run_enforces_the_cache_size_ceiling() {
     assert_eq!(exit, check::Exit::Clean);
     let bytes = crate::test_support::two_level_tree_size(&cache_root);
     assert!(bytes <= 1, "cache retained {bytes} bytes past its ceiling");
+}
+
+/// A cache-only run must never contact the provider. Its distinct exit code is
+/// what lets the pre-push hook warm the cache, stop the current push, and ask
+/// Git to reconnect for the fast retry instead of resuming a stale transport.
+#[tokio::test]
+async fn cache_only_miss_exits_3_without_contacting_the_provider() {
+    let (dir, server) = setup_mock(r#"{"issues": []}"#).await;
+    crate::test_support::write_drep_toml(dir.path(), &format!("{}/v1", server.uri()));
+    let source = dir.path().join("lib.py");
+    std::fs::write(&source, "x = 1\n").expect("lib.py");
+    let mut args = args(vec![source], None);
+    args.cache_only = true;
+
+    let exit = run_paths_with(&args, dir.path()).await;
+
+    assert_eq!(exit, check::Exit::CacheMiss);
+    assert_eq!(exit.code(), 3);
+    assert_eq!(crate::test_support::request_count(&server).await, 0);
+}
+
+/// Push-gate mode performs the cold review, deliberately exits 3 before Git
+/// resumes its old connection, then lets the immediate cached retry through.
+#[tokio::test]
+async fn push_gate_warms_once_then_the_cached_retry_is_clean() {
+    let (dir, server) = setup_mock(r#"{"issues": []}"#).await;
+    crate::test_support::write_drep_toml(dir.path(), &format!("{}/v1", server.uri()));
+    let source = dir.path().join("lib.py");
+    std::fs::write(&source, "x = 1\n").expect("lib.py");
+    let cache = Cache::new(dir.path().join("push-cache"), 30, 8 * 1024 * 1024);
+    let mut args = args(vec![source], None);
+    args.push_gate = true;
+
+    let first = check::run_with(&args, dir.path(), cache.clone())
+        .await
+        .expect("cold push gate");
+    let second = check::run_with(&args, dir.path(), cache)
+        .await
+        .expect("warm push gate");
+
+    assert_eq!(first, check::Exit::CacheMiss);
+    assert_eq!(second, check::Exit::Clean);
+    assert_eq!(crate::test_support::request_count(&server).await, 1);
+}
+
+/// Exit 3 alone cannot distinguish a successful warm from an internal cache
+/// miss that accidentally survived the live pass. The real binary must print
+/// the reconnect instruction and must not render that stale marker as failed
+/// analysis.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_successful_push_warm_renders_only_the_reconnect_instruction() {
+    let (dir, server) = setup_mock(r#"{"issues": []}"#).await;
+    crate::test_support::write_drep_toml(dir.path(), &format!("{}/v1", server.uri()));
+    std::fs::write(dir.path().join("lib.py"), "x = 1\n").expect("lib.py");
+
+    let output = run_drep(dir.path(), &["check", "--push-gate", "lib.py"]);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert_eq!(output.status.code(), Some(3), "stdout: {stdout}");
+    assert!(stdout.contains("Run git push again"), "stdout: {stdout}");
+    assert!(
+        !stdout.contains("could not be analyzed"),
+        "stdout: {stdout}"
+    );
+    assert!(!stdout.contains("not cached"), "stdout: {stdout}");
 }
 
 // ---------- 13 ----------
@@ -237,6 +305,8 @@ async fn llm_finding_at_error_blocks_under_fail_on_error() {
         tip: None,
         format: OutputFormat::Text,
         fail_on: Some(Severity::Error),
+        cache_only: false,
+        push_gate: false,
     };
     let exit = run_paths_with(&args, dir.path()).await;
     assert_eq!(
@@ -270,6 +340,8 @@ async fn llm_finding_at_warning_does_not_block_under_fail_on_error() {
         tip: None,
         format: OutputFormat::Text,
         fail_on: Some(Severity::Error),
+        cache_only: false,
+        push_gate: false,
     };
     let exit = run_paths_with(&args, dir.path()).await;
     assert_eq!(
@@ -317,6 +389,8 @@ async fn failure_outranks_finding() {
         tip: None,
         format: OutputFormat::Text,
         fail_on: None,
+        cache_only: false,
+        push_gate: false,
     };
     let exit = run_paths_with(&args, dir.path()).await;
     assert_eq!(

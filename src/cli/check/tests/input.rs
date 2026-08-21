@@ -37,6 +37,8 @@ fn paths_args(paths: Vec<PathBuf>) -> CheckArgs {
         tip: None,
         format: OutputFormat::Text,
         fail_on: None,
+        cache_only: false,
+        push_gate: false,
     }
 }
 
@@ -49,6 +51,8 @@ fn diff_args(ref_: &str) -> CheckArgs {
         tip: None,
         format: OutputFormat::Text,
         fail_on: None,
+        cache_only: false,
+        push_gate: false,
     }
 }
 

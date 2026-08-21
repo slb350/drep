@@ -26,6 +26,7 @@ pub(super) fn outcome() -> CheckOutcome {
         llm_findings: Vec::new(),
         failures: BTreeMap::new(),
         provider_uses: Vec::new(),
+        retry_push: false,
         exit: Exit::Clean,
     }
 }

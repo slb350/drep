@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Pre-push reviews no longer resume a remote connection that may have sat idle
+  for the whole LLM run. The generated and published hooks use a cache-first
+  push gate: a cold review completes and caches, exits 3 with an explicit
+  `git push` retry instruction, and the immediate retry reconnects and uses the
+  cached verdict. `drep check --cache-only` exposes the no-network lookup.
+
 ## [2.3.0] - 2026-08-20
 
 ### Added

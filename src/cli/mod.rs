@@ -175,6 +175,15 @@ mod tests {
         let args = check_args(["drep", "check"]);
         assert_eq!(args.format, OutputFormat::Text);
         assert_eq!(args.fail_on, None);
+        assert!(!args.cache_only);
+        assert!(!args.push_gate);
+    }
+
+    #[test]
+    fn cache_only_and_push_gate_parse_individually_but_not_together() {
+        assert!(check_args(["drep", "check", "--cache-only"]).cache_only);
+        assert!(check_args(["drep", "check", "--push-gate"]).push_gate);
+        assert!(Cli::try_parse_from(["drep", "check", "--cache-only", "--push-gate"]).is_err());
     }
 
     #[test]

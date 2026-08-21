@@ -331,6 +331,25 @@ impl ProviderChain {
         Err(self.error(attempts))
     }
 
+    /// Return the first cached answer in provider order without contacting any
+    /// backend. A miss is not a provider failure: nothing was attempted and no
+    /// provider should be demoted merely because this machine has not reviewed
+    /// the payload yet.
+    pub fn cached_json(
+        &self,
+        system_prompt: &str,
+        user_content: &str,
+        cache: &Cache,
+    ) -> Option<Served> {
+        for (index, provider) in self.providers.iter().enumerate() {
+            let key = provider.cache_key(cache, system_prompt, user_content);
+            if let Some(served) = cached_for(index, provider, key, cache) {
+                return Some(served);
+            }
+        }
+        None
+    }
+
     fn error(&self, attempts: Vec<Attempt>) -> ChainError {
         ChainError {
             attempts,
@@ -381,14 +400,8 @@ async fn try_provider(
     // carries it back so the caller cannot file the answer under a different
     // provider's key.
     let key = provider.cache_key(cache, system_prompt, user_content);
-    if let Some(value) = cache.get(&key) {
-        provider.record_served();
-        return ProviderOutcome::Served(Served {
-            provider: index,
-            key,
-            extracted: Extracted::Complete(value),
-            from_cache: true,
-        });
+    if let Some(served) = cached_for(index, provider, key.clone(), cache) {
+        return ProviderOutcome::Served(served);
     }
 
     // The slot is held for the request and released on every exit path,
@@ -434,6 +447,18 @@ async fn try_provider(
             }
         }
     }
+}
+
+/// Build the one canonical cache-hit result, including served accounting.
+fn cached_for(index: usize, provider: &Provider, key: CacheKey, cache: &Cache) -> Option<Served> {
+    let value = cache.get(&key)?;
+    provider.record_served();
+    Some(Served {
+        provider: index,
+        key,
+        extracted: Extracted::Complete(value),
+        from_cache: true,
+    })
 }
 
 /// Whether this failure should be handed to the next provider.

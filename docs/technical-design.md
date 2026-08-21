@@ -1,7 +1,7 @@
 # Technical design: drep 2.0
 
 drep is one binary. It reads files, runs the tools the repository configures,
-asks a model about the code that changed, and exits 0, 1 or 2. There is no
+asks a model about the code that changed, and exits 0, 1, 2 or 3. There is no
 server, no database, no platform client and no background work.
 
 This document is the structure. `CLAUDE.md` carries the invariants, each with
@@ -196,7 +196,15 @@ includes a backend identity, not just the model, computed inside the failover
 loop through `Provider::cache_key`. HTTP identity includes endpoint and wire
 protocol. Codex identity includes ChatGPT auth mode, CLI version and reasoning
 effort. One model served by the OpenAI API and by a ChatGPT subscription must
-never share an entry. Defaults: 30-day TTL, 1 GiB.
+never share an entry. Defaults: 30-day TTL, 256 MiB.
+
+`--cache-only` walks the provider chain's cache identities without contacting
+a backend. A miss is distinct from failed analysis and exits 3. `--push-gate`
+uses that mode first: a warm diff passes immediately; a cold diff is reviewed
+and cached in the foreground, then exits 3 so Git discards the remote
+connection that sat idle during review. The next `git push` reconnects and is a
+fast cache-only verdict. A failed warm or blocking finding retains exit 2 or 1
+and never prints the reconnect instruction.
 
 ## Failure contract
 
@@ -205,6 +213,10 @@ them. A file that could not be analyzed is counted, reported in its own block,
 and makes the run exit **2**. Exit 1 means analysis ran and found something
 blocking. `--format json` carries `unanalyzed` alongside `findings` so a
 consumer can tell a clean run from one that never happened.
+
+Exit 3 is the successful pre-push reconnect handshake, not a failure to
+analyze: the missing review completed and is now cached, but the current Git
+transport is intentionally abandoned before it resumes after a long idle.
 
 `LintOutcome` and `CheckOutcome` carry the gate's decision rather than letting
 the renderer re-derive it from the findings and the threshold. The threshold

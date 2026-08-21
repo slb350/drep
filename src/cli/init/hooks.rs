@@ -7,7 +7,8 @@
 //! resolves it (relative to the *repository*, not the cwd).
 //!
 //! Two hooks are installed today: `pre-commit` (one `drep check --staged`)
-//! and `pre-push` (one `drep check --diff <remote-oid>` per ref on stdin).
+//! and `pre-push` (one `drep check --push-gate --diff <remote-oid>` per ref on
+//! stdin).
 //! Both begin with `# Managed by \`drep init\`.` - that marker is how this
 //! module recognises a hook it wrote and may rewrite.
 
@@ -75,6 +76,11 @@ exec drep check --staged
 /// there is no previous state to diff against; fall back to the remote's
 /// default branch. An all-zero *local* oid is a branch deletion, which has
 /// no content to review.
+///
+/// `--push-gate` performs a cache-only verdict first. A cold review is
+/// completed and cached, but exits 3 so Git closes the connection it opened
+/// before invoking this hook; repeating the push reconnects and reads the
+/// warm verdict instead of resuming a transport that sat idle for minutes.
 pub const PRE_PUSH_BODY: &str = concat!(
     "#!/bin/sh\n",
     managed_marker!(),
@@ -125,12 +131,17 @@ while read -r _local_ref local_oid _remote_ref remote_oid; do
 
     [ -n "$base" ] || continue
 
-    drep check --diff "$base" --tip "$local_oid" < /dev/null
+    drep check --push-gate --diff "$base" --tip "$local_oid" < /dev/null
     rc=$?
-    # Highest exit code wins, not the last one. 2 ("could not analyze") must
-    # not be downgraded to 1 ("found issues") by a later ref that merely had
-    # findings - the two mean different things to whoever reads the output.
-    [ "$rc" -gt "$status" ] && status=$rc
+    # Failure precedence is semantic, not numeric: 2 (could not analyze), then
+    # 1 (findings), then 3 (review cached; reconnect), then 0. Exit 3 is
+    # numerically highest but is a successful review, so it must not hide a
+    # harder failure from another ref.
+    case "$rc" in
+        2) status=2 ;;
+        1) [ "$status" -ne 2 ] && status=1 ;;
+        3) [ "$status" -eq 0 ] && status=3 ;;
+    esac
 done
 
 exit $status
@@ -494,7 +505,7 @@ mod tests {
             "and not a diff against a ref: {pre_commit}"
         );
         assert!(
-            pre_push.contains("drep check --diff") && pre_push.contains("--tip"),
+            pre_push.contains("drep check --push-gate --diff") && pre_push.contains("--tip"),
             "pre-push reviews a range ending at the pushed ref: {pre_push}"
         );
         assert!(

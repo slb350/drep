@@ -41,6 +41,12 @@ pub enum Exit {
     FoundIssues,
     /// One or more files could not be analyzed. Never reported as clean.
     Unanalyzed,
+    /// Cache-only review found work that has not been reviewed yet.
+    ///
+    /// Distinct from [`Self::Unanalyzed`] so the pre-push hook can warm the
+    /// missing entries and deliberately stop before Git resumes an idle remote
+    /// connection. The next push is then a fast cache lookup.
+    CacheMiss,
 }
 
 impl Exit {
@@ -58,6 +64,7 @@ impl Exit {
             Exit::Clean => 0,
             Exit::FoundIssues => 1,
             Exit::Unanalyzed => 2,
+            Exit::CacheMiss => 3,
         }
     }
 }
@@ -77,5 +84,6 @@ mod tests {
         assert_eq!(Exit::Clean.code(), 0);
         assert_eq!(Exit::FoundIssues.code(), 1);
         assert_eq!(Exit::Unanalyzed.code(), 2);
+        assert_eq!(Exit::CacheMiss.code(), 3);
     }
 }

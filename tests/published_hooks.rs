@@ -55,3 +55,15 @@ fn the_markdown_hook_blocks_only_on_error_severity() {
         "--strict blocks on info findings, which no consumer wants in a hook"
     );
 }
+
+/// A pre-push consumer must use the same cold-review handshake as the native
+/// hook. A plain `drep check` can leave Git's already-open SSH connection idle
+/// for the entire review and then fail with SIGPIPE when Git resumes it.
+#[test]
+fn the_published_pre_push_hook_uses_the_push_gate() {
+    let yaml = hooks_yaml();
+    assert!(
+        yaml.contains("drep check --push-gate"),
+        "the published pre-push hook must stop after warming a cold review"
+    );
+}

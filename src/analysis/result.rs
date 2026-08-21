@@ -46,6 +46,8 @@ pub enum FailureReason {
     },
     /// A response arrived and no JSON could be extracted from it.
     Unparseable(String),
+    /// Cache-only review found no response for this exact prompt and provider.
+    CacheMiss,
     /// The model stopped before producing JSON, and the server said why.
     ///
     /// Distinct from [`Self::Unparseable`] because the cause is known and
@@ -175,6 +177,9 @@ impl FailureReason {
             }
             FailureReason::Unparseable(message) => {
                 format!("LLM response was unparseable: {message}")
+            }
+            FailureReason::CacheMiss => {
+                "LLM review is not cached; run a normal check to warm it".to_owned()
             }
             FailureReason::Backend { kind, message } => {
                 format!("LLM backend {kind}: {message}")

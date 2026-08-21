@@ -36,6 +36,7 @@ fn expected_kind(reason: &FailureReason) -> &'static str {
         FailureReason::Transport { .. } => "transport",
         FailureReason::Backend { .. } => "backend",
         FailureReason::Unparseable(_) => "unparseable",
+        FailureReason::CacheMiss => "cache_miss",
         FailureReason::ModelStopped { .. } => "model_stopped",
         FailureReason::Truncated => "truncated",
         FailureReason::MalformedFinding(_) => "malformed_finding",
@@ -65,6 +66,7 @@ fn each_failure_variant_renders_its_own_kind_tag() {
             message: "tool event".to_owned(),
         },
         FailureReason::Unparseable("no json".to_owned()),
+        FailureReason::CacheMiss,
         FailureReason::ModelStopped {
             finish: "length".to_owned(),
             message: "the model hit its output token limit".to_owned(),

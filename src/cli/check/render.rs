@@ -92,7 +92,13 @@ fn render_text<W: Write>(out: &mut W, outcome: &CheckOutcome) -> Result<()> {
 
     write_provider_block(out, &outcome.provider_uses)?;
 
-    if clean {
+    if outcome.retry_push {
+        writeln!(out)?;
+        writeln!(
+            out,
+            "Review cache warmed. Run git push again; the cached review will be fast."
+        )?;
+    } else if clean {
         writeln!(out, "No issues found.")?;
     }
     Ok(())
@@ -161,6 +167,7 @@ fn render_json<W: Write>(out: &mut W, outcome: &CheckOutcome) -> Result<()> {
         "findings": findings,
         "unanalyzed": unanalyzed,
         "providers": providers,
+        "retry_push": outcome.retry_push,
         "exit": exit,
     });
     serde_json::to_writer_pretty(&mut *out, &payload)?;
@@ -183,6 +190,7 @@ fn failure_kind(reason: &FailureReason) -> &'static str {
         FailureReason::Transport { .. } => "transport",
         FailureReason::Backend { .. } => "backend",
         FailureReason::Unparseable(_) => "unparseable",
+        FailureReason::CacheMiss => "cache_miss",
         FailureReason::ModelStopped { .. } => "model_stopped",
         FailureReason::Truncated => "truncated",
         FailureReason::MalformedFinding(_) => "malformed_finding",

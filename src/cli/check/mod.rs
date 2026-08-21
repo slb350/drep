@@ -31,10 +31,10 @@ use anyhow::{Context, Result, anyhow};
 use clap::{ArgGroup, Args};
 
 use crate::analysis::findings::{self, Finding, Severity};
-use crate::analysis::result::{AnalysisResult, FailureReason, union_failures};
+use crate::analysis::result::{FailureReason, union_failures};
 use crate::auth;
 use crate::cli::{OutputFormat, severity_parser};
-use crate::config::{self, LlmConfig};
+use crate::config;
 use crate::llm::cache::Cache;
 use crate::llm::chain::ProviderChain;
 
@@ -85,6 +85,21 @@ pub struct CheckArgs {
     /// nearly every file.
     #[arg(long, value_name = "SEVERITY", value_parser = severity_parser())]
     pub fail_on: Option<Severity>,
+
+    /// Use cached LLM reviews only; never contact a provider.
+    ///
+    /// An uncached file exits 3 without warming it; run a normal check to
+    /// populate the missing entry. The generated pre-push hook uses
+    /// `--push-gate` for the full warm-and-reconnect handshake.
+    #[arg(long, conflicts_with = "push_gate")]
+    pub cache_only: bool,
+
+    /// Prepare a push without resuming a stale remote connection.
+    ///
+    /// Cached reviews pass immediately. A cold review is completed and cached,
+    /// then exits 3 so Git reconnects; repeating `git push` uses the cache.
+    #[arg(long, conflicts_with = "cache_only")]
+    pub push_gate: bool,
 }
 
 /// Everything one `check` run produced.
@@ -109,6 +124,9 @@ pub struct CheckOutcome {
     /// left the head is one entry - and a run that did fall through says so
     /// rather than leaving a silent switch from a local model to a paid one.
     pub provider_uses: Vec<ProviderUse>,
+    /// A cold push review completed successfully and must be retried over a new
+    /// Git transport. False for ordinary checks and warm push gates.
+    pub retry_push: bool,
     /// The gate's verdict for this run.
     ///
     /// On the outcome rather than passed alongside it: `render` used to take
@@ -217,16 +235,52 @@ pub(crate) async fn run_against(
         .await
         .with_context(|| format!("could not resolve input under {}", root.display()))?;
 
+    let chain =
+        ProviderChain::new(&providers).map_err(|e| anyhow!("could not build LLM analyzer: {e}"))?;
+    let analyzer = crate::analysis::code_quality::CodeQualityAnalyzer::new(chain, cache.clone())
+        .with_cache_only(args.cache_only || args.push_gate);
+
     // The two layers share no data - they only both report failures - so they
     // run concurrently. The deterministic leg is pure added latency otherwise:
     // a warm `cargo clippy` on this repo is ~3.5s, and the LLM leg is
     // multi-second regardless, so joining hides essentially all of it.
     let (deterministic_result, llm_result) = tokio::join!(
         deterministic::run(&work, root),
-        run_llm(&work, &providers, cache.clone()),
+        analyzer.analyze_files(&work.by_file),
     );
     let (tool_findings, tool_failures) = deterministic_result;
-    let (llm_result, provider_uses) = llm_result?;
+    let mut llm_result = llm_result;
+
+    let cache_misses_only = !llm_result.failed_files.is_empty()
+        && llm_result
+            .failed_files
+            .values()
+            .all(|reason| matches!(reason, FailureReason::CacheMiss));
+    let warmed_for_push = args.push_gate
+        && cache_misses_only
+        && work.read_failures.is_empty()
+        && tool_failures.is_empty()
+        && tool_findings.is_empty();
+    if warmed_for_push {
+        let misses: Vec<&[_]> = work
+            .by_file
+            .iter()
+            .filter(|hunks| {
+                hunks.first().is_some_and(|first| {
+                    matches!(
+                        llm_result.failed_files.get(&first.file_path),
+                        Some(FailureReason::CacheMiss)
+                    )
+                })
+            })
+            .map(Vec::as_slice)
+            .collect();
+        llm_result
+            .failed_files
+            .retain(|_, reason| !matches!(reason, FailureReason::CacheMiss));
+        llm_result.merge(analyzer.analyze_files_live(&misses).await);
+    }
+    let provider_uses = provider_uses(analyzer.chain());
 
     // All concurrent writers have finished, so one oldest-first pass can
     // enforce the configured disk ceiling without racing another put. Cache
@@ -246,9 +300,14 @@ pub(crate) async fn run_against(
         llm_findings: llm_result.findings,
         failures,
         provider_uses,
+        retry_push: false,
         exit: Exit::Clean,
     };
     outcome.exit = gate(&outcome, args.fail_on);
+    if warmed_for_push && outcome.exit == Exit::Clean {
+        outcome.retry_push = true;
+        outcome.exit = Exit::CacheMiss;
+    }
 
     render::render(&outcome, args.format)?;
     Ok(outcome.exit)
@@ -264,7 +323,11 @@ pub(crate) async fn run_against(
 ///    block; LLM findings block when `fail_on` admits their severity and
 ///    `fail_on` is set.
 fn gate(outcome: &CheckOutcome, fail_on: Option<Severity>) -> Exit {
-    if !outcome.failures.is_empty() {
+    if outcome
+        .failures
+        .values()
+        .any(|reason| !matches!(reason, FailureReason::CacheMiss))
+    {
         return Exit::Unanalyzed;
     }
     if any_blocking_tool_finding(&outcome.tool_findings) {
@@ -275,6 +338,9 @@ fn gate(outcome: &CheckOutcome, fail_on: Option<Severity>) -> Exit {
     {
         return Exit::FoundIssues;
     }
+    if !outcome.failures.is_empty() {
+        return Exit::CacheMiss;
+    }
     Exit::Clean
 }
 
@@ -282,28 +348,6 @@ fn gate(outcome: &CheckOutcome, fail_on: Option<Severity>) -> Exit {
 /// project's own choice, so the gate honors it without an allow-list.
 fn any_blocking_tool_finding(findings: &[Finding]) -> bool {
     !findings.is_empty()
-}
-
-/// Run the LLM layer.
-///
-/// Returns the LLM findings, its failures, and which providers served. The
-/// analyzer is built from the whole enabled provider chain, so a transport
-/// failure at the head falls through to the next entry; each provider carries
-/// its own concurrency limiter, sized by its own `max_concurrent`. A failure
-/// to build the chain (a misconfigured `[[llm]]` entry) is propagated as
-/// `Err` - the gate is LLM-only and there is no deterministic-only fallback.
-async fn run_llm(
-    work: &input::Work,
-    cfgs: &[&LlmConfig],
-    cache: Cache,
-) -> Result<(AnalysisResult, Vec<ProviderUse>)> {
-    let chain =
-        ProviderChain::new(cfgs).map_err(|e| anyhow!("could not build LLM analyzer: {e}"))?;
-    let analyzer = crate::analysis::code_quality::CodeQualityAnalyzer::new(chain, cache);
-
-    let result = analyzer.analyze_files(&work.by_file).await;
-    let uses = provider_uses(analyzer.chain());
-    Ok((result, uses))
 }
 
 /// Who answered, and for how many files.

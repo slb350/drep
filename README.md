@@ -85,6 +85,13 @@ It writes native git hooks rather than a pre-commit entry, and it handles
 `core.hooksPath`: if you have a global hooks directory, a repository-local hook
 would otherwise never fire, silently.
 
+The pre-push hook protects Git's already-open remote connection from a long
+cold review. When every review is cached, the push continues immediately. On a
+cache miss, drep completes and caches the review but deliberately stops that
+push with exit 3; run `git push` again and the cache-only retry reconnects and
+finishes quickly. Findings and analysis failures keep their normal exit codes,
+so only a successful cache warm asks for the retry.
+
 To adopt drep through [pre-commit](https://pre-commit.com) instead:
 
 ```yaml
@@ -104,6 +111,8 @@ drep check                      # this directory
 drep check src/ main.go         # named files or directories
 drep check --staged             # what is staged, for a pre-commit hook
 drep check --diff origin/main   # what changed since a ref, for pre-push
+drep check --cache-only         # cached LLM reviews only; miss exits 3
+drep check --push-gate          # warm cold reviews, then ask for a fresh push
 drep check --fail-on error      # also block on LLM findings
 drep check --format json        # machine-readable
 
@@ -112,13 +121,17 @@ drep lint-docs --staged --fail-on error
 drep doctor                     # what will actually run here
 ```
 
-Exit codes, shared by `check` and `lint-docs`:
+Exit codes (`3` is specific to `check`):
 
 | Code | Meaning |
 |---|---|
 | 0 | Everything that should have run, ran, and found nothing blocking |
 | 1 | Blocking findings |
 | 2 | Something that should have run did not |
+| 3 | Cache-only miss, or a successful push-gate warm requiring a fresh push |
+
+In JSON, `retry_push: true` identifies the successful warm-and-reconnect case;
+a plain `--cache-only` miss leaves it false.
 
 Exit 2 is the one that matters. An unreachable endpoint, a file too large for
 the model, a configured tool that is not installed: none of those are a pass,

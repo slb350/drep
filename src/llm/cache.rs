@@ -43,7 +43,7 @@
 //!
 //! ## Defaults
 //!
-//! 30 days TTL, 1 GiB max bytes.
+//! 30 days TTL, 256 MiB max bytes.
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
