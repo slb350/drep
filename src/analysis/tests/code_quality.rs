@@ -80,13 +80,11 @@ async fn empty_hunks_return_empty_and_make_no_request() {
     );
 }
 
-/// The analyzer attributes one result to the first hunk's path, so its input
-/// grouping invariant must fail loudly during development rather than silently
-/// merging two files under one name.
+/// A public caller that supplies more than one file is partitioned safely.
 #[tokio::test]
-#[should_panic(expected = "one file")]
-async fn mixed_file_hunks_violate_the_analyzer_contract() {
-    let server = MockServer::start().await;
+async fn mixed_file_hunks_are_analyzed_and_attributed_separately() {
+    let finding = r#"{"issues":[{"line":1,"severity":"high","message":"found"}]}"#;
+    let server = server_returning(&[finding]).await;
     let (analyzer, _dir) = analyzer_for(&server);
     let mut hunks = hunks_for_python_at(1);
     hunks.push(Hunk {
@@ -98,7 +96,16 @@ async fn mixed_file_hunks_violate_the_analyzer_contract() {
         lines: vec![HunkLine::Added("different = True".to_owned())],
     });
 
-    let _ = analyzer.analyze_file(&hunks).await;
+    let result = analyzer.analyze_file(&hunks).await;
+
+    assert_eq!(request_count(&server).await, 2);
+    assert_eq!(result.findings.len(), 2, "findings: {:?}", result.findings);
+    let paths: std::collections::BTreeSet<_> = result
+        .findings
+        .iter()
+        .map(|finding| finding.file_path.as_str())
+        .collect();
+    assert_eq!(paths, ["other.py", "src/lib.py"].into_iter().collect());
 }
 
 /// Criterion 10: a clean response yields no findings and no failures.

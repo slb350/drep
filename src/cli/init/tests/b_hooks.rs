@@ -99,6 +99,55 @@ async fn install_does_not_clobber_a_foreign_hook_without_force() {
 }
 
 #[tokio::test]
+async fn a_non_utf8_foreign_hook_is_preserved_or_backed_up_byte_for_byte() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    crate::test_support::git_init(dir.path());
+    let hook_path = hooks_dir(dir.path()).join("pre-push");
+    let foreign = b"#!/bin/sh\n# latin-1: \xff\nexit 0\n";
+    std::fs::write(&hook_path, foreign).expect("write foreign hook");
+
+    install(&mut Vec::new(), dir.path(), HookKind::PrePush, false)
+        .await
+        .expect("leave foreign hook");
+    assert_eq!(std::fs::read(&hook_path).expect("read hook"), foreign);
+
+    install(&mut Vec::new(), dir.path(), HookKind::PrePush, true)
+        .await
+        .expect("replace foreign hook");
+    assert_eq!(
+        std::fs::read(hook_path.with_extension("drep-backup")).expect("read backup"),
+        foreign
+    );
+}
+
+#[tokio::test]
+async fn force_refuses_to_overwrite_an_existing_hook_backup() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    crate::test_support::git_init(dir.path());
+    let hook_path = hooks_dir(dir.path()).join("pre-push");
+    std::fs::write(&hook_path, "#!/bin/sh\necho current\n").expect("foreign hook");
+    let backup = hook_path.with_extension("drep-backup");
+    std::fs::write(&backup, "original backup\n").expect("backup");
+
+    let error = install(&mut Vec::new(), dir.path(), HookKind::PrePush, true)
+        .await
+        .expect_err("an existing backup must never be replaced");
+
+    assert!(
+        error.to_string().contains("move the existing backup"),
+        "the remedy must match the collision: {error:#}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&backup).expect("read backup"),
+        "original backup\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&hook_path).expect("read hook"),
+        "#!/bin/sh\necho current\n"
+    );
+}
+
+#[tokio::test]
 async fn install_rewrites_its_own_modified_hook() {
     let dir = tempfile::tempdir().expect("tempdir");
     crate::test_support::git_init(dir.path());
@@ -252,7 +301,7 @@ async fn install_refreshes_an_outdated_managed_chainer() {
 async fn an_unresolvable_hooks_path_leaves_repository_hooks_untouched() {
     let dir = tempfile::tempdir().expect("tempdir");
     crate::test_support::git_init(dir.path());
-    crate::test_support::git(dir.path())
+    let status = crate::test_support::git(dir.path())
         .args([
             "config",
             "--local",
@@ -261,6 +310,7 @@ async fn an_unresolvable_hooks_path_leaves_repository_hooks_untouched() {
         ])
         .status()
         .expect("set core.hooksPath");
+    assert!(status.success(), "git config core.hooksPath failed");
 
     let mut out = Vec::new();
     let result = install(&mut out, dir.path(), HookKind::PrePush, false).await;
@@ -449,133 +499,4 @@ async fn a_chainer_that_is_not_executable_is_fixed_and_an_executable_one_is_left
         "an already-executable chainer needs no announcement; got:\n{text}"
     );
     crate::test_support::assert_executable(&chainer);
-}
-
-/// `--hooks none` does no filesystem or git work at all.
-///
-/// Asserting only "no hook file exists" cannot see this: with an empty name
-/// list the write loop never runs either way, so deleting the early return
-/// passes. The observable difference is everything *around* the loop -
-/// locating the git dir, creating the hooks directory, and querying
-/// `core.hooksPath`, which reports itself. So the fixture sets a hooks path
-/// and asserts total silence: an escape hatch with side effects is not one.
-#[tokio::test]
-async fn hooks_none_does_no_work_at_all() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    crate::test_support::git_init(dir.path());
-
-    let shared = dir.path().join("shared-hooks");
-    let status = crate::test_support::git(dir.path())
-        .args(["config", "--local", "core.hooksPath"])
-        .arg(&shared)
-        .status()
-        .expect("git config");
-    assert!(status.success());
-
-    let mut out: Vec<u8> = Vec::new();
-    install(&mut out, dir.path(), HookKind::None, false)
-        .await
-        .expect("install");
-
-    assert!(
-        out.is_empty(),
-        "nothing was asked for, so nothing should be reported; got:\n{}",
-        String::from_utf8_lossy(&out)
-    );
-    assert!(
-        !shared.exists(),
-        "and the chainer directory must not be created"
-    );
-}
-
-/// `--force` over a foreign hook keeps a copy rather than destroying it.
-///
-/// `--force` serves two destinations, and `config_file::write` is what tells
-/// the user to reach for it ("Re-run with --force to replace it") - so someone
-/// with an existing `drep.toml` and a hand-written pre-push hook is steered
-/// straight into losing the hook. The backup is what makes that recoverable.
-#[tokio::test]
-async fn forcing_over_a_foreign_hook_backs_it_up_first() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    crate::test_support::git_init(dir.path());
-    let hooks = dir.path().join(".git").join("hooks");
-    std::fs::create_dir_all(&hooks).expect("hooks dir");
-    let foreign = "#!/bin/sh\n# my secret scanner\nexit 0\n";
-    std::fs::write(hooks.join("pre-push"), foreign).expect("write foreign");
-
-    let mut out: Vec<u8> = Vec::new();
-    install(&mut out, dir.path(), HookKind::PrePush, true)
-        .await
-        .expect("install");
-    let text = String::from_utf8(out).expect("utf8");
-
-    assert_eq!(
-        std::fs::read_to_string(hooks.join("pre-push")).expect("read"),
-        hook_body("pre-push").expect("known"),
-        "--force does replace the hook"
-    );
-    let backup = hooks.join("pre-push.drep-backup");
-    assert_eq!(
-        std::fs::read_to_string(&backup).expect("the previous hook must be kept"),
-        foreign,
-        "and the user's own hook is preserved verbatim"
-    );
-    assert!(
-        text.contains("saved at"),
-        "and they are told where; got:\n{text}"
-    );
-}
-
-/// A hook drep wrote is replaced with no backup, because there is nothing to
-/// preserve.
-///
-/// The counterpart to the test above: without it, "always write a backup"
-/// would pass, littering `.git/hooks` with a stale copy on every run.
-#[tokio::test]
-async fn refreshing_dreps_own_hook_leaves_no_backup() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    crate::test_support::git_init(dir.path());
-
-    let mut out: Vec<u8> = Vec::new();
-    install(&mut out, dir.path(), HookKind::PrePush, false)
-        .await
-        .expect("first install");
-    let mut out: Vec<u8> = Vec::new();
-    install(&mut out, dir.path(), HookKind::PrePush, false)
-        .await
-        .expect("second install");
-
-    let hooks = dir.path().join(".git").join("hooks");
-    assert!(
-        !hooks.join("pre-push.drep-backup").exists(),
-        "drep's own hook needs no backup"
-    );
-    assert!(
-        !hooks.join("pre-push.drep-tmp").exists(),
-        "and the atomic-write temp file must not be left behind"
-    );
-}
-
-/// Installing twice leaves the hook executable.
-///
-/// `set_executable` ORs the execute bits in; XOR-ing them would *toggle*, so a
-/// second install would silently strip the bits off a hook that was already
-/// executable - and git ignores a non-executable hook without a word, so the
-/// gate would simply stop running. Only a second install can see this.
-#[tokio::test]
-async fn installing_twice_leaves_the_hook_executable() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    crate::test_support::git_init(dir.path());
-    let hook = dir.path().join(".git").join("hooks").join("pre-push");
-
-    for pass in 1..=2 {
-        let mut out: Vec<u8> = Vec::new();
-        install(&mut out, dir.path(), HookKind::PrePush, false)
-            .await
-            .unwrap_or_else(|e| panic!("install pass {pass}: {e}"));
-        assert!(
-            crate::languages::runner::is_executable(&hook),
-            "the hook must be executable after pass {pass}"
-        );
-    }
 }

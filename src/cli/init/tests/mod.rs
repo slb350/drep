@@ -9,6 +9,7 @@ mod b_codex;
 mod b_config_file;
 mod b_gitignore;
 mod b_hook_exec;
+mod b_hook_install_safety;
 mod b_hooks;
 mod b_plan;
 mod b_presets;

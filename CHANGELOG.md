@@ -24,6 +24,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   multi-ref hooks retain the semantic status order `2 > 1 > 3 > 0`, and empty
   provider-chain failures render a stable diagnostic instead of assuming an
   attempt exists.
+- Generated pre-push hooks fail closed when drep exits with an unknown nonzero
+  status. Analyzer calls that accidentally mix files are partitioned before
+  review, so findings cannot be attributed to the first path in release builds.
+  Foreign hooks are classified byte-safely, backed up byte-for-byte under
+  `--force`, and an existing recovery backup is never overwritten.
 
 ## [2.3.0] - 2026-08-20
 

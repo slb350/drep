@@ -222,6 +222,8 @@ consumer can tell a clean run from one that never happened.
 Exit 3 is the successful pre-push reconnect handshake, not a failure to
 analyze: the missing review completed and is now cached, but the current Git
 transport is intentionally abandoned before it resumes after a long idle.
+Generated hooks map every unknown nonzero drep status to exit 2, so a crash,
+signal, or future exit code cannot silently let a push through.
 
 `LintOutcome` and `CheckOutcome` carry the gate's decision rather than letting
 the renderer re-derive it from the findings and the threshold. The threshold

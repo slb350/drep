@@ -141,6 +141,8 @@ while read -r _local_ref local_oid _remote_ref remote_oid; do
         2) status=2 ;;
         1) [ "$status" -ne 2 ] && status=1 ;;
         3) [ "$status" -eq 0 ] && status=3 ;;
+        0) ;;
+        *) status=2 ;;
     esac
 done
 
@@ -267,9 +269,10 @@ pub async fn install<W: Write>(
         let body =
             hook_body(name).ok_or_else(|| anyhow!("no hook body is defined for `{name}`"))?;
         let path = hooks_dir.join(name);
-        match std::fs::read_to_string(&path) {
+        match std::fs::read(&path) {
             Ok(existing) => {
-                if is_drep_managed(&existing) {
+                let existing_text = String::from_utf8_lossy(&existing);
+                if is_drep_managed(&existing_text) {
                     write_executable(&path, body)?;
                     writeln!(out, "  Wrote {}", path.display())?;
                 } else if force {
@@ -277,8 +280,7 @@ pub async fn install<W: Write>(
                     // `config_file::write` is what tells the user to reach for
                     // it. Keeping a copy makes replacement recoverable.
                     let backup = path.with_extension("drep-backup");
-                    std::fs::write(&backup, &existing)
-                        .with_context(|| format!("could not back up to {}", backup.display()))?;
+                    write_backup(&backup, &existing)?;
                     write_executable(&path, body)?;
                     writeln!(out, "  Wrote {}", path.display())?;
                     writeln!(out, "  Your previous hook is saved at {}", backup.display())?;
@@ -370,8 +372,9 @@ async fn run_git_config_path(root: &Path) -> Result<Option<String>> {
 /// exists.
 fn ensure_chainer<W: Write>(out: &mut W, dir: &Path, name: &str) -> Result<()> {
     let chainer = dir.join(name);
-    match std::fs::read_to_string(&chainer) {
-        Ok(body) if is_drep_managed(&body) => {
+    match std::fs::read(&chainer) {
+        Ok(bytes) if is_drep_managed(&String::from_utf8_lossy(&bytes)) => {
+            let body = String::from_utf8_lossy(&bytes);
             let current = chainer_body(name);
             if body != current {
                 write_executable(&chainer, &current)?;
@@ -381,7 +384,8 @@ fn ensure_chainer<W: Write>(out: &mut W, dir: &Path, name: &str) -> Result<()> {
             ensure_executable(out, &chainer)?;
             return Ok(());
         }
-        Ok(body) => {
+        Ok(bytes) => {
+            let body = String::from_utf8_lossy(&bytes);
             let marker = format!("hooks/{name}");
             let mentions_hook_in_command = body.lines().any(|line| {
                 let line = line.trim_start();
@@ -429,6 +433,34 @@ fn ensure_executable<W: Write>(out: &mut W, path: &Path) -> Result<()> {
     if !was_executable {
         writeln!(out, "  {} is not executable; making it so.", path.display())?;
     }
+    Ok(())
+}
+
+/// Publish a byte-for-byte backup without replacing an earlier recovery copy.
+fn write_backup(path: &Path, body: &[u8]) -> Result<()> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| anyhow!("backup path {} has no parent", path.display()))?;
+    let mut temporary = tempfile::NamedTempFile::new_in(parent)
+        .with_context(|| format!("could not back up to {}", path.display()))?;
+    temporary
+        .write_all(body)
+        .with_context(|| format!("could not back up to {}", path.display()))?;
+    temporary
+        .as_file()
+        .sync_all()
+        .with_context(|| format!("could not back up to {}", path.display()))?;
+    temporary.persist_noclobber(path).map_err(|err| {
+        if err.error.kind() == std::io::ErrorKind::AlreadyExists {
+            anyhow::Error::new(err.error).context(format!(
+                "could not back up to {}; move the existing backup and retry",
+                path.display()
+            ))
+        } else {
+            anyhow::Error::new(err.error)
+                .context(format!("could not publish backup to {}", path.display()))
+        }
+    })?;
     Ok(())
 }
 

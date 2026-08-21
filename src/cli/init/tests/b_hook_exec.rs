@@ -237,16 +237,16 @@ fn a_branch_deletion_does_not_invoke_drep() {
 /// "review cached; reconnect and push again".
 #[test]
 fn a_failing_check_aborts_the_push() {
-    for expected in [1, 2, 3] {
+    for (drep_exit, hook_exit) in [(1, 1), (2, 2), (3, 3), (42, 2)] {
         let dir = tempfile::tempdir().expect("tempdir");
         crate::test_support::git_init(dir.path());
         let stdin = "refs/heads/x 1111111111111111111111111111111111111111 refs/heads/x \
                      2222222222222222222222222222222222222222\n";
-        let (status, recorded) = run_pre_push_status(dir.path(), stdin, false, expected);
+        let (status, recorded) = run_pre_push_status(dir.path(), stdin, false, drep_exit);
         assert_eq!(
             status,
-            Some(expected),
-            "drep exited {expected}, so the hook must too; recorded: {recorded:?}"
+            Some(hook_exit),
+            "drep exited {drep_exit}, so the hook must exit {hook_exit}; recorded: {recorded:?}"
         );
     }
 }

@@ -205,7 +205,12 @@ pub(crate) async fn run_against(
     // passes ".", so production behaviour is unchanged, and a test can point
     // the whole run at a `TempDir` without chdir-ing a shared process.
     let default_config_path = config::default_config_path();
-    debug_assert!(default_config_path.is_relative());
+    if default_config_path.is_absolute() {
+        return Err(anyhow!(
+            "default config path must be repository-relative, got {}",
+            default_config_path.display()
+        ));
+    }
     let config_path = root.join(default_config_path);
     let mut config = config::load(&config_path)
         .with_context(|| format!("could not load {}", config_path.display()))?;

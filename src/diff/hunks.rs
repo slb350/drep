@@ -20,6 +20,7 @@
 //! `include`/`exclude` config, `lint-docs`) without threading a predicate
 //! through it.
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 /// One line inside a hunk, tagged by what the diff said about it.
@@ -64,6 +65,21 @@ pub struct Hunk {
     pub new_start: u32,
     pub new_count: u32,
     pub lines: Vec<HunkLine>,
+}
+
+/// Group owned hunks by file in deterministic path order.
+///
+/// Shared by input resolution and the analyzer's defensive public boundary so
+/// the normal grouping rule cannot diverge from its release-mode recovery.
+pub(crate) fn group_by_file(hunks: impl IntoIterator<Item = Hunk>) -> Vec<Vec<Hunk>> {
+    let mut by_file: BTreeMap<PathBuf, Vec<Hunk>> = BTreeMap::new();
+    for hunk in hunks {
+        by_file
+            .entry(hunk.file_path.clone())
+            .or_default()
+            .push(hunk);
+    }
+    by_file.into_values().collect()
 }
 
 impl Hunk {

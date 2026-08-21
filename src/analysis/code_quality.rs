@@ -40,6 +40,7 @@ use crate::analysis::prompt::build_analysis_prompt;
 use crate::analysis::response_contract::{CATEGORY, ISSUES, LINE, MESSAGE, SEVERITY, SUGGESTION};
 use crate::analysis::result::{AnalysisResult, FailureReason, ProviderFailure};
 use crate::diff::hunks::Hunk;
+use crate::diff::hunks::group_by_file;
 use crate::languages;
 use crate::llm::cache::Cache;
 use crate::llm::chain::{ChainError, ProviderChain};
@@ -100,7 +101,8 @@ impl CodeQualityAnalyzer {
     /// bare `Vec<Finding>`; the failure axis is part of the return type so
     /// the caller cannot forget it.
     pub async fn analyze_file(&self, hunks: &[Hunk]) -> AnalysisResult {
-        self.analyze_file_in_mode(hunks, self.cache_only).await
+        self.analyze_files_in_mode(std::iter::once(hunks), self.cache_only)
+            .await
     }
 
     async fn analyze_file_in_mode(&self, hunks: &[Hunk], cache_only: bool) -> AnalysisResult {
@@ -110,10 +112,6 @@ impl CodeQualityAnalyzer {
         let Some(first) = hunks.first() else {
             return AnalysisResult::default();
         };
-        debug_assert!(
-            hunks.iter().all(|hunk| hunk.file_path == first.file_path),
-            "one analyzer call must contain hunks from one file"
-        );
         let Some(language) = languages::detect(&first.file_path) else {
             return AnalysisResult::default();
         };
@@ -133,7 +131,7 @@ impl CodeQualityAnalyzer {
         // gate actually runs in: a newly-added 5 MB file reached the model
         // whole. Too large is a *failure*, not a skip; a file drep declined to
         // analyze is not clean.
-        let rendered = payload.text.len() as u64;
+        let rendered = u64::try_from(payload.text.len()).unwrap_or(u64::MAX);
         if rendered > payload::PAYLOAD_MAX_BYTES {
             return AnalysisResult::failed(
                 first.file_path.clone(),
@@ -231,9 +229,10 @@ impl CodeQualityAnalyzer {
         by_file: impl IntoIterator<Item = &'a [Hunk]>,
         cache_only: bool,
     ) -> AnalysisResult {
-        let futures = by_file
-            .into_iter()
-            .map(|hunks| self.analyze_file_in_mode(hunks, cache_only));
+        let groups: Vec<HunkGroup<'a>> = by_file.into_iter().flat_map(partition_hunks).collect();
+        let futures = groups
+            .iter()
+            .map(|group| self.analyze_file_in_mode(group.as_slice(), cache_only));
         let results = join_all(futures).await;
         let mut merged = AnalysisResult::default();
         for result in results {
@@ -241,6 +240,35 @@ impl CodeQualityAnalyzer {
         }
         merged
     }
+}
+
+/// A correctly grouped borrowed slice, or owned groups recovered from a mixed one.
+enum HunkGroup<'a> {
+    Borrowed(&'a [Hunk]),
+    Owned(Vec<Hunk>),
+}
+
+impl HunkGroup<'_> {
+    fn as_slice(&self) -> &[Hunk] {
+        match self {
+            Self::Borrowed(hunks) => hunks,
+            Self::Owned(hunks) => hunks,
+        }
+    }
+}
+
+/// Preserve the zero-copy normal path and partition only malformed input.
+fn partition_hunks(hunks: &[Hunk]) -> Vec<HunkGroup<'_>> {
+    let mixed = hunks
+        .first()
+        .is_some_and(|first| hunks.iter().any(|hunk| hunk.file_path != first.file_path));
+    if !mixed {
+        return vec![HunkGroup::Borrowed(hunks)];
+    }
+    group_by_file(hunks.iter().cloned())
+        .into_iter()
+        .map(HunkGroup::Owned)
+        .collect()
 }
 
 /// Map an `LlmError` to the failure reason the caller carries in
@@ -489,4 +517,21 @@ enum IssueOutcome {
     Dropped,
     /// An unparseable record, with a reason naming what was wrong.
     Malformed(String),
+}
+
+#[cfg(test)]
+mod partition_tests {
+    use super::{HunkGroup, partition_hunks};
+    use crate::diff::hunks::Hunk;
+    use std::path::PathBuf;
+
+    #[test]
+    fn already_grouped_hunks_remain_borrowed() {
+        let hunks = [Hunk::whole_file(PathBuf::from("same.rs"), "one\ntwo\n")];
+        let groups = partition_hunks(&hunks);
+        let [HunkGroup::Borrowed(group)] = groups.as_slice() else {
+            panic!("an already-grouped slice must stay on the zero-copy path");
+        };
+        assert!(std::ptr::eq(group.as_ptr(), hunks.as_ptr()));
+    }
 }

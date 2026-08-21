@@ -22,7 +22,7 @@ use anyhow::Result;
 use crate::analysis::result::FailureReason;
 use crate::cli::check::CheckArgs;
 use crate::diff;
-use crate::diff::hunks::Hunk;
+use crate::diff::hunks::{Hunk, group_by_file};
 use crate::files;
 
 /// The largest file drep will read into memory in paths mode.
@@ -183,21 +183,4 @@ fn resolve_paths(paths: &[PathBuf], root: &Path) -> Result<Work> {
         read_failures,
         lint_only,
     })
-}
-
-/// Group hunks into `Vec<Vec<Hunk>>` keyed by file.
-///
-/// A `BTreeMap<PathBuf, Vec<Hunk>>` collected into values keeps the order
-/// deterministic across runs of the same diff - the analyzer builds its
-/// cache key from the file path, not from a list index, but a stable order
-/// means the JSON output is stable too.
-fn group_by_file(hunks: Vec<Hunk>) -> Vec<Vec<Hunk>> {
-    let mut by_file: BTreeMap<PathBuf, Vec<Hunk>> = BTreeMap::new();
-    for hunk in hunks {
-        by_file
-            .entry(hunk.file_path.clone())
-            .or_default()
-            .push(hunk);
-    }
-    by_file.into_values().collect()
 }
