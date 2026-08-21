@@ -105,8 +105,8 @@ fn mutation_ci_is_main_only_on_the_pinned_homelab_runner() {
         "the full sweep must require the repository-scoped Strix label"
     );
     assert!(
-        mutants.contains("timeout-minutes: 45"),
-        "a wedged mutation run must release the homelab runner"
+        mutants.contains("timeout-minutes: 90"),
+        "the full sweep needs headroom above its observed runtime while still releasing a wedged runner"
     );
     assert!(
         mutants.contains("tool: cargo-mutants@27.1.0"),
