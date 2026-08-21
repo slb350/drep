@@ -113,50 +113,31 @@ fn tool_status_unavailable_when_configured_but_binary_missing() {
     assert_eq!(outcome.status, ToolStatus::Unavailable);
 }
 
-/// A file whose name begins with `-` is passed as a path, not an option.
-///
-/// A repository can legitimately contain `--fix`, and every checker drep runs
-/// would read that as a flag. The guard is a `./` prefix rather than a `--`
-/// separator, because `--` is not universally accepted across
-/// ruff/eslint/tsc/gofmt/go vet/clippy while `./` is unambiguous to any
-/// argument parser.
-///
-/// Resolves the fake tool through `local_paths`, so it touches no global
-/// state at all.
-#[tokio::test]
-async fn a_filename_that_looks_like_a_flag_is_passed_as_a_path() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let bin = dir.path().join("bin");
-    std::fs::create_dir_all(&bin).expect("mkdir bin");
-    let tool = bin.join("argvdump");
-    write_executable(
-        &tool,
-        format!(
-            "#!/bin/sh\nfor a in \"$@\"; do echo \"$a\"; done > {}/argv.txt\nexit 0\n",
-            dir.path().display()
-        ),
-    );
-    std::fs::write(dir.path().join("pyproject.toml"), "").expect("config");
-
+#[test]
+fn missing_nested_tool_detail_names_the_workspace_search_boundary() {
+    let dir = TempDir::new().unwrap();
+    let workspace = dir.path().join("apps/web");
+    std::fs::create_dir_all(&workspace).unwrap();
+    std::fs::write(workspace.join("project.config"), "").unwrap();
     let spec = ToolSpec {
-        name: "argvdump",
-        command: &["argvdump"],
-        local_paths: &["bin/argvdump"],
-        config_files: &["pyproject.toml"],
-        output_format: "lines",
-        diagnostics_stream: "stdout",
+        name: "nested-tool",
+        local_paths: &["node_modules/.bin/nested-tool"],
+        command: &["definitely-not-installed-nested-tool"],
+        config_files: &["project.config"],
         ..ToolSpec::default()
     };
 
-    let _ = run_tool(&spec, dir.path(), &["--fix".to_owned()]).await;
+    let outcome = tool_status_at(&spec, dir.path(), &workspace);
 
-    let argv = std::fs::read_to_string(dir.path().join("argv.txt")).unwrap_or_default();
+    assert_eq!(outcome.status, ToolStatus::Unavailable);
     assert!(
-        argv.lines().any(|a| a == "./--fix"),
-        "a dash-leading filename must reach the tool as `./--fix`, got: {argv:?}"
+        outcome.detail.contains(&workspace.display().to_string()),
+        "the diagnostic must name where its ancestor search started: {}",
+        outcome.detail
     );
     assert!(
-        !argv.lines().any(|a| a == "--fix"),
-        "it must not reach the tool as a bare option: {argv:?}"
+        outcome.detail.contains(&dir.path().display().to_string()),
+        "the diagnostic must name the repository boundary: {}",
+        outcome.detail
     );
 }

@@ -26,7 +26,7 @@
 
 use crate::analysis::findings::LlmSeverity;
 use crate::analysis::response_contract::{
-    CATEGORY, CODE_SNIPPET, ISSUES, LINE, MESSAGE, SEVERITY, SUGGESTION, SUMMARY,
+    CATEGORY, CODE_SNIPPET, COMPILE_FAILURE, ISSUES, LINE, MESSAGE, SEVERITY, SUGGESTION, SUMMARY,
 };
 use crate::languages::spec::LanguageSupport;
 
@@ -53,6 +53,7 @@ pub fn build_analysis_prompt(language: &LanguageSupport) -> String {
     let message = MESSAGE;
     let suggestion = SUGGESTION;
     let code_snippet = CODE_SNIPPET;
+    let compile_failure = COMPILE_FAILURE;
     // The template is shaped so the conventions block, when empty, leaves
     // no stray heading and no doubled blank line. The newline after the
     // placeholder is the only one that exists in the template, so an
@@ -80,6 +81,7 @@ pub fn build_analysis_prompt(language: &LanguageSupport) -> String {
          - Clear message explaining the issue\n\
          - Specific, actionable suggestion for fixing it\n\
          - The problematic code snippet\n\
+         - Whether the finding explicitly claims the code cannot compile\n\
          \n\
          **Important instructions:**\n\
          - Only report genuine issues, not false positives\n\
@@ -101,7 +103,8 @@ pub fn build_analysis_prompt(language: &LanguageSupport) -> String {
                \"{category}\": \"<bug|security|best-practice|performance|style|maintainability>\",\n\
                \"{message}\": \"<clear description of the issue>\",\n\
                \"{suggestion}\": \"<specific recommendation for fixing>\",\n\
-               \"{code_snippet}\": \"<the problematic code>\"\n\
+               \"{code_snippet}\": \"<the problematic code>\",\n\
+               \"{compile_failure}\": <true|false>\n\
              }}\n\
            ],\n\
            \"{summary}\": \"<overall assessment of code quality>\"\n\

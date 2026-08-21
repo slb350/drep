@@ -129,29 +129,24 @@ async fn an_empty_response_fails_over() {
     );
 }
 
-/// A non-empty body carrying no JSON must NOT fail over.
-///
-/// This is the deterministic case: the same prompt produces the same
-/// unparseable answer, so a second provider is a second full-price call for
-/// the same outcome. It is also the discriminating counterpart to the test
-/// above - a rule that failed over on "no JSON extracted" would pass the
-/// empty-body test and be wrong here.
+/// A non-empty body carrying no JSON fails over after local retries, but does
+/// not demote the provider for later files.
 #[tokio::test]
-async fn an_unparseable_but_non_empty_response_does_not_fail_over() {
+async fn an_unparseable_but_non_empty_response_fails_over_without_demotion() {
     let chatty = server_returning_prose().await;
     let healthy = server_returning_json().await;
     let (cache, _dir) = temp_cache();
     let chain = fast_retry_chain(&[cfg_for(&chatty, "a", 1), cfg_for(&healthy, "b", 1)]);
 
-    let err = chain
+    let served = chain
         .complete_json(SYSTEM, CONTENT, &cache)
         .await
-        .expect_err("prose with no JSON fails the file");
-    assert_eq!(err.attempts.len(), 1);
+        .expect("the fallback salvages the file");
+    assert_eq!(served.provider, 1);
     assert_eq!(
         request_count(&healthy).await,
-        0,
-        "a deterministic parse failure must not spend a second provider"
+        1,
+        "the fallback is tried after the primary's parse retries"
     );
     assert!(
         !chain.providers()[0].is_down(),

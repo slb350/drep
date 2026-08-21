@@ -14,6 +14,7 @@
 //! testable without spawning a subprocess. The tests call [`run_to`] directly
 //! against a captured buffer.
 
+use std::collections::BTreeSet;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
@@ -173,13 +174,21 @@ fn write_tools_section<W: Write>(
     writeln!(out)?;
     writeln!(out, "Deterministic checks (these gate):")?;
     let mut missing: Vec<&'static str> = Vec::new();
-    for (language, _) in buckets {
+    for (language, paths) in buckets {
         if language.tools.is_empty() {
             writeln!(out, "  {}: no tools wired up yet", language.display_name)?;
             continue;
         }
         for spec in language.tools {
-            let outcome = languages::runner::tool_status(spec, root);
+            let roots: BTreeSet<PathBuf> = paths
+                .iter()
+                .filter_map(|path| languages::runner::configuration_root(spec, root, path))
+                .collect();
+            let outcome = if roots.is_empty() {
+                languages::runner::tool_status(spec, root)
+            } else {
+                workspace_tool_status(spec, root, &roots)
+            };
             writeln!(out, "  {}: {}", spec.name, outcome.detail)?;
             // `Skipped` is the project exercising a choice, not a problem.
             // Rendering it as one trains users to ignore the report.
@@ -196,6 +205,35 @@ fn write_tools_section<W: Write>(
         }
     }
     Ok(missing)
+}
+
+fn workspace_tool_status(
+    spec: &'static languages::spec::ToolSpec,
+    root: &Path,
+    roots: &BTreeSet<PathBuf>,
+) -> languages::runner::ToolOutcome {
+    let statuses: Vec<_> = roots
+        .iter()
+        .map(|workspace| languages::runner::tool_status_at(spec, root, workspace))
+        .collect();
+    if let Some(unavailable) = statuses
+        .iter()
+        .find(|outcome| matches!(outcome.status, languages::runner::ToolStatus::Unavailable))
+    {
+        return unavailable.clone();
+    }
+    let detail = if roots.len() == 1 && roots.contains(&root.to_path_buf()) {
+        "ready".to_owned()
+    } else {
+        format!("ready in {} workspace(s)", roots.len())
+    };
+    languages::runner::ToolOutcome {
+        tool: spec.name,
+        status: languages::runner::ToolStatus::Ok,
+        findings: Vec::new(),
+        detail,
+        compilation_succeeded: false,
+    }
 }
 
 /// `LLM analysis (required):` block.

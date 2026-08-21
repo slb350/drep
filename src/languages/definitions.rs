@@ -7,7 +7,7 @@
 //! the style that project has *chosen*, so a repo with no eslint config gets no
 //! eslint findings rather than a wall of default-preset complaints.
 
-use super::spec::{LanguageSupport, ToolSpec};
+use super::spec::{DEFAULT_TOOL_TIMEOUT_SECS, LanguageSupport, ToolSpec};
 
 /// Python deterministic checker.
 pub static RUFF: ToolSpec = ToolSpec {
@@ -17,6 +17,10 @@ pub static RUFF: ToolSpec = ToolSpec {
     config_files: &["pyproject.toml", "ruff.toml", ".ruff.toml"],
     output_format: "json",
     diagnostics_stream: "stdout",
+    timeout_secs: DEFAULT_TOOL_TIMEOUT_SECS,
+    timeout_context: None,
+    establishes_compilation: false,
+    serial_in_repository: false,
     accepts_files: true,
 };
 
@@ -38,6 +42,10 @@ pub static ESLINT: ToolSpec = ToolSpec {
     ],
     output_format: "json",
     diagnostics_stream: "stdout",
+    timeout_secs: DEFAULT_TOOL_TIMEOUT_SECS,
+    timeout_context: None,
+    establishes_compilation: false,
+    serial_in_repository: false,
     accepts_files: true,
 };
 
@@ -49,7 +57,13 @@ pub static TSC: ToolSpec = ToolSpec {
     config_files: &["tsconfig.json"],
     output_format: "tsc",
     diagnostics_stream: "stdout",
-    accepts_files: true,
+    timeout_secs: DEFAULT_TOOL_TIMEOUT_SECS,
+    timeout_context: None,
+    establishes_compilation: true,
+    serial_in_repository: false,
+    // Passing source files makes tsc ignore tsconfig.json. Run the configured
+    // project and filter its diagnostics back to the requested files.
+    accepts_files: false,
 };
 
 /// Go formatting checker - lists files whose formatting drifts from `gofmt`'s.
@@ -63,6 +77,10 @@ pub static GOFMT: ToolSpec = ToolSpec {
     config_files: &["go.mod"],
     output_format: "lines",
     diagnostics_stream: "stdout",
+    timeout_secs: DEFAULT_TOOL_TIMEOUT_SECS,
+    timeout_context: None,
+    establishes_compilation: false,
+    serial_in_repository: false,
     accepts_files: true,
 };
 
@@ -77,6 +95,10 @@ pub static GO_VET: ToolSpec = ToolSpec {
     config_files: &["go.mod"],
     output_format: "position",
     diagnostics_stream: "stderr",
+    timeout_secs: DEFAULT_TOOL_TIMEOUT_SECS,
+    timeout_context: None,
+    establishes_compilation: true,
+    serial_in_repository: false,
     accepts_files: true,
 };
 
@@ -88,6 +110,13 @@ pub static CLIPPY: ToolSpec = ToolSpec {
     config_files: &["Cargo.toml"],
     output_format: "cargo",
     diagnostics_stream: "stdout",
+    // Cargo's build lock is acquired by Cargo itself, so its wait is part of
+    // the child process. Allow the same long-running ceiling as an LLM review
+    // rather than failing a whole gate at the generic two-minute tool limit.
+    timeout_secs: 1_800,
+    timeout_context: Some(", including its Cargo build-lock wait"),
+    establishes_compilation: true,
+    serial_in_repository: true,
     // `cargo clippy` checks a crate, not files: a path argument is rejected
     // with "unexpected argument". See `ToolSpec::accepts_files`.
     accepts_files: false,

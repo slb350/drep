@@ -1,12 +1,13 @@
 //! Command-line surface.
 //!
-//! Four commands, two triggers (pre-commit and pre-push). Anything that needs
+//! Six commands, two triggers (pre-commit and pre-push). Anything that needs
 //! a platform API, a webhook or a database was dropped in 2.0 - see
 //! `docs/rust-migration.md`.
 //!
 //! Each command owns its arguments in its own module, so a command's contract
 //! and its behaviour stay together as the later phases fill them in.
 
+pub mod acknowledge;
 pub mod auth;
 pub mod check;
 pub mod doctor;
@@ -21,6 +22,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 use crate::analysis::findings::Severity;
 
 use crate::Exit;
+use acknowledge::AcknowledgeArgs;
 use auth::AuthArgs;
 use check::CheckArgs;
 use doctor::DoctorArgs;
@@ -51,6 +53,8 @@ pub enum Command {
     Init(InitArgs),
     /// Manage the API keys drep holds for this machine.
     Auth(AuthArgs),
+    /// Stop re-reporting an LLM finding until its surrounding source changes.
+    Acknowledge(AcknowledgeArgs),
 }
 
 /// Parse a `--fail-on` severity, for whichever command takes one.
@@ -82,6 +86,7 @@ pub async fn run(cli: Cli) -> Result<Exit> {
         Command::Doctor(args) => doctor::run(&args),
         Command::Init(args) => init::run(&args).await,
         Command::Auth(args) => auth::run(&args),
+        Command::Acknowledge(args) => acknowledge::run(&args, std::path::Path::new(".")),
     }
 }
 
@@ -216,7 +221,17 @@ mod tests {
             .get_subcommands()
             .map(|c| c.get_name().to_owned())
             .collect();
-        assert_eq!(names, vec!["check", "lint-docs", "doctor", "init", "auth"]);
+        assert_eq!(
+            names,
+            vec![
+                "check",
+                "lint-docs",
+                "doctor",
+                "init",
+                "auth",
+                "acknowledge"
+            ]
+        );
     }
 
     #[test]

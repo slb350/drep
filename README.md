@@ -97,7 +97,7 @@ To adopt drep through [pre-commit](https://pre-commit.com) instead:
 ```yaml
 repos:
   - repo: https://github.com/slb350/drep
-    rev: v2.3.0
+    rev: v2.4.0
     hooks:
       - id: drep-check-push   # pre-push: what the push touches
       # - id: drep-check      # pre-commit: staged files
@@ -115,6 +115,7 @@ drep check --cache-only         # cached LLM reviews only; miss exits 3
 drep check --push-gate          # warm cold reviews, then ask for a fresh push
 drep check --fail-on error      # also block on LLM findings
 drep check --format json        # machine-readable
+drep acknowledge <fingerprint>  # hide a reviewed false positive until code changes
 
 drep lint-docs                  # markdown in this tree
 drep lint-docs --staged --fail-on error
@@ -162,8 +163,9 @@ Three rules decide what runs:
 
 - Repository-local before PATH, so a project is checked by the version its CI
   runs.
-- Only where the project configured it. No eslint config means no eslint
-  opinion.
+- From the nearest configured ancestor of each file. A monorepo member's
+  eslint or TypeScript config applies to that member, while a hoisted binary at
+  the repository root remains usable.
 - A configured tool that is missing makes the run exit 2. A check that did not
   run is never reported as a pass.
 
@@ -180,6 +182,12 @@ Three rules decide what runs:
 The LLM half reads any of them. It parses nothing, so it needs no grammar per
 language; it is told which language it is reading and which conventions that
 language's ecosystem expects.
+
+LLM findings print an acknowledgement command. Running it records the finding
+fingerprint in `.drep/acknowledgements.toml`; commit that file when the team's
+adjudication should be shared. The fingerprint includes the file, finding
+category and surrounding source, so an edit near the finding makes it eligible
+for review again.
 
 ## Markdown
 

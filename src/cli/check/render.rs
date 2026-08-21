@@ -67,24 +67,19 @@ fn render_text<W: Write>(out: &mut W, outcome: &CheckOutcome) -> Result<()> {
     // afterwards - as this did - detaches them: with two findings, the first
     // suggestion appears below the second finding and reads as if it belonged
     // to it.
-    let mut by_position: BTreeMap<(&str, u32, usize), (String, Option<String>)> = BTreeMap::new();
+    let mut by_position: BTreeMap<(&str, u32, usize), (String, Vec<String>)> = BTreeMap::new();
     for (idx, (source, f)) in tagged(outcome).enumerate() {
         by_position.insert(
             (f.file_path.as_str(), f.line, idx),
-            (
-                finding_line(Some(source), f),
-                f.suggestion
-                    .as_ref()
-                    .map(|s| format!("    suggestion: {s}")),
-            ),
+            (finding_line(Some(source), f), finding_details(f)),
         );
     }
 
     let clean = by_position.is_empty() && outcome.failures.is_empty();
-    for (line, suggestion) in by_position.values() {
+    for (line, details) in by_position.values() {
         writeln!(out, "{line}")?;
-        if let Some(suggestion) = suggestion {
-            writeln!(out, "{suggestion}")?;
+        for detail in details {
+            writeln!(out, "{detail}")?;
         }
     }
 
@@ -102,6 +97,17 @@ fn render_text<W: Write>(out: &mut W, outcome: &CheckOutcome) -> Result<()> {
         writeln!(out, "No issues found.")?;
     }
     Ok(())
+}
+
+fn finding_details(finding: &Finding) -> Vec<String> {
+    let mut details = Vec::new();
+    if let Some(suggestion) = &finding.suggestion {
+        details.push(format!("    suggestion: {suggestion}"));
+    }
+    if let Some(fingerprint) = &finding.fingerprint {
+        details.push(format!("    acknowledge: drep acknowledge {fingerprint}"));
+    }
+    details
 }
 
 /// The failover report (see the module doc for when it prints at all).
@@ -296,5 +302,8 @@ fn finding_json(source: &'static str, f: &Finding) -> serde_json::Value {
     }
     obj.insert("message".to_owned(), json!(f.message));
     obj.insert("suggestion".to_owned(), json!(f.suggestion));
+    if let Some(fingerprint) = &f.fingerprint {
+        obj.insert("fingerprint".to_owned(), json!(fingerprint));
+    }
     serde_json::Value::Object(obj)
 }

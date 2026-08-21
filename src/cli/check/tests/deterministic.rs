@@ -76,7 +76,7 @@ async fn two_python_files_invoke_their_tool_once_not_twice() {
     std::fs::write(&b, "b = 2\n").expect("b.py");
 
     let work = work_for(&[a.clone(), b.clone()]);
-    let (_findings, _failures) = deterministic::run(&work, dir.path()).await;
+    let (_findings, _failures, _compiled) = deterministic::run(&work, dir.path()).await;
 
     let lines = std::fs::read_to_string(&counter)
         .map(|s| s.lines().count())
@@ -111,7 +111,7 @@ async fn unavailable_tool_marks_every_file_in_the_batch_as_failed() {
     std::fs::write(&b, "b = 2\n").expect("b.py");
 
     let work = work_for(&[a.clone(), b.clone()]);
-    let (findings, failures) = deterministic::run(&work, dir.path()).await;
+    let (findings, failures, _compiled) = deterministic::run(&work, dir.path()).await;
 
     assert!(
         findings.is_empty(),
@@ -146,7 +146,7 @@ async fn unconfigured_tool_is_skipped_and_adds_no_failure() {
     std::fs::write(&b, "b = 2\n").expect("b.py");
 
     let work = work_for(&[a.clone(), b.clone()]);
-    let (findings, failures) = deterministic::run(&work, dir.path()).await;
+    let (findings, failures, _compiled) = deterministic::run(&work, dir.path()).await;
 
     assert!(
         findings.is_empty(),
@@ -155,5 +155,83 @@ async fn unconfigured_tool_is_skipped_and_adds_no_failure() {
     assert!(
         failures.is_empty(),
         "Skipped must contribute no failures, got {failures:?}"
+    );
+}
+
+/// A monorepo tool is run from the nearest configured workspace, while a
+/// dependency hoisted to the repository root remains resolvable.
+#[tokio::test]
+async fn nested_workspace_config_runs_with_workspace_relative_files() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path();
+    let bin = root.join("venv/bin/ruff");
+    std::fs::create_dir_all(bin.parent().unwrap()).expect("bin dir");
+    let argv = root.join("argv.txt");
+    write_executable(
+        &bin,
+        format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$PWD\" \"$@\" > {}\nprintf '%s' '[]'\n",
+            argv.display()
+        ),
+    );
+
+    let member = root.join("apps/web");
+    std::fs::create_dir_all(member.join("src")).expect("member dirs");
+    std::fs::write(member.join("pyproject.toml"), "").expect("member config");
+    let file = member.join("src/app.py");
+    std::fs::write(&file, "x = 1\n").expect("source");
+
+    let work = work_for(std::slice::from_ref(&file));
+    let (_findings, failures, _compiled) = deterministic::run(&work, root).await;
+
+    assert!(failures.is_empty(), "workspace tool failed: {failures:?}");
+    let recorded = std::fs::read_to_string(argv).expect("recorded argv");
+    let lines: Vec<&str> = recorded.lines().collect();
+    assert_eq!(
+        std::path::Path::new(lines[0])
+            .canonicalize()
+            .expect("actual cwd"),
+        member.canonicalize().expect("member cwd")
+    );
+    assert_eq!(lines.last().copied(), Some("src/app.py"));
+}
+
+/// Files under different configured members are separate tool batches.
+#[tokio::test]
+async fn separate_workspace_configs_produce_separate_invocations() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path();
+    let bin = root.join("venv/bin/ruff");
+    std::fs::create_dir_all(bin.parent().unwrap()).expect("bin dir");
+    let counter = root.join("counter.txt");
+    write_executable(
+        &bin,
+        format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$PWD\" >> {}\nprintf '%s' '[]'\n",
+            counter.display()
+        ),
+    );
+
+    let files: Vec<PathBuf> = ["apps/web", "packages/core"]
+        .into_iter()
+        .map(|member| {
+            let member = root.join(member);
+            std::fs::create_dir_all(&member).expect("member dir");
+            std::fs::write(member.join("pyproject.toml"), "").expect("member config");
+            let file = member.join("mod.py");
+            std::fs::write(&file, "x = 1\n").expect("source");
+            file
+        })
+        .collect();
+
+    let work = work_for(&files);
+    let (_findings, failures, _compiled) = deterministic::run(&work, root).await;
+    assert!(failures.is_empty(), "workspace tools failed: {failures:?}");
+    assert_eq!(
+        std::fs::read_to_string(counter)
+            .expect("counter")
+            .lines()
+            .count(),
+        2
     );
 }

@@ -13,6 +13,8 @@
 //! Deliberately free of heavyweight drep imports: the registry is consulted by
 //! file discovery (`drep.core.file_targets`), which analyzer packages import.
 
+pub const DEFAULT_TOOL_TIMEOUT_SECS: u64 = 120;
+
 /// A deterministic checker for one language.
 ///
 /// Attributes:
@@ -49,6 +51,15 @@ pub struct ToolSpec {
     /// Which stream carries them. `go vet` writes to stderr, so reading only
     /// stdout would report every Go file clean.
     pub diagnostics_stream: &'static str,
+    /// Wall-clock ceiling for the process. This includes any tool-owned lock
+    /// wait before analysis starts.
+    pub timeout_secs: u64,
+    /// Optional diagnostic suffix explaining a legitimate long wait.
+    pub timeout_context: Option<&'static str>,
+    /// A zero-exit run proves the checked files compiled/typechecked.
+    pub establishes_compilation: bool,
+    /// Whether invocations of this tool must be serialized within a repo.
+    pub serial_in_repository: bool,
     /// Whether the tool accepts file paths as arguments.
     ///
     /// `cargo clippy` does not: it checks a *crate*, and a path argument is
@@ -73,6 +84,10 @@ impl Default for ToolSpec {
             config_files: &[],
             output_format: "json",
             diagnostics_stream: "stdout",
+            timeout_secs: DEFAULT_TOOL_TIMEOUT_SECS,
+            timeout_context: None,
+            establishes_compilation: false,
+            serial_in_repository: false,
             accepts_files: true,
         }
     }

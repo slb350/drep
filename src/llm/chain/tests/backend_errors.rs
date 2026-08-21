@@ -35,3 +35,10 @@ fn backend_error_policy_is_driven_only_by_the_kind() {
         assert!(!is_sticky(&unknown));
     }
 }
+
+#[test]
+fn unparseable_answers_fail_over_without_demoting_the_provider() {
+    let error = LlmError::Unparseable("garbled model output".to_owned());
+    assert!(should_failover(&error));
+    assert!(!is_sticky(&error));
+}

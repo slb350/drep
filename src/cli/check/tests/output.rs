@@ -70,7 +70,7 @@ fn text_output_for_a_known_finding_is_exactly_the_expected_string() {
         "expected Clean exit, stderr was {:?}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let expected = "lib.py:1: error [llm/bug] test message\n    suggestion: fix it\n";
+    let expected = "lib.py:1: error [llm/bug] test message\n    suggestion: fix it\n    acknowledge: drep acknowledge 60ac6ab2f58ced927ee8b7180d5c9c03498f3aa0fd1107cd36b0302bbbb7899d\n";
     assert_eq!(
         stdout, expected,
         "rendered text must equal the exact expected string"
@@ -355,6 +355,8 @@ fn each_suggestion_follows_its_own_finding() {
         column: None,
         message: message.to_owned(),
         suggestion: Some(suggestion.to_owned()),
+        asserts_compile_failure: false,
+        fingerprint: None,
     };
 
     let outcome = super::support::outcome_with_tool_findings(vec![

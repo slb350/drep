@@ -250,7 +250,9 @@ impl LlmClient {
         // but it would surface as `LlmError::Transport` once the attempts ran
         // out - and `Transport` fails over to the next provider and demotes
         // this one for the whole run. A model that answered in prose has told
-        // us nothing about the endpoint, so neither of those is right.
+        // us nothing about the endpoint: after these response retries the
+        // chain may ask a fallback for this file, but must not demote this
+        // provider.
         //
         // The SDK's own retry still runs inside each pass, so a transport
         // failure is handled by the layer that classifies it.
@@ -397,10 +399,11 @@ enum Answer {
 /// practice it does not repeat: drep's own gated push failed on a different
 /// file each run, and each failing file analyzed cleanly when asked again.
 ///
-/// Two attempts, so one retry. The evidence is that a single retry clears it,
-/// and a model that answers in prose twice is not going to be talked round on
-/// the third try.
-pub const NO_JSON_ATTEMPTS: u32 = 2;
+/// Three total attempts, so two local retries before the provider chain may
+/// ask a fallback. Production output has been visibly garbled twice in a row
+/// and then parsed unchanged on a later run; the third attempt salvages that
+/// case without demoting an otherwise healthy provider.
+pub const NO_JSON_ATTEMPTS: u32 = 3;
 
 /// Whether asking the same question again could produce a different answer.
 ///

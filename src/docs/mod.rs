@@ -180,15 +180,15 @@ pub(crate) fn finding(
     column: u32,
     message: String,
 ) -> Finding {
-    Finding {
-        kind: check.as_str().to_owned(),
-        severity: check.severity(),
-        file_path: file_path.to_owned(),
+    Finding::deterministic(
+        check.as_str().to_owned(),
+        check.severity(),
+        file_path.to_owned(),
         line,
-        column: Some(column),
+        Some(column),
         message,
-        suggestion: Some(check.suggestion().to_owned()),
-    }
+        Some(check.suggestion().to_owned()),
+    )
 }
 
 /// Run every check over `content`, reporting against `path`.

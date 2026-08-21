@@ -79,15 +79,15 @@ fn parse_lines(spec: &ToolSpec, output: &str) -> Vec<Finding> {
                 "Run `{base} -w {path}`",
                 base = spec.command[..spec.command.len() - 1].join(" "),
             );
-            Finding {
-                kind: spec.name.to_owned(),
-                severity: Severity::Error,
-                file_path: path.to_owned(),
-                line: 1,
-                column: None,
-                message: format!("{}: file is not formatted", spec.name),
-                suggestion: Some(suggest),
-            }
+            Finding::deterministic(
+                spec.name.to_owned(),
+                Severity::Error,
+                path.to_owned(),
+                1,
+                None,
+                format!("{}: file is not formatted", spec.name),
+                Some(suggest),
+            )
         })
         .collect()
 }
@@ -113,15 +113,15 @@ fn parse_positions(spec: &ToolSpec, output: &str) -> Vec<Finding> {
             .name("message")
             .map(|m| m.as_str().trim())
             .unwrap_or("");
-        findings.push(Finding {
-            kind: spec.name.to_owned(),
-            severity: Severity::Error,
-            file_path: file.strip_prefix("./").unwrap_or(file).to_owned(),
-            line: line_num,
-            column: Some(col),
-            message: message.to_owned(),
-            suggestion: None,
-        });
+        findings.push(Finding::deterministic(
+            spec.name.to_owned(),
+            Severity::Error,
+            file.strip_prefix("./").unwrap_or(file).to_owned(),
+            line_num,
+            Some(col),
+            message.to_owned(),
+            None,
+        ));
     }
     findings
 }
@@ -147,15 +147,15 @@ fn parse_tsc(spec: &ToolSpec, output: &str) -> Vec<Finding> {
             .name("message")
             .map(|m| m.as_str().trim())
             .unwrap_or("");
-        findings.push(Finding {
-            kind: code.to_owned(),
-            severity: Severity::Error,
-            file_path: file.to_owned(),
-            line: line_num,
-            column: Some(col),
-            message: message.to_owned(),
-            suggestion: None,
-        });
+        findings.push(Finding::deterministic(
+            code.to_owned(),
+            Severity::Error,
+            file.to_owned(),
+            line_num,
+            Some(col),
+            message.to_owned(),
+            None,
+        ));
     }
     findings
 }
@@ -222,15 +222,15 @@ fn parse_cargo(spec: &ToolSpec, output: &str) -> Result<Vec<Finding>, ToolOutput
             .unwrap_or("")
             .to_owned();
 
-        findings.push(Finding {
+        findings.push(Finding::deterministic(
             kind,
-            severity: Severity::Error,
+            Severity::Error,
             file_path,
             line,
             column,
-            message: message_text,
-            suggestion: None,
-        });
+            message_text,
+            None,
+        ));
     }
     Ok(findings)
 }
@@ -300,15 +300,15 @@ fn parse_json(
                 .and_then(|f| f.get("message"))
                 .and_then(Value::as_str)
                 .map(str::to_owned);
-            findings.push(Finding {
+            findings.push(Finding::deterministic(
                 kind,
-                severity: Severity::Error,
+                Severity::Error,
                 file_path,
-                line: row,
+                row,
                 column,
                 message,
                 suggestion,
-            });
+            ));
             continue;
         }
 
@@ -344,15 +344,15 @@ fn parse_json(
                 .and_then(Value::as_str)
                 .map(str::to_owned)
                 .unwrap_or_else(|| spec.name.to_owned());
-            findings.push(Finding {
+            findings.push(Finding::deterministic(
                 kind,
-                severity: Severity::Error,
-                file_path: file_path.clone(),
+                Severity::Error,
+                file_path.clone(),
                 line,
                 column,
-                message: message_text,
-                suggestion: None,
-            });
+                message_text,
+                None,
+            ));
         }
     }
     Ok(findings)

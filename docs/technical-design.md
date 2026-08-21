@@ -73,15 +73,21 @@ Three rules govern them:
 
 - Repository-local resolution before PATH, so a project is checked by the
   version its CI runs.
-- A tool runs only where the project configured it, decided by
-  `ToolSpec::config_files`.
+- Each file is assigned to its nearest configured ancestor, decided by
+  `ToolSpec::config_files`; batches are per tool and workspace. Local
+  executable resolution walks from that workspace to the repository root, so
+  hoisted dependencies remain available. Ordinary tool processes are capped
+  at four concurrent invocations; repository-wide clippy tasks are serialized
+  so workspace fan-out does not create build-lock contention itself.
 - `unavailable` is not a pass. `ToolSpec::diagnostics_stream` exists because
   `go vet` writes diagnostics to stderr, and reading stdout alone reported
   every Go file clean.
 
 A whole-project tool is invoked bare and its findings narrowed to the files
-being checked: `cargo clippy` takes no file arguments (`accepts_files = false`)
-and rejects a path outright.
+being checked: `cargo clippy` rejects path arguments, and passing paths to
+`tsc` makes it ignore `tsconfig.json`, so both use `accepts_files = false`.
+Clippy's process ceiling is 30 minutes because Cargo's build-lock wait happens
+inside that process; other tools retain the two-minute default.
 
 **Semantic** findings come from the model and inform unless `--fail-on` opts
 them into gating. The model parses nothing, which is why multi-language support
@@ -130,11 +136,12 @@ Two questions, deliberately answered by different predicates:
 - `should_failover` decides whether the chain advances. Status-less failures
   (timeout, refused connection, empty body) and 408/429/5xx advance. A 401/403
   stops it, because that is misconfiguration and falling back would mask it. A
-  non-empty unparseable body stops it, because it is deterministic.
+  non-empty unparseable body advances after three response attempts, because a
+  fallback can salvage model-side garbling.
 - `is_sticky` decides whether the failure is remembered for the run. It is
-  `should_failover(err) || is_auth_failure(err)`, never "every transport
-  failure": remembering a failure that does not fail over stops the chain for
-  every later file.
+  the endpoint-level subset of failover errors plus authentication/contract
+  failures. An unparseable answer advances for this file but is not sticky,
+  because another file from the same provider may parse normally.
 
 Backend failures carry a typed kind. Authentication and contract failures stop
 and are sticky; a request-shaped failure stops without poisoning later files;
@@ -152,6 +159,17 @@ A one-provider chain collapses to that provider's own `FailureReason`;
 `drep init` writes reports exactly what it did before failover existed.
 
 ### Responses
+
+The response schema includes `compile_failure`, an explicit statement that the
+finding claims the code cannot compile. Successful clippy, tsc, or go-vet
+outcomes are carried back to the orchestrator per file; only a matching LLM
+compile-failure claim is suppressed. Semantic findings are unchanged.
+
+Each accepted LLM finding is fingerprinted from its file, category and nearby
+source. `.drep/acknowledgements.toml` stores rejected fingerprints. Checks load
+the file read-only and filter matches; `drep acknowledge` is the only writer,
+publishing it atomically. Because line numbers are excluded from the hash, a
+pure line shift does not resurrect a finding, while a local source edit does.
 
 The HTTP backend uses `open-agent-sdk`. The subscription backend invokes
 `codex exec --json` with ChatGPT authentication forced. It runs in an empty

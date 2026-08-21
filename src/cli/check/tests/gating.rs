@@ -15,12 +15,13 @@
 //! unreachable endpoint must not print "No issues found."), so they
 //! spawn the drep binary as a subprocess to capture stdout.
 
-use std::path::Path;
+use std::collections::BTreeSet;
+use std::path::{Path, PathBuf};
 
 use wiremock::MockServer;
 
 use super::support::run_drep;
-use crate::analysis::findings::Severity;
+use crate::analysis::findings::{Finding, Severity};
 use crate::cli::OutputFormat;
 use crate::cli::check::{self, CheckArgs};
 use crate::llm::cache::Cache;
@@ -402,6 +403,41 @@ fn unreachable_endpoint_exits_2_and_does_not_print_clean() {
     assert!(
         !stdout.contains("No issues found."),
         "an unanalyzed run must not print 'No issues found.', got {stdout:?}"
+    );
+}
+
+#[test]
+fn successful_compilation_suppresses_only_explicit_compile_failure_claims() {
+    let finding = |path: &str, compile_failure: bool| Finding {
+        kind: "bug".to_owned(),
+        severity: Severity::Error,
+        file_path: path.to_owned(),
+        line: 1,
+        column: None,
+        message: "review".to_owned(),
+        suggestion: None,
+        asserts_compile_failure: compile_failure,
+        fingerprint: None,
+    };
+    let mut findings = vec![
+        finding("src/compiled.rs", true),
+        finding("src/compiled.rs", false),
+        finding("src/unchecked.rs", true),
+    ];
+    let compiled = BTreeSet::from([PathBuf::from("src/compiled.rs")]);
+
+    check::suppress_disproved_compile_claims(&mut findings, &compiled);
+
+    assert_eq!(findings.len(), 2);
+    assert!(
+        findings
+            .iter()
+            .any(|finding| !finding.asserts_compile_failure)
+    );
+    assert!(
+        findings
+            .iter()
+            .any(|finding| finding.file_path == "src/unchecked.rs")
     );
 }
 

@@ -262,9 +262,10 @@ Two things the SDK already gets right, so **do not reimplement them**:
 
 That leaves drep responsible for only the *other* half of the taxonomy: a
 truncated response is **not** an SDK error. The stream completes successfully and
-the damage surfaces as unparseable JSON in drep's own parsing. So transport
-retries belong to the SDK, and a parse failure must fail the file without a
-retry — which is exactly the split the Python conflated.
+the damage surfaces as unparseable JSON in drep's own parsing. Transport
+retries belong to the SDK; a finish reason proving truncation stops, while a
+body containing no parseable JSON gets its own bounded response retries and
+may reach a fallback — distinctions the Python conflated.
 
 **Retry policy must discriminate by failure class.** The Python has one
 `max_retries` governing every failure, which forces a bad trade and is why 7 of
@@ -272,7 +273,8 @@ retry — which is exactly the split the Python conflated.
 
 | Failure | Deterministic? | Retry? |
 |---|---|---|
-| Truncated at `max_tokens`; unparseable JSON | Yes; repeats identically | **No.** Re-burns a full model call |
+| Truncated at `max_tokens` | Yes; repeats identically | **No.** Re-burns a full model call |
+| Non-empty response with no parseable JSON | Sometimes model-side garbling | **Three attempts, then fallback.** Do not demote the provider |
 | 429, 5xx, reset, timeout | No; transient | **Yes.** No output tokens, so retry is nearly free |
 
 `config.yaml` sets `max_retries: 1` with the comment "a 'length' failure repeats
@@ -822,14 +824,16 @@ Each needs a test in the Rust suite.
   0, and a naive `0..max_retries` loop skips the request entirely and then
   reports a bogus "no exception captured".
 - **An empty response body is a transport failure and retries; a non-empty
-  unparseable one does not.** Both were one non-retrying `Ok(None)` until
+  unparseable one gets three response attempts and then fails over without
+  demoting the provider.** Both were one non-retrying `Ok(None)` until
   drep's own gated push failed 7 of 49 files and an immediate re-run of one
   succeeded — so "the model returned nothing" is provider flakiness, not a
   property of the prompt. Zero output tokens cost nothing to produce, so
-  retrying is nearly free; re-sending a prompt whose answer was prose buys the
-  same prose for a full reasoning call. Assert the **request count**, not just
-  the classification: labelling the empty body correctly while still refusing
-  to retry passes every other check.
+  retrying is nearly free. Later production evidence showed visibly garbled
+  non-empty output succeeding unchanged on a rerun, so that response is not
+  deterministic either; it may spend retries and a configured fallback for
+  the affected file, but must not poison later files. Assert the **request
+  count**, not just the classification.
 
 **Diff parsing and the LLM payload**
 - The file a hunk belongs to comes from the **`+++ b/<path>` line**, never from

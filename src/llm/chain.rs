@@ -14,15 +14,17 @@
 //!   (timeout, connection refused, an empty body). A backend may also report a
 //!   typed usage-limit failure. A 401/403 or backend authentication failure
 //!   must **not** advance: that is misconfiguration, and quietly asking a
-//!   second provider masks it. An unparseable non-empty response does not
-//!   advance either.
+//!   second provider masks it. An unparseable non-empty response advances only
+//!   after its own three response attempts.
 //! - [`is_sticky`] — is the failure remembered for the rest of the run? Every
-//!   failure that advances the chain, plus the two that are a property of the
+//!   endpoint-level failure that advances the chain, plus the two that are a property of the
 //!   connection rather than the request: a stale API key returns 401 for every
 //!   file, and re-handshaking forty-nine times to be told so again is pure
 //!   wall-clock on a commit gate that is going to exit 2 anyway. A *request*
 //!   -level 4xx is deliberately excluded - remembering one would let a single
 //!   oversized payload stop the chain for every later file.
+//!   Unparseable output is excluded for the same reason: it belongs to one
+//!   model response, even though a fallback may salvage that file.
 //!
 //! Conflating the two is what makes a chain either mask a bad key or re-ask a
 //! dead endpoint once per file. A remembered failure is then replayed through
@@ -474,9 +476,10 @@ fn should_failover(err: &LlmError) -> bool {
         LlmError::Transport {
             status: Some(code), ..
         } => is_retryable_status(*code),
-        // A non-empty body we could not parse is deterministic - a second
-        // provider is a second full-price call for the same outcome.
-        LlmError::Unparseable(_) => false,
+        // A non-empty body we could not parse already exhausted the primary's
+        // response retries. A fallback can salvage this file, but the failure
+        // remains payload/model-specific and must not demote the provider.
+        LlmError::Unparseable(_) => true,
         // A token cap or a content filter is a property of the request. A
         // second provider cannot make the file smaller, and asking one to is
         // the same category error as failing over on a 400. `is_sticky` is
@@ -511,7 +514,9 @@ fn is_sticky(err: &LlmError) -> bool {
     // protocol, never that one source payload was rejected. A request-level
     // HTTP 400 is not safe: one oversized payload once poisoned every later
     // file by demoting the provider for the whole run.
-    should_failover(err) || is_auth_failure(err) || is_sticky_backend_failure(err)
+    (should_failover(err) && !matches!(err, LlmError::Unparseable(_)))
+        || is_auth_failure(err)
+        || is_sticky_backend_failure(err)
 }
 
 fn is_sticky_backend_failure(err: &LlmError) -> bool {

@@ -114,7 +114,8 @@ fn private_files_replace_generic_instructions_and_pin_the_response_shape() {
             "category",
             "message",
             "suggestion",
-            "code_snippet"
+            "code_snippet",
+            "compile_failure"
         ])
     );
     assert_eq!(

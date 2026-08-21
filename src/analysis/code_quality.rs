@@ -37,7 +37,9 @@ use serde_json::Value;
 use crate::analysis::findings::{Finding, LlmSeverity};
 use crate::analysis::payload;
 use crate::analysis::prompt::build_analysis_prompt;
-use crate::analysis::response_contract::{CATEGORY, ISSUES, LINE, MESSAGE, SEVERITY, SUGGESTION};
+use crate::analysis::response_contract::{
+    CATEGORY, COMPILE_FAILURE, ISSUES, LINE, MESSAGE, SEVERITY, SUGGESTION,
+};
 use crate::analysis::result::{AnalysisResult, FailureReason, ProviderFailure};
 use crate::diff::hunks::Hunk;
 use crate::diff::hunks::group_by_file;
@@ -469,6 +471,11 @@ fn parse_issue(issue: &Value, payload: &payload::Payload, file_path: &str) -> Is
         Some(_) => return IssueOutcome::Malformed("non-string `category`".to_owned()),
     };
     let message = message.to_owned();
+    let asserts_compile_failure = match issue.get(COMPILE_FAILURE) {
+        None => false,
+        Some(Value::Bool(value)) => *value,
+        Some(_) => return IssueOutcome::Malformed("non-boolean `compile_failure`".to_owned()),
+    };
 
     // `suggestion` is optional on the same terms. Absent or empty → `None`, not
     // `Some("")`: an empty suggestion is not a suggestion. A present non-string
@@ -506,6 +513,8 @@ fn parse_issue(issue: &Value, payload: &payload::Payload, file_path: &str) -> Is
         column: None,
         message,
         suggestion,
+        asserts_compile_failure,
+        fingerprint: None,
     })
 }
 

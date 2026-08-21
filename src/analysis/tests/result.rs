@@ -55,6 +55,8 @@ fn merge_concatenates_findings_and_sums_dropped_out_of_range() {
         column: None,
         message: "m1".to_owned(),
         suggestion: None,
+        asserts_compile_failure: false,
+        fingerprint: None,
     });
     a.dropped_out_of_range = 2;
 
@@ -67,6 +69,8 @@ fn merge_concatenates_findings_and_sums_dropped_out_of_range() {
         column: None,
         message: "m2".to_owned(),
         suggestion: None,
+        asserts_compile_failure: false,
+        fingerprint: None,
     });
     b.dropped_out_of_range = 3;
 

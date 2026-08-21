@@ -12,6 +12,7 @@ pub(crate) const CATEGORY: &str = "category";
 pub(crate) const MESSAGE: &str = "message";
 pub(crate) const SUGGESTION: &str = "suggestion";
 pub(crate) const CODE_SNIPPET: &str = "code_snippet";
+pub(crate) const COMPILE_FAILURE: &str = "compile_failure";
 
 /// Strict schema for the response shape validated by the analyzer.
 pub(crate) fn output_schema() -> serde_json::Value {
@@ -25,7 +26,7 @@ pub(crate) fn output_schema() -> serde_json::Value {
                 "items": {
                     "type": "object",
                     "additionalProperties": false,
-                    "required": [LINE, SEVERITY, CATEGORY, MESSAGE, SUGGESTION, CODE_SNIPPET],
+                    "required": [LINE, SEVERITY, CATEGORY, MESSAGE, SUGGESTION, CODE_SNIPPET, COMPILE_FAILURE],
                     "properties": {
                         LINE: {"type": "integer", "minimum": 1, "maximum": u32::MAX},
                         SEVERITY: {
@@ -35,7 +36,8 @@ pub(crate) fn output_schema() -> serde_json::Value {
                         CATEGORY: {"type": "string"},
                         MESSAGE: {"type": "string"},
                         SUGGESTION: {"type": "string"},
-                        CODE_SNIPPET: {"type": "string"}
+                        CODE_SNIPPET: {"type": "string"},
+                        COMPILE_FAILURE: {"type": "boolean"}
                     }
                 }
             },

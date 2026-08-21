@@ -180,8 +180,7 @@ mod tests {
         assert_eq!(definitions::GO_VET.diagnostics_stream, "stderr");
     }
 
-    /// `cargo clippy` is the one registered tool that cannot take file
-    /// arguments, and every other one can.
+    /// Project compilers run from configuration and cannot take file args.
     ///
     /// Pinned explicitly because the failure is invisible in unit tests: with
     /// `accepts_files: true`, clippy is invoked as `cargo clippy ... a.rs` and
@@ -190,10 +189,34 @@ mod tests {
     /// noticed - it took running drep against its own source to find it, and a
     /// well-meant "why is this field false?" edit would put it straight back.
     #[test]
-    fn clippy_is_the_only_tool_that_cannot_take_file_arguments() {
+    fn project_compilers_do_not_take_file_arguments() {
         assert!(
             !definitions::CLIPPY.accepts_files,
             "cargo clippy checks a crate; a path argument is rejected outright"
+        );
+        assert!(
+            !definitions::TSC.accepts_files,
+            "passing paths makes tsc ignore tsconfig.json"
+        );
+        for spec in [
+            &definitions::RUFF,
+            &definitions::ESLINT,
+            &definitions::GOFMT,
+            &definitions::GO_VET,
+        ] {
+            assert!(
+                spec.accepts_files,
+                "{} is invoked with the files it should check",
+                spec.name
+            );
+        }
+    }
+
+    #[test]
+    fn only_clippy_is_serialized_within_a_repository() {
+        assert!(
+            definitions::CLIPPY.serial_in_repository,
+            "parallel cargo processes contend for the same build lock"
         );
         for spec in [
             &definitions::RUFF,
@@ -203,8 +226,8 @@ mod tests {
             &definitions::GO_VET,
         ] {
             assert!(
-                spec.accepts_files,
-                "{} is invoked with the files it should check",
+                !spec.serial_in_repository,
+                "{} should remain eligible for bounded parallel execution",
                 spec.name
             );
         }

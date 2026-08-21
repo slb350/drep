@@ -7,7 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.4.0] - 2026-08-21
+
+### Added
+
+- LLM findings now carry a source-sensitive fingerprint. `drep acknowledge
+  <fingerprint>` records a reviewed false positive in
+  `.drep/acknowledgements.toml`; the finding stays suppressed while its file,
+  category and surrounding source are unchanged, and expires automatically
+  when that code changes.
+
+### Changed
+
+- Deterministic tools are planned per nearest configured ancestor. Workspace
+  members can own their own `eslint.config.*`, `tsconfig.json`, `Cargo.toml`,
+  `pyproject.toml`, or other supported config while still resolving a
+  repository-hoisted executable. `tsc` now runs the configured project rather
+  than receiving file arguments that make it ignore `tsconfig.json`. Tool
+  fan-out is capped at four processes and repository clippy tasks are
+  serialized to avoid creating Cargo lock contention.
+- Clippy allows up to 30 minutes for Cargo's own build-directory lock and names
+  that lock wait if the extended ceiling is exhausted. Other deterministic
+  tools retain the two-minute ceiling.
+- A non-empty unparseable model response is attempted three times, then handed
+  to the next configured provider. This is per-file recovery: it does not
+  demote the provider for later files.
+
 ### Fixed
+
+- LLM responses explicitly identify findings that claim compilation failure.
+  When clippy, tsc, or go vet succeeds for that same file in the same check,
+  drep suppresses the disproved claim while retaining semantic findings.
 
 - Pre-push reviews no longer resume a remote connection that may have sat idle
   for the whole LLM run. The generated and published hooks use a cache-first
@@ -1245,7 +1275,8 @@ behavior changes.
 - Rate limiting considerations
 - Sanitized LLM prompts to prevent injection
 
-[Unreleased]: https://github.com/slb350/drep/compare/v2.3.0...HEAD
+[Unreleased]: https://github.com/slb350/drep/compare/v2.4.0...HEAD
+[2.4.0]: https://github.com/slb350/drep/compare/v2.3.0...v2.4.0
 [2.3.0]: https://github.com/slb350/drep/compare/v2.2.0...v2.3.0
 [2.2.0]: https://github.com/slb350/drep/compare/v2.1.0...v2.2.0
 [2.1.0]: https://github.com/slb350/drep/compare/v2.0.0...v2.1.0

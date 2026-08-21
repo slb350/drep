@@ -21,7 +21,7 @@ use std::time::Duration;
 use tokio::process::Command;
 
 use crate::analysis::findings::Finding;
-use crate::languages::spec::ToolSpec;
+use crate::languages::spec::{DEFAULT_TOOL_TIMEOUT_SECS, ToolSpec};
 
 pub mod parsers;
 
@@ -30,12 +30,10 @@ pub use parsers::parse_output;
 #[cfg(test)]
 mod tests;
 
-/// A tool that has not produced output by now is hung, not slow.
-///
-/// Deterministic checkers are fast; this is not the LLM path. The Python
-/// reference uses 120s; matching it keeps the two implementations comparable
-/// in bug reports.
-pub const TOOL_TIMEOUT: Duration = Duration::from_secs(120);
+/// Default ceiling for deterministic tools. Individual tools can extend it
+/// when their own execution model includes a legitimate wait, such as Cargo's
+/// build-directory lock.
+pub const TOOL_TIMEOUT: Duration = Duration::from_secs(DEFAULT_TOOL_TIMEOUT_SECS);
 
 /// Whether a tool ran, declined to run, or failed to.
 ///
@@ -59,6 +57,36 @@ pub struct ToolOutcome {
     pub status: ToolStatus,
     pub findings: Vec<Finding>,
     pub detail: String,
+    pub compilation_succeeded: bool,
+}
+
+impl ToolOutcome {
+    fn skipped(spec: &ToolSpec) -> Self {
+        let listed = spec.config_files[..spec.config_files.len().min(3)].join(", ");
+        Self::empty(
+            spec,
+            ToolStatus::Skipped,
+            format!("not configured (add one of: {listed})"),
+        )
+    }
+
+    fn unavailable(spec: &ToolSpec, detail: String) -> Self {
+        Self::empty(spec, ToolStatus::Unavailable, detail)
+    }
+
+    fn ready(spec: &ToolSpec) -> Self {
+        Self::empty(spec, ToolStatus::Ok, "ready".to_owned())
+    }
+
+    fn empty(spec: &ToolSpec, status: ToolStatus, detail: String) -> Self {
+        Self {
+            tool: spec.name,
+            status,
+            findings: Vec::new(),
+            detail,
+            compilation_succeeded: false,
+        }
+    }
 }
 
 /// The tool produced output we could not parse.
@@ -125,10 +153,23 @@ pub(crate) fn resolve_tool_in(
     root: &Path,
     path: Option<&std::ffi::OsStr>,
 ) -> Option<PathBuf> {
-    for relative in spec.local_paths {
-        let candidate = root.join(relative);
-        if is_executable(&candidate) {
-            return Some(candidate);
+    resolve_tool_at(spec, root, root, path)
+}
+
+/// Resolve a tool for a configured workspace, allowing dependencies hoisted
+/// to any ancestor up to the repository root.
+fn resolve_tool_at(
+    spec: &ToolSpec,
+    repository_root: &Path,
+    workspace_root: &Path,
+    path: Option<&std::ffi::OsStr>,
+) -> Option<PathBuf> {
+    for directory in ancestors_within(workspace_root, repository_root) {
+        for relative in spec.local_paths {
+            let candidate = directory.join(relative);
+            if is_executable(&candidate) {
+                return Some(candidate);
+            }
         }
     }
 
@@ -138,6 +179,29 @@ pub(crate) fn resolve_tool_in(
     // tool unavailable.
     let name = spec.command.first()?;
     which_first_in(name, path?).map(PathBuf::from)
+}
+
+pub(crate) fn absolute(path: &Path) -> PathBuf {
+    if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .map(|cwd| cwd.join(path))
+            .unwrap_or_else(|_| path.to_path_buf())
+    }
+}
+
+fn ancestors_within(start: &Path, root: &Path) -> Vec<PathBuf> {
+    let root = absolute(root);
+    let start = absolute(start);
+    if !start.starts_with(&root) {
+        return Vec::new();
+    }
+    start
+        .ancestors()
+        .take_while(|ancestor| ancestor.starts_with(&root))
+        .map(Path::to_path_buf)
+        .collect()
 }
 
 /// Look up `command` on PATH, mirroring `shutil.which` from the Python
@@ -179,6 +243,26 @@ pub fn is_configured(spec: &ToolSpec, root: &Path) -> bool {
         .any(|name| root.join(name).exists())
 }
 
+/// The nearest configured ancestor for `file`, bounded by `repository_root`.
+///
+/// Looking along the file's ancestor chain avoids both monorepo blind spots
+/// and accidental discovery in unrelated dependency/build directories.
+pub(crate) fn configuration_root(
+    spec: &ToolSpec,
+    repository_root: &Path,
+    file: &Path,
+) -> Option<PathBuf> {
+    let repository_root = absolute(repository_root);
+    let file = if file.is_absolute() {
+        file.to_path_buf()
+    } else {
+        repository_root.join(file)
+    };
+    ancestors_within(file.parent()?, &repository_root)
+        .into_iter()
+        .find(|directory| is_configured(spec, directory))
+}
+
 /// Whether this tool will run here, without running it.
 ///
 /// The single derivation of eligibility, so `drep doctor` reports exactly
@@ -186,36 +270,7 @@ pub fn is_configured(spec: &ToolSpec, root: &Path) -> bool {
 /// says "ready" for a tool check then skips - the failure doctor exists
 /// to prevent.
 pub fn tool_status(spec: &ToolSpec, root: &Path) -> ToolOutcome {
-    if !is_configured(spec, root) {
-        let listed = spec.config_files[..spec.config_files.len().min(3)].join(", ");
-        return ToolOutcome {
-            tool: spec.name,
-            status: ToolStatus::Skipped,
-            findings: Vec::new(),
-            detail: format!("not configured (add one of: {listed})"),
-        };
-    }
-
-    if resolve_tool(spec, root).is_none() {
-        let looked = if spec.local_paths.is_empty() {
-            "PATH".to_owned()
-        } else {
-            format!("{}, then PATH", spec.local_paths.join(", "))
-        };
-        return ToolOutcome {
-            tool: spec.name,
-            status: ToolStatus::Unavailable,
-            findings: Vec::new(),
-            detail: format!("configured but not found (looked in {looked})"),
-        };
-    }
-
-    ToolOutcome {
-        tool: spec.name,
-        status: ToolStatus::Ok,
-        findings: Vec::new(),
-        detail: "ready".to_owned(),
-    }
+    tool_status_at(spec, root, root)
 }
 
 /// Run one deterministic tool over some files.
@@ -224,20 +279,20 @@ pub fn tool_status(spec: &ToolSpec, root: &Path) -> ToolOutcome {
 /// that is reported as [`ToolStatus::Unavailable`] so the caller can surface
 /// it rather than mistake it for a clean result.
 pub async fn run_tool(spec: &ToolSpec, root: &Path, files: &[String]) -> ToolOutcome {
-    let eligibility = tool_status(spec, root);
-    if eligibility.status != ToolStatus::Ok {
-        return eligibility;
-    }
+    run_tool_at(spec, root, root, files).await
+}
 
-    // `tool_status` just confirmed the resolution succeeded, but the type
-    // system needs the unwrap; the `if` above is the real check.
-    let Some(executable) = resolve_tool(spec, root) else {
-        return ToolOutcome {
-            tool: spec.name,
-            status: ToolStatus::Unavailable,
-            findings: Vec::new(),
-            detail: "configured but not found".to_owned(),
-        };
+/// Run a tool from one configured workspace, resolving hoisted executables
+/// through the repository root.
+pub(crate) async fn run_tool_at(
+    spec: &ToolSpec,
+    repository_root: &Path,
+    workspace_root: &Path,
+    files: &[String],
+) -> ToolOutcome {
+    let executable = match eligible_executable(spec, repository_root, workspace_root) {
+        Ok(executable) => executable,
+        Err(outcome) => return outcome,
     };
 
     // Absolutised before spawning. `resolve_tool` returns `root.join(relative)`
@@ -283,7 +338,7 @@ pub async fn run_tool(spec: &ToolSpec, root: &Path, files: &[String]) -> ToolOut
 
     let mut command = Command::new(&argv[0]);
     command.args(&argv[1..]);
-    command.current_dir(root);
+    command.current_dir(workspace_root);
     command.stdin(Stdio::null());
     command.stdout(Stdio::piped());
     command.stderr(Stdio::piped());
@@ -292,34 +347,33 @@ pub async fn run_tool(spec: &ToolSpec, root: &Path, files: &[String]) -> ToolOut
     let child = match command.spawn() {
         Ok(child) => child,
         Err(err) => {
-            return ToolOutcome {
-                tool: spec.name,
-                status: ToolStatus::Unavailable,
-                findings: Vec::new(),
-                detail: format!("{} could not be executed: {err}", spec.name),
-            };
+            return ToolOutcome::unavailable(
+                spec,
+                format!("{} could not be executed: {err}", spec.name),
+            );
         }
     };
 
     // `wait_with_output` drains both pipes into buffers before returning,
     // and rejects on any IO error from the spawn or the read.
-    let output = match tokio::time::timeout(TOOL_TIMEOUT, child.wait_with_output()).await {
+    let timeout = Duration::from_secs(spec.timeout_secs);
+    let output = match tokio::time::timeout(timeout, child.wait_with_output()).await {
         Ok(Ok(output)) => output,
         Ok(Err(err)) => {
-            return ToolOutcome {
-                tool: spec.name,
-                status: ToolStatus::Unavailable,
-                findings: Vec::new(),
-                detail: format!("{} could not be executed: {err}", spec.name),
-            };
+            return ToolOutcome::unavailable(
+                spec,
+                format!("{} could not be executed: {err}", spec.name),
+            );
         }
         Err(_) => {
-            return ToolOutcome {
-                tool: spec.name,
-                status: ToolStatus::Unavailable,
-                findings: Vec::new(),
-                detail: format!("{} timed out after {}s", spec.name, TOOL_TIMEOUT.as_secs()),
-            };
+            let context = spec.timeout_context.unwrap_or_default();
+            return ToolOutcome::unavailable(
+                spec,
+                format!(
+                    "{} timed out after {}s{context}",
+                    spec.name, spec.timeout_secs
+                ),
+            );
         }
     };
 
@@ -344,6 +398,7 @@ pub async fn run_tool(spec: &ToolSpec, root: &Path, files: &[String]) -> ToolOut
         diagnostics,
         files.first().map(String::as_str).unwrap_or(""),
     );
+    let compilation_succeeded = spec.establishes_compilation && output.status.success();
     match parse_result {
         Ok(findings)
             if findings.is_empty() && !output.status.success() && diagnostics.trim().is_empty() =>
@@ -352,11 +407,9 @@ pub async fn run_tool(spec: &ToolSpec, root: &Path, files: &[String]) -> ToolOut
             // diagnostics, and produced no findings. Whatever it did, it did
             // not check the files. The other stream usually carries the real
             // error, so it becomes the detail.
-            ToolOutcome {
-                tool: spec.name,
-                status: ToolStatus::Unavailable,
-                findings: Vec::new(),
-                detail: format!(
+            ToolOutcome::unavailable(
+                spec,
+                format!(
                     "{} exited {} without producing diagnostics: {}",
                     spec.name,
                     output
@@ -365,21 +418,65 @@ pub async fn run_tool(spec: &ToolSpec, root: &Path, files: &[String]) -> ToolOut
                         .map_or("by signal".to_owned(), |c| c.to_string()),
                     truncate(other.trim(), 200)
                 ),
-            }
+            )
         }
         Ok(findings) => ToolOutcome {
             tool: spec.name,
             status: ToolStatus::Ok,
             findings: retain_requested(spec, findings, files),
             detail: truncate(other.trim(), 200),
+            compilation_succeeded,
         },
-        Err(err) => ToolOutcome {
-            tool: spec.name,
-            status: ToolStatus::Unavailable,
-            findings: Vec::new(),
-            detail: format!("{err}. other stream: {}", truncate(other.trim(), 200)),
-        },
+        Err(err) => ToolOutcome::unavailable(
+            spec,
+            format!("{err}. other stream: {}", truncate(other.trim(), 200)),
+        ),
     }
+}
+
+pub(crate) fn tool_status_at(
+    spec: &ToolSpec,
+    repository_root: &Path,
+    workspace_root: &Path,
+) -> ToolOutcome {
+    match eligible_executable(spec, repository_root, workspace_root) {
+        Ok(_) => ToolOutcome::ready(spec),
+        Err(outcome) => outcome,
+    }
+}
+
+fn eligible_executable(
+    spec: &ToolSpec,
+    repository_root: &Path,
+    workspace_root: &Path,
+) -> Result<PathBuf, ToolOutcome> {
+    if !is_configured(spec, workspace_root) {
+        return Err(ToolOutcome::skipped(spec));
+    }
+    if let Some(executable) = resolve_tool_at(
+        spec,
+        repository_root,
+        workspace_root,
+        std::env::var_os("PATH").as_deref(),
+    ) {
+        return Ok(executable);
+    }
+    let looked = if spec.local_paths.is_empty() {
+        "PATH".to_owned()
+    } else if absolute(repository_root) == absolute(workspace_root) {
+        format!("{}, then PATH", spec.local_paths.join(", "))
+    } else {
+        format!(
+            "{} from {} through {}, then PATH",
+            spec.local_paths.join(", "),
+            workspace_root.display(),
+            repository_root.display()
+        )
+    };
+    Err(ToolOutcome::unavailable(
+        spec,
+        format!("configured but not found (looked in {looked})"),
+    ))
 }
 
 /// Narrow a whole-project tool's findings to the files actually being checked.

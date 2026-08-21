@@ -46,6 +46,33 @@ async fn run_tool_returns_unavailable_when_binary_cannot_be_found() {
 }
 
 #[tokio::test]
+async fn compilation_ground_truth_requires_a_successful_compiler() {
+    for (establishes_compilation, expected) in [(true, true), (false, false)] {
+        let dir = TempDir::new().unwrap();
+        let bin = dir.path().join("checker");
+        write_executable(&bin, "#!/bin/sh\nexit 0\n");
+        std::fs::write(dir.path().join("project.config"), "").unwrap();
+        let spec = ToolSpec {
+            name: "checker",
+            command: &["checker"],
+            local_paths: &["checker"],
+            config_files: &["project.config"],
+            output_format: "lines",
+            establishes_compilation,
+            ..ToolSpec::default()
+        };
+
+        let outcome = run_tool(&spec, dir.path(), &["src/lib.rs".to_owned()]).await;
+
+        assert_eq!(outcome.status, ToolStatus::Ok);
+        assert_eq!(
+            outcome.compilation_succeeded, expected,
+            "a successful linter cannot disprove an LLM compile-error claim"
+        );
+    }
+}
+
+#[tokio::test]
 async fn run_tool_reads_stderr_when_diagnostics_stream_is_stderr() {
     // Build a tiny shell script in a temp dir; it writes parseable JSON
     // to stderr and nothing to stdout. With `diagnostics_stream = "stderr"`
@@ -326,5 +353,50 @@ async fn a_file_taking_tools_findings_are_not_filtered() {
         outcome.findings.len(),
         1,
         "a per-file tool only reports on what it was given, so nothing is dropped"
+    );
+}
+
+/// A file whose name begins with `-` is passed as a path, not an option.
+///
+/// A repository can legitimately contain `--fix`, and every checker drep runs
+/// would read that as a flag. The guard is a `./` prefix rather than a `--`
+/// separator, because `--` is not universally accepted across
+/// ruff/eslint/tsc/gofmt/go vet/clippy while `./` is unambiguous to any
+/// argument parser.
+#[tokio::test]
+async fn a_filename_that_looks_like_a_flag_is_passed_as_a_path() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let bin = dir.path().join("bin");
+    std::fs::create_dir_all(&bin).expect("mkdir bin");
+    let tool = bin.join("argvdump");
+    write_executable(
+        &tool,
+        format!(
+            "#!/bin/sh\nfor a in \"$@\"; do echo \"$a\"; done > {}/argv.txt\nexit 0\n",
+            dir.path().display()
+        ),
+    );
+    std::fs::write(dir.path().join("pyproject.toml"), "").expect("config");
+
+    let spec = ToolSpec {
+        name: "argvdump",
+        command: &["argvdump"],
+        local_paths: &["bin/argvdump"],
+        config_files: &["pyproject.toml"],
+        output_format: "lines",
+        diagnostics_stream: "stdout",
+        ..ToolSpec::default()
+    };
+
+    let _ = run_tool(&spec, dir.path(), &["--fix".to_owned()]).await;
+
+    let argv = std::fs::read_to_string(dir.path().join("argv.txt")).unwrap_or_default();
+    assert!(
+        argv.lines().any(|a| a == "./--fix"),
+        "a dash-leading filename must reach the tool as `./--fix`, got: {argv:?}"
+    );
+    assert!(
+        !argv.lines().any(|a| a == "--fix"),
+        "it must not reach the tool as a bare option: {argv:?}"
     );
 }

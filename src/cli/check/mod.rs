@@ -24,12 +24,13 @@ mod deterministic;
 pub(crate) mod input;
 mod render;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, anyhow};
 use clap::{ArgGroup, Args};
 
+use crate::analysis::acknowledgements;
 use crate::analysis::findings::{self, Finding, Severity};
 use crate::analysis::result::{FailureReason, union_failures};
 use crate::auth;
@@ -244,6 +245,7 @@ pub(crate) async fn run_against(
     let work = input::resolve(args, root)
         .await
         .with_context(|| format!("could not resolve input under {}", root.display()))?;
+    let acknowledgements = acknowledgements::Store::load(root)?;
 
     let chain =
         ProviderChain::new(&providers).map_err(|e| anyhow!("could not build LLM analyzer: {e}"))?;
@@ -258,7 +260,7 @@ pub(crate) async fn run_against(
         deterministic::run(&work, root),
         analyzer.analyze_files(&work.by_file),
     );
-    let (tool_findings, tool_failures) = deterministic_result;
+    let (tool_findings, tool_failures, compiled_files) = deterministic_result;
     let mut llm_result = llm_result;
 
     let cache_misses_only = !llm_result.failed_files.is_empty()
@@ -307,6 +309,9 @@ pub(crate) async fn run_against(
     union_failures(&mut failures, tool_failures);
     union_failures(&mut failures, llm_result.failed_files);
 
+    suppress_disproved_compile_claims(&mut llm_result.findings, &compiled_files);
+    acknowledgements::apply(&mut llm_result.findings, &work.by_file, &acknowledgements);
+
     let mut outcome = CheckOutcome {
         tool_findings,
         llm_findings: llm_result.findings,
@@ -323,6 +328,14 @@ pub(crate) async fn run_against(
 
     render::render(&outcome, args.format)?;
     Ok(outcome.exit)
+}
+
+/// Drop only findings that explicitly claim compilation failure after a
+/// configured compiler has successfully checked the same file.
+fn suppress_disproved_compile_claims(findings: &mut Vec<Finding>, compiled: &BTreeSet<PathBuf>) {
+    findings.retain(|finding| {
+        !(finding.asserts_compile_failure && compiled.contains(Path::new(&finding.file_path)))
+    });
 }
 
 /// What the process should exit with.

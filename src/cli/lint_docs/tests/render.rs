@@ -21,6 +21,8 @@ fn finding(kind: &str, line: u32, column: Option<u32>) -> Finding {
         column,
         message: "something".to_owned(),
         suggestion: Some("do the other thing".to_owned()),
+        asserts_compile_failure: false,
+        fingerprint: None,
     }
 }
 

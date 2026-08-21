@@ -125,6 +125,38 @@ pub struct Finding {
     /// Optional one-line suggested fix from the tool. None when the tool
     /// does not emit one (e.g. eslint messages carry only a rule id).
     pub suggestion: Option<String>,
+    /// Whether the LLM explicitly claims the code cannot compile. Tool
+    /// findings and older cached responses leave this false.
+    pub asserts_compile_failure: bool,
+    /// Stable acknowledgement key for an LLM finding, when source context was
+    /// available. Deterministic findings do not use acknowledgements.
+    pub fingerprint: Option<String>,
+}
+
+impl Finding {
+    /// Construct a rule-based finding, centralizing metadata that belongs only
+    /// to semantic review.
+    pub fn deterministic(
+        kind: String,
+        severity: Severity,
+        file_path: String,
+        line: u32,
+        column: Option<u32>,
+        message: String,
+        suggestion: Option<String>,
+    ) -> Self {
+        Self {
+            kind,
+            severity,
+            file_path,
+            line,
+            column,
+            message,
+            suggestion,
+            asserts_compile_failure: false,
+            fingerprint: None,
+        }
+    }
 }
 
 /// The five-level scale the LLM is asked to use, and its mapping onto

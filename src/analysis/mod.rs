@@ -4,6 +4,7 @@
 //! cannot pick arbitrarily between `analysis::Severity` and
 //! `analysis::findings::Severity` and drift apart.
 
+pub mod acknowledgements;
 pub mod code_quality;
 pub mod findings;
 pub mod payload;

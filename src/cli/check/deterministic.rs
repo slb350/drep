@@ -17,10 +17,10 @@
 //! files would otherwise pay twenty `ruff` process starts. The batch lives
 //! in `run_tool`; this module just decides which files to pass.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
-use futures::future::join_all;
+use futures::stream::{self, StreamExt};
 
 use crate::analysis::findings::Finding;
 use crate::analysis::result::{FailureReason, union_failures};
@@ -29,6 +29,8 @@ use crate::languages;
 use crate::languages::runner::{self};
 use crate::languages::spec::ToolSpec;
 
+const TOOL_PROCESS_CONCURRENCY: usize = 4;
+
 /// Run every configured deterministic tool against the work set and return
 /// its findings.
 ///
@@ -36,18 +38,38 @@ use crate::languages::spec::ToolSpec;
 /// `ToolStatus::Unavailable` lands there with a `FailureReason::ToolUnavailable`.
 /// The orchestrator unions this with the LLM layer's failures; the first
 /// reason wins on a key collision, matching `AnalysisResult::merge`.
-pub async fn run(work: &Work, root: &Path) -> (Vec<Finding>, BTreeMap<PathBuf, FailureReason>) {
+pub async fn run(
+    work: &Work,
+    root: &Path,
+) -> (
+    Vec<Finding>,
+    BTreeMap<PathBuf, FailureReason>,
+    BTreeSet<PathBuf>,
+) {
     let mut failures: BTreeMap<PathBuf, FailureReason> = BTreeMap::new();
-    let tasks = plan_tasks(work);
-    let futures = tasks
+    let tasks = plan_tasks(work, root);
+    let (serial, parallel): (Vec<_>, Vec<_>) = tasks
         .into_iter()
-        .map(|task| async move { run_one(task, root).await });
-    let outcomes = join_all(futures).await;
+        .partition(|task| task.spec.serial_in_repository);
+    let parallel = stream::iter(parallel)
+        .map(|task| run_one(task, root))
+        .buffer_unordered(TOOL_PROCESS_CONCURRENCY)
+        .collect::<Vec<_>>();
+    let serial = async {
+        let mut outcomes = Vec::with_capacity(serial.len());
+        for task in serial {
+            outcomes.push(run_one(task, root).await);
+        }
+        outcomes
+    };
+    let (mut outcomes, serial_outcomes) = tokio::join!(parallel, serial);
+    outcomes.extend(serial_outcomes);
     let mut findings = Vec::new();
+    let mut compiled = BTreeSet::new();
     for (outcome, files) in outcomes {
-        merge_outcome(outcome, files, &mut failures, &mut findings);
+        merge_outcome(outcome, files, &mut failures, &mut findings, &mut compiled);
     }
-    (findings, failures)
+    (findings, failures, compiled)
 }
 
 /// One deterministic-tool invocation: the spec and the files it should be
@@ -55,15 +77,48 @@ pub async fn run(work: &Work, root: &Path) -> (Vec<Finding>, BTreeMap<PathBuf, F
 /// here.
 struct PlannedTask {
     spec: &'static ToolSpec,
-    files: Vec<String>,
+    workspace_root: PathBuf,
+    files: Vec<PlannedFile>,
+}
+
+struct PlannedFile {
+    original: PathBuf,
+    absolute: PathBuf,
+    argument: String,
 }
 
 /// Run one planned task and return its outcome alongside the files it was
 /// given. The files list is moved back out so the caller can map the
 /// outcome back to per-file failures without re-borrowing.
-async fn run_one(task: PlannedTask, root: &Path) -> (runner::ToolOutcome, Vec<String>) {
-    let outcome = runner::run_tool(task.spec, root, &task.files).await;
-    (outcome, task.files)
+async fn run_one(task: PlannedTask, root: &Path) -> (runner::ToolOutcome, Vec<PathBuf>) {
+    let PlannedTask {
+        spec,
+        workspace_root,
+        files,
+    } = task;
+    let mut arguments = Vec::with_capacity(files.len());
+    let mut originals = Vec::with_capacity(files.len());
+    let mut original_by_absolute = BTreeMap::new();
+    for file in files {
+        arguments.push(file.argument);
+        originals.push(file.original.clone());
+        original_by_absolute.insert(file.absolute, file.original);
+    }
+    let mut outcome = runner::run_tool_at(spec, root, &workspace_root, &arguments).await;
+    for finding in &mut outcome.findings {
+        let reported = Path::new(&finding.file_path)
+            .strip_prefix(".")
+            .unwrap_or_else(|_| Path::new(&finding.file_path));
+        let absolute = if reported.is_absolute() {
+            reported.to_path_buf()
+        } else {
+            workspace_root.join(reported)
+        };
+        if let Some(original) = original_by_absolute.get(&absolute) {
+            finding.file_path = original.to_string_lossy().into_owned();
+        }
+    }
+    (outcome, originals)
 }
 
 /// Plan the per-language, per-tool batches.
@@ -72,7 +127,7 @@ async fn run_one(task: PlannedTask, root: &Path) -> (runner::ToolOutcome, Vec<St
 /// languages, and the spec list lives on the language, not globally. A
 /// tool that appears in two languages' specs is run twice, once per
 /// language, so the bins are disjoint.
-fn plan_tasks(work: &Work) -> Vec<PlannedTask> {
+fn plan_tasks(work: &Work, root: &Path) -> Vec<PlannedTask> {
     // The bucketing itself is `languages::group_by_language`, so `doctor` and
     // `check` cannot disagree about which languages a repository contains -
     // doctor's whole job is to predict what check will do. What stays here is
@@ -90,16 +145,46 @@ fn plan_tasks(work: &Work) -> Vec<PlannedTask> {
         .chain(work.lint_only.iter().map(PathBuf::as_path))
         .collect();
 
+    let repository_root = runner::absolute(root);
     languages::group_by_language(&paths)
         .into_iter()
         .flat_map(|(language, files)| {
-            let files: Vec<String> = files
-                .into_iter()
-                .map(|p| p.to_string_lossy().into_owned())
-                .collect();
-            language.tools.iter().map(move |spec| PlannedTask {
-                spec,
-                files: files.clone(),
+            language.tools.iter().flat_map({
+                let repository_root = repository_root.clone();
+                move |spec| {
+                    let mut workspaces: BTreeMap<PathBuf, Vec<PlannedFile>> = BTreeMap::new();
+                    for file in &files {
+                        let Some(workspace_root) =
+                            runner::configuration_root(spec, &repository_root, file)
+                        else {
+                            continue;
+                        };
+                        let absolute = if file.is_absolute() {
+                            (*file).to_path_buf()
+                        } else {
+                            repository_root.join(file)
+                        };
+                        let Ok(relative) = absolute.strip_prefix(&workspace_root) else {
+                            continue;
+                        };
+                        let argument = relative.to_string_lossy().into_owned();
+                        workspaces
+                            .entry(workspace_root)
+                            .or_default()
+                            .push(PlannedFile {
+                                original: (*file).to_path_buf(),
+                                absolute,
+                                argument,
+                            });
+                    }
+                    workspaces
+                        .into_iter()
+                        .map(move |(workspace_root, files)| PlannedTask {
+                            spec,
+                            workspace_root,
+                            files,
+                        })
+                }
             })
         })
         .collect()
@@ -109,10 +194,14 @@ fn plan_tasks(work: &Work) -> Vec<PlannedTask> {
 /// record the per-file failure the orchestrator's exit-2 contract rests on.
 fn merge_outcome(
     outcome: runner::ToolOutcome,
-    files: Vec<String>,
+    files: Vec<PathBuf>,
     failures: &mut BTreeMap<PathBuf, FailureReason>,
     findings: &mut Vec<Finding>,
+    compiled: &mut BTreeSet<PathBuf>,
 ) {
+    if outcome.compilation_succeeded {
+        compiled.extend(files.iter().cloned());
+    }
     match outcome.status {
         runner::ToolStatus::Ok => {
             findings.extend(outcome.findings);
@@ -127,7 +216,7 @@ fn merge_outcome(
             };
             let batch: BTreeMap<PathBuf, FailureReason> = files
                 .into_iter()
-                .map(|file| (PathBuf::from(file), reason.clone()))
+                .map(|file| (file, reason.clone()))
                 .collect();
             union_failures(failures, batch);
         }

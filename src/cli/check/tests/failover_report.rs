@@ -285,6 +285,8 @@ fn the_failure_block_is_preceded_by_a_blank_line_when_findings_were_printed() {
         column: None,
         message: "m".to_owned(),
         suggestion: None,
+        asserts_compile_failure: false,
+        fingerprint: None,
     }];
 
     let text = rendered(&outcome, OutputFormat::Text);
