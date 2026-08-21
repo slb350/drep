@@ -89,6 +89,7 @@ pub async fn run(cli: Cli) -> Result<Exit> {
 mod tests {
     use super::*;
     use crate::analysis::findings::Severity;
+    use crate::config;
     use clap::CommandFactory;
 
     /// Parse a `check` invocation and hand back its arguments.
@@ -184,6 +185,11 @@ mod tests {
         assert!(check_args(["drep", "check", "--cache-only"]).cache_only);
         assert!(check_args(["drep", "check", "--push-gate"]).push_gate);
         assert!(Cli::try_parse_from(["drep", "check", "--cache-only", "--push-gate"]).is_err());
+    }
+
+    #[test]
+    fn default_repository_config_path_is_relative_to_the_requested_root() {
+        assert!(config::default_config_path().is_relative());
     }
 
     #[test]

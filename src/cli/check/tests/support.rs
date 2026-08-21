@@ -8,13 +8,35 @@
 //! looks unrelated.
 
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::time::Duration;
+
+use assert_cmd::Command;
 
 use crate::Exit;
 use crate::analysis::findings::Finding;
 use crate::analysis::result::FailureReason;
 use crate::cli::OutputFormat;
 use crate::cli::check::{CheckOutcome, ProviderUse, render};
+
+/// Run the drep test binary with an isolated cache and bounded network access.
+pub(super) fn run_drep(dir: &Path, args: &[&str]) -> std::process::Output {
+    let bin = assert_cmd::cargo::cargo_bin("drep");
+    let mut command = Command::new(bin);
+    command
+        .args(args)
+        .current_dir(dir)
+        .env("HOME", dir)
+        .env("XDG_CACHE_HOME", dir)
+        .env_remove("HTTP_PROXY")
+        .env_remove("HTTPS_PROXY")
+        .env_remove("ALL_PROXY")
+        .env_remove("http_proxy")
+        .env_remove("https_proxy")
+        .env_remove("all_proxy")
+        .timeout(Duration::from_secs(15));
+    command.output().expect("drep spawns and finishes")
+}
 
 /// A `CheckOutcome` with everything empty and the gate clean.
 ///

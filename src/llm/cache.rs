@@ -29,9 +29,9 @@
 //! big-endian length. Length prefixing rules out the
 //! `key("ab", "c", ...)` vs `key("a", "bc", ...)` collision that a separator
 //! byte cannot guarantee once `content` or `system_prompt` is allowed to
-//! contain that byte. `temperature` is formatted with a fixed number of
-//! decimals so `0.2` and `0.20` hash to the same key (they are the same
-//! value).
+//! contain that byte. `temperature` uses Rust's shortest round-tripping
+//! representation, so equal values hash alike without collapsing neighboring
+//! `f32` values.
 //!
 //! **The backend identity is part of the key, not just the model.** A model name is
 //! not a globally unique identity: the canonical failover pair is one open
@@ -47,6 +47,7 @@
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
+use std::{fs, io::Write};
 
 use serde_json::Value;
 use thiserror::Error;
@@ -89,9 +90,6 @@ pub enum CacheError {
     /// Reading the cache directory during eviction failed.
     #[error("could not read cache directory: {0}")]
     Walk(std::io::Error),
-    /// Stat-ing an entry during eviction failed.
-    #[error("could not stat cache entry {0}: {1}")]
-    Stat(PathBuf, std::io::Error),
     /// Removing an entry during eviction failed.
     #[error("could not remove cache entry {0}: {1}")]
     Remove(PathBuf, std::io::Error),
@@ -161,10 +159,10 @@ impl Cache {
         write_field(&mut hasher, backend.as_bytes());
         write_field(&mut hasher, model.as_bytes());
         write_field(&mut hasher, request_shape.as_bytes());
-        // `{:?}` on an `f32` is the *shortest string that round-trips*, so two
-        // distinct `f32`s always render differently and `0.2` and `0.20` - the
-        // same value - render the same. That is exactly the property a key
-        // needs.
+        // `{:?}` on an ordinary finite `f32` is the shortest string that
+        // round-trips, so values such as `0.2` and `0.20` share a key while
+        // neighboring finite values do not. Config validation excludes NaN;
+        // signed zero is harmlessly allowed to retain its distinct spelling.
         //
         // This replaced `{:.6}`, whose comment claimed six decimal places were
         // finer than `f32`'s resolution. They are not: `f32` has ~7 significant
@@ -219,13 +217,26 @@ impl Cache {
     /// fresh cache does not need a separate bootstrap step.
     pub fn put(&self, key: &CacheKey, value: &Value) -> Result<(), CacheError> {
         let path = self.entry_path(key);
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)
-                .map_err(|e| CacheError::CreateShard(parent.to_path_buf(), e))?;
-        }
+        let parent = path.parent().ok_or_else(|| {
+            CacheError::Write(
+                path.clone(),
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "cache entry path has no shard directory",
+                ),
+            )
+        })?;
+        fs::create_dir_all(parent).map_err(|e| CacheError::CreateShard(parent.to_path_buf(), e))?;
         let bytes = serde_json::to_vec(value)
             .map_err(|e| CacheError::Serialize(key.as_hex().to_owned(), e))?;
-        std::fs::write(&path, &bytes).map_err(|e| CacheError::Write(path.clone(), e))?;
+        let mut temporary = tempfile::NamedTempFile::new_in(parent)
+            .map_err(|e| CacheError::Write(path.clone(), e))?;
+        temporary
+            .write_all(&bytes)
+            .map_err(|e| CacheError::Write(path.clone(), e))?;
+        temporary
+            .persist(&path)
+            .map_err(|e| CacheError::Write(path.clone(), e.error))?;
         Ok(())
     }
 
@@ -276,7 +287,7 @@ impl Cache {
         let mut out = Vec::new();
         let shards = std::fs::read_dir(&self.root).map_err(CacheError::Walk)?;
         for shard in shards {
-            let shard = shard.map_err(CacheError::Walk)?;
+            let Ok(shard) = shard else { continue };
             // Only descend into the two-hex-char directories. Anything else -
             // a stray file the user dropped in the cache root, or a directory
             // that is not one of ours - is ignored, so nothing outside the

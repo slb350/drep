@@ -144,3 +144,11 @@ fn a_typed_backend_failure_is_not_misreported_as_transport() {
     ));
     assert!(!reason.one_line().contains("transport"));
 }
+
+#[test]
+fn an_empty_chain_failure_has_a_complete_fallback_message() {
+    assert_eq!(
+        FailureReason::ChainFailed(Vec::new()).one_line(),
+        "no LLM provider analyzed this file"
+    );
+}

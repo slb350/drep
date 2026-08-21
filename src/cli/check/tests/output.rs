@@ -15,37 +15,13 @@
 //! - 22: JSON `findings[].source` distinguishes tool from llm.
 //! - 23: JSON `exit` matches the `Exit`'s code on a run with failures.
 
-use std::path::Path;
-use std::process::Command;
-
 use serde_json::Value;
 use wiremock::MockServer;
 
+use super::support::run_drep;
 use crate::test_support::mount_sse;
 use crate::test_support::sse;
 use crate::test_support::write_executable;
-
-// ---------- scaffolding ----------
-
-/// Spawn the drep binary with `cwd = dir` and `args`, returning the
-/// captured `Output` so callers can inspect stdout/stderr/status.
-///
-/// `HOME` is pointed at `dir` so the LLM cache lives under the test's
-/// `TempDir` rather than the real `~/Library/Caches`. Without this,
-/// `check::run`'s use of `Cache::default_root()` would carry cached
-/// responses across tests - which means test 14's "something smells"
-/// response leaks into test 19, which expects a different finding for
-/// the same payload (same file content, same model, same temperature).
-fn run_drep(dir: &Path, args: &[&str]) -> std::process::Output {
-    let bin = assert_cmd::cargo::cargo_bin("drep");
-    Command::new(bin)
-        .args(args)
-        .current_dir(dir)
-        .env("HOME", dir)
-        .env("XDG_CACHE_HOME", dir)
-        .output()
-        .expect("drep spawns")
-}
 
 /// Mount one SSE response on `server` with `body` as the JSON payload.
 async fn mount_llm(server: &MockServer, body: &str) {

@@ -121,14 +121,12 @@ async fn a_fully_demoted_chain_reports_every_provider_without_contacting_any() {
 
 /// A demoted head does not block a cache hit for itself.
 ///
-/// The cache lookup is inside the loop, after the down check - so a demoted
-/// provider is skipped even when it has a cached answer. That is the correct
-/// order: the demotion says "do not spend a request here", and a cache hit
-/// spends none. This pins the behaviour deliberately rather than by accident,
-/// because reversing the two lines is a one-character change with no other
-/// visible effect.
+/// Demotion says not to spend another request on the provider. A cache hit
+/// spends no request and is still the preferred provider's content-specific
+/// verdict, so it remains usable. Checking demotion first needlessly routes
+/// around an answer that the same provider already produced.
 #[tokio::test]
-async fn a_demoted_provider_is_skipped_even_when_it_has_a_cached_answer() {
+async fn a_demoted_provider_can_serve_its_cached_answer() {
     let dead = server_failing_with(500).await;
     let healthy = server_returning_json().await;
     let (cache, _dir) = temp_cache();
@@ -156,8 +154,14 @@ async fn a_demoted_provider_is_skipped_even_when_it_has_a_cached_answer() {
         .await
         .expect("the fallback answers again");
     assert_eq!(
-        served.provider, 1,
-        "a demoted provider is skipped before its cache is consulted"
+        served.provider, 0,
+        "a cache hit must be served before the provider's demotion is replayed"
+    );
+    assert!(served.from_cache);
+    assert_eq!(
+        request_count(&healthy).await,
+        1,
+        "the fallback is not contacted when the preferred provider has a cache hit"
     );
 }
 

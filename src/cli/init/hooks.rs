@@ -227,7 +227,12 @@ pub fn resolve_hooks_dir(root: &Path, value: &str) -> PathBuf {
 
 /// True when `body` is a hook drep wrote and may therefore rewrite.
 pub fn is_drep_managed(body: &str) -> bool {
-    body.contains(MANAGED_MARKER)
+    let mut lines = body.lines();
+    match lines.next() {
+        Some(first) if first == MANAGED_MARKER => true,
+        Some(first) if first.starts_with("#!") => lines.next() == Some(MANAGED_MARKER),
+        _ => false,
+    }
 }
 
 /// Install the hooks. Writes to `out`; never panics.
@@ -245,6 +250,12 @@ pub async fn install<W: Write>(
         return Ok(());
     }
     let hooks_dir = locate_hooks_dir(root).await?;
+
+    // Resolve every git-owned destination before writing anything. If git
+    // cannot expand core.hooksPath, returning an error after installing the
+    // repo-local hooks would leave a partial installation that still never
+    // runs while claiming the operation failed.
+    let configured = run_git_config_path(root).await?;
     std::fs::create_dir_all(&hooks_dir)
         .with_context(|| format!("could not create {}", hooks_dir.display()))?;
 
@@ -256,43 +267,44 @@ pub async fn install<W: Write>(
         let body =
             hook_body(name).ok_or_else(|| anyhow!("no hook body is defined for `{name}`"))?;
         let path = hooks_dir.join(name);
-        if path.exists() {
-            let existing = std::fs::read_to_string(&path)
-                .with_context(|| format!("could not read existing hook {}", path.display()))?;
-            if is_drep_managed(&existing) {
-                write_executable(&path, body)?;
-                writeln!(out, "  Wrote {}", path.display())?;
-            } else if force {
-                // `--force` is one flag serving two destinations, and
-                // `config_file::write` is what tells the user to reach for it
-                // ("Re-run with --force to replace it") - so someone with an
-                // existing drep.toml AND a hand-written hook is steered
-                // straight into destroying the hook. Keeping a copy makes that
-                // recoverable instead of silent data loss.
-                let backup = path.with_extension("drep-backup");
-                std::fs::write(&backup, &existing)
-                    .with_context(|| format!("could not back up to {}", backup.display()))?;
-                write_executable(&path, body)?;
-                writeln!(out, "  Wrote {}", path.display())?;
-                writeln!(out, "  Your previous hook is saved at {}", backup.display())?;
-            } else {
-                writeln!(
-                    out,
-                    "  {} already exists and was not written by drep; leaving it alone.",
-                    path.display()
-                )?;
-                writeln!(out, "  Re-run with --force to replace it.")?;
+        match std::fs::read_to_string(&path) {
+            Ok(existing) => {
+                if is_drep_managed(&existing) {
+                    write_executable(&path, body)?;
+                    writeln!(out, "  Wrote {}", path.display())?;
+                } else if force {
+                    // `--force` is one flag serving two destinations, and
+                    // `config_file::write` is what tells the user to reach for
+                    // it. Keeping a copy makes replacement recoverable.
+                    let backup = path.with_extension("drep-backup");
+                    std::fs::write(&backup, &existing)
+                        .with_context(|| format!("could not back up to {}", backup.display()))?;
+                    write_executable(&path, body)?;
+                    writeln!(out, "  Wrote {}", path.display())?;
+                    writeln!(out, "  Your previous hook is saved at {}", backup.display())?;
+                } else {
+                    writeln!(
+                        out,
+                        "  {} already exists and was not written by drep; leaving it alone.",
+                        path.display()
+                    )?;
+                    writeln!(out, "  Re-run with --force to replace it.")?;
+                }
             }
-            continue;
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                write_executable(&path, body)?;
+                writeln!(out, "  Wrote {}", path.display())?;
+            }
+            Err(err) => {
+                return Err(anyhow::Error::new(err)
+                    .context(format!("could not read existing hook {}", path.display())));
+            }
         }
-        write_executable(&path, body)?;
-        writeln!(out, "  Wrote {}", path.display())?;
     }
 
     // core.hooksPath chainer: query with --type=path so git expands ~ and
     // ~user itself; hand-rolled expansion mangled `~alice/hooks`, and $HOME
     // is unset in some environments.
-    let configured = run_git_config_path(root).await?;
     if let Some(value) = configured {
         writeln!(out, "  core.hooksPath is set to {value}")?;
         writeln!(
@@ -302,7 +314,7 @@ pub async fn install<W: Write>(
 
         let chainer_dir = resolve_hooks_dir(root, &value);
         for name in names {
-            ensure_chainer(out, &chainer_dir, name).await?;
+            ensure_chainer(out, &chainer_dir, name)?;
         }
     }
 
@@ -327,7 +339,6 @@ async fn locate_hooks_dir(root: &Path) -> Result<PathBuf> {
     Ok(hooks_dir.join("hooks"))
 }
 
-/// Query `core.hooksPath`. `None` when unset.
 /// Query `core.hooksPath`. `Ok(None)` when genuinely unset.
 ///
 /// `git config --get` exits **1** for "not found" and >=2 for a real error, so
@@ -357,13 +368,29 @@ async fn run_git_config_path(root: &Path) -> Result<Option<String>> {
 /// Leaves a foreign chainer alone, reports the situation. `git` ignores a
 /// non-executable hook silently, which is the entire reason this branch
 /// exists.
-async fn ensure_chainer<W: Write>(out: &mut W, dir: &Path, name: &str) -> Result<()> {
+fn ensure_chainer<W: Write>(out: &mut W, dir: &Path, name: &str) -> Result<()> {
     let chainer = dir.join(name);
-    if chainer.exists() {
-        let body = std::fs::read_to_string(&chainer)
-            .with_context(|| format!("could not read existing chainer {}", chainer.display()))?;
-        let marker = format!("hooks/{name}");
-        if !body.contains(&marker) {
+    match std::fs::read_to_string(&chainer) {
+        Ok(body) if is_drep_managed(&body) => {
+            let current = chainer_body(name);
+            if body != current {
+                write_executable(&chainer, &current)?;
+                writeln!(out, "  Wrote {}", chainer.display())?;
+                return Ok(());
+            }
+            ensure_executable(out, &chainer)?;
+            return Ok(());
+        }
+        Ok(body) => {
+            let marker = format!("hooks/{name}");
+            let mentions_hook_in_command = body.lines().any(|line| {
+                let line = line.trim_start();
+                !line.starts_with('#') && line.contains(&marker)
+            });
+            if mentions_hook_in_command {
+                ensure_executable(out, &chainer)?;
+                return Ok(());
+            }
             writeln!(
                 out,
                 "  {} exists but does not appear to chain to the repo-local hook.",
@@ -372,22 +399,13 @@ async fn ensure_chainer<W: Write>(out: &mut W, dir: &Path, name: &str) -> Result
             writeln!(out, "  drep will not run until it does.")?;
             return Ok(());
         }
-        // Ensure the bit unconditionally, and report only when it was
-        // actually missing. Guarding the *chmod* on the check instead meant
-        // `set_executable` was only ever handed a non-executable file, which
-        // makes OR and XOR indistinguishable there - the operator's
-        // correctness was unobservable, and an operator nothing can observe is
-        // one nothing protects.
-        let was_executable = crate::languages::runner::is_executable(&chainer);
-        set_executable(&chainer)?;
-        if !was_executable {
-            writeln!(
-                out,
-                "  {} is not executable; making it so.",
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+        Err(err) => {
+            return Err(anyhow::Error::new(err).context(format!(
+                "could not read existing chainer {}",
                 chainer.display()
-            )?;
+            )));
         }
-        return Ok(());
     }
 
     std::fs::create_dir_all(dir)
@@ -404,6 +422,16 @@ async fn ensure_chainer<W: Write>(out: &mut W, dir: &Path, name: &str) -> Result
     Ok(())
 }
 
+/// Make an existing forwarding hook executable, reporting only a repair.
+fn ensure_executable<W: Write>(out: &mut W, path: &Path) -> Result<()> {
+    let was_executable = crate::languages::runner::is_executable(path);
+    set_executable(path)?;
+    if !was_executable {
+        writeln!(out, "  {} is not executable; making it so.", path.display())?;
+    }
+    Ok(())
+}
+
 /// Write `body` to `path` and make it executable, atomically.
 ///
 /// Via a sibling temp file and a rename, because `fs::write` truncates in
@@ -412,17 +440,21 @@ async fn ensure_chainer<W: Write>(out: &mut W, dir: &Path, name: &str) -> Result
 /// exits 0 and waves every push through. A rename is atomic on the same
 /// filesystem, so a hook is either the old one or the new one.
 fn write_executable(path: &Path, body: &str) -> Result<()> {
-    let temp = path.with_extension("drep-tmp");
-    std::fs::write(&temp, body)
-        .with_context(|| format!("could not write hook {}", temp.display()))?;
-    set_executable(&temp)?;
-    std::fs::rename(&temp, path).map_err(|err| {
-        // A failed rename leaves the temporary behind, and `drep init` is a
-        // command people re-run - so without this a repeatedly-failing install
-        // litters `.git/hooks` with one file per attempt. The quirks cache's
-        // write does the same thing for the same reason.
-        let _ = std::fs::remove_file(&temp);
-        anyhow::Error::new(err).context(format!("could not install hook {}", path.display()))
+    let parent = path
+        .parent()
+        .ok_or_else(|| anyhow!("hook path {} has no parent", path.display()))?;
+    let mut temporary = tempfile::NamedTempFile::new_in(parent)
+        .with_context(|| format!("could not write hook {}", path.display()))?;
+    temporary
+        .write_all(body.as_bytes())
+        .with_context(|| format!("could not write hook {}", path.display()))?;
+    set_executable(temporary.path())?;
+    temporary
+        .as_file()
+        .sync_all()
+        .with_context(|| format!("could not write hook {}", path.display()))?;
+    temporary.persist(path).map_err(|err| {
+        anyhow::Error::new(err.error).context(format!("could not install hook {}", path.display()))
     })?;
     Ok(())
 }

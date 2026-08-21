@@ -217,7 +217,11 @@ impl FailureReason {
                 // failed" is wrong for the case that matters most - a chain
                 // stopped at the head by a 401 has one entry and more
                 // providers behind it that were deliberately not asked.
-                format!("no LLM provider analyzed this file: {}", each.join("; "))
+                if each.is_empty() {
+                    "no LLM provider analyzed this file".to_owned()
+                } else {
+                    format!("no LLM provider analyzed this file: {}", each.join("; "))
+                }
             }
         }
     }

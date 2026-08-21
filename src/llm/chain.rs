@@ -343,7 +343,7 @@ impl ProviderChain {
     ) -> Option<Served> {
         for (index, provider) in self.providers.iter().enumerate() {
             let key = provider.cache_key(cache, system_prompt, user_content);
-            if let Some(served) = cached_for(index, provider, key, cache) {
+            if let Some(served) = cached_for(index, provider, &key, cache) {
                 return Some(served);
             }
         }
@@ -379,7 +379,7 @@ impl ProviderOutcome {
     }
 }
 
-/// Try one provider: demotion check, cache, limiter, request.
+/// Try one provider: cache, demotion check, limiter, request.
 ///
 /// A free function rather than a method because it reads no chain state — all
 /// of it now lives on the `Provider` it is handed.
@@ -390,18 +390,19 @@ async fn try_provider(
     user_content: &str,
     cache: &Cache,
 ) -> ProviderOutcome {
+    // The key is computed here, from *this* provider's model, and the `Served`
+    // carries it back so the caller cannot file the answer under a different
+    // provider's key. A cache hit precedes demotion because it spends no
+    // backend request and remains the preferred provider's own verdict.
+    let key = provider.cache_key(cache, system_prompt, user_content);
+    if let Some(served) = cached_for(index, provider, &key, cache) {
+        return ProviderOutcome::Served(served);
+    }
+
     // Already down: report what it said the first time rather than paying the
     // SDK's backoff schedule to be told again.
     if let Some(err) = provider.down_reason() {
         return ProviderOutcome::demoted(index, provider, err);
-    }
-
-    // The key is computed here, from *this* provider's model, and the `Served`
-    // carries it back so the caller cannot file the answer under a different
-    // provider's key.
-    let key = provider.cache_key(cache, system_prompt, user_content);
-    if let Some(served) = cached_for(index, provider, key.clone(), cache) {
-        return ProviderOutcome::Served(served);
     }
 
     // The slot is held for the request and released on every exit path,
@@ -450,12 +451,12 @@ async fn try_provider(
 }
 
 /// Build the one canonical cache-hit result, including served accounting.
-fn cached_for(index: usize, provider: &Provider, key: CacheKey, cache: &Cache) -> Option<Served> {
-    let value = cache.get(&key)?;
+fn cached_for(index: usize, provider: &Provider, key: &CacheKey, cache: &Cache) -> Option<Served> {
+    let value = cache.get(key)?;
     provider.record_served();
     Some(Served {
         provider: index,
-        key,
+        key: key.clone(),
         extracted: Extracted::Complete(value),
         from_cache: true,
     })
@@ -503,12 +504,13 @@ fn is_sticky(err: &LlmError) -> bool {
     // - It is a credential the endpoint rejects, which it will reject for every
     //   request regardless of payload.
     //
-    // The combination to avoid is "remembered" *and* "does not fail over": a
-    // later file skips the provider, replays the stored reason, and stops the
-    // chain without contacting anyone. `Transport { .. } => true` had exactly
-    // that shape for a request-level 4xx - one oversized payload drawing a 400
-    // demoted the provider, and every file after it stopped there without ever
-    // reaching the configured fallback. One bad file poisoned the run.
+    // The combination to avoid is a request-dependent failure that is both
+    // remembered and non-failing-over: a later file would replay it and stop
+    // without contacting anyone. `Contract` is safe despite that shape because
+    // it means the process backend violated drep's fixed isolation/event
+    // protocol, never that one source payload was rejected. A request-level
+    // HTTP 400 is not safe: one oversized payload once poisoned every later
+    // file by demoting the provider for the whole run.
     should_failover(err) || is_auth_failure(err) || is_sticky_backend_failure(err)
 }
 

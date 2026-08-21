@@ -24,10 +24,26 @@ fn is_drep_managed_recognises_own_bodies_only() {
     assert!(is_drep_managed(hook_body("pre-push").unwrap()));
     assert!(is_drep_managed(&chainer_body("pre-push")));
     assert!(!is_drep_managed("#!/bin/sh\necho hi\n"));
+    assert!(!is_drep_managed(
+        "#!/bin/sh\n# This foreign hook mentions # Managed by `drep init`. in documentation.\n"
+    ));
 }
 
 fn hooks_dir(root: &Path) -> std::path::PathBuf {
     root.join(".git/hooks")
+}
+
+/// Configure the shared-hooks fixture and return its resolved directory.
+fn configured_chainer_dir(root: &Path) -> std::path::PathBuf {
+    let relative = "shared/hooks";
+    let status = crate::test_support::git(root)
+        .args(["config", "--local", "core.hooksPath", relative])
+        .status()
+        .expect("set core.hooksPath");
+    assert!(status.success());
+    let chainer_dir = root.join(relative);
+    std::fs::create_dir_all(&chainer_dir).expect("chainer dir");
+    chainer_dir
 }
 
 #[tokio::test]
@@ -123,12 +139,7 @@ fn resolve_hooks_dir_handles_relative_and_absolute() {
 async fn install_writes_chainer_when_core_hooks_path_is_set() {
     let dir = tempfile::tempdir().expect("tempdir");
     crate::test_support::git_init(dir.path());
-    let rel = "shared/hooks";
-    let status = crate::test_support::git(dir.path())
-        .args(["config", "--local", "core.hooksPath", rel])
-        .status()
-        .expect("set core.hooksPath");
-    assert!(status.success());
+    let chainer_dir = configured_chainer_dir(dir.path());
 
     let mut out = Vec::new();
     install(&mut out, dir.path(), HookKind::PrePush, false)
@@ -150,7 +161,7 @@ async fn install_writes_chainer_when_core_hooks_path_is_set() {
     );
 
     // Chainer was written in the resolved hooks dir.
-    let chainer = dir.path().join(rel).join("pre-push");
+    let chainer = chainer_dir.join("pre-push");
     assert!(chainer.exists(), "chainer must exist at {chainer:?}");
     let body = std::fs::read_to_string(&chainer).expect("read chainer");
     assert!(
@@ -164,11 +175,7 @@ async fn install_writes_chainer_when_core_hooks_path_is_set() {
 async fn install_leaves_a_foreign_chainer_alone() {
     let dir = tempfile::tempdir().expect("tempdir");
     crate::test_support::git_init(dir.path());
-    let rel = "shared/hooks";
-    crate::test_support::git(dir.path())
-        .args(["config", "--local", "core.hooksPath", rel])
-        .status()
-        .expect("set core.hooksPath");
+    let chainer_dir = configured_chainer_dir(dir.path());
 
     // Write the repo-local hook so the foreign chainer doesn't get rewritten.
     std::fs::create_dir_all(hooks_dir(dir.path())).expect("hooks dir");
@@ -179,8 +186,6 @@ async fn install_leaves_a_foreign_chainer_alone() {
     .expect("write local");
 
     // Foreign chainer.
-    let chainer_dir = dir.path().join(rel);
-    std::fs::create_dir_all(&chainer_dir).expect("chainer dir");
     let foreign = "#!/bin/sh\necho other\n";
     crate::test_support::write_executable(&chainer_dir.join("pre-push"), foreign);
 
@@ -195,6 +200,76 @@ async fn install_leaves_a_foreign_chainer_alone() {
     );
     let after = std::fs::read_to_string(chainer_dir.join("pre-push")).expect("read");
     assert_eq!(after, foreign, "foreign chainer is untouched");
+}
+
+#[tokio::test]
+async fn a_foreign_chainer_comment_does_not_count_as_forwarding() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    crate::test_support::git_init(dir.path());
+    let chainer_dir = configured_chainer_dir(dir.path());
+    let foreign = "#!/bin/sh\n# docs mention hooks/pre-push but this never executes it\nexit 0\n";
+    crate::test_support::write_executable(&chainer_dir.join("pre-push"), foreign);
+
+    let mut out = Vec::new();
+    install(&mut out, dir.path(), HookKind::PrePush, false)
+        .await
+        .expect("install");
+
+    assert!(
+        String::from_utf8(out)
+            .expect("utf8")
+            .contains("does not appear to chain")
+    );
+    assert_eq!(
+        std::fs::read_to_string(chainer_dir.join("pre-push")).expect("read"),
+        foreign
+    );
+}
+
+#[tokio::test]
+async fn install_refreshes_an_outdated_managed_chainer() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    crate::test_support::git_init(dir.path());
+    let chainer_dir = configured_chainer_dir(dir.path());
+    std::fs::write(
+        chainer_dir.join("pre-push"),
+        "#!/bin/sh\n# Managed by `drep init`.\n# obsolete forwarding logic\nexit 0\n",
+    )
+    .expect("old chainer");
+
+    let mut out = Vec::new();
+    install(&mut out, dir.path(), HookKind::PrePush, false)
+        .await
+        .expect("install");
+
+    assert_eq!(
+        std::fs::read_to_string(chainer_dir.join("pre-push")).expect("read"),
+        chainer_body("pre-push")
+    );
+}
+
+#[tokio::test]
+async fn an_unresolvable_hooks_path_leaves_repository_hooks_untouched() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    crate::test_support::git_init(dir.path());
+    crate::test_support::git(dir.path())
+        .args([
+            "config",
+            "--local",
+            "core.hooksPath",
+            "~drep-user-that-does-not-exist/hooks",
+        ])
+        .status()
+        .expect("set core.hooksPath");
+
+    let mut out = Vec::new();
+    let result = install(&mut out, dir.path(), HookKind::PrePush, false).await;
+
+    assert!(result.is_err(), "the invalid path must be reported");
+    assert!(
+        !hooks_dir(dir.path()).join("pre-push").exists(),
+        "validation must finish before any hook is installed"
+    );
 }
 
 /// In a **linked worktree**, the hook must land in the main repository's

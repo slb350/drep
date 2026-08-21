@@ -110,6 +110,10 @@ impl CodeQualityAnalyzer {
         let Some(first) = hunks.first() else {
             return AnalysisResult::default();
         };
+        debug_assert!(
+            hunks.iter().all(|hunk| hunk.file_path == first.file_path),
+            "one analyzer call must contain hunks from one file"
+        );
         let Some(language) = languages::detect(&first.file_path) else {
             return AnalysisResult::default();
         };
@@ -280,11 +284,11 @@ pub(crate) fn into_failure_reason(err: LlmError) -> FailureReason {
 /// "I configured a fallback - why didn't it run?".
 fn chain_failure_reason(err: ChainError) -> FailureReason {
     let mut attempts = err.attempts;
-    if err.chain_len == 1 {
-        // `pop` rather than indexing: it moves the attempt out, so the error
-        // string is not cloned on the overwhelmingly common path. The chain
-        // guarantees at least one attempt.
-        let only = attempts.pop().expect("a chain always reports one attempt");
+    if err.chain_len == 1
+        && let Some(only) = attempts.pop()
+    {
+        // Move the attempt out so the error string is not cloned on the
+        // overwhelmingly common one-provider path.
         return into_failure_reason(only.error);
     }
     FailureReason::ChainFailed(

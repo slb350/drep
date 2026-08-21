@@ -198,6 +198,11 @@ protocol. Codex identity includes ChatGPT auth mode, CLI version and reasoning
 effort. One model served by the OpenAI API and by a ChatGPT subscription must
 never share an entry. Defaults: 30-day TTL, 256 MiB.
 
+Writes go through a uniquely named temporary file in the destination shard and
+atomically replace the canonical entry. A concurrent reader therefore sees the
+old complete JSON or the new complete JSON, never an in-progress write, and a
+destination symlink is replaced rather than followed.
+
 `--cache-only` walks the provider chain's cache identities without contacting
 a backend. A miss is distinct from failed analysis and exits 3. `--push-gate`
 uses that mode first: a warm diff passes immediately; a cold diff is reviewed

@@ -14,6 +14,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   push gate: a cold review completes and caches, exits 3 with an explicit
   `git push` retry instruction, and the immediate retry reconnects and uses the
   cached verdict. `drep check --cache-only` exposes the no-network lookup.
+- Hook installation now distinguishes drep-managed scripts by a header marker,
+  resolves the active hooks directory before writing anything, refreshes stale
+  managed chainers, and never treats a comment mentioning a hook path as an
+  active chainer. Cache entries are published through a unique sibling file and
+  atomically replace the destination, so concurrent writers cannot expose
+  partial JSON or follow a planted destination symlink.
+- Push-gate retries preserve cache misses for files outside the retried diff,
+  multi-ref hooks retain the semantic status order `2 > 1 > 3 > 0`, and empty
+  provider-chain failures render a stable diagnostic instead of assuming an
+  attempt exists.
 
 ## [2.3.0] - 2026-08-20
 

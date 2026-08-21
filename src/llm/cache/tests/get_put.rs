@@ -229,3 +229,33 @@ fn put_over_existing_key_replaces_value() {
         "put must overwrite, not append"
     );
 }
+
+/// Publishing replaces the cache directory entry itself. Opening the final
+/// path directly would follow a symlink and overwrite a file the cache does
+/// not own, in addition to exposing partial JSON to concurrent readers.
+#[cfg(unix)]
+#[test]
+fn put_replaces_a_symlink_without_writing_through_it() {
+    use std::os::unix::fs::symlink;
+
+    let temp = tempfile::tempdir().expect("tempdir");
+    let cache = Cache::new(temp.path().join("cache"), 30, 1024 * 1024);
+    let key = cache.key("sys", "content", "http://e/v1", "m", "openai", None);
+    let path = cache.entry_path(&key);
+    std::fs::create_dir_all(path.parent().expect("shard")).expect("create shard");
+    let outside = temp.path().join("outside.json");
+    std::fs::write(&outside, b"do not replace me").expect("outside");
+    symlink(&outside, &path).expect("cache symlink");
+
+    cache.put(&key, &json!({"safe": true})).expect("put");
+
+    assert_eq!(
+        std::fs::read(&outside).expect("outside remains"),
+        b"do not replace me"
+    );
+    assert_eq!(cache.get(&key), Some(json!({"safe": true})));
+    assert!(
+        !path.is_symlink(),
+        "the cache entry must replace the symlink"
+    );
+}

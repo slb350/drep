@@ -80,6 +80,27 @@ async fn empty_hunks_return_empty_and_make_no_request() {
     );
 }
 
+/// The analyzer attributes one result to the first hunk's path, so its input
+/// grouping invariant must fail loudly during development rather than silently
+/// merging two files under one name.
+#[tokio::test]
+#[should_panic(expected = "one file")]
+async fn mixed_file_hunks_violate_the_analyzer_contract() {
+    let server = MockServer::start().await;
+    let (analyzer, _dir) = analyzer_for(&server);
+    let mut hunks = hunks_for_python_at(1);
+    hunks.push(Hunk {
+        file_path: PathBuf::from("other.py"),
+        old_start: 1,
+        old_count: 0,
+        new_start: 1,
+        new_count: 1,
+        lines: vec![HunkLine::Added("different = True".to_owned())],
+    });
+
+    let _ = analyzer.analyze_file(&hunks).await;
+}
+
 /// Criterion 10: a clean response yields no findings and no failures.
 /// "Clean" is a legitimate outcome, not a failure.
 #[tokio::test]

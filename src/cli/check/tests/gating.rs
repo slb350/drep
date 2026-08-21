@@ -1,6 +1,7 @@
 //! Gating and exit codes: criteria 12-18.
 //!
-//! Seven tests, one precedence table:
+//! Criteria 12-18 plus cache-limit and push-handshake regressions share one
+//! precedence table:
 //!
 //! - Exit 0 (`Clean`): no failures, no blocking findings.
 //! - Exit 1 (`FoundIssues`): tool findings always block; LLM findings block
@@ -15,10 +16,10 @@
 //! spawn the drep binary as a subprocess to capture stdout.
 
 use std::path::Path;
-use std::process::Command;
 
 use wiremock::MockServer;
 
+use super::support::run_drep;
 use crate::analysis::findings::Severity;
 use crate::cli::OutputFormat;
 use crate::cli::check::{self, CheckArgs};
@@ -75,25 +76,17 @@ async fn run_paths(path: std::path::PathBuf, dir: &Path) -> check::Exit {
     run_paths_with(&args(vec![path], None), dir).await
 }
 
-// ---------- subprocess scaffolding ----------
-
-/// Spawn the drep binary with `cwd = dir`, capture stdout/stderr/exit.
-///
-/// `HOME` is pointed at `dir` so the LLM cache lives under this test's
-/// `TempDir` rather than the real `~/Library/Caches`. Without this, an
-/// earlier in-process test (which uses `Cache::default_root()`) would
-/// have cached a clean response for the same payload, and this test
-/// would see that hit instead of the unreachable-endpoint error it is
-/// trying to pin.
-fn run_drep(dir: &Path, args: &[&str]) -> std::process::Output {
-    let bin = assert_cmd::cargo::cargo_bin("drep");
-    Command::new(bin)
-        .args(args)
-        .current_dir(dir)
-        .env("HOME", dir)
-        .env("XDG_CACHE_HOME", dir)
-        .output()
-        .expect("drep spawns")
+/// Configure ruff and install a local stub that emits one F401 finding.
+fn install_fake_ruff(dir: &Path) {
+    let bin = dir.join("venv/bin/ruff");
+    std::fs::create_dir_all(bin.parent().expect("ruff parent")).expect("bin dir");
+    write_executable(
+        &bin,
+        "#!/bin/sh\nprintf '%s' '[{\"code\":\"F401\",\"filename\":\"src/lib.py\",\"location\":{\"row\":1,\"column\":1},\"message\":\"unused import\"}]'\n",
+    );
+    std::fs::write(dir.join("pyproject.toml"), "").expect("pyproject");
+    std::fs::create_dir_all(dir.join("src")).expect("src dir");
+    std::fs::write(dir.join("src/lib.py"), "import os\n").expect("lib.py");
 }
 
 // ---------- 12 ----------
@@ -210,17 +203,7 @@ async fn tool_finding_blocks_with_no_fail_on() {
     let (dir, server) = setup_mock(r#"{"issues": []}"#).await;
     crate::test_support::write_drep_toml(dir.path(), &format!("{}/v1", server.uri()));
 
-    // Fake `ruff` that emits one finding. We use `printf '%s'` (no trailing
-    // newline) so the JSON parser sees exactly one element.
-    let bin = dir.path().join("venv/bin/ruff");
-    std::fs::create_dir_all(bin.parent().unwrap()).expect("bin dir");
-    write_executable(
-        &bin,
-        "#!/bin/sh\nprintf '%s' '[{\"code\":\"F401\",\"filename\":\"src/lib.py\",\"location\":{\"row\":1,\"column\":1},\"message\":\"unused import\"}]'\n",
-    );
-    std::fs::write(dir.path().join("pyproject.toml"), "").expect("pyproject");
-    std::fs::create_dir_all(dir.path().join("src")).expect("src dir");
-    std::fs::write(dir.path().join("src/lib.py"), "import os\n").expect("lib.py");
+    install_fake_ruff(dir.path());
 
     let exit = run_paths(dir.path().join("src/lib.py"), dir.path()).await;
     assert_eq!(
@@ -229,6 +212,22 @@ async fn tool_finding_blocks_with_no_fail_on() {
         "a tool finding with no --fail-on must return FoundIssues"
     );
     assert_eq!(exit.code(), 1, "FoundIssues must map to exit 1");
+}
+
+/// A cache-only miss is operationally softer than a deterministic finding:
+/// retrying cannot make the project's own tool finding disappear.
+#[tokio::test]
+async fn tool_findings_outrank_cache_only_misses() {
+    let (dir, server) = setup_mock(r#"{"issues": []}"#).await;
+    crate::test_support::write_drep_toml(dir.path(), &format!("{}/v1", server.uri()));
+    install_fake_ruff(dir.path());
+    let mut check_args = args(vec![dir.path().join("src/lib.py")], None);
+    check_args.cache_only = true;
+
+    let exit = run_paths_with(&check_args, dir.path()).await;
+
+    assert_eq!(exit, check::Exit::FoundIssues);
+    assert_eq!(crate::test_support::request_count(&server).await, 0);
 }
 
 // ---------- 14 (subprocess) ----------
@@ -298,16 +297,7 @@ async fn llm_finding_at_error_blocks_under_fail_on_error() {
     crate::test_support::write_drep_toml(dir.path(), &format!("{}/v1", server.uri()));
     std::fs::write(dir.path().join("lib.py"), "x = 1\n").expect("lib.py");
 
-    let args = CheckArgs {
-        paths: vec![dir.path().join("lib.py")],
-        staged: false,
-        diff: None,
-        tip: None,
-        format: OutputFormat::Text,
-        fail_on: Some(Severity::Error),
-        cache_only: false,
-        push_gate: false,
-    };
+    let args = args(vec![dir.path().join("lib.py")], Some(Severity::Error));
     let exit = run_paths_with(&args, dir.path()).await;
     assert_eq!(
         exit,
@@ -333,16 +323,7 @@ async fn llm_finding_at_warning_does_not_block_under_fail_on_error() {
     crate::test_support::write_drep_toml(dir.path(), &format!("{}/v1", server.uri()));
     std::fs::write(dir.path().join("lib.py"), "x = 1\n").expect("lib.py");
 
-    let args = CheckArgs {
-        paths: vec![dir.path().join("lib.py")],
-        staged: false,
-        diff: None,
-        tip: None,
-        format: OutputFormat::Text,
-        fail_on: Some(Severity::Error),
-        cache_only: false,
-        push_gate: false,
-    };
+    let args = args(vec![dir.path().join("lib.py")], Some(Severity::Error));
     let exit = run_paths_with(&args, dir.path()).await;
     assert_eq!(
         exit,
@@ -368,30 +349,16 @@ async fn failure_outranks_finding() {
     crate::test_support::write_drep_toml(dir.path(), &format!("{}/v1", server.uri()));
 
     // One file produces a tool finding.
-    let bin = dir.path().join("venv/bin/ruff");
-    std::fs::create_dir_all(bin.parent().unwrap()).expect("bin dir");
-    write_executable(
-        &bin,
-        "#!/bin/sh\nprintf '%s' '[{\"code\":\"F401\",\"filename\":\"src/lib.py\",\"location\":{\"row\":1,\"column\":1},\"message\":\"unused import\"}]'\n",
-    );
-    std::fs::write(dir.path().join("pyproject.toml"), "").expect("pyproject");
-    std::fs::create_dir_all(dir.path().join("src")).expect("src dir");
-    std::fs::write(dir.path().join("src/lib.py"), "import os\n").expect("lib.py");
+    install_fake_ruff(dir.path());
     // The second file is non-UTF-8: a binary blob. The input layer
     // rejects it before either the deterministic or the LLM layer can
     // touch it, and the orchestrator records it as a read failure.
     std::fs::write(dir.path().join("src/bad.py"), [0xFFu8, 0xFE]).expect("bad.py");
 
-    let args = CheckArgs {
-        paths: vec![dir.path().join("src/lib.py"), dir.path().join("src/bad.py")],
-        staged: false,
-        diff: None,
-        tip: None,
-        format: OutputFormat::Text,
-        fail_on: None,
-        cache_only: false,
-        push_gate: false,
-    };
+    let args = args(
+        vec![dir.path().join("src/lib.py"), dir.path().join("src/bad.py")],
+        None,
+    );
     let exit = run_paths_with(&args, dir.path()).await;
     assert_eq!(
         exit,
@@ -414,10 +381,13 @@ async fn failure_outranks_finding() {
 /// 0.
 #[test]
 fn unreachable_endpoint_exits_2_and_does_not_print_clean() {
-    // Use a port that nothing is listening on. 1 is privileged and the OS
-    // rejects the connect immediately, which keeps the test fast.
+    // Ask the OS for an unused loopback port, then close it before drep runs.
+    // Removing proxy variables in `run_drep` keeps this request local.
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+    let port = listener.local_addr().expect("local address").port();
+    drop(listener);
     let dir = tempfile::tempdir().expect("tempdir");
-    crate::test_support::write_drep_toml(dir.path(), "http://127.0.0.1:1/v1");
+    crate::test_support::write_drep_toml(dir.path(), &format!("http://127.0.0.1:{port}/v1"));
     std::fs::write(dir.path().join("lib.py"), "x = 1\n").expect("lib.py");
 
     let output = run_drep(dir.path(), &["check", "lib.py"]);

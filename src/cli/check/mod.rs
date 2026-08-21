@@ -50,7 +50,10 @@ use crate::llm::chain::ProviderChain;
 // `bare_check_with_no_paths_expands_the_root_instead_of_reading_a_directory`,
 // which exists because an earlier version passed the root through as a *file*
 // and exited 2 without analyzing anything.
-#[command(group(ArgGroup::new("input").args(["paths", "staged", "diff"]).multiple(false)))]
+#[command(
+    group(ArgGroup::new("input").args(["paths", "staged", "diff"]).multiple(false)),
+    group(ArgGroup::new("cache_mode").args(["cache_only", "push_gate"]).multiple(false))
+)]
 pub struct CheckArgs {
     /// Files or directories to check. Duplicates and overlaps are collapsed,
     /// so `drep check a.rs .` analyzes `a.rs` once.
@@ -91,14 +94,14 @@ pub struct CheckArgs {
     /// An uncached file exits 3 without warming it; run a normal check to
     /// populate the missing entry. The generated pre-push hook uses
     /// `--push-gate` for the full warm-and-reconnect handshake.
-    #[arg(long, conflicts_with = "push_gate")]
+    #[arg(long)]
     pub cache_only: bool,
 
     /// Prepare a push without resuming a stale remote connection.
     ///
     /// Cached reviews pass immediately. A cold review is completed and cached,
     /// then exits 3 so Git reconnects; repeating `git push` uses the cache.
-    #[arg(long, conflicts_with = "cache_only")]
+    #[arg(long)]
     pub push_gate: bool,
 }
 
@@ -201,7 +204,9 @@ pub(crate) async fn run_against(
     // resolution would read one directory and configuration another. The CLI
     // passes ".", so production behaviour is unchanged, and a test can point
     // the whole run at a `TempDir` without chdir-ing a shared process.
-    let config_path = root.join(config::default_config_path());
+    let default_config_path = config::default_config_path();
+    debug_assert!(default_config_path.is_relative());
+    let config_path = root.join(default_config_path);
     let mut config = config::load(&config_path)
         .with_context(|| format!("could not load {}", config_path.display()))?;
 
@@ -275,9 +280,11 @@ pub(crate) async fn run_against(
             })
             .map(Vec::as_slice)
             .collect();
-        llm_result
-            .failed_files
-            .retain(|_, reason| !matches!(reason, FailureReason::CacheMiss));
+        for hunks in &misses {
+            if let Some(first) = hunks.first() {
+                llm_result.failed_files.remove(&first.file_path);
+            }
+        }
         llm_result.merge(analyzer.analyze_files_live(&misses).await);
     }
     let provider_uses = provider_uses(analyzer.chain());
@@ -338,6 +345,8 @@ fn gate(outcome: &CheckOutcome, fail_on: Option<Severity>) -> Exit {
     {
         return Exit::FoundIssues;
     }
+    // The earlier arm returned for every non-cache failure, so only cache
+    // misses remain here. Findings deliberately outrank a retryable miss.
     if !outcome.failures.is_empty() {
         return Exit::CacheMiss;
     }

@@ -5,6 +5,8 @@
 //! stub `drep` on PATH (set on the *child* process only, never on the test
 //! process) and asserts the recorded arguments.
 
+#![cfg(unix)]
+
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -79,6 +81,19 @@ fn run_pre_push_status(
     )
 }
 
+/// Install a `drep` stub that records argv before running `stub_body`.
+fn recording_stub(dir: &Path, stub_body: &str) -> (PathBuf, PathBuf) {
+    let bin_dir = dir.join("bin");
+    std::fs::create_dir_all(&bin_dir).expect("bin dir");
+    let args_log = dir.join("args.log");
+    let stub = format!(
+        "#!/bin/sh\nfor a in \"$@\"; do printf '%s\\n' \"$a\" >> \
+         \"$DREP_TEST_ARGS_LOG\"; done\n{stub_body}"
+    );
+    crate::test_support::write_executable(&bin_dir.join("drep"), stub);
+    (bin_dir, args_log)
+}
+
 /// The one pre-push execution fixture. `stub_body` runs after every argument
 /// has been logged, so a test can vary provider status without duplicating the
 /// hook, PATH, stdin, or child-process plumbing.
@@ -88,15 +103,7 @@ fn run_pre_push_with_stub(
     include_real_path: bool,
     stub_body: &str,
 ) -> (Option<i32>, Vec<String>) {
-    let bin_dir = dir.join("bin");
-    std::fs::create_dir_all(&bin_dir).expect("bin dir");
-    let args_log = dir.join("args.log");
-    let stub = format!(
-        "#!/bin/sh\nfor a in \"$@\"; do printf '%s\\n' \"$a\" >> {}; done\n{stub_body}",
-        args_log.to_string_lossy(),
-    );
-    let stub_path = bin_dir.join("drep");
-    crate::test_support::write_executable(&stub_path, stub);
+    let (bin_dir, args_log) = recording_stub(dir, stub_body);
 
     let hook_path = dir.join("pre-push");
     crate::test_support::write_executable(&hook_path, hook_body("pre-push").expect("known"));
@@ -112,10 +119,12 @@ fn run_pre_push_with_stub(
     let mut child = Command::new("/bin/sh")
         .arg(&hook_path)
         .env("PATH", &path)
+        .env("DREP_TEST_ARGS_LOG", &args_log)
+        .env("DREP_TEST_COUNTER", dir.join("count"))
         .current_dir(dir)
         .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
         .spawn()
         .expect("spawn hook");
     use std::io::Write;
@@ -125,13 +134,13 @@ fn run_pre_push_with_stub(
         .expect("stdin")
         .write_all(stdin.as_bytes())
         .expect("write stdin");
-    let result = child.wait_with_output().expect("wait hook");
+    let status = child.wait().expect("wait hook");
     let recorded: Vec<String> = std::fs::read_to_string(&args_log)
         .unwrap_or_default()
         .lines()
         .map(str::to_owned)
         .collect();
-    (result.status.code(), recorded)
+    (status.code(), recorded)
 }
 
 /// A branch that does not exist upstream yet sends an all-zero remote oid.
@@ -256,8 +265,8 @@ fn failure_precedence_across_refs_is_semantic_not_numeric() {
         crate::test_support::git_init(dir.path());
         let counter = dir.path().join("count");
         let stub_body = format!(
-            "if [ -f {c} ]; then exit {second}; else : > {c}; exit {first}; fi\n",
-            c = counter.to_string_lossy()
+            "if [ -f \"$DREP_TEST_COUNTER\" ]; then exit {second}; \
+             else : > \"$DREP_TEST_COUNTER\"; exit {first}; fi\n"
         );
         let stdin = "refs/heads/a 1111111111111111111111111111111111111111 refs/heads/a \
                      2222222222222222222222222222222222222222\n\
@@ -318,14 +327,7 @@ fn a_missing_drep_binary_blocks_the_push_with_an_explanation() {
 /// Run the `pre-commit` body against a stub `drep` that records its argv and
 /// exits `stub_exit`, and hand back (status, recorded args).
 fn run_pre_commit(dir: &Path, stub_exit: i32) -> (Option<i32>, Vec<String>) {
-    let bin_dir = dir.join("bin");
-    std::fs::create_dir_all(&bin_dir).expect("bin dir");
-    let args_log = dir.join("args.log");
-    let stub = format!(
-        "#!/bin/sh\nfor a in \"$@\"; do printf '%s\\n' \"$a\" >> {}; done\nexit {stub_exit}\n",
-        args_log.to_string_lossy()
-    );
-    crate::test_support::write_executable(&bin_dir.join("drep"), stub);
+    let (bin_dir, args_log) = recording_stub(dir, &format!("exit {stub_exit}\n"));
 
     let hook_path = dir.join("pre-commit");
     crate::test_support::write_executable(&hook_path, hook_body("pre-commit").expect("known"));
@@ -334,6 +336,7 @@ fn run_pre_commit(dir: &Path, stub_exit: i32) -> (Option<i32>, Vec<String>) {
     let output = Command::new("/bin/sh")
         .arg(&hook_path)
         .env("PATH", &path)
+        .env("DREP_TEST_ARGS_LOG", &args_log)
         .current_dir(dir)
         .output()
         .expect("run hook");

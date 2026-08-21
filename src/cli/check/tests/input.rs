@@ -117,7 +117,7 @@ async fn oversized_file_fails_is_not_in_by_file_and_is_still_linted() {
     let dir = tempfile::tempdir().expect("tempdir");
     // One byte over. The check is `bytes > limit`, so one over is the smallest
     // observable boundary - a regression to `>=` shows up here.
-    let size = (READ_MAX_BYTES + 1) as usize;
+    let size = usize::try_from(READ_MAX_BYTES + 1).expect("read limit fits in usize");
     std::fs::write(dir.path().join("big.py"), vec![b'x'; size]).expect("write big.py");
 
     let args = paths_args(vec![dir.path().join("big.py")]);
@@ -140,7 +140,7 @@ async fn oversized_file_fails_is_not_in_by_file_and_is_still_linted() {
         .expect("oversize file must appear in read_failures");
     match reason {
         FailureReason::FileTooLarge { bytes, limit } => {
-            assert_eq!(*bytes, size as u64);
+            assert_eq!(*bytes, u64::try_from(size).expect("file size fits in u64"));
             assert_eq!(*limit, READ_MAX_BYTES);
         }
         other => panic!("expected FileTooLarge, got {other:?}"),
@@ -206,8 +206,8 @@ async fn diff_ref_starting_with_dash_is_rejected_before_git() {
     let dir = tempfile::tempdir().expect("tempdir");
     // Intentionally no `init_repo_with_commit` here: the guard fires before
     // git is ever invoked. If the guard regressed, the test would then
-    // fail for a *different* reason (no git repo) rather than the one
-    // being pinned - and the assertion on the message would still hold.
+    // fail for a *different* reason (no git repo) that does not name the ref;
+    // the message assertion below is what detects that regression.
 
     let args = diff_args("--output=/tmp/whatever");
     let result = resolve(&args, dir.path()).await;
@@ -249,7 +249,15 @@ fn init_repo_with_commit(root: &std::path::Path) {
     run(&["config", "user.name", "test"]);
     std::fs::write(root.join("seed.txt"), "seed\n").expect("seed");
     run(&["add", "seed.txt"]);
-    run(&["commit", "--quiet", "-m", "init"]);
+    run(&[
+        "-c",
+        "commit.gpgsign=false",
+        "commit",
+        "--quiet",
+        "--no-verify",
+        "-m",
+        "init",
+    ]);
 }
 
 /// A file of exactly `READ_MAX_BYTES` is accepted; one byte more is not.
@@ -259,7 +267,7 @@ fn init_repo_with_commit(root: &std::path::Path) {
 #[tokio::test]
 async fn a_file_exactly_at_the_size_limit_is_accepted_and_one_byte_over_is_not() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let limit = READ_MAX_BYTES as usize;
+    let limit = usize::try_from(READ_MAX_BYTES).expect("read limit fits in usize");
 
     let exact = dir.path().join("exact.py");
     std::fs::write(&exact, "a".repeat(limit)).expect("write exact");
