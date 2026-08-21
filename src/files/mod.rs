@@ -22,18 +22,6 @@ use ignore::{DirEntry, WalkBuilder};
 
 use crate::languages;
 
-/// True iff `path`'s lowercased extension appears in `targets_with_dots`.
-///
-/// Used by the walkers for the registered language suffix set.
-fn extension_in(path: &Path, targets_with_dots: &[&str]) -> bool {
-    let Some(ext) = path.extension().and_then(|e| e.to_str()) else {
-        return false;
-    };
-    let lower = ext.to_ascii_lowercase();
-    let dotted = format!(".{lower}");
-    targets_with_dots.iter().any(|t| **t == dotted)
-}
-
 /// Any registered language's source file - the file class `drep check` reads.
 ///
 /// Markdown is **not** here, and that is the point. Each command owns one file
@@ -43,7 +31,7 @@ fn extension_in(path: &Path, targets_with_dots: &[&str]) -> bool {
 /// [`crate::analysis::result::FailureReason::Unsupported`] pointing at the
 /// other command - never a silent skip.
 pub fn is_scan_target(path: &Path) -> bool {
-    extension_in(path, languages::source_extensions())
+    languages::detect(path).is_some()
 }
 
 /// Markdown document.

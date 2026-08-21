@@ -87,11 +87,8 @@ pub fn source_extensions() -> &'static [&'static str] {
     &SOURCE_EXTENSIONS
 }
 
-/// Computed once. `files::is_scan_target` calls `source_extensions()` for
-/// **every entry the tree walk touches**, not just the matches, and this used
-/// to build a fresh `BTreeSet` plus a fresh `Vec` on each of those calls - tens
-/// of thousands of allocations per run to answer a question whose answer is
-/// fixed at compile time.
+/// Computed once so repeated registry introspection does not rebuild a set
+/// whose answer is fixed at compile time.
 static SOURCE_EXTENSIONS: LazyLock<Vec<&'static str>> = LazyLock::new(|| {
     let mut seen = BTreeSet::new();
     let mut out = Vec::new();
