@@ -67,3 +67,15 @@ fn the_published_pre_push_hook_uses_the_push_gate() {
         "the published pre-push hook must stop after warming a cold review"
     );
 }
+
+/// drep's own installed pre-push gate must exercise the same reconnect path it
+/// publishes. Otherwise release work can remain green while the shipped hook
+/// contract is broken.
+#[test]
+fn the_repository_pre_push_hook_uses_the_push_gate_too() {
+    let yaml = common::without_comments(".pre-commit-config.yaml");
+    assert!(
+        yaml.contains("entry: ./target/release/drep check --push-gate"),
+        "drep must gate itself through the cache-first push path"
+    );
+}

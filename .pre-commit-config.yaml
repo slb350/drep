@@ -87,9 +87,13 @@ repos:
       # them to the files the outgoing commits touch. `--staged` would be wrong
       # here: nothing is staged at push time, so it would analyze nothing and
       # pass silently.
+      #
+      # `--push-gate` first asks the cache. A cold review is completed and
+      # cached, then exits 3 so Git reconnects instead of resuming the SSH
+      # transport it opened before this potentially long hook began.
       - id: drep-check
         name: drep check (LLM code quality)
-        entry: ./target/release/drep check
+        entry: ./target/release/drep check --push-gate
         language: system
         types: [rust]
         stages: [pre-push]
