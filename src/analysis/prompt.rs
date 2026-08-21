@@ -42,9 +42,10 @@ use crate::languages::spec::LanguageSupport;
 pub fn build_analysis_prompt(language: &LanguageSupport) -> String {
     let conventions = conventions_block(language);
     let display_name = language.display_name;
-    // Rendered from `LlmSeverity::ALL`, so the levels the prompt asks for and
-    // the levels the parser accepts are the same list by construction.
-    let severities = LlmSeverity::alternation();
+    // Rendered from the same review vocabulary as the strict output schema.
+    // The parser accepts the wider legacy vocabulary so an old cache entry or
+    // unconstrained provider response cannot make a whole file malformed.
+    let severities = LlmSeverity::review_alternation();
     let issues = ISSUES;
     let summary = SUMMARY;
     let line = LINE;
@@ -61,33 +62,41 @@ pub fn build_analysis_prompt(language: &LanguageSupport) -> String {
     // found`.
     format!(
         "You are an expert {display_name} code reviewer.\n\
-         Analyze the following code and identify issues in these categories:\n\
+         Review the following code as a merge gate. Report only concrete issues\n\
+         that are worth fixing before merge:\n\
          \n\
-         1. **Bugs & Logic Errors**: Incorrect logic, unhandled edge cases,\n\
-            potential crashes, undefined variables, type errors\n\
+         1. **Bugs & Logic Errors**: Incorrect logic, reachable crashes, data\n\
+            loss, broken contracts, type errors\n\
          2. **Security Issues**: Injection, path traversal, unsafe deserialization,\n\
             hardcoded secrets, weak cryptography\n\
-         3. **Best Practices**: Poor naming, code smells, anti-patterns\n\
-         4. **Performance**: Inefficient algorithms, unnecessary work,\n\
-            blocking I/O, memory leaks\n\
+         3. **Reliability & Maintainability Defects**: Resource leaks, races,\n\
+            inconsistent state, or a design defect with a concrete failure mode\n\
+         4. **Performance Defects**: Material algorithmic or resource problems on\n\
+            a plausible execution path\n\
          \n\
          {conventions}\
          For each issue found, provide:\n\
-         - Line number (approximate if exact line is unclear)\n\
-         - Severity: critical (security vulnerabilities, crashes), high (bugs,\n\
-           serious issues), medium (best practices, moderate issues), low (minor\n\
-           improvements), info (suggestions)\n\
-         - Category: bug, security, best-practice, performance, style, maintainability\n\
+         - The exact gutter line number of the affected code\n\
+         - Severity: critical (security vulnerabilities, data loss), high (bugs,\n\
+           crashes, serious issues), medium (material but non-critical defects).\n\
+           Low and info suggestions are outside this review and must not be emitted\n\
+         - Category: bug, security, performance, maintainability\n\
          - Clear message explaining the issue\n\
          - Specific, actionable suggestion for fixing it\n\
          - The problematic code snippet\n\
          - Whether the finding explicitly claims the code cannot compile\n\
          \n\
          **Important instructions:**\n\
-         - Only report genuine issues, not false positives\n\
-         - Be specific about line numbers - estimate if needed\n\
+         - Only report a finding when it is concrete and reachable from the code\n\
+           shown, with a plausible execution path and a material consequence\n\
+         - This is not an exhaustive hardening exercise. Do not report optional hardening,\n\
+           extreme edge cases without a plausible execution path, nits, subjective\n\
+           preferences, cleanup, or refactoring opportunities\n\
+         - Do not report missing tests or documentation unless their absence creates\n\
+           a concrete product or API defect in the shown change\n\
+         - Prefer no finding over a speculative or marginal finding\n\
          - Provide actionable suggestions, not vague advice\n\
-         - Focus on correctness, security, and maintainability\n\
+         - Focus on correctness, security, reliability, and material performance\n\
          - The input is a line-numbered excerpt. Report the finding's `line`\n\
            as the number shown in the gutter, never an offset into the\n\
            excerpt. The excerpt itself states which lines are in scope.\n\
@@ -100,7 +109,7 @@ pub fn build_analysis_prompt(language: &LanguageSupport) -> String {
              {{\n\
                \"{line}\": <line_number>,\n\
                \"{severity}\": \"<{severities}>\",\n\
-               \"{category}\": \"<bug|security|best-practice|performance|style|maintainability>\",\n\
+               \"{category}\": \"<bug|security|performance|maintainability>\",\n\
                \"{message}\": \"<clear description of the issue>\",\n\
                \"{suggestion}\": \"<specific recommendation for fixing>\",\n\
                \"{code_snippet}\": \"<the problematic code>\",\n\

@@ -56,26 +56,38 @@ fn the_markdown_hook_blocks_only_on_error_severity() {
     );
 }
 
-/// A pre-push consumer must use the same cold-review handshake as the native
-/// hook. A plain `drep check` can leave Git's already-open SSH connection idle
-/// for the entire review and then fail with SIGPIPE when Git resumes it.
+/// pre-commit normally appends the names touched by the outgoing commits.
+/// Passing those names selects drep's whole-file mode, while the native hook
+/// sends the actual base and pushed tip and therefore reviews diff hunks. The
+/// adapter flag reads pre-commit's ref environment; filenames must be disabled
+/// so both installation paths have the same scope.
 #[test]
-fn the_published_pre_push_hook_uses_the_push_gate() {
+fn the_published_pre_push_hook_uses_pre_commit_refs_not_filenames() {
     let yaml = hooks_yaml();
+    let start = yaml
+        .find("- id: drep-check-push\n")
+        .expect("published hooks must declare drep-check-push");
+    let block = &yaml[start..];
+    let end = block[1..]
+        .find("\n- id:")
+        .map_or(block.len(), |offset| offset + 1);
+    let block = &block[..end];
+
     assert!(
-        yaml.contains("drep check --push-gate"),
-        "the published pre-push hook must stop after warming a cold review"
+        block.contains("entry: drep check --push-gate --pre-commit-push"),
+        "the published pre-push hook must ask drep to resolve pre-commit's refs: {block}"
+    );
+    assert!(
+        block.contains("pass_filenames: false"),
+        "pre-commit filenames would select whole-file review: {block}"
     );
 }
 
-/// drep's own installed pre-push gate must exercise the same reconnect path it
-/// publishes. Otherwise release work can remain green while the shipped hook
-/// contract is broken.
 #[test]
-fn the_repository_pre_push_hook_uses_the_push_gate_too() {
+fn the_repository_pre_push_hook_uses_the_push_gate_and_ref_adapter() {
     let yaml = common::without_comments(".pre-commit-config.yaml");
     assert!(
-        yaml.contains("entry: ./target/release/drep check --push-gate"),
-        "drep must gate itself through the cache-first push path"
+        yaml.contains("entry: ./target/release/drep check --push-gate --pre-commit-push"),
+        "drep must test the same pre-commit ref adapter it publishes"
     );
 }

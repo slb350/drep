@@ -1,6 +1,6 @@
 //! Input resolution for `drep check`.
 //!
-//! Three modes, mutually exclusive at the clap layer, all surface here as
+//! Four modes, mutually exclusive at the clap layer, all surface here as
 //! one [`Work`] value: a list of files, a list of hunks per file, and a
 //! per-file map of failure reasons for the things that could not be read
 //! (oversize, non-UTF-8, missing). The orchestrator downstream does not need
@@ -15,9 +15,10 @@
 //!   every file either getting a hunk or getting a `FailureReason`.
 
 use std::collections::BTreeMap;
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
-use anyhow::Result;
+use anyhow::{Result, bail};
 
 use crate::analysis::result::FailureReason;
 use crate::cli::check::CheckArgs;
@@ -73,13 +74,95 @@ pub struct Work {
     pub lint_only: Vec<PathBuf>,
 }
 
+/// The pushed range pre-commit derived from git's pre-push stdin.
+///
+/// Existing remote refs produce an exact range. For a new branch whose pushed
+/// history reaches a root commit, pre-commit deliberately selects all files and
+/// omits its FROM/TO variables; [`AllFiles`](Self::AllFiles) preserves that
+/// distinct decision rather than inventing a base.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum PreCommitPush {
+    Range { from: String, to: String },
+    AllFiles,
+}
+
+impl PreCommitPush {
+    /// Read the environment pre-commit exposes to a pre-push hook.
+    fn from_env() -> Result<Self> {
+        Self::from_lookup(|name| std::env::var_os(name))
+    }
+
+    /// Parse through an injected lookup so tests never mutate process-global
+    /// environment while the Rust suite runs concurrently.
+    pub(crate) fn from_lookup(mut lookup: impl FnMut(&str) -> Option<OsString>) -> Result<Self> {
+        let mut value = |name: &str| {
+            lookup(name)
+                .map(|raw| {
+                    raw.into_string().map_err(|_| {
+                        anyhow::anyhow!("pre-commit environment variable `{name}` is not UTF-8")
+                    })
+                })
+                .transpose()
+        };
+
+        if value("PRE_COMMIT")?.as_deref() != Some("1") {
+            bail!("--pre-commit-push must be invoked by pre-commit's pre-push hook");
+        }
+        // PRE_COMMIT_FROM_REF/TO_REF are the current names. ORIGIN/SOURCE are
+        // their legacy aliases and keep the published hook compatible with
+        // older pre-commit installations.
+        let from = value("PRE_COMMIT_FROM_REF")?.or(value("PRE_COMMIT_ORIGIN")?);
+        let to = value("PRE_COMMIT_TO_REF")?.or(value("PRE_COMMIT_SOURCE")?);
+        match (from, to) {
+            (Some(from), Some(to)) if !from.is_empty() && !to.is_empty() => {
+                Ok(Self::Range { from, to })
+            }
+            (None, None) => {
+                let remote = value("PRE_COMMIT_REMOTE_NAME")?;
+                if remote.as_deref().is_none_or(str::is_empty) {
+                    bail!(
+                        "--pre-commit-push has no ref range or `PRE_COMMIT_REMOTE_NAME`; the hook context is incomplete"
+                    );
+                }
+                Ok(Self::AllFiles)
+            }
+            _ => bail!(
+                "--pre-commit-push requires both `PRE_COMMIT_FROM_REF` and `PRE_COMMIT_TO_REF`, or neither for an all-files new-branch push"
+            ),
+        }
+    }
+}
+
 /// Resolve `args` against `root` into a [`Work`].
 ///
-/// The three modes are a fold of file paths into the same in-memory shape:
+/// The four modes are a fold of file paths into the same in-memory shape:
 /// the deterministic layer and the LLM layer both consume `Vec<Vec<Hunk>>`,
 /// so resolving differently per mode would mean a parallel code path
 /// downstream. The point is to pay the per-mode divergence once, here.
 pub async fn resolve(args: &CheckArgs, root: &Path) -> Result<Work> {
+    if args.pre_commit_push {
+        return resolve_pre_commit(root, &PreCommitPush::from_env()?).await;
+    }
+
+    let hunks = if args.staged {
+        diff::staged_hunks(root, files::is_scan_target).await?
+    } else if let Some(git_ref) = args.diff.as_deref() {
+        diff::hunks_between(root, git_ref, args.tip.as_deref(), files::is_scan_target).await?
+    } else {
+        return resolve_paths(&args.paths, root);
+    };
+    Ok(Work {
+        by_file: group_by_file(hunks),
+        read_failures: BTreeMap::new(),
+        lint_only: Vec::new(),
+    })
+}
+
+/// Resolve an already-parsed pre-commit context.
+///
+/// The seam keeps environment access at the production boundary and lets the
+/// tests prove range and all-files behavior without racing on `set_var`.
+pub(crate) async fn resolve_pre_commit(root: &Path, pre_commit: &PreCommitPush) -> Result<Work> {
     // The name-only queries used to run first as an error probe and have
     // their results discarded. They buy nothing: `staged_hunks` and
     // `hunks_since` go through the same `staged_diff`/`since_diff` helpers,
@@ -88,12 +171,11 @@ pub async fn resolve(args: &CheckArgs, root: &Path) -> Result<Work> {
     // watching for. Each discarded call cost two `git` spawns (~37 ms
     // measured), paid on every pre-commit and pre-push run before any useful
     // work started.
-    let hunks = if args.staged {
-        diff::staged_hunks(root, files::is_scan_target).await?
-    } else if let Some(git_ref) = args.diff.as_deref() {
-        diff::hunks_between(root, git_ref, args.tip.as_deref(), files::is_scan_target).await?
-    } else {
-        return resolve_paths(&args.paths, root);
+    let hunks = match pre_commit {
+        PreCommitPush::Range { from, to } => {
+            diff::hunks_between(root, from, Some(to), files::is_scan_target).await?
+        }
+        PreCommitPush::AllFiles => return resolve_paths(&[], root),
     };
     Ok(Work {
         by_file: group_by_file(hunks),

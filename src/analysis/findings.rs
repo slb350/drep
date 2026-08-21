@@ -159,17 +159,11 @@ impl Finding {
     }
 }
 
-/// The five-level scale the LLM is asked to use, and its mapping onto
-/// [`Severity`].
+/// The LLM severity vocabulary and its mapping onto [`Severity`].
 ///
-/// The model does not emit `Severity` directly: a reviewer reasons in
-/// critical/high/medium/low/info, and collapsing that to three levels is
-/// drep's decision, not the model's. Keeping the wire vocabulary as its own
-/// type means the prompt renders the alternation from `ALL` and the parser
-/// accepts exactly the same list, so the two cannot drift. They previously
-/// could, and the consequence was not cosmetic: a level named in the prompt
-/// but missing from the parser makes every record carrying it `Malformed`,
-/// which marks the file unanalyzed and turns the gate's exit code to 2.
+/// New reviews request only critical/high/medium findings. The parser retains
+/// low/info for compatibility with cached and unconstrained provider responses;
+/// a recognized legacy level must not make the entire file `Malformed`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LlmSeverity {
     Critical,
@@ -189,6 +183,13 @@ impl LlmSeverity {
         LlmSeverity::Info,
     ];
 
+    /// The material levels a new review is allowed to emit.
+    pub const REVIEW: [LlmSeverity; 3] = [
+        LlmSeverity::Critical,
+        LlmSeverity::High,
+        LlmSeverity::Medium,
+    ];
+
     /// Every wire name, most severe first. Derived from `ALL` — see
     /// [`Severity::NAMES`].
     pub const NAMES: [&'static str; 5] = [
@@ -197,6 +198,13 @@ impl LlmSeverity {
         Self::ALL[2].as_str(),
         Self::ALL[3].as_str(),
         Self::ALL[4].as_str(),
+    ];
+
+    /// Wire names exposed by the prompt and strict output schema.
+    pub const REVIEW_NAMES: [&'static str; 3] = [
+        Self::REVIEW[0].as_str(),
+        Self::REVIEW[1].as_str(),
+        Self::REVIEW[2].as_str(),
     ];
 
     /// The wire name, as the prompt asks for it and the response carries it.
@@ -219,13 +227,9 @@ impl LlmSeverity {
         }
     }
 
-    /// The `critical|high|medium|low|info` alternation, for the prompt.
-    ///
-    /// Rendered from `NAMES`, which is itself derived from `ALL`, so a level
-    /// added to the enum reaches the prompt without anyone remembering to
-    /// update it.
-    pub fn alternation() -> String {
-        Self::NAMES.join("|")
+    /// The `critical|high|medium` alternation exposed by the prompt.
+    pub fn review_alternation() -> String {
+        Self::REVIEW_NAMES.join("|")
     }
 }
 
@@ -346,11 +350,8 @@ mod tests {
     }
 
     #[test]
-    fn alternation_is_derived_from_all_not_written_out() {
-        assert_eq!(LlmSeverity::alternation(), "critical|high|medium|low|info");
-        // Every level must appear, so adding one cannot silently miss the prompt.
-        for level in LlmSeverity::ALL {
-            assert!(LlmSeverity::alternation().contains(level.as_str()));
-        }
+    fn review_vocabulary_excludes_advisory_levels() {
+        assert_eq!(LlmSeverity::review_alternation(), "critical|high|medium");
+        assert_eq!(LlmSeverity::REVIEW_NAMES, ["critical", "high", "medium"]);
     }
 }

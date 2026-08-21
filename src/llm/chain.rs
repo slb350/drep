@@ -9,14 +9,14 @@
 //!
 //! ## Two independent questions about a failure
 //!
-//! - [`should_failover`] — does the next provider get asked? HTTP transport
+//! - `should_failover` — does the next provider get asked? HTTP transport
 //!   failures advance the chain for 408, 429, 5xx and status-less failures
 //!   (timeout, connection refused, an empty body). A backend may also report a
 //!   typed usage-limit failure. A 401/403 or backend authentication failure
 //!   must **not** advance: that is misconfiguration, and quietly asking a
 //!   second provider masks it. An unparseable non-empty response advances only
 //!   after its own three response attempts.
-//! - [`is_sticky`] — is the failure remembered for the rest of the run? Every
+//! - `is_sticky` — is the failure remembered for the rest of the run? Every
 //!   endpoint-level failure that advances the chain, plus the two that are a property of the
 //!   connection rather than the request: a stale API key returns 401 for every
 //!   file, and re-handshaking forty-nine times to be told so again is pure

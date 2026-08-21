@@ -2,13 +2,14 @@
 //!
 //! Three concerns, three sibling modules, one orchestrator here:
 //!
-//! - [`input`] resolves the three input modes (paths, `--staged`, `--diff`)
+//! - `input` resolves the four input modes (paths, `--staged`, `--diff`, and
+//!   pre-commit's pre-push ref environment)
 //!   into a uniform `[Hunk]` list. Whatever the caller passed, the rest of
 //!   the pipeline sees the same shape.
-//! - [`deterministic`] runs the configured per-language tools, collecting
+//! - `deterministic` runs the configured per-language tools, collecting
 //!   their findings AND marking every file in a batch failed when a tool was
 //!   `Unavailable` — the per-tool/per-file join the exit-2 contract rests on.
-//! - [`render`] turns the two layers' findings plus the failure map into the
+//! - `render` turns the two layers' findings plus the failure map into the
 //!   text or JSON output the user sees.
 //!
 //! The split is by topic, not by file size, because the smallest meaningful
@@ -52,7 +53,11 @@ use crate::llm::chain::ProviderChain;
 // which exists because an earlier version passed the root through as a *file*
 // and exited 2 without analyzing anything.
 #[command(
-    group(ArgGroup::new("input").args(["paths", "staged", "diff"]).multiple(false)),
+    group(
+        ArgGroup::new("input")
+            .args(["paths", "staged", "diff", "pre_commit_push"])
+            .multiple(false)
+    ),
     group(ArgGroup::new("cache_mode").args(["cache_only", "push_gate"]).multiple(false))
 )]
 pub struct CheckArgs {
@@ -77,6 +82,14 @@ pub struct CheckArgs {
     /// branch and lets the pushed code through unseen.
     #[arg(long, value_name = "REF", requires = "diff")]
     pub tip: Option<String>,
+
+    /// Read the pushed base and tip from pre-commit's hook environment.
+    ///
+    /// Used by the published `drep-check-push` hook. pre-commit otherwise
+    /// passes filenames, which would make drep review whole files instead of
+    /// the hunks between `PRE_COMMIT_FROM_REF` and `PRE_COMMIT_TO_REF`.
+    #[arg(long)]
+    pub pre_commit_push: bool,
 
     #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
     pub format: OutputFormat,

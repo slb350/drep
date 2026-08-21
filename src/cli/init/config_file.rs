@@ -7,7 +7,7 @@
 //! reason `[[llm]]` lands in this phase rather than in 5c.
 //!
 //! Escaping happens here rather than at a higher level, so `render` is the
-//! single place a caller's value could fail to escape. See [`escape`] for what
+//! single place a caller's value could fail to escape. See `escape` for what
 //! TOML actually requires - it is more than the two characters this originally
 //! handled.
 

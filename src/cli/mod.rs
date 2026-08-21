@@ -174,6 +174,16 @@ mod tests {
             Some("origin/main")
         );
         assert!(check_args(["drep", "check"]).paths.is_empty());
+        assert!(check_args(["drep", "check", "--pre-commit-push"]).pre_commit_push);
+    }
+
+    #[test]
+    fn pre_commit_push_is_an_input_mode_not_a_modifier() {
+        assert!(Cli::try_parse_from(["drep", "check", "--pre-commit-push", "a.rs"]).is_err());
+        assert!(Cli::try_parse_from(["drep", "check", "--pre-commit-push", "--staged"]).is_err());
+        assert!(
+            Cli::try_parse_from(["drep", "check", "--pre-commit-push", "--diff", "main",]).is_err()
+        );
     }
 
     #[test]

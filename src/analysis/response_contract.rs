@@ -31,7 +31,7 @@ pub(crate) fn output_schema() -> serde_json::Value {
                         LINE: {"type": "integer", "minimum": 1, "maximum": u32::MAX},
                         SEVERITY: {
                             "type": "string",
-                            "enum": LlmSeverity::NAMES
+                            "enum": LlmSeverity::REVIEW_NAMES
                         },
                         CATEGORY: {"type": "string"},
                         MESSAGE: {"type": "string"},

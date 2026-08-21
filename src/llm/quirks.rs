@@ -234,7 +234,7 @@ impl Http {
     /// The same fetcher with a different size ceiling.
     ///
     /// Exists for the tests that pin the boundary. Production always uses
-    /// [`MAX_DOCUMENT_BYTES`], which `new` applies.
+    /// `MAX_DOCUMENT_BYTES`, which `new` applies.
     pub fn with_max_bytes(mut self, max_bytes: u64) -> Self {
         self.max_bytes = max_bytes;
         self
@@ -347,7 +347,7 @@ impl Registry {
             .get(model)
     }
 
-    /// Whether this copy is older than [`MAX_AGE`] at `now`.
+    /// Whether this copy is older than `MAX_AGE` at `now`.
     ///
     /// A `fetched_at` in the future - a clock that moved backwards - saturates
     /// to an age of zero and reads as fresh, rather than wrapping into a

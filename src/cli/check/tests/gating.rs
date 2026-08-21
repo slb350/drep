@@ -52,6 +52,7 @@ fn args(paths: Vec<std::path::PathBuf>, fail_on: Option<Severity>) -> CheckArgs 
         staged: false,
         diff: None,
         tip: None,
+        pre_commit_push: false,
         format: OutputFormat::Text,
         fail_on,
         cache_only: false,

@@ -130,3 +130,39 @@ fn prompt_tells_the_model_to_use_the_gutter_line_number() {
         "the prompt must state the input is a line-numbered excerpt, got:\n{prompt}"
     );
 }
+
+/// v2.5's convergence boundary: semantic review is a high-signal merge review,
+/// not an exhaustive invitation to keep discovering optional work forever.
+///
+/// Each clause rules out one failure mode seen in repeated push/fix cycles:
+/// speculative reachability, extreme hardening, nits, and findings whose only
+/// value is that another change could be made.
+#[test]
+fn prompt_sets_a_high_signal_merge_review_threshold() {
+    let prompt = build_analysis_prompt(&PYTHON);
+
+    for required in [
+        "worth fixing before merge",
+        "concrete and reachable",
+        "plausible execution path",
+        "optional hardening",
+        "extreme edge cases",
+        "nits",
+        "Prefer no finding",
+    ] {
+        assert!(
+            prompt.contains(required),
+            "the focused review contract must contain `{required}`, got:\n{prompt}"
+        );
+    }
+    for excluded in ["Poor naming", "code smells", "minor improvements"] {
+        assert!(
+            !prompt.contains(excluded),
+            "the focused prompt must not retain the broad invitation `{excluded}`, got:\n{prompt}"
+        );
+    }
+    assert!(
+        prompt.contains(r#""severity": "<critical|high|medium>""#),
+        "the exact response example must not offer low-signal severities: {prompt}"
+    );
+}

@@ -8,12 +8,12 @@
 //!
 //! Structure:
 //!
-//! - [`fence`] answers "is this line inside a code fence", once per file, for
+//! - `fence` answers "is this line inside a code fence", once per file, for
 //!   every check that asks. See its module doc for why that is not a per-check
 //!   concern.
-//! - [`lines`] holds the checks that look at one line in isolation.
-//! - [`links`] holds the two that need markdown's link grammar.
-//! - [`blocks`] holds the three that span more than one line.
+//! - `lines` holds the checks that look at one line in isolation.
+//! - `links` holds the two that need markdown's link grammar.
+//! - `blocks` holds the three that span more than one line.
 //!
 //! The split is by what a check needs to see, not by file size, so a new check
 //! has an obvious home.

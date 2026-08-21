@@ -94,6 +94,14 @@ them into gating. The model parses nothing, which is why multi-language support
 needed no grammars. Severity thresholds over LLM output were never a usable
 gate; splitting by source is what makes one calibratable.
 
+The system prompt defines a high-signal merge-review threshold: a finding must
+be concrete, reachable, materially consequential and worth fixing before
+merge. It excludes speculative hardening, implausible extreme edge cases, nits,
+cleanup and optional refactors. drep does not count remediation rounds or stop
+reviewing after a quota. An autonomous fixer should use a three-round default
+outside drep, then surface remaining advisory findings; keeping that boundary
+in the orchestrator prevents an expired counter from hiding a new regression.
+
 ## Input and diff modes
 
 `files::expand_named` is the single answer to "what did the user ask for, and
@@ -106,6 +114,14 @@ instead; a walk that finds nothing analyzable is legitimately empty.
 Every `diff` query takes the file-class predicate as a parameter:
 `staged_files`, `changed_since`, `staged_hunks`, `hunks_since`, `hunks_between`.
 `check` passes `is_scan_target`, `lint-docs --staged` passes `is_markdown`.
+
+The published pre-commit pre-push hook uses `--pre-commit-push` with filename
+passing disabled. That adapter reads pre-commit's FROM/TO ref environment and
+feeds it to `hunks_between`, so the published hook and the native hook both
+review a pushed diff. When pre-commit deliberately omits refs for a new branch
+whose history reaches a root commit, the adapter preserves its all-files
+decision. Missing, partial or non-UTF-8 hook context fails instead of silently
+falling back to paths mode.
 
 Two size ceilings, deliberately separate. `analysis::payload::PAYLOAD_MAX_BYTES`
 (256 KiB) is checked against the rendered payload, so it holds for every input

@@ -31,6 +31,11 @@ naming is not precise at any severity, so it informs instead. Splitting by
 source rather than by severity is what makes the gate calibratable; opt the
 LLM into blocking with `--fail-on error` when you want it.
 
+Semantic review is intentionally high-signal rather than exhaustive. The model
+is asked for concrete, reachable defects worth fixing before merge, and told
+to omit speculative hardening, implausible extreme edge cases, nits and cleanup
+opportunities. A clean response is preferable to manufacturing marginal work.
+
 drep is a single binary. It talks to no source-control platform, runs no
 server, and needs no drep account. The deterministic half needs no model and
 no API key at all. Semantic review can use an HTTP API or a separately
@@ -97,12 +102,17 @@ To adopt drep through [pre-commit](https://pre-commit.com) instead:
 ```yaml
 repos:
   - repo: https://github.com/slb350/drep
-    rev: v2.4.0
+    rev: v2.5.0
     hooks:
       - id: drep-check-push   # pre-push: what the push touches
       # - id: drep-check      # pre-commit: staged files
       # - id: drep-lint-docs  # markdown, rule-based
 ```
+
+The pre-commit pre-push hook reads the base and pushed tip that pre-commit
+exports and disables filename arguments. This keeps review in diff-hunk mode;
+passing the filenames would make a one-line follow-up fix re-review each whole
+file.
 
 ## Commands
 
@@ -188,6 +198,16 @@ fingerprint in `.drep/acknowledgements.toml`; commit that file when the team's
 adjudication should be shared. The fingerprint includes the file, finding
 category and surrounding source, so an edit near the finding makes it eligible
 for review again.
+
+### Autonomous remediation
+
+An agent that fixes advisory LLM findings should default to at most three
+drep-driven remediation rounds for one change set. After that, it should still
+fix deterministic failures and analysis failures, but hand any new advisory
+LLM findings to a person (or acknowledge a confirmed false positive) instead
+of continuing automatically. This is an orchestrator policy, not a drep
+shutoff: drep keeps reviewing every pushed change, because a fourth review can
+contain a real regression and a hidden counter must never wave it through.
 
 ## Markdown
 

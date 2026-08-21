@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.5.0] - 2026-08-21
+
+### Added
+
+- `drep check --pre-commit-push` adapts pre-commit's pre-push environment to
+  drep's diff input. The published hook disables filename arguments and reviews
+  the exact `PRE_COMMIT_FROM_REF...PRE_COMMIT_TO_REF` hunks; pre-commit's
+  explicit all-files case for a new root branch remains all-files.
+
+### Changed
+
+- Semantic review now asks only for concrete, reachable defects worth fixing
+  before merge. Optional hardening, implausible extreme edge cases, nits,
+  subjective preferences, cleanup, and speculative findings are explicitly out
+  of scope. Autonomous remediation should stop after three LLM-driven fix
+  rounds by default and hand remaining advisory findings to a person; drep
+  deliberately keeps reviewing so a round counter cannot hide a new defect.
+  Because the system prompt is part of the response-cache identity, upgrading
+  intentionally starts this policy with cold semantic-review entries.
+
+### Fixed
+
+- The published pre-commit pre-push hook no longer passes changed filenames to
+  `drep check`. Filename input selected whole-file mode, so a small follow-up
+  fix caused the model to reconsider unchanged code around it instead of
+  receiving the same diff-hunk scope as drep's native hook.
+
 ## [2.4.0] - 2026-08-21
 
 ### Added
@@ -1275,7 +1302,8 @@ behavior changes.
 - Rate limiting considerations
 - Sanitized LLM prompts to prevent injection
 
-[Unreleased]: https://github.com/slb350/drep/compare/v2.4.0...HEAD
+[Unreleased]: https://github.com/slb350/drep/compare/v2.5.0...HEAD
+[2.5.0]: https://github.com/slb350/drep/compare/v2.4.0...v2.5.0
 [2.4.0]: https://github.com/slb350/drep/compare/v2.3.0...v2.4.0
 [2.3.0]: https://github.com/slb350/drep/compare/v2.2.0...v2.3.0
 [2.2.0]: https://github.com/slb350/drep/compare/v2.1.0...v2.2.0

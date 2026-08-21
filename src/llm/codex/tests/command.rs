@@ -120,7 +120,7 @@ fn private_files_replace_generic_instructions_and_pin_the_response_shape() {
     );
     assert_eq!(
         issue["properties"]["severity"]["enum"],
-        serde_json::json!(["critical", "high", "medium", "low", "info"])
+        serde_json::json!(["critical", "high", "medium"])
     );
 }
 

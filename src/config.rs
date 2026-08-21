@@ -39,7 +39,7 @@ pub use backend::{BackendKind, LlmConfig, ReasoningEffort};
 /// order*: [`Self::providers`] is the failover chain.
 ///
 /// `#[serde(default)]` means a file with an empty body deserializes
-/// successfully; [`validate`] is what then rejects it, because a config
+/// successfully; `validate` is what then rejects it, because a config
 /// declaring no provider cannot run the mandatory LLM layer.
 #[derive(Debug, Default, Deserialize)]
 #[serde(default)]
@@ -383,7 +383,7 @@ fn expand_env_in(value: &mut Value, source: &Path) -> Result<(), ConfigError> {
 /// believing it had already reported it. The user was told the config was fine
 /// and `drep check` then refused to load it.
 ///
-/// An unterminated `${` yields nothing here; [`expand_string`] is what reports
+/// An unterminated `${` yields nothing here; `expand_string` is what reports
 /// it, because only the substituter knows it is an error rather than literal
 /// text.
 pub fn env_var_refs(s: &str) -> Vec<String> {

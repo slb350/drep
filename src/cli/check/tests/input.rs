@@ -19,13 +19,16 @@
 //! assertion can reach the `Work` value rather than only its rendered
 //! downstream effect.
 
+use std::collections::BTreeMap;
+use std::ffi::OsString;
 use std::path::PathBuf;
 
 use crate::analysis::result::FailureReason;
 use crate::cli::OutputFormat;
 use crate::cli::check::CheckArgs;
-use crate::cli::check::input::READ_MAX_BYTES;
-use crate::cli::check::input::resolve;
+use crate::cli::check::input::{PreCommitPush, READ_MAX_BYTES};
+use crate::cli::check::input::{resolve, resolve_pre_commit};
+use crate::diff::hunks::HunkLine;
 
 /// Build a `CheckArgs` for paths mode. Defaults `format = Text`, no
 /// `--fail-on`, no `--diff`/`--staged`.
@@ -35,6 +38,7 @@ fn paths_args(paths: Vec<PathBuf>) -> CheckArgs {
         staged: false,
         diff: None,
         tip: None,
+        pre_commit_push: false,
         format: OutputFormat::Text,
         fail_on: None,
         cache_only: false,
@@ -49,11 +53,136 @@ fn diff_args(ref_: &str) -> CheckArgs {
         staged: false,
         diff: Some(ref_.to_owned()),
         tip: None,
+        pre_commit_push: false,
         format: OutputFormat::Text,
         fail_on: None,
         cache_only: false,
         push_gate: false,
     }
+}
+
+/// The published hook must resolve the exact range pre-commit derived from
+/// git's pre-push stdin. If it falls through to paths mode, the hunk contains
+/// only `Context` and drep reviews the whole file again after every fix.
+#[tokio::test]
+async fn pre_commit_push_refs_resolve_to_diff_hunks() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    init_repo_with_commit(dir.path());
+    let source = dir.path().join("app.py");
+    std::fs::write(&source, "value = 1\nunchanged = True\n").expect("base source");
+    git_commit(dir.path(), "base", &["app.py"]);
+    let base = git_output(dir.path(), &["rev-parse", "HEAD"]);
+
+    std::fs::write(&source, "value = 2\nunchanged = True\n").expect("tip source");
+    git_commit(dir.path(), "tip", &["app.py"]);
+    let tip = git_output(dir.path(), &["rev-parse", "HEAD"]);
+    let context = PreCommitPush::Range {
+        from: base,
+        to: tip,
+    };
+
+    let work = resolve_pre_commit(dir.path(), &context)
+        .await
+        .expect("pre-commit push range resolves");
+
+    assert_eq!(work.by_file.len(), 1);
+    assert_eq!(work.by_file[0][0].file_path, PathBuf::from("app.py"));
+    assert!(
+        work.by_file[0][0]
+            .lines
+            .iter()
+            .any(|line| matches!(line, HunkLine::Added(text) if text == "value = 2")),
+        "the pushed edit must remain marked as an added diff line"
+    );
+}
+
+/// pre-commit omits FROM/TO for a new branch whose pushed history reaches a
+/// root commit and marks the run as all-files. That case must deliberately use
+/// whole-tree mode rather than fail or invent a base ref.
+#[tokio::test]
+async fn pre_commit_new_root_branch_resolves_all_files() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::write(dir.path().join("app.py"), "value = 1\n").expect("source");
+
+    let work = resolve_pre_commit(dir.path(), &PreCommitPush::AllFiles)
+        .await
+        .expect("all-files push resolves");
+
+    assert_eq!(work.by_file.len(), 1);
+    assert!(
+        work.by_file[0][0]
+            .lines
+            .iter()
+            .all(|line| matches!(line, HunkLine::Context(_))),
+        "pre-commit's explicit all-files case is whole-tree review"
+    );
+}
+
+/// Parse pre-commit's environment through an injected lookup so the suite
+/// never mutates process-global environment while other tests run.
+#[test]
+fn pre_commit_push_environment_is_complete_or_rejected() {
+    let parse = |pairs: &[(&str, &str)]| {
+        let values: BTreeMap<&str, OsString> = pairs
+            .iter()
+            .map(|(key, value)| (*key, OsString::from(value)))
+            .collect();
+        PreCommitPush::from_lookup(|name| values.get(name).cloned())
+    };
+
+    assert!(
+        parse(&[]).is_err(),
+        "manual use outside pre-commit must fail"
+    );
+    assert!(
+        parse(&[
+            ("PRE_COMMIT", "1"),
+            ("PRE_COMMIT_REMOTE_NAME", "origin"),
+            ("PRE_COMMIT_FROM_REF", "base"),
+        ])
+        .is_err(),
+        "a half-specified range must never fall back to whole-tree mode"
+    );
+    for (from, to) in [("", "tip"), ("base", ""), ("", "")] {
+        assert!(
+            parse(&[
+                ("PRE_COMMIT", "1"),
+                ("PRE_COMMIT_FROM_REF", from),
+                ("PRE_COMMIT_TO_REF", to),
+            ])
+            .is_err(),
+            "empty refs are not a valid push range: from={from:?}, to={to:?}"
+        );
+    }
+    assert_eq!(
+        parse(&[
+            ("PRE_COMMIT", "1"),
+            ("PRE_COMMIT_FROM_REF", "base"),
+            ("PRE_COMMIT_TO_REF", "tip"),
+        ])
+        .expect("a complete range does not need remote metadata"),
+        PreCommitPush::Range {
+            from: "base".to_owned(),
+            to: "tip".to_owned(),
+        }
+    );
+    assert_eq!(
+        parse(&[
+            ("PRE_COMMIT", "1"),
+            ("PRE_COMMIT_ORIGIN", "legacy-base"),
+            ("PRE_COMMIT_SOURCE", "legacy-tip"),
+        ])
+        .expect("legacy aliases remain supported"),
+        PreCommitPush::Range {
+            from: "legacy-base".to_owned(),
+            to: "legacy-tip".to_owned(),
+        }
+    );
+    assert_eq!(
+        parse(&[("PRE_COMMIT", "1"), ("PRE_COMMIT_REMOTE_NAME", "origin"),])
+            .expect("new root branch"),
+        PreCommitPush::AllFiles
+    );
 }
 
 /// Criterion 4: paths mode reads a real `.py` file and yields one whole-file
@@ -229,35 +358,33 @@ async fn diff_ref_starting_with_dash_is_rejected_before_git() {
 /// clean exit with the expected file on disk is what subsequent assertions
 /// rest on.
 fn init_repo_with_commit(root: &std::path::Path) {
-    use std::process::Command;
-
-    let run = |args: &[&str]| {
-        let out = Command::new("git")
-            .args(args)
-            .current_dir(root)
-            .output()
-            .expect("git spawns");
-        assert!(
-            out.status.success(),
-            "git {args:?} failed: {}",
-            String::from_utf8_lossy(&out.stderr)
-        );
-    };
-
-    run(&["init", "--quiet"]);
-    run(&["config", "user.email", "test@example.com"]);
-    run(&["config", "user.name", "test"]);
+    crate::test_support::git_init(root);
     std::fs::write(root.join("seed.txt"), "seed\n").expect("seed");
-    run(&["add", "seed.txt"]);
-    run(&[
-        "-c",
-        "commit.gpgsign=false",
-        "commit",
-        "--quiet",
-        "--no-verify",
-        "-m",
-        "init",
-    ]);
+    crate::test_support::git_add(root, "seed.txt");
+    git_output(root, &["commit", "--quiet", "--no-verify", "-m", "init"]);
+}
+
+fn git_output(root: &std::path::Path, args: &[&str]) -> String {
+    let output = crate::test_support::git(root)
+        .args(args)
+        .output()
+        .expect("git spawns");
+    assert!(
+        output.status.success(),
+        "git {args:?} failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8(output.stdout)
+        .expect("git output is utf8")
+        .trim()
+        .to_owned()
+}
+
+fn git_commit(root: &std::path::Path, message: &str, paths: &[&str]) {
+    for path in paths {
+        crate::test_support::git_add(root, path);
+    }
+    git_output(root, &["commit", "--quiet", "--no-verify", "-m", message]);
 }
 
 /// A file of exactly `READ_MAX_BYTES` is accepted; one byte more is not.
