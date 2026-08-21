@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.3.0] - 2026-08-20
+
 ### Added
 
 - **ChatGPT/Codex subscription review is a first-class backend, separate from
@@ -35,6 +37,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   per-token API billing distinct from ChatGPT/Codex subscription allowance.
   Its endpoint, model, key variable and Chat Completions wire contract are
   unchanged and covered by an OpenAI-specific mock-server test.
+
+### Fixed
+
+- Independent Kimi review hardened the Codex subprocess boundary, including
+  bounded stdout and stderr capture, child cleanup, event validation and
+  diagnostic redaction. It also tightened atomic config publication, cache
+  ownership and eviction, terminal finish handling, configuration validation,
+  and the remote mutation-sweep argument contract.
+- The generated release workflow now pins artifact upload and download actions
+  to the v4 protocol understood by the family Gitea runner. A release contract
+  test protects that compatibility override from `dist init` regeneration.
 
 ## [2.2.0] - 2026-08-20
 
@@ -1209,7 +1222,8 @@ behavior changes.
 - Rate limiting considerations
 - Sanitized LLM prompts to prevent injection
 
-[Unreleased]: https://github.com/slb350/drep/compare/v2.2.0...HEAD
+[Unreleased]: https://github.com/slb350/drep/compare/v2.3.0...HEAD
+[2.3.0]: https://github.com/slb350/drep/compare/v2.2.0...v2.3.0
 [2.2.0]: https://github.com/slb350/drep/compare/v2.1.0...v2.2.0
 [2.1.0]: https://github.com/slb350/drep/compare/v2.0.0...v2.1.0
 [2.0.0]: https://github.com/slb350/drep/compare/v1.3.0...v2.0.0

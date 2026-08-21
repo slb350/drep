@@ -688,6 +688,11 @@ formula = "drep"
 Requires a `HOMEBREW_TAP_TOKEN` secret with `repo` scope, and the
 `slb350/homebrew-tap` repository to exist.
 
+The tag workflow publishes binaries, the shell installer, and Homebrew. It does
+not publish the Rust package: the stable release procedure runs
+`cargo publish --locked` separately after `cargo publish --dry-run --locked`.
+The package is `drep-ai`; the installed binary remains `drep`.
+
 Also rewrite `.pre-commit-hooks.yaml` to `language: rust` ✅ (2026-08-19) — the
 `language: python` entry it replaced dies with the package.
 
@@ -744,12 +749,10 @@ the targets, the installers, the tap, the formula name, and that the pinned
 Verified by `dist plan`, `dist build --artifacts=local --target=<host>` and
 `dist build --artifacts=global`.
 
-**Still open in this phase:** the two prerequisites a release needs, neither of
-which is created from here - the `slb350/homebrew-tap` repository, and a
-`HOMEBREW_TAP_TOKEN` secret with `repo` scope on `slb350/drep`. They do not
-block a prerelease: dist gates `publish-homebrew-formula` on
-`!announcement_is_prerelease`, so a `v2.0.0-alpha.N` tag skips it and releases
-the binaries and the shell installer. They block the first stable tag.
+**Resolved before the first stable release:** `slb350/homebrew-tap` and the
+`HOMEBREW_TAP_TOKEN` secret were created. Dist gates
+`publish-homebrew-formula` on `!announcement_is_prerelease`, so a prerelease
+still skips the formula while a stable tag requires both.
 
 ### Phase 8 — Delete Python ✅ (2026-08-19)
 `drep/`, the pytest suite, `pyproject.toml`, `uv.lock`, `scripts/install.sh`,

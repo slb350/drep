@@ -1,9 +1,31 @@
 # OpenAI API and ChatGPT/Codex subscription integration plan
 
-- Status: design complete; implementation not started
+- Status: implemented and release-qualified for v2.3.0
 - Branch: `codex/openai-subscription-plan`
 - Base: `v2.2.0` / `3067e9c219f7e38e00744eec6b9f5eb1fd926bca`
 - Research date: 2026-08-20
+
+## Implementation outcome
+
+The design below was implemented without changing the existing OpenAI API
+preset or billing path. The initial implementation passed a live
+`gpt-5.6-sol` ChatGPT subscription smoke; the default remains one concurrent
+Codex process because no higher plan-safe concurrency was established.
+
+After an independent Kimi review, every accepted finding was reproduced or
+validated before repair. The final branch passed formatting, Clippy, the full
+Rust suite, strict documentation lint, a release build, a 1,124-mutant sweep
+with zero misses, and the normal Kimi-backed pre-push review. The final 2.3.0
+release candidate repeated the full sweep over 1,127 mutants with zero misses.
+The final `drep 2.3.0` binary also reviewed two uncached Python files through
+the ChatGPT subscription backend in 15.78 seconds: `gpt-5.6-sol` served both,
+the command exited zero, and it reported no findings or unanalyzed files. The
+OpenAI API path has deterministic wire-contract coverage; no paid OpenAI API
+credential was available for an additional live request.
+
+The implementation commits are `7642572` (backend), `3f0def6` (simplification)
+and `1b4fa50` (validated review fixes). This document retains the original
+design and TDD sequence as the rationale for the shipped boundary.
 
 ## Decision summary
 
@@ -15,7 +37,7 @@ model rejects. OpenAI currently documents `gpt-5.6-sol` as supporting both
 rebuilt or migrated to Responses as part of this feature.
 
 ChatGPT/Codex subscription usage is a separate backend, not another HTTP
-endpoint or API-key preset. Add a `codex` preset that invokes the installed
+endpoint or API-key preset. The `codex` preset invokes the installed
 Codex CLI in non-interactive mode, forces ChatGPT authentication, and consumes
 the user's Codex subscription allowance. drep will not read, copy, refresh, or
 store ChatGPT OAuth tokens.

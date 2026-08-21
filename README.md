@@ -46,7 +46,10 @@ curl --proto '=https' --tlsv1.2 -LsSf \
 # Homebrew
 brew install slb350/tap/drep
 
-# From source
+# crates.io
+cargo install drep-ai
+
+# Current main branch
 cargo install --git https://github.com/slb350/drep drep-ai
 ```
 
@@ -87,7 +90,7 @@ To adopt drep through [pre-commit](https://pre-commit.com) instead:
 ```yaml
 repos:
   - repo: https://github.com/slb350/drep
-    rev: v2.0.0
+    rev: v2.3.0
     hooks:
       - id: drep-check-push   # pre-push: what the push touches
       # - id: drep-check      # pre-commit: staged files
@@ -205,9 +208,10 @@ drep init --provider openai
 export OPENAI_API_KEY='...'
 ```
 
-ChatGPT/Codex subscription usage is a separate backend. Install the Codex CLI,
-follow the official [Codex authentication](https://learn.chatgpt.com/docs/auth)
-guide to run `codex login`, then select the `codex` preset:
+ChatGPT/Codex subscription usage is a separate backend. Install the official
+[Codex CLI](https://learn.chatgpt.com/docs/codex/cli), follow the
+[Codex authentication](https://learn.chatgpt.com/docs/auth) guide to run
+`codex login`, then select the `codex` preset:
 
 ```sh
 codex login

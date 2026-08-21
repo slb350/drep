@@ -255,7 +255,11 @@ its key to be set. `LlmConfig` hand-writes `Debug` to redact `api_key`.
 `dist-workspace.toml` drives cargo-dist. Four targets, each built on a runner
 of its own architecture, plus a shell installer and a Homebrew formula pushed
 to `slb350/homebrew-tap`. `.github/workflows/release.yml` is generated from that
-config and must not be hand-edited.
+config, with one tested compatibility override pinning the artifact actions to
+the v4 protocol supported by family Gitea. `allow-dirty = ["ci"]` declares that
+override to cargo-dist. The same workflow creates the GitHub release and
+publishes Homebrew; crates.io is a separate `cargo publish --locked` step
+because cargo-dist does not publish Rust crates.
 
 CI (`.github/workflows/rust.yml`) runs fmt and clippy once, an MSRV check at
 1.88, and a full `cargo mutants` sweep. GitHub runs the test suite on Linux and

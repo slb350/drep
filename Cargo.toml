@@ -1,6 +1,6 @@
 [package]
 name = "drep-ai"
-version = "2.2.0"
+version = "2.3.0"
 edition = "2024"
 # Set by `ignore` 0.4.30, which uses let-chains and declares no `rust-version`
 # of its own - so cargo cannot refuse the resolve, and the failure is a build
