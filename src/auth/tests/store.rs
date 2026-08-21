@@ -99,6 +99,31 @@ fn the_saved_directory_is_enterable_only_by_its_owner() {
 
 #[cfg(unix)]
 #[test]
+fn saving_does_not_narrow_an_existing_directory() {
+    // The runner service has a 0077 umask, so a freshly-created directory is
+    // already 0700 even if `ensure_dir_private` fails to call `restrict`.
+    // Widening an existing directory makes the ownership rule observable
+    // without depending on the process umask.
+    use std::os::unix::fs::PermissionsExt;
+
+    let (_dir, path) = temp_store();
+    let parent = path.parent().expect("parent");
+    std::fs::create_dir_all(parent).expect("mkdir");
+    std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o755)).expect("widen");
+    let mut store = AuthStore::new();
+    store.set("https://e/v1", "k").expect("set");
+
+    store.save(&path).expect("save");
+
+    let mode = std::fs::metadata(parent)
+        .expect("metadata")
+        .permissions()
+        .mode();
+    assert_eq!(mode & 0o777, 0o755, "got {:o}", mode & 0o777);
+}
+
+#[cfg(unix)]
+#[test]
 fn saving_narrows_a_file_whose_mode_was_widened() {
     // A store written before the mode was enforced, or one a user chmod'd, is
     // narrowed on the next save rather than left as found.
