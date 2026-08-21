@@ -1,8 +1,7 @@
 //! Tolerant JSON extraction from LLM responses.
 //!
-//! The model returns prose-wrapped, fenced, or slightly malformed JSON. Port
-//! the strategy ladder from `drep/llm/json_parsing.py` (minus the single-quote
-//! repair and the fuzzy-inference fallback), first success wins:
+//! The model returns prose-wrapped, fenced, or slightly malformed JSON. The
+//! extraction strategy is tried in this order, with the first success winning:
 //!
 //! 1. Parse the whole response directly - a response that is already JSON is
 //!    the answer, even if it happens to quote a fence inside a string.
@@ -19,12 +18,12 @@
 //!
 //! Recovering truncated JSON yields a *partial* findings list. While LLM
 //! findings only inform, under `--fail-on` a truncated response could
-//! silently omit the one blocking finding and the gate would pass. Phase 4
-//! will treat `Truncated` as *unanalyzed* rather than clean when gating.
+//! silently omit the one blocking finding and the gate would pass. The analyzer
+//! treats `Truncated` as *unanalyzed* rather than clean when gating.
 //! Losing this distinction reintroduces the exact failure the whole project
 //! exists to prevent.
 //!
-//! ## What is deliberately NOT ported
+//! ## What is deliberately unsupported
 //!
 //! - **Single-quote repair.** It corrupts any JSON string containing an
 //!   apostrophe (`"don't"`, `` "`os` imported but unused" ``), which finding

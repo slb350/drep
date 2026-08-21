@@ -403,8 +403,7 @@ async fn a_linked_worktree_installs_into_the_main_repositorys_hooks_dir() {
 /// An **empty** `core.hooksPath` means "hooks are disabled", not "hooks live
 /// in the current directory".
 ///
-/// git reads an empty value back as present-but-blank, and the 1.x installer
-/// documented this as one of its two silent failure modes. Treating it as a
+/// git reads an empty value back as present-but-blank. Treating it as a
 /// directory resolves to `root.join("")`, i.e. the repository root, so drep
 /// would scatter chainers next to the user's source files and report a
 /// `core.hooksPath is set to` line naming nothing.

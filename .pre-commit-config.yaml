@@ -7,10 +7,9 @@
 #       && pre-commit install --hook-type pre-push
 #     git config --local --unset core.hooksPath
 #
-# `pre-commit` itself is the one Python left anywhere near this repository, and
-# it lives on PATH rather than in a venv here: `uv tool install pre-commit`.
-# Every hook below is `language: system`, so pre-commit builds no environments
-# and the tool versions are the ones CI runs.
+# `pre-commit` is expected on PATH (`uv tool install pre-commit`). Every hook
+# below is `language: system`, so pre-commit builds no environments and the tool
+# versions are the ones CI runs.
 #
 # Ordering is deliberate: the instant checks run first, so an obvious lint
 # failure does not cost an LLM round-trip.

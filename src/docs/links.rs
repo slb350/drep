@@ -144,9 +144,8 @@ fn match_link(chars: &[char], start: usize) -> Option<usize> {
 ///
 /// `[ref]: https://example.com` declares a link target; the URL there is
 /// *supposed* to be bare, and wrapping it in `[text](url)` would break the
-/// definition. 1.x reported it, which meant nine spurious findings in this
-/// repository's own `CHANGELOG.md` alone - the Keep a Changelog footer is
-/// nothing but reference definitions, and so is the bottom of most READMEs.
+/// definition. The Keep a Changelog footer is made entirely of reference
+/// definitions, as are the link indexes at the bottom of many READMEs.
 ///
 /// Only the destination is blanked. The `[ref]` half stays, so the bracket
 /// balance check still sees a well-formed pair and a genuinely broken
@@ -176,9 +175,8 @@ fn blank_reference_definition(chars: &mut [char]) {
 ///
 /// Reported against `blanked`, so a URL inside a well-formed link or inside
 /// backticks is already spaces and does not fire. Reported *per line* rather
-/// than per URL, matching 1.x - but the blanking is what makes that honest: one
-/// link on the line does not excuse a bare URL sitting beside it, because only
-/// the link's own characters were blanked.
+/// than per URL; the blanking makes that honest because one link on the line
+/// does not excuse a bare URL sitting beside it.
 fn bare_url(line: &Line<'_>, blanked: &[char], file_path: &str, out: &mut Vec<Finding>) {
     let Some(start) = find_url(blanked) else {
         return;

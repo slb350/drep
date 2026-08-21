@@ -2,11 +2,10 @@
 //!
 //! Every entry used to carry only `file` and `reason`, where `reason` is an
 //! English sentence. A consumer wanting to tell "the endpoint rate-limited us"
-//! from "the endpoint is misconfigured" had to match on that prose — and Phase
-//! 5c's failover has to make exactly that call, because a 429 should fail over
-//! to the next provider and a 401 must not (falling back would mask the
-//! misconfiguration). So each entry now carries a stable `kind` tag, plus an
-//! HTTP `status` or process `backend_kind` where one exists.
+//! from "the endpoint is misconfigured" had to match on that prose. Failover
+//! makes exactly that call because a 429 should advance and a 401 must not.
+//! Each entry therefore carries a stable `kind` tag, plus an HTTP `status` or
+//! process `backend_kind` where one exists.
 
 use serde_json::Value;
 

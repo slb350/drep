@@ -102,8 +102,8 @@ fn a_url_carrying_an_escape_sequence_cannot_reach_the_terminal_intact() {
 
 #[test]
 fn only_the_first_bare_url_on_a_line_is_reported() {
-    // One finding per line, matching 1.x. Two URLs on one line is one thing to
-    // fix, and two findings at two columns reads as two.
+    // One finding per line: two URLs on one line is one thing to fix, while two
+    // findings at two columns reads as two.
     assert_eq!(
         of_kind("https://a.example and https://b.example", Check::BareUrl).len(),
         1
@@ -164,13 +164,12 @@ fn a_reference_style_link_is_balanced() {
 
 #[test]
 fn a_link_reference_definition_declares_a_url_rather_than_leaving_one_bare() {
-    // The Keep a Changelog footer, which is nothing but these. 1.x reported
-    // every one of them; this repository's own CHANGELOG.md has nine.
+    // The Keep a Changelog footer is made entirely of these definitions.
     silent(
-        "[1.1.3]: https://github.com/slb350/drep/compare/v1.1.2...v1.1.3",
+        "[2.5.0]: https://github.com/slb350/drep/compare/v2.4.0...v2.5.0",
         Check::BareUrl,
     );
-    silent("[1.1.3]: https://example.com", Check::LinkSyntaxInvalid);
+    silent("[2.5.0]: https://example.com", Check::LinkSyntaxInvalid);
     // Indented definitions inside a list still count.
     silent("  [ref]: https://example.com", Check::BareUrl);
 }

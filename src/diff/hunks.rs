@@ -154,15 +154,14 @@ impl Hunk {
 /// - **The file path comes from `+++ b/…`, never from `diff --git a/… b/…`.**
 ///   The git header carries two paths on one line with no unambiguous
 ///   separator, so any "find `b/`" rule captures the wrong span for a
-///   repository path that itself contains `b/` (`src/b/mod.rs`). The Python
-///   `diff_parser.py` this replaces had exactly that bug.
+///   repository path that itself contains `b/` (`src/b/mod.rs`).
 /// - `+++ /dev/null` marks a deletion; there is nothing to analyze, so the
 ///   file's hunks are dropped.
 /// - **Inside a hunk body the first byte alone decides the line kind.** Lines
 ///   starting `---` or `+++` are *not* additionally skipped: those headers
 ///   appear only before the first `@@` of a file, and a removed source line
 ///   whose own text begins with `--` arrives as `---…`. Skipping it silently
-///   drops real removed code — the second bug in the Python.
+///   drops real removed code.
 /// - `\ No newline at end of file` refers to the preceding line and never
 ///   becomes a `HunkLine`.
 /// - A malformed `@@` terminates the current hunk without its body being

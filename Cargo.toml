@@ -16,8 +16,8 @@ readme = "README.md"
 keywords = ["code-review", "linter", "pre-commit", "llm", "static-analysis"]
 categories = ["command-line-utilities", "development-tools"]
 
-# `drep` is taken on crates.io (0.1.3), exactly as it is on PyPI. The package
-# keeps the `-ai` suffix; the binary and the library are both `drep`.
+# `drep` is already taken on crates.io, so the package keeps the `-ai` suffix;
+# the binary and the library are both `drep`.
 #
 # The bin `path` is required because the binary name differs from the package
 # name; the lib path is inferred and left implicit.
@@ -38,21 +38,18 @@ warnings = "deny"
 [lints.clippy]
 all = { level = "deny", priority = -1 }
 
-# Dependencies arrive with the phase that first needs them - see
-# docs/rust-migration.md. Declaring the full target set up front would mean
-# carrying unused crates through every build for no benefit.
 [dependencies]
 anyhow = "1.0"
 clap = { version = "4.6", features = ["derive"] }
-# Phase 1: the deterministic tool runner.
+# Deterministic tool output parsing and asynchronous process execution.
 regex = "1.13"
 serde_json = "1.0"
 tokio = { version = "1.53", features = ["io-util", "process", "rt-multi-thread", "macros", "time"] }
-# Phase 2: file discovery. Prunes ignored trees during the walk rather than
-# stat-ing every entry under them first, and understands .gitignore.
+# File discovery prunes ignored trees during the walk and understands
+# .gitignore without stat-ing every entry under them first.
 ignore = "0.4"
-# Phase 3: the LLM layer. The crate is `open-agent-sdk`; the library it exposes
-# is `open_agent`.
+# The `open-agent-sdk` crate exposes the `open_agent` library used by the HTTP
+# review backend.
 # 0.9.0 adds the Anthropic `/messages` protocol and makes `temperature`
 # omittable, both of which drep requires: `kimi` and `minimax` speak Anthropic,
 # and `k3` rejects any temperature at all. 0.10.0 delivers streamed text one
@@ -69,11 +66,11 @@ directories = "6.0"
 # Codex reviews run from a fresh private directory containing drep's
 # replacement instructions and response schema, with an empty child cwd.
 tempfile = "3.27"
-# Phase 9: `drep init` reads a pasted API key without echoing it. A key in the
+# `drep init` reads a pasted API key without echoing it. A key in the
 # terminal's scrollback is the one place drep would otherwise leave a credential
 # in the clear, having hand-written `Debug` three times to avoid exactly that.
 rpassword = "7.5"
-# Phase 9: `drep init` asks an endpoint which models it serves, so a model name
+# `drep init` asks an endpoint which models it serves, so a model name
 # is chosen from what the plan actually includes rather than typed from memory.
 # One GET, no streaming and no retry, which is why it does not go through
 # open-agent-sdk - that crate owns the completion path and its retry policy.

@@ -126,8 +126,8 @@ async fn the_registry_is_consulted_once_for_the_whole_chain() {
 #[tokio::test]
 async fn the_registry_never_adds_a_max_tokens_to_an_endpoint_that_does_not_need_one() {
     // `glm-5.2` publishes an output limit and z.ai accepts a request without
-    // the field. Writing one would put a completion cap on a reasoning model,
-    // which is the coupling 2.0 removed.
+    // the field. Writing one would put an arbitrary completion cap on a
+    // reasoning model.
     let catalog = Catalog::of(&["glm-5.3", "glm-5.2"]);
 
     let (plan, _) = run_one("zai", &catalog, &Quirked::from_json(FIXTURE), "2").await;

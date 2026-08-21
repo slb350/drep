@@ -13,7 +13,7 @@
 //!   environment variable instead of holding the secret. The file gets
 //!   committed; the secret does not. An unset variable is an error rather
 //!   than an empty string, because a silent empty credential produces a
-//!   confusing 401 instead of a clear "GITHUB_TOKEN is not set".
+//!   confusing 401 instead of a clear "API_KEY is not set".
 //! - **`max_tokens` defaults to None**, meaning no cap is sent to the model.
 //!   Modern reasoning models ship 256k-1M context, and inventing a ceiling
 //!   truncates them mid-thought. The option stays available for capping
@@ -33,10 +33,8 @@ pub use backend::{BackendKind, LlmConfig, ReasoningEffort};
 /// The whole configuration tree, rooted at the file.
 ///
 /// `llm` is an **array of tables** (`[[llm]]`), not a single `[llm]` section,
-/// and it is that shape from the day `drep init` first wrote one - a phase
-/// before failover could read it, precisely so the file format would not have
-/// to change underneath a file drep itself wrote. The list is a *preference
-/// order*: [`Self::providers`] is the failover chain.
+/// and the list is a *preference order*: [`Self::providers`] is the failover
+/// chain.
 ///
 /// `#[serde(default)]` means a file with an empty body deserializes
 /// successfully; `validate` is what then rejects it, because a config
@@ -194,9 +192,9 @@ pub fn load(path: &Path) -> Result<Config, ConfigError> {
     let content =
         std::fs::read_to_string(path).map_err(|err| ConfigError::Io(path.to_path_buf(), err))?;
 
-    // `toml::from_str::<Value>` and `<Value as FromStr>::from_str` are NOT
-    // interchangeable in toml 1.x, despite producing the same type. The former
-    // runs the document parser; the latter runs `ValueDeserializer`, which
+    // `toml::from_str::<Value>` and `<Value as FromStr>::from_str` are not
+    // interchangeable despite producing the same type. The former runs the
+    // document parser; the latter runs `ValueDeserializer`, which
     // parses a single TOML *value* (`42`, `"text"`) and rejects a whole document
     // with "unexpected content, expected nothing".
     let mut tree: Value = toml::from_str(&content).map_err(|err: toml::de::Error| {

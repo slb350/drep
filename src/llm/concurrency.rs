@@ -1,10 +1,8 @@
 //! Concurrency cap for LLM requests.
 //!
 //! One thing, on purpose: a bounded number of in-flight requests, nothing
-//! else. The Python's `drep/llm/rate_limiter.py` carried five mechanisms in
-//! one file because 1.x was a server scanning whole repositories against a
-//! shared endpoint. A local pre-commit gate reviewing a handful of changed
-//! files has none of those pressures:
+//! else. A local commit gate reviewing a handful of changed files does not need
+//! server-oriented rate-limit machinery:
 //!
 //! - **Per-repo semaphores** are a map with one entry. One invocation, one
 //!   repo, one bucket.
@@ -12,15 +10,14 @@
 //!   second, worse implementation of what `open-agent-sdk` 0.7.0 already
 //!   does: it classifies 429 as retryable and backs off, so a client-side
 //!   throttle duplicates the backoff without owning it.
-//! - **Two-phase token accounting** exists to reconcile an estimate against
+//! - **Two-step token accounting** exists to reconcile an estimate against
 //!   actuals across a queue. With no token budget, nothing to reconcile, so
 //!   the "never hold the lock across an await" hazard disappears with it.
 //! - **A circuit breaker** protects a shared service from a stampede. One
 //!   developer committing is not a stampede.
 //!
 //! If a real workload later shows `max_concurrent` is not enough, add the
-//! narrowest thing that fixes it - do not restore the Python's machinery
-//! wholesale.
+//! narrowest mechanism that fixes it.
 //!
 //! [`tokio::sync::Semaphore::acquire`] returns `Result` because the
 //! semaphore can be closed. This limiter never closes it, so the error

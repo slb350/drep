@@ -13,11 +13,9 @@
 //! than silently replaced, so a stale one here is visible instead of inherited.
 //! They remain the answer for `--provider` runs, which have no prompt.
 //!
-//! **`max_tokens` is deliberately absent.** The Python presets set it to
-//! 100,000 for reasoning models. In 2.0 no cap is sent unless the user sets
-//! one - see the `max_tokens` note in [`crate::config`]. A preset that set one
-//! would reintroduce exactly the coupling that was removed. The one exception
-//! is an endpoint that *refuses a request without the field*, where the preset
+//! **`max_tokens` is deliberately absent.** No cap is sent unless the user sets
+//! one - see the `max_tokens` note in [`crate::config`]. The one exception is
+//! an endpoint that *refuses a request without the field*, where the preset
 //! records that requirement and a value to fall back on.
 //!
 //! **`temperature` and `max_tokens` are properties of a model, not a

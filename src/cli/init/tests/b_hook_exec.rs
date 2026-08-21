@@ -350,11 +350,6 @@ fn run_pre_commit(dir: &Path, stub_exit: i32) -> (Option<i32>, Vec<String>) {
 
 /// The installed hook runs the markdown checks, and runs them first.
 ///
-/// `drep init` used to write `exec drep check --staged` and nothing else, so a
-/// repository gated by drep's own installer had no markdown gating at all -
-/// invisible in this repository, which ran `lint-docs` from its own
-/// `.pre-commit-config.yaml` instead of from the hook it ships.
-///
 /// First because it is rule-based and takes ~10 ms, and `check` sends files to
 /// an LLM: an obvious documentation defect should not cost a round trip.
 #[test]
@@ -380,8 +375,8 @@ fn the_pre_commit_hook_lints_markdown_before_it_calls_the_llm() {
 
 /// `--fail-on error`, not `--strict`.
 ///
-/// Under the Phase 6 severity scale `--strict` blocks on any finding, which
-/// over a real repository is dominated by line length and trailing whitespace.
+/// `--strict` blocks on any finding, which over a real repository is dominated
+/// by line length and trailing whitespace.
 /// A hook that blocks a commit over a long line is a hook that gets deleted.
 /// `error` is exactly one check - an unclosed fence, which turns the rest of
 /// the document into code.

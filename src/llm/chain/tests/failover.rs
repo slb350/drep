@@ -106,10 +106,9 @@ async fn a_403_does_not_fail_over() {
 
 /// An empty response fails over.
 ///
-/// The decision recorded in `docs/rust-migration.md`: zero characters means
-/// the provider did not answer, it already cost the SDK's retries, and it
-/// produced no output tokens - so the next provider is the first one likely to
-/// actually answer.
+/// Zero characters means the provider did not answer, it already cost the
+/// SDK's retries, and it produced no output tokens - so the next provider is
+/// the first one likely to actually answer.
 #[tokio::test]
 async fn an_empty_response_fails_over() {
     let silent = server_returning_nothing().await;

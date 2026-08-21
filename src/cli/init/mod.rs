@@ -217,9 +217,9 @@ pub(crate) fn describe(path: &Path) -> Vec<String> {
     let Ok(raw) = std::fs::read_to_string(path) else {
         return vec!["(could not be read)".to_string()];
     };
-    // `toml::from_str::<Value>` and `raw.parse::<Value>()` are NOT
-    // interchangeable in toml 1.x despite producing the same type: the former
-    // runs the document parser, the latter runs `ValueDeserializer`, which
+    // `toml::from_str::<Value>` and `raw.parse::<Value>()` are not
+    // interchangeable despite producing the same type: the former runs the
+    // document parser, while the latter runs `ValueDeserializer`, which
     // parses a single TOML *value* and rejects a whole document. Getting this
     // wrong reported every well-formed config as unparseable.
     let Ok(value) = toml::from_str::<toml::Value>(&raw) else {

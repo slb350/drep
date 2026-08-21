@@ -29,9 +29,9 @@ fn preset_keys_are_in_spec_order_and_every_key_round_trips() {
 #[test]
 fn only_a_preset_whose_endpoint_requires_max_tokens_renders_one() {
     // The rule is still "no completion cap": an invented ceiling truncates a
-    // reasoning model mid-thought, which is the coupling 2.0 removed. The single
-    // exception is an endpoint that refuses a request *without* the field, where
-    // omitting it is not a lighter touch but a 400. Asserted as an exact set
+    // reasoning model mid-thought. The single exception is an endpoint that
+    // refuses a request *without* the field, where omitting it is not a lighter
+    // touch but a 400. Asserted as an exact set
     // rather than per-preset, so re-introducing a cap for any other provider
     // fails here.
     use crate::cli::init::presets::PRESETS;

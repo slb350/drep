@@ -92,10 +92,9 @@ echo "mutants: running on $HOST (-j $JOBS), results mirrored back to $MUTANTS_OU
 # would otherwise take it, turning every run into a cold build.
 rsync -a --delete --force --delete-excluded --filter='P /target' --mkpath \
   --exclude target --exclude 'mutants.out*' \
-  --exclude .git --exclude venv --exclude node_modules \
-  --exclude .mypy_cache --exclude .pytest_cache --exclude .ruff_cache \
-  --exclude '*.egg-info' --exclude dist --exclude build --exclude .drep \
-  --exclude '.tokens' --exclude '.env*' \
+  --exclude .git --exclude node_modules \
+  --exclude dist --exclude build --exclude .drep \
+  --exclude '.env*' \
   ./ "$REMOTE/"
 
 # Files the run needs that the sync above skipped - in practice the staged diff,

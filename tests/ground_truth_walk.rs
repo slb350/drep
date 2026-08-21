@@ -7,9 +7,7 @@
 //!
 //! The pruning assertions are the load-bearing ones. Descending into `target/`
 //! costs tens of thousands of syscalls and is the reason this uses the `ignore`
-//! crate rather than a recursive glob. Until Phase 8 the same sentence was
-//! about a 222MB `venv/`; the tree it walks is the ground truth, so deleting
-//! Python changed what this file can honestly assert.
+//! crate rather than a recursive glob.
 //!
 //! Only properties that need a *real* tree live here. The explicit-path
 //! asymmetry (naming a gitignored file outranks the walk) used to have a copy
@@ -73,16 +71,14 @@ fn the_markdown_walk_finds_this_repos_docs_and_respects_gitignore() {
     // The other half of the split, and the one that carries the gitignore
     // assertions: `.claude/` holds 15 real `.md` files, so only `.gitignore`
     // keeps them out of this walk. Asserting that against `is_scan_target`
-    // stopped meaning anything once markdown left it. `.pytest_cache/` was the
-    // second example here until Phase 8 deleted it, and a directory that no
-    // longer exists cannot fail this assertion.
+    // would not test the markdown walk.
     let rel = walk(is_markdown);
 
     // Note what is *not* here: `CLAUDE.md` is gitignored in this repository,
     // so the walk correctly skips it and `drep lint-docs` says nothing about
     // it unless the user names it. That is the same asymmetry the explicit
     // -path test below pins, seen from the walk's side.
-    for expected in ["README.md", "CHANGELOG.md", "docs/rust-migration.md"] {
+    for expected in ["README.md", "CHANGELOG.md", "docs/technical-design.md"] {
         assert!(rel.iter().any(|p| p == expected), "missing {expected}");
     }
     assert!(

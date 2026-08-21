@@ -1,11 +1,11 @@
-//! `is_scan_target`, `is_python_source`, `is_markdown`.
+//! `is_scan_target` and `is_markdown`.
 //!
 //! Pins the case-insensitive suffix contract every discovery path shares:
 //! `FOO.PY` is a target, `Makefile` is not, `.gitignore` does not panic.
 
 use std::path::Path;
 
-use crate::files::{is_markdown, is_python_source, is_scan_target};
+use crate::files::{is_markdown, is_scan_target};
 
 /// Every extension a registered language owns.
 ///
@@ -96,15 +96,6 @@ fn a_dotfile_with_no_extension_is_not_a_target_and_does_not_panic() {
     // because `Path::extension` returning `None` is easy to mishandle.
     assert!(!is_scan_target(Path::new(".gitignore")));
     assert!(!is_scan_target(Path::new("..")));
-}
-
-#[test]
-fn is_python_source_is_python_only() {
-    assert!(is_python_source(Path::new("foo.py")));
-    assert!(is_python_source(Path::new("FOO.PY")));
-    assert!(!is_python_source(Path::new("foo.rs")));
-    assert!(!is_python_source(Path::new("foo.md")));
-    assert!(!is_python_source(Path::new("Makefile")));
 }
 
 #[test]

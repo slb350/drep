@@ -349,10 +349,9 @@ endpoint = "http://live/v1"
 
 /// An `llm` key that is not an array of tables is reported as such.
 ///
-/// The pre-2.0 single-table `[llm]` shape used to read here as "declares no
-/// `[[llm]]` provider. Run `drep init`." - which points the user at a command
-/// that will refuse to overwrite their file, and skipped the `config::load`
-/// check that would have named the real problem.
+/// Reporting this as "declares no `[[llm]]` provider" points the user at a
+/// command that will refuse to overwrite their file and skips the
+/// `config::load` check that names the real problem.
 #[test]
 fn a_non_array_llm_key_is_not_reported_as_a_missing_provider() {
     let temp = tempfile::tempdir().expect("tempdir");

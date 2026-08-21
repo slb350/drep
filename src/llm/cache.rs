@@ -1,15 +1,11 @@
 //! Content-addressed cache for LLM responses.
 //!
-//! Two design choices diverge from the Python `drep/llm/cache.py` and the
-//! criterion is "the cache should hit on the call paths the gate actually
-//! takes", not "the cache should mirror what 1.x did":
+//! Two choices make cache hits follow the call paths the gate actually takes:
 //!
-//! - **The key is content-only, never commit-aware.** The Python mixed the
-//!   commit SHA into the key so a new commit invalidated everything. Hashing
-//!   the content already invalidates precisely when the content changes; the
-//!   SHA was forcing a miss on every unchanged file at every new commit, which
-//!   is the exact case the cache exists to serve. On a pre-commit gate that is
-//!   the common path.
+//! - **The key is content-only, never commit-aware.** Hashing content
+//!   invalidates precisely when the content changes; including the commit SHA
+//!   would force a miss on unchanged files after every commit, which is the
+//!   exact case the cache exists to serve.
 //! - **One file per entry, the value is the JSON.** No sidecar metadata file.
 //!   The key is the filename, so nothing has to be re-validated on read except
 //!   age. If the entry is corrupt, unreadable, or expired, the read returns

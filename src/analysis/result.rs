@@ -321,10 +321,8 @@ impl AnalysisResult {
     /// Fold `other` into `self`: findings concatenate, `failed_files`
     /// unions, `dropped_out_of_range` sums.
     ///
-    /// The merge semantics are what let a caller run several analyzers
-    /// (code quality, docstrings, ...) and combine their results without
-    /// losing the failure signal. Calling `merge` in a loop over per-file
-    /// results inside `analyze_files` is the planned usage.
+    /// The merge semantics let a caller combine per-file and per-layer results
+    /// without losing the failure signal.
     ///
     /// On a key collision in `failed_files`, the **first** reason wins. A
     /// file failing twice is still one failure, and the two reasons are not

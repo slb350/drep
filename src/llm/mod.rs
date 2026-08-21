@@ -1,6 +1,6 @@
 //! LLM client and JSON extraction.
 //!
-//! Split by concern rather than by phase:
+//! Split by concern:
 //!
 //! - [`json_parsing`] turns whatever the model returned into a `serde_json::Value`.
 //!   Tolerant of fences, prose, trailing commas and truncated output, in that
@@ -10,8 +10,7 @@
 //! - [`cache`] is the on-disk response cache. Content-addressed keys (not
 //!   git-aware), infallible reads, oldest-first eviction.
 //! - [`concurrency`] is the bounded in-flight limiter. Deliberately just a
-//!   `Semaphore`; the rate-limit machinery the Python carried is gone (see
-//!   the module doc for the four reasons).
+//!   `Semaphore`; see the module doc for why it remains narrow.
 //! - [`models`] asks an endpoint which models it serves, for `drep init`.
 //! - [`quirks`] answers what one *model* accepts - `temperature` and its
 //!   output ceiling - which no endpoint's listing carries.

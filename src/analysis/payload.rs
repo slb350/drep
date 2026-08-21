@@ -6,9 +6,9 @@
 //! header, which it does unreliably; every finding then points at the wrong
 //! code and looks perfectly plausible. So the payload states each line's real
 //! file line number explicitly in the gutter, and the caller keeps the set of
-//! numbers that were actually shown. A later phase drops any finding whose
-//! line is not in that set, because such a finding is about code the model was
-//! never shown.
+//! numbers that were actually shown. The analyzer drops any finding whose line
+//! is not in that set, because such a finding is about code the model was never
+//! shown.
 //!
 //! The numbering itself is not implemented here: it comes from
 //! [`Hunk::numbered_lines`], which is the single home of the rule that a
@@ -36,9 +36,7 @@ use crate::languages::spec::LanguageSupport;
 ///
 /// A payload over the ceiling is a
 /// [`crate::analysis::result::FailureReason::PayloadTooLarge`] failure, never a
-/// skip: 1.x returned an empty finding list for anything over 32k chars, which
-/// under this codebase's contract is the banned move - a file drep declined to
-/// analyze is not clean.
+/// skip: a file drep declined to analyze is not clean.
 ///
 /// `u64` rather than `usize` so it compares directly against the byte counts
 /// `FailureReason` carries; only one site measures a `str` length, and that one
@@ -51,7 +49,7 @@ pub struct Payload {
     /// The text handed to the model.
     pub text: String,
     /// Every new-file line number that appears in `text` with a number in the
-    /// gutter — `Context` and `Added` lines. A later phase drops any finding
+    /// gutter — `Context` and `Added` lines. The analyzer drops any finding
     /// whose line is not in this set, because such a finding is about code the
     /// model was never shown.
     ///

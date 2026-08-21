@@ -19,10 +19,9 @@ AGENTS.md
 # Local provider selection. Each checkout may use a different review backend.
 drep.toml
 
-# Secrets. .env holds the pre-push provider credential; .tokens is 1.x's PyPI
-# credentials. Neither belongs in repository history.
+# Secrets. .env holds the pre-push provider credential and never belongs in
+# repository history.
 .env
-.tokens
 
 # Local caches and scratch
 .drep/

@@ -17,9 +17,8 @@
 //!   parser's point of view, an unanalyzed file — the parser does not
 //!   attempt to recover a foreign schema.
 //!
-//! 2.x advertises two facts the Python did not need to: every line in the
-//! payload carries a real file line number in the gutter, and a finding must
-//! not be reported on a line that has no number. Together with
+//! Every payload line carries its real file line number in the gutter, and a
+//! finding must not be reported on a line that has no number. Together with
 //! [`crate::analysis::payload::Payload::valid_lines`] they are the line-
 //! number provenance the parser relies on to drop findings that point at
 //! code the model was never shown.

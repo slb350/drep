@@ -1,12 +1,9 @@
 //! The finding vocabulary.
 //!
-//! Phase 4 adds `Finding` itself. `Severity` lands here in Phase 0 because
-//! `drep check --fail-on` is part of the CLI contract and needs it to parse.
-//!
 //! Deliberately free of `clap`: this module becomes the core analysis library,
-//! and the tool parsers (Phase 1) and LLM response parsing (Phases 3-4) need
-//! `Severity` without dragging an argument parser in behind it. The CLI adapts
-//! to `FromStr` at its own boundary.
+//! and both tool parsers and LLM response parsing need `Severity` without
+//! dragging an argument parser in behind it. The CLI adapts to `FromStr` at its
+//! own boundary.
 
 use std::str::FromStr;
 
@@ -17,11 +14,9 @@ use std::str::FromStr;
 /// directly rather than inventing a ranking.
 ///
 /// Ordering is derived from declaration order, so it cannot drift from a
-/// separate rank table and there is no "unknown severity" case to default.
-/// In the Python implementation this was a `SEVERITY_RANK` dict that callers
-/// had to remember to index rather than `.get(..., 0)` - a lookup with a
-/// default silently passes a gate on a severity nobody ranked. Here the type
-/// system removes the question.
+/// separate rank table and there is no "unknown severity" case to default. A
+/// lookup with a default could silently pass a gate on a severity nobody
+/// ranked; the type system removes that possibility.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Severity {
     Info,
@@ -108,10 +103,6 @@ impl std::fmt::Display for Severity {
 }
 
 /// One finding produced by an analyzer.
-///
-/// Field naming follows the Python `drep.models.findings.Finding` so the two
-/// stay translatable; `kind` here is `type` there, since `type` is a reserved
-/// word in Rust and would force `r#type` at every call site.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Finding {
     /// Rule code (e.g. `"F401"`) for a structured finding, or the tool name

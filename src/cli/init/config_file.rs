@@ -1,10 +1,8 @@
 //! Render and write `drep.toml`.
 //!
-//! The on-disk shape is fixed by Phase 5b: every entry has its documented
-//! position, comments explain *why* a field exists (or doesn't), and the file
-//! parses cleanly through [`crate::config::load`] once the referenced env
-//! vars are set. `init` and `config` agreeing about the file is the whole
-//! reason `[[llm]]` lands in this phase rather than in 5c.
+//! Every entry has its documented position, comments explain *why* a field
+//! exists (or does not), and the file parses cleanly through
+//! [`crate::config::load`] once the referenced environment variables are set.
 //!
 //! Escaping happens here rather than at a higher level, so `render` is the
 //! single place a caller's value could fail to escape. See `escape` for what
@@ -201,8 +199,8 @@ fn render_one(body: &mut String, choice: &Choice) {
         body.push_str(&format!("api_key = \"${{{env}}}\"\n"));
     }
 
-    // Written only when the preset names one, so an OpenAI-compatible block keeps
-    // the shape it has had since 2.0 and no existing file has to be migrated.
+    // Written only when the preset names one, so an OpenAI-compatible block
+    // stays minimal.
     if let Some(protocol) = http.protocol {
         body.push_str("# This endpoint speaks Anthropic's messages API, not chat completions.\n");
         body.push_str(&format!("protocol = \"{}\"\n", escape(protocol)));
