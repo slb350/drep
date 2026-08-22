@@ -102,7 +102,7 @@ To adopt drep through [pre-commit](https://pre-commit.com) instead:
 ```yaml
 repos:
   - repo: https://github.com/slb350/drep
-    rev: v2.5.0
+    rev: v2.5.1
     hooks:
       - id: drep-check-push   # pre-push: what the push touches
       # - id: drep-check      # pre-commit: staged files

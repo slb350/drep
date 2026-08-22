@@ -7,8 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.5.1] - 2026-08-22
+
 ### Changed
 
+- Refreshed the locked Rust dependency graph to the newest releases compatible
+  with the declared Rust 1.88 minimum, including direct runtime dependencies
+  `blake3` and `ignore` plus their HTTP, Unicode, and build-time transitive
+  dependencies.
 - Full mutation CI now runs on the repository-scoped Strix GitHub Actions
   runner for pushes to `main` only. Hosted Linux, macOS, lint and MSRV lanes
   remain unchanged; the duplicate multi-hour hosted mutation job is gone.
@@ -461,7 +467,8 @@ LLM for review, and gates commits and pushes on the result. That is all it does.
 - Python, JavaScript, TypeScript, Go and Rust are all first-class. Adding a
   language is an entry in one table.
 
-[Unreleased]: https://github.com/slb350/drep/compare/v2.5.0...HEAD
+[Unreleased]: https://github.com/slb350/drep/compare/v2.5.1...HEAD
+[2.5.1]: https://github.com/slb350/drep/compare/v2.5.0...v2.5.1
 [2.5.0]: https://github.com/slb350/drep/compare/v2.4.0...v2.5.0
 [2.4.0]: https://github.com/slb350/drep/compare/v2.3.0...v2.4.0
 [2.3.0]: https://github.com/slb350/drep/compare/v2.2.0...v2.3.0

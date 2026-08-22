@@ -2,7 +2,7 @@
 #
 #   repos:
 #     - repo: https://github.com/slb350/drep
-#       rev: v2.5.0
+#       rev: v2.5.1
 #       hooks:
 #         - id: drep-check-push
 #
