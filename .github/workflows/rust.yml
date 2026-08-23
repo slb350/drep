@@ -9,12 +9,13 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  # fmt and clippy are byte-identical work on every OS - there is no cfg(unix)
-  # or cfg(windows) in the tree - and clippy's check-only artifacts do not seed
-  # the codegen build that `cargo test` needs. Running them once, here, avoids
-  # paying a second full pass over the dependency tree on the macOS runner.
-  lint:
-    runs-on: ubuntu-latest
+  # Strix has one repository-scoped runner, so separate Linux jobs would only
+  # serialize while repeating checkout, cache and toolchain setup. Keep the
+  # complete Linux gate in one allocation; macOS remains independent below.
+  linux:
+    name: validate (Strix)
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: [self-hosted, linux, x64, drep-linux]
     steps:
       - uses: actions/checkout@v5
 
@@ -31,35 +32,8 @@ jobs:
       - name: Clippy
         run: cargo clippy --all-targets --all-features
 
-  test-linux:
-    name: test (ubuntu-latest)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-
-      - uses: dtolnay/rust-toolchain@stable
-
-      - uses: Swatinem/rust-cache@v2
-
-      - run: cargo test --all-targets --all-features
-
-  test-macos:
-    name: test (macos-latest)
-    runs-on: macos-latest
-    steps:
-      - uses: actions/checkout@v5
-
-      - uses: dtolnay/rust-toolchain@stable
-
-      - uses: Swatinem/rust-cache@v2
-
-      - run: cargo test --all-targets --all-features
-
-  msrv:
-    name: msrv (1.88)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
+      - name: Test
+        run: cargo test --all-targets --all-features
 
       # If this breaks, the MSRV in Cargo.toml is wrong - do not paper over it
       # by bumping the toolchain here. It has moved once already: `ignore`
@@ -68,8 +42,20 @@ jobs:
       # compile error in a dependency.
       - uses: dtolnay/rust-toolchain@1.88.0
 
+      # No --all-targets: MSRV is a property of [dependencies]. Whether the dev
+      # dependencies build on 1.88 has no consumer.
+      - name: MSRV
+        run: cargo +1.88.0 check
+
+  test-macos:
+    name: test (Mac mini)
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: [self-hosted, macos, arm64, drep-macos]
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@stable
+
       - uses: Swatinem/rust-cache@v2
 
-      # No --all-targets: MSRV is a property of [dependencies]. Whether the dev
-      # dependencies build on 1.85 has no consumer.
-      - run: cargo check
+      - run: cargo test --all-targets --all-features

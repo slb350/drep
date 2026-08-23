@@ -1,9 +1,13 @@
 name: mutants
 
-# This repository is public. Never add pull_request or workflow_dispatch here:
-# only reviewed code that has landed on main may execute on the homelab runner.
+# This repository is public. Only a successful push validation on main may
+# execute the expensive full sweep on the homelab runner. The job-level event
+# check is load-bearing: a skipped pull-request validation can still conclude
+# successfully, including for a fork branch named `main`.
 on:
-  push:
+  workflow_run:
+    workflows: [rust]
+    types: [completed]
     branches: [main]
 
 permissions:
@@ -21,7 +25,8 @@ jobs:
   # production diff. The pre-commit hook remains staged for fast local feedback;
   # this main-only lane is the comprehensive backstop.
   mutants:
-    runs-on: [self-hosted, linux, x64, drep-mutants]
+    if: github.event.workflow_run.event == 'push' && github.event.workflow_run.conclusion == 'success'
+    runs-on: [self-hosted, linux, x64, drep-linux]
     timeout-minutes: 90
     steps:
       # Keeping target/ makes the 32-thread Strix run take minutes instead of
@@ -31,6 +36,7 @@ jobs:
         with:
           clean: false
           persist-credentials: false
+          ref: ${{ github.event.workflow_run.head_sha }}
 
       - name: Verify persistent workspace hygiene
         shell: bash

@@ -23,6 +23,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- All validation and release jobs now run on repository-scoped homelab
+  runners: Linux and global release work use the hardened Strix service, while
+  native macOS validation and both Apple release targets use the Xcode-equipped
+  M1 Mac mini. Forked pull requests cannot execute on either LAN host, and the
+  cargo-dist release workflow is tag-only. Strix's quick Linux gates share one
+  runner allocation, and the full mutation sweep starts only after successful
+  main-push validation.
 - Clean complete diff and push checks reset the remediation cycle. Clean
   staged subsets and named-path checks do not erase full-branch accounting;
   clean responses, acknowledged or compiler-disproved findings, and pure

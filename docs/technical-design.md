@@ -325,18 +325,20 @@ its key to be set. `LlmConfig` hand-writes `Debug` to redact `api_key`.
 
 ## Distribution
 
-`dist-workspace.toml` drives cargo-dist. Four targets, each built on a runner
-of its own architecture, plus a shell installer and a Homebrew formula pushed
-to `slb350/homebrew-tap`. `.github/workflows/release.yml` is generated directly
-from that config and creates the GitHub release and Homebrew publication.
-crates.io remains a separate `cargo publish --locked` operation because
-cargo-dist does not publish Rust crates.
+`dist-workspace.toml` drives cargo-dist. Four targets are built on two
+repository-scoped homelab runners: Strix builds both Linux targets and owns
+global plan, host and Homebrew publication work, while the arm64 Mac mini uses
+the native macOS SDK to build both Apple targets. The generated
+`.github/workflows/release.yml` is tag-only and creates the GitHub release and
+Homebrew publication. crates.io remains a separate `cargo publish --locked`
+operation because cargo-dist does not publish Rust crates.
 
-GitHub CI is split by cost and runner. `.github/workflows/rust.yml` runs fmt and
-clippy once, checks the 1.88 MSRV, and runs the test suite on hosted Linux and
-macOS runners. `.github/workflows/mutants.yml` runs the full mutation sweep only
-after pushes to `main`, on the repository-scoped Strix runner labelled
-`drep-mutants`. Pull requests never execute on the homelab runner. The mutation
-workflow keeps `target/` warm, rejects any other persistent workspace state,
-and pins `cargo-mutants` 27.1.0; `scripts/mutants-run.sh` remains the single
-definition of the mutation verdict.
+`.github/workflows/rust.yml` runs format, clippy, tests and the 1.88 MSRV check
+in one Strix allocation, plus the test suite on the native Mac mini. Its jobs
+accept pushes and same-repository pull requests but skip forked pull requests
+before a LAN runner is selected. `.github/workflows/mutants.yml` follows the
+successful `rust` workflow for a push to `main` and checks out that exact SHA on
+the same hardened Strix service labelled `drep-linux`; pull-request workflow
+completions cannot trigger it. The mutation workflow keeps `target/` warm,
+rejects any other persistent workspace state, and pins `cargo-mutants` 27.1.0;
+`scripts/mutants-run.sh` remains the single definition of the mutation verdict.
