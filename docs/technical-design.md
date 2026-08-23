@@ -343,9 +343,21 @@ fact to provision cargo-zigbuild and Zig instead of assuming native arm64.
 `.github/build-setup.yml` installs pinned Zig 0.16.0 and cargo-zigbuild 0.23.0
 for that matrix row before cargo-dist's generated dependency step. That avoids
 the generated pip fallback, which Strix's PEP 668-managed Python rejects.
+The same setup installs stable Rust plus the matrix-selected target on macOS
+before cargo-dist is installed, so the Mac service never depends on an
+interactive user's shell profile or a runner-global Cargo path.
 Reqwest enables `native-tls-vendored` only for arm64 Linux, which compiles
 OpenSSL for that target instead of requiring an arm64 OpenSSL sysroot on the
 x86_64 host or adding the source build to native targets.
+
+Cargo-dist's global jobs have two explicit Strix host prerequisites that its
+generated workflow assumes are present on a GitHub-hosted image: `gh` must be
+on the service PATH, and Homebrew publication uses Linuxbrew's supported
+`/home/linuxbrew/.linuxbrew` prefix. The hardened service keeps home directories
+hidden with `ProtectHome=tmpfs` and bind-mounts only that prefix read-write;
+private user homes remain unavailable. The service PATH also includes its
+dedicated Cargo bin directory because global jobs download a cached `dist`
+there without adding that directory to `GITHUB_PATH`.
 
 `.github/workflows/rust.yml` runs format, clippy, tests and the 1.88 MSRV check
 in one Strix allocation, plus the test suite on the native Mac mini. Both

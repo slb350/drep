@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- macOS release matrix jobs now install their own stable Rust toolchain and
+  declared target before cargo-dist runs, so a runner service does not depend
+  on an interactive shell's Cargo path or mutable machine-global toolchain.
+
 ## [2.6.0] - 2026-08-22
 
 ### Added

@@ -334,6 +334,28 @@ fn arm64_linux_cross_build_tools_are_reproducibly_provisioned() {
     );
 }
 
+/// A self-hosted Mac may have Rust installed for an interactive user while the
+/// runner service starts with a deliberately small PATH. Release builds must
+/// therefore provision their own toolchain and matrix-selected target.
+#[test]
+fn macos_release_builds_provision_their_rust_targets() {
+    let setup = release_build_setup();
+    assert!(
+        setup.contains("if: runner.os == 'macOS'")
+            && setup.contains("uses: dtolnay/rust-toolchain@stable")
+            && setup.contains("targets: ${{ join(matrix.targets, ',') }}"),
+        "Mac release builds must not depend on runner-global Rust PATH state"
+    );
+
+    let workflow = release_workflow();
+    let local_build = workflow_job(&workflow, "build-local-artifacts");
+    assert!(
+        local_build.contains("dtolnay/rust-toolchain@stable")
+            && local_build.contains("join(matrix.targets, ',')"),
+        "the generated release workflow must include the Mac Rust bootstrap"
+    );
+}
+
 #[test]
 fn linux_release_tls_is_self_contained_for_cross_compilation() {
     let manifest = parsed_toml("Cargo.toml");
