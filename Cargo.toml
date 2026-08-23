@@ -85,6 +85,7 @@ reqwest = { version = "0.12", features = ["native-tls-vendored"] }
 
 [dev-dependencies]
 assert_cmd = "2.2"
+serde_yaml_ng = "0.10.0"
 wiremock = "0.6"
 
 [profile.release]

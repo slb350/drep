@@ -8,4 +8,6 @@ updates:
       day: sunday
       time: "08:00"
       timezone: America/Los_Angeles
+    exclude-paths:
+      - .github/workflows/release.yml
     open-pull-requests-limit: 5

@@ -37,6 +37,11 @@ fn parsed_toml(relative: &str) -> toml::Table {
     toml::from_str(&common::read(relative)).unwrap_or_else(|e| panic!("{relative} must parse: {e}"))
 }
 
+fn parsed_yaml(relative: &str) -> serde_yaml_ng::Value {
+    serde_yaml_ng::from_str(&common::read(relative))
+        .unwrap_or_else(|e| panic!("{relative} must parse: {e}"))
+}
+
 fn workflow_job<'a>(workflow: &'a str, name: &str) -> &'a str {
     let marker = format!("\n  {name}:\n");
     let start = workflow
@@ -502,6 +507,29 @@ fn release_workflow_needs_no_manual_ci_exception() {
     assert!(
         !config.contains("allow-dirty"),
         "the generated workflow must not require a hand-maintained CI exception"
+    );
+}
+
+/// Dependabot must not propose edits to cargo-dist's generated workflow.
+///
+/// `release.yml` is regenerated from `dist-workspace.toml` and
+/// `.github/build-setup.yml`. Updating an Action in the generated output alone
+/// creates a clean-looking PR whose change disappears at the next `dist init`.
+#[test]
+fn dependabot_excludes_the_generated_release_workflow() {
+    let config = parsed_yaml(".github/dependabot.yml");
+    let updates = config["updates"]
+        .as_sequence()
+        .expect("Dependabot must declare update entries");
+    let excludes_generated_workflow = updates
+        .iter()
+        .filter_map(|update| update["exclude-paths"].as_sequence())
+        .flatten()
+        .any(|path| path.as_str() == Some(".github/workflows/release.yml"));
+
+    assert!(
+        excludes_generated_workflow,
+        "Dependabot must leave cargo-dist's generated release.yml to dist init"
     );
 }
 

@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Dependabot now excludes cargo-dist's generated release workflow so Action
+  updates remain source-owned and regenerable instead of opening transient
+  edits to generated YAML.
+
 ## [2.6.1] - 2026-08-23
 
 ### Fixed
