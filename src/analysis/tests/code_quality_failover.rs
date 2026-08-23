@@ -253,6 +253,7 @@ fn a_chain_is_built_from_the_enabled_providers_only() {
         ..crate::config::LlmConfig::default()
     };
     let config = crate::config::Config {
+        max_review_rounds: crate::config::DEFAULT_MAX_REVIEW_ROUNDS,
         llm: vec![disabled, live],
     };
 

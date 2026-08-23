@@ -56,8 +56,11 @@ use crate::config::LlmConfig;
 use crate::llm::backend::{BackendFactory, ProviderBackend};
 use crate::llm::cache::{Cache, CacheKey};
 use crate::llm::concurrency::Limiter;
-use crate::llm::error::{BackendErrorKind, LlmError};
+use crate::llm::error::LlmError;
 use crate::llm::json_parsing::Extracted;
+
+mod policy;
+use policy::{is_sticky, should_failover};
 
 /// One provider: a backend, its concurrency budget, and the
 /// two pieces of run-scoped state that belong to it.
@@ -311,10 +314,44 @@ impl ProviderChain {
         user_content: &str,
         cache: &Cache,
     ) -> Result<Served, ChainError> {
+        self.complete_json_in_mode(system_prompt, user_content, cache, true)
+            .await
+    }
+
+    /// Send one prompt down the chain without accepting a cached answer.
+    ///
+    /// Used only after a cache-only preflight has identified an exact miss and
+    /// the caller has reserved authority for a fresh provider pass.
+    pub async fn complete_json_fresh(
+        &self,
+        system_prompt: &str,
+        user_content: &str,
+        cache: &Cache,
+    ) -> Result<Served, ChainError> {
+        self.complete_json_in_mode(system_prompt, user_content, cache, false)
+            .await
+    }
+
+    async fn complete_json_in_mode(
+        &self,
+        system_prompt: &str,
+        user_content: &str,
+        cache: &Cache,
+        consult_cache: bool,
+    ) -> Result<Served, ChainError> {
         let mut attempts: Vec<Attempt> = Vec::new();
 
         for (index, provider) in self.providers.iter().enumerate() {
-            match try_provider(index, provider, system_prompt, user_content, cache).await {
+            match try_provider(
+                index,
+                provider,
+                system_prompt,
+                user_content,
+                cache,
+                consult_cache,
+            )
+            .await
+            {
                 ProviderOutcome::Served(served) => return Ok(served),
                 // One place decides what a failure means for the loop, so the
                 // three ways a provider can fail cannot disagree about it.
@@ -388,13 +425,14 @@ async fn try_provider(
     system_prompt: &str,
     user_content: &str,
     cache: &Cache,
+    consult_cache: bool,
 ) -> ProviderOutcome {
     // The key is computed here, from *this* provider's model, and the `Served`
     // carries it back so the caller cannot file the answer under a different
     // provider's key. A cache hit precedes demotion because it spends no
     // backend request and remains the preferred provider's own verdict.
     let key = provider.cache_key(cache, system_prompt, user_content);
-    if let Some(served) = cached_for(index, provider, &key, cache) {
+    if consult_cache && let Some(served) = cached_for(index, provider, &key, cache) {
         return ProviderOutcome::Served(served);
     }
 
@@ -459,102 +497,6 @@ fn cached_for(index: usize, provider: &Provider, key: &CacheKey, cache: &Cache) 
         extracted: Extracted::Complete(value),
         from_cache: true,
     })
-}
-
-/// Whether this failure should be handed to the next provider.
-///
-/// The whole failover policy, in one place, so the rule cannot be restated
-/// differently at a second site.
-fn should_failover(err: &LlmError) -> bool {
-    match err {
-        // No status: a timeout, a refused connection, or an empty body. All
-        // provider-level, all worth asking someone else.
-        LlmError::Transport { status: None, .. } => true,
-        LlmError::Transport {
-            status: Some(code), ..
-        } => is_retryable_status(*code),
-        // A non-empty body we could not parse already exhausted the primary's
-        // response retries. A fallback can salvage this file, but the failure
-        // remains payload/model-specific and must not demote the provider.
-        LlmError::Unparseable(_) => true,
-        // A token cap or a content filter is a property of the request. A
-        // second provider cannot make the file smaller, and asking one to is
-        // the same category error as failing over on a 400. `is_sticky` is
-        // defined in terms of this, so it is not remembered either - which
-        // matters, because remembering a non-failover failure is what let one
-        // bad file stop the chain for every later one.
-        LlmError::ModelStopped { .. } => false,
-        // Misconfiguration. Routing around it is what hides it.
-        LlmError::NotConfigured(_) => false,
-        LlmError::Backend { kind, .. } => matches!(kind, BackendErrorKind::UsageLimit),
-    }
-}
-
-/// Whether this failure is remembered for the rest of the run.
-///
-/// Deliberately a wider set than [`should_failover`]. A 401 does not advance
-/// the chain, but it is still a property of the endpoint rather than of this
-/// file: every file in the run will get the same answer, so ask once.
-fn is_sticky(err: &LlmError) -> bool {
-    // Remember a failure only when remembering it cannot change a later file's
-    // outcome. Two ways that holds:
-    //
-    // - The chain advances past this provider anyway, so skipping it costs the
-    //   later file nothing it was not already going to pay.
-    // - It is a credential the endpoint rejects, which it will reject for every
-    //   request regardless of payload.
-    //
-    // The combination to avoid is a request-dependent failure that is both
-    // remembered and non-failing-over: a later file would replay it and stop
-    // without contacting anyone. `Contract` is safe despite that shape because
-    // it means the process backend violated drep's fixed isolation/event
-    // protocol, never that one source payload was rejected. A request-level
-    // HTTP 400 is not safe: one oversized payload once poisoned every later
-    // file by demoting the provider for the whole run.
-    (should_failover(err) && !matches!(err, LlmError::Unparseable(_)))
-        || is_auth_failure(err)
-        || is_sticky_backend_failure(err)
-}
-
-fn is_sticky_backend_failure(err: &LlmError) -> bool {
-    matches!(
-        err,
-        LlmError::Backend {
-            kind: BackendErrorKind::Contract | BackendErrorKind::Authentication,
-            ..
-        }
-    )
-}
-
-/// Whether the endpoint rejected the credential rather than the request.
-///
-/// 401 and 403 are the two statuses that are a property of the *connection* and
-/// not of what was sent, so they are the only non-failover failures worth
-/// remembering: a stale key answers the same way for every file, and
-/// re-handshaking once per file is pure wall-clock on a gate that will exit 2
-/// regardless.
-fn is_auth_failure(err: &LlmError) -> bool {
-    matches!(
-        err,
-        LlmError::Transport {
-            status: Some(401 | 403),
-            ..
-        }
-    )
-}
-
-/// The retryable HTTP statuses.
-///
-/// 408 and 429 are the two 4xx codes that mean "ask again"; everything else in
-/// the 4xx range is the client's fault and a second provider cannot fix it.
-/// 5xx is the server's fault and another server might not have it.
-///
-/// Deliberately drep's own list rather than a claim to mirror the SDK's:
-/// open-agent-sdk's retryable set is private, and it excludes some 5xx codes
-/// (501, 505) that a *different provider* may well not return at all. The two
-/// answer different questions - "retry this endpoint" and "try another one".
-fn is_retryable_status(code: u16) -> bool {
-    matches!(code, 408 | 429) || (500..=599).contains(&code)
 }
 
 #[cfg(test)]

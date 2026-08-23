@@ -29,6 +29,7 @@ use crate::cli::check::CheckArgs;
 use crate::cli::check::input::{PreCommitPush, READ_MAX_BYTES};
 use crate::cli::check::input::{resolve, resolve_pre_commit};
 use crate::diff::hunks::HunkLine;
+use crate::test_support::git_output;
 
 /// Build a `CheckArgs` for paths mode. Defaults `format = Text`, no
 /// `--fail-on`, no `--diff`/`--staged`.
@@ -43,6 +44,8 @@ fn paths_args(paths: Vec<PathBuf>) -> CheckArgs {
         fail_on: None,
         cache_only: false,
         push_gate: false,
+        max_review_rounds: None,
+        unlimited_reviews: false,
     }
 }
 
@@ -58,6 +61,8 @@ fn diff_args(ref_: &str) -> CheckArgs {
         fail_on: None,
         cache_only: false,
         push_gate: false,
+        max_review_rounds: None,
+        unlimited_reviews: false,
     }
 }
 
@@ -362,22 +367,6 @@ fn init_repo_with_commit(root: &std::path::Path) {
     std::fs::write(root.join("seed.txt"), "seed\n").expect("seed");
     crate::test_support::git_add(root, "seed.txt");
     git_output(root, &["commit", "--quiet", "--no-verify", "-m", "init"]);
-}
-
-fn git_output(root: &std::path::Path, args: &[&str]) -> String {
-    let output = crate::test_support::git(root)
-        .args(args)
-        .output()
-        .expect("git spawns");
-    assert!(
-        output.status.success(),
-        "git {args:?} failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    String::from_utf8(output.stdout)
-        .expect("git output is utf8")
-        .trim()
-        .to_owned()
 }
 
 fn git_commit(root: &std::path::Path, message: &str, paths: &[&str]) {

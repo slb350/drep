@@ -24,6 +24,8 @@ mod deterministic;
 // below it), and the assertion pinning that has to see both constants.
 pub(crate) mod input;
 mod render;
+mod review_budget;
+mod semantic;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -39,6 +41,7 @@ use crate::cli::{OutputFormat, severity_parser};
 use crate::config;
 use crate::llm::cache::Cache;
 use crate::llm::chain::ProviderChain;
+use review_budget::Budget;
 
 #[derive(Debug, Args)]
 // One rule, stated once. Paired `conflicts_with_all` attributes say the same
@@ -117,6 +120,19 @@ pub struct CheckArgs {
     /// then exits 3 so Git reconnects; repeating `git push` uses the cache.
     #[arg(long)]
     pub push_gate: bool,
+
+    /// Override the repository's maximum fresh LLM review rounds.
+    #[arg(
+        long,
+        value_name = "N",
+        value_parser = clap::value_parser!(u32).range(1..),
+        conflicts_with = "unlimited_reviews"
+    )]
+    pub max_review_rounds: Option<u32>,
+
+    /// Permit fresh LLM review rounds without a limit for this invocation.
+    #[arg(long)]
+    pub unlimited_reviews: bool,
 }
 
 /// Everything one `check` run produced.
@@ -144,6 +160,8 @@ pub struct CheckOutcome {
     /// A cold push review completed successfully and must be retried over a new
     /// Git transport. False for ordinary checks and warm push gates.
     pub retry_push: bool,
+    /// What this invocation did to the bounded semantic-review cycle.
+    pub review_activity: Option<ReviewActivity>,
     /// The gate's verdict for this run.
     ///
     /// On the outcome rather than passed alongside it: `render` used to take
@@ -151,6 +169,17 @@ pub struct CheckOutcome {
     /// did, because `render` computed its own and ignored `--fail-on`. A field
     /// set once by `run` makes the mismatch unrepresentable.
     pub exit: Exit,
+}
+
+/// Visible accounting for a fresh semantic review.
+pub enum ReviewActivity {
+    /// Actionable findings survived suppression and acknowledgement, consuming
+    /// one remediation round.
+    Counted { round: u32, limit: u32 },
+    /// An authoritative clean result completed the current review cycle.
+    Reset,
+    /// The caller explicitly disabled the configured bound for this review.
+    Unlimited,
 }
 
 /// One provider's share of a run.
@@ -260,53 +289,69 @@ pub(crate) async fn run_against(
         .with_context(|| format!("could not resolve input under {}", root.display()))?;
     let acknowledgements = acknowledgements::Store::load(root)?;
 
+    let authoritative = review_budget::is_authoritative(args);
+    let effective_limit = args.max_review_rounds.unwrap_or(config.max_review_rounds);
+    let semantic_policy = semantic::Policy {
+        authoritative,
+        limit: effective_limit,
+    };
     let chain =
         ProviderChain::new(&providers).map_err(|e| anyhow!("could not build LLM analyzer: {e}"))?;
     let analyzer = crate::analysis::code_quality::CodeQualityAnalyzer::new(chain, cache.clone())
-        .with_cache_only(args.cache_only || args.push_gate);
+        .with_cache_only(args.cache_only || args.push_gate || authoritative);
 
     // The two layers share no data - they only both report failures - so they
     // run concurrently. The deterministic leg is pure added latency otherwise:
     // a warm `cargo clippy` on this repo is ~3.5s, and the LLM leg is
     // multi-second regardless, so joining hides essentially all of it.
-    let (deterministic_result, llm_result) = tokio::join!(
-        deterministic::run(&work, root),
-        analyzer.analyze_files(&work.by_file),
-    );
-    let (tool_findings, tool_failures, compiled_files) = deterministic_result;
-    let mut llm_result = llm_result;
-
-    let cache_misses_only = !llm_result.failed_files.is_empty()
-        && llm_result
-            .failed_files
-            .values()
-            .all(|reason| matches!(reason, FailureReason::CacheMiss));
-    let warmed_for_push = args.push_gate
-        && cache_misses_only
-        && work.read_failures.is_empty()
-        && tool_failures.is_empty()
-        && tool_findings.is_empty();
-    if warmed_for_push {
-        let misses: Vec<&[_]> = work
-            .by_file
-            .iter()
-            .filter(|hunks| {
-                hunks.first().is_some_and(|first| {
-                    matches!(
-                        llm_result.failed_files.get(&first.file_path),
-                        Some(FailureReason::CacheMiss)
-                    )
-                })
-            })
-            .map(Vec::as_slice)
-            .collect();
-        for hunks in &misses {
-            if let Some(first) = hunks.first() {
-                llm_result.failed_files.remove(&first.file_path);
-            }
+    let semantic = async {
+        let cached = analyzer.analyze_files(&work.by_file).await;
+        if args.push_gate {
+            Ok(semantic::Stage::Deferred(cached))
+        } else {
+            semantic::complete(args, root, &work, &analyzer, semantic_policy, cached, true)
+                .await
+                .map(Box::new)
+                .map(semantic::Stage::Complete)
         }
-        llm_result.merge(analyzer.analyze_files_live(&misses).await);
-    }
+    };
+    let (deterministic_result, semantic_stage) =
+        tokio::join!(deterministic::run(&work, root), semantic,);
+    let (tool_findings, tool_failures, compiled_files) = deterministic_result;
+    let semantic_stage = semantic_stage?;
+    let (semantic_pass, eligible_push_warm) = match semantic_stage {
+        semantic::Stage::Deferred(cached) => {
+            let eligible = push_warm_eligible(
+                &cached,
+                work.read_failures.is_empty(),
+                tool_failures.is_empty(),
+                tool_findings.is_empty(),
+            );
+            (
+                semantic::complete(
+                    args,
+                    root,
+                    &work,
+                    &analyzer,
+                    semantic_policy,
+                    cached,
+                    eligible,
+                )
+                .await?,
+                eligible,
+            )
+        }
+        semantic::Stage::Complete(pass) => (*pass, false),
+    };
+    let semantic::Pass {
+        cached: mut llm_result,
+        live: mut live_result,
+        live_review,
+        budget,
+        should_review_live,
+        limit_reached,
+        live_answered,
+    } = semantic_pass;
     let provider_uses = provider_uses(analyzer.chain());
 
     // All concurrent writers have finished, so one oldest-first pass can
@@ -315,6 +360,65 @@ pub(crate) async fn run_against(
     // otherwise valid review into an unanalyzed file.
     let _ = cache.evict_if_needed();
 
+    adjudicate_findings(
+        &mut llm_result.findings,
+        &compiled_files,
+        &work,
+        &acknowledgements,
+    );
+    adjudicate_findings(
+        &mut live_result.findings,
+        &compiled_files,
+        &work,
+        &acknowledgements,
+    );
+
+    let mut review_activity = None;
+    match live_review {
+        semantic::LiveReview::Reserved(claim) => {
+            if !live_result.findings.is_empty() {
+                let round = claim.round();
+                claim.commit()?;
+                review_activity = Some(ReviewActivity::Counted {
+                    round,
+                    limit: effective_limit,
+                });
+            }
+            // Otherwise Drop refunds the pending slot. Pure failures did not
+            // complete a review, and a clean answer consumes no remediation round.
+        }
+        semantic::LiveReview::Unbounded
+            if should_report_unlimited(args.unlimited_reviews, live_answered) =>
+        {
+            review_activity = Some(ReviewActivity::Unlimited);
+        }
+        semantic::LiveReview::Skip
+        | semantic::LiveReview::Unbounded
+        | semantic::LiveReview::Denied { .. } => {}
+    }
+    llm_result.merge(live_result);
+
+    if review_budget::is_completion_scope(args)
+        && !args.cache_only
+        && !work.by_file.is_empty()
+        && work.read_failures.is_empty()
+        && tool_findings.is_empty()
+        && tool_failures.is_empty()
+        && llm_result.findings.is_empty()
+        && llm_result.failed_files.is_empty()
+    {
+        let reset = if let Some(budget) = &budget {
+            budget.reset()?
+        } else {
+            Budget::for_repo(root, effective_limit).await?.reset()?
+        };
+        if should_report_reset(live_answered, reset) {
+            review_activity = Some(ReviewActivity::Reset);
+        }
+    }
+
+    let warmed_for_push = eligible_push_warm && should_review_live && !limit_reached;
+
     let mut failures: BTreeMap<PathBuf, FailureReason> = BTreeMap::new();
     // Union order is the reporting priority: a file that could not be read
     // keeps that reason over a later layer's view of the same path.
@@ -322,15 +426,13 @@ pub(crate) async fn run_against(
     union_failures(&mut failures, tool_failures);
     union_failures(&mut failures, llm_result.failed_files);
 
-    suppress_disproved_compile_claims(&mut llm_result.findings, &compiled_files);
-    acknowledgements::apply(&mut llm_result.findings, &work.by_file, &acknowledgements);
-
     let mut outcome = CheckOutcome {
         tool_findings,
         llm_findings: llm_result.findings,
         failures,
         provider_uses,
         retry_push: false,
+        review_activity,
         exit: Exit::Clean,
     };
     outcome.exit = gate(&outcome, args.fail_on);
@@ -341,6 +443,40 @@ pub(crate) async fn run_against(
 
     render::render(&outcome, args.format)?;
     Ok(outcome.exit)
+}
+
+fn push_warm_eligible(
+    cached: &crate::analysis::result::AnalysisResult,
+    reads_clean: bool,
+    tools_analyzed: bool,
+    tools_clean: bool,
+) -> bool {
+    cached
+        .failed_files
+        .values()
+        .all(|reason| matches!(reason, FailureReason::CacheMiss))
+        && reads_clean
+        && tools_analyzed
+        && tools_clean
+}
+
+fn should_report_unlimited(requested: bool, live_answered: bool) -> bool {
+    requested && live_answered
+}
+
+fn should_report_reset(live_answered: bool, state_removed: bool) -> bool {
+    live_answered || state_removed
+}
+
+/// Apply the two repository-grounded filters in their load-bearing order.
+fn adjudicate_findings(
+    findings: &mut Vec<Finding>,
+    compiled: &BTreeSet<PathBuf>,
+    work: &input::Work,
+    acknowledgements: &acknowledgements::Store,
+) {
+    suppress_disproved_compile_claims(findings, compiled);
+    acknowledgements::apply(findings, &work.by_file, acknowledgements);
 }
 
 /// Drop only findings that explicitly claim compilation failure after a

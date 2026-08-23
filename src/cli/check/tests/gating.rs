@@ -20,9 +20,9 @@ use std::path::{Path, PathBuf};
 
 use wiremock::MockServer;
 
-use super::support::run_drep;
+use super::support::{check_args as args, run_drep};
 use crate::analysis::findings::{Finding, Severity};
-use crate::cli::OutputFormat;
+use crate::analysis::result::{AnalysisResult, FailureReason};
 use crate::cli::check::{self, CheckArgs};
 use crate::llm::cache::Cache;
 use crate::test_support::mount_sse;
@@ -45,21 +45,6 @@ async fn setup_mock(body: &str) -> (tempfile::TempDir, MockServer) {
     (dir, server)
 }
 
-/// Build a `CheckArgs` for paths mode with an optional gating threshold.
-fn args(paths: Vec<std::path::PathBuf>, fail_on: Option<Severity>) -> CheckArgs {
-    CheckArgs {
-        paths,
-        staged: false,
-        diff: None,
-        tip: None,
-        pre_commit_push: false,
-        format: OutputFormat::Text,
-        fail_on,
-        cache_only: false,
-        push_gate: false,
-    }
-}
-
 /// Run `check` in-process against a cache scoped to this test.
 ///
 /// Goes through `run_with`, not `run`. `run` builds `Cache::default_root()` -
@@ -76,6 +61,32 @@ async fn run_paths_with(args: &CheckArgs, dir: &Path) -> check::Exit {
 /// The common case: one path, default format, no gating threshold.
 async fn run_paths(path: std::path::PathBuf, dir: &Path) -> check::Exit {
     run_paths_with(&args(vec![path], None), dir).await
+}
+
+#[test]
+fn push_warm_requires_cache_misses_and_every_deterministic_input_to_be_clean() {
+    let cached = AnalysisResult::failed(PathBuf::from("src/lib.py"), FailureReason::CacheMiss);
+    assert!(check::push_warm_eligible(&cached, true, true, true));
+    assert!(!check::push_warm_eligible(&cached, false, true, true));
+    assert!(!check::push_warm_eligible(&cached, true, false, true));
+    assert!(!check::push_warm_eligible(&cached, true, true, false));
+
+    let failed = AnalysisResult::failed(
+        PathBuf::from("src/lib.py"),
+        FailureReason::Unparseable("bad response".to_owned()),
+    );
+    assert!(!check::push_warm_eligible(&failed, true, true, true));
+}
+
+#[test]
+fn review_activity_boolean_contracts_cover_each_independent_reason() {
+    assert!(check::should_report_unlimited(true, true));
+    assert!(!check::should_report_unlimited(false, true));
+    assert!(!check::should_report_unlimited(true, false));
+
+    assert!(check::should_report_reset(true, false));
+    assert!(check::should_report_reset(false, true));
+    assert!(!check::should_report_reset(false, false));
 }
 
 /// Configure ruff and install a local stub that emits one F401 finding.

@@ -9,8 +9,9 @@
 
 use serde_json::Value;
 
-use super::support::{outcome_failing, rendered_json};
+use super::support::{outcome, outcome_failing, rendered_json};
 use crate::analysis::result::{FailureReason, ProviderFailure};
+use crate::cli::check::ReviewActivity;
 use crate::llm::error::BackendErrorKind;
 
 /// Render `failures` as JSON and hand back the parsed `unanalyzed` array.
@@ -36,6 +37,7 @@ fn expected_kind(reason: &FailureReason) -> &'static str {
         FailureReason::Backend { .. } => "backend",
         FailureReason::Unparseable(_) => "unparseable",
         FailureReason::CacheMiss => "cache_miss",
+        FailureReason::ReviewLimit { .. } => "review_limit",
         FailureReason::ModelStopped { .. } => "model_stopped",
         FailureReason::Truncated => "truncated",
         FailureReason::MalformedFinding(_) => "malformed_finding",
@@ -66,6 +68,10 @@ fn each_failure_variant_renders_its_own_kind_tag() {
         },
         FailureReason::Unparseable("no json".to_owned()),
         FailureReason::CacheMiss,
+        FailureReason::ReviewLimit {
+            completed: 3,
+            limit: 3,
+        },
         FailureReason::ModelStopped {
             finish: "length".to_owned(),
             message: "the model hit its output token limit".to_owned(),
@@ -114,6 +120,28 @@ fn each_failure_variant_renders_its_own_kind_tag() {
         seen.len(),
         "every variant needs its own tag; duplicates found in {seen:?}"
     );
+}
+
+#[test]
+fn review_activity_has_a_stable_machine_readable_shape() {
+    let cases = [
+        (
+            ReviewActivity::Counted { round: 2, limit: 3 },
+            serde_json::json!({"kind": "counted", "round": 2, "limit": 3}),
+        ),
+        (ReviewActivity::Reset, serde_json::json!({"kind": "reset"})),
+        (
+            ReviewActivity::Unlimited,
+            serde_json::json!({"kind": "unlimited"}),
+        ),
+    ];
+
+    for (activity, expected) in cases {
+        let mut check = outcome();
+        check.review_activity = Some(activity);
+        assert_eq!(rendered_json(&check)["review"], expected);
+    }
+    assert!(rendered_json(&outcome())["review"].is_null());
 }
 
 #[test]
@@ -175,4 +203,44 @@ fn a_failure_without_a_status_omits_the_key_rather_than_nulling_it() {
             "{reason:?} has no HTTP status, so `status` must be absent, got {obj:?}"
         );
     }
+}
+
+#[test]
+fn review_limit_exposes_structured_progress_and_recovery_text() {
+    let entries = unanalyzed_for(vec![(
+        "src/a.rs",
+        FailureReason::ReviewLimit {
+            completed: 3,
+            limit: 3,
+        },
+    )]);
+
+    assert_eq!(entries[0]["kind"].as_str(), Some("review_limit"));
+    assert_eq!(entries[0]["completed"].as_u64(), Some(3));
+    assert_eq!(entries[0]["limit"].as_u64(), Some(3));
+    assert!(
+        entries[0]["reason"]
+            .as_str()
+            .expect("reason")
+            .contains("--max-review-rounds")
+    );
+}
+
+#[test]
+fn review_limit_distinguishes_in_flight_reservations_from_completed_rounds() {
+    let entries = unanalyzed_for(vec![(
+        "src/a.rs",
+        FailureReason::ReviewLimit {
+            completed: 1,
+            limit: 3,
+        },
+    )]);
+
+    assert_eq!(entries[0]["completed"].as_u64(), Some(1));
+    assert!(
+        entries[0]["reason"]
+            .as_str()
+            .expect("reason")
+            .contains("currently reserved")
+    );
 }

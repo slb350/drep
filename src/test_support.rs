@@ -403,11 +403,14 @@ pub(crate) fn git_add(dir: &std::path::Path, path: &str) {
     git_must(dir, &["add", "--", path]);
 }
 
-/// Run a git command that must succeed, failing the test with its stderr.
-///
-/// Shared so a new fixture command cannot quietly discard the status, which is
-/// how the three `git_init` copies this replaced had already diverged.
-fn git_must(dir: &std::path::Path, args: &[&str]) {
+/// Stage every path and create one unsigned, hook-free fixture commit.
+pub(crate) fn git_commit_all(dir: &std::path::Path, message: &str) {
+    git_must(dir, &["add", "--all"]);
+    git_must(dir, &["commit", "--quiet", "--no-verify", "-m", message]);
+}
+
+/// Run a Git fixture command that must succeed and return trimmed UTF-8 output.
+pub(crate) fn git_output(dir: &std::path::Path, args: &[&str]) -> String {
     let output = git(dir)
         .args(args)
         .output()
@@ -418,6 +421,18 @@ fn git_must(dir: &std::path::Path, args: &[&str]) {
         args.join(" "),
         String::from_utf8_lossy(&output.stderr)
     );
+    String::from_utf8(output.stdout)
+        .expect("git output is utf8")
+        .trim()
+        .to_owned()
+}
+
+/// Run a git command that must succeed, failing the test with its stderr.
+///
+/// Shared so a new fixture command cannot quietly discard the status, which is
+/// how the three `git_init` copies this replaced had already diverged.
+fn git_must(dir: &std::path::Path, args: &[&str]) {
+    git_output(dir, args);
 }
 
 /// Assert `path` is executable, by the same predicate production uses.

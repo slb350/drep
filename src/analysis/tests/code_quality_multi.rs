@@ -255,6 +255,35 @@ async fn cache_hit_does_not_acquire_a_limiter_slot() {
     );
 }
 
+/// A bounded review reserves a round only for a fresh provider pass. Another
+/// process may populate the cache between the cache-only preflight and that
+/// pass, so the live API must bypass cache rather than relabel the concurrent
+/// entry as this process's fresh response.
+#[tokio::test]
+async fn analyze_files_live_bypasses_a_cache_entry() {
+    let server = MockServer::start().await;
+    let body = "{\"issues\": [], \"summary\": \"ok\"}";
+    Mock::given(method("POST"))
+        .and(path("/v1/chat/completions"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(sse(&[body]), "text/event-stream"))
+        .expect(2)
+        .mount(&server)
+        .await;
+
+    let (analyzer, _dir) = analyzer_for(&server);
+    let hunks = vec![python_hunk("src/lib.py", 100)];
+    let first = analyzer.analyze_file(&hunks).await;
+    assert!(first.failed_files.is_empty());
+
+    let second = analyzer.analyze_files_live(&[hunks.as_slice()]).await;
+    assert!(second.failed_files.is_empty());
+    assert_eq!(
+        request_count(&server).await,
+        2,
+        "the explicitly live pass must contact the provider despite the cache"
+    );
+}
+
 /// The prompt module is used by the analyzer; the analyzer's cache key
 /// is built from the prompt. This pins that the prompt fed to the LLM
 /// is the one the spec calls for — a regression here would silently

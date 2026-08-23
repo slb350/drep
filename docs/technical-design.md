@@ -33,7 +33,7 @@ source, `files::is_markdown` is markdown, and nothing satisfies both.
 | Module | Responsibility |
 |---|---|
 | `main.rs` | clap entry point; turns every error into an `ExitCode` |
-| `cli/check/` | `input` (what to analyze), `deterministic` (tool half), `render`, exit codes |
+| `cli/check/` | `input`, deterministic tools, `review_budget`, rendering and exit codes |
 | `cli/lint_docs/` | markdown command, `--staged`, `--fail-on` |
 | `cli/doctor.rs` | what languages and tools are visible here, and which providers |
 | `cli/init/` | `drep.toml` and native git hooks; `presets`, `config_file`, `hooks` |
@@ -97,10 +97,30 @@ gate; splitting by source is what makes one calibratable.
 The system prompt defines a high-signal merge-review threshold: a finding must
 be concrete, reachable, materially consequential and worth fixing before
 merge. It excludes speculative hardening, implausible extreme edge cases, nits,
-cleanup and optional refactors. drep does not count remediation rounds or stop
-reviewing after a quota. An autonomous fixer should use a three-round default
-outside drep, then surface remaining advisory findings; keeping that boundary
-in the orchestrator prevents an expired counter from hiding a new regression.
+cleanup and optional refactors.
+
+Authoritative staged, diff, pre-commit-push and bare push-gate checks enforce a
+three-round semantic-remediation budget by default. The accounting is
+two-phase: an atomic pending slot is reserved before a cold provider request,
+then retained only if the fresh result still has an actionable finding after
+compile-claim suppression and acknowledgements. Clean results and pure
+analysis failures refund the slot. Mixed findings and failures retain it.
+Cached verdicts and deterministic tools remain available at the limit; a cold
+semantic miss becomes `ReviewLimit` and exits 2 without contacting a provider.
+Once reserved, the selected misses bypass cache so a concurrently published
+cache entry cannot be counted as this process's fresh response.
+
+The slots live under the current worktree's Git directory, partitioned by
+branch identity. A worktree-wide advisory lock and fixed, atomically-created
+filenames prevent concurrent checks from oversubscribing the configured limit.
+Each pending lease carries an owner token; commit and refund verify it while
+holding the same lock, so an expired owner cannot alter its successor's slot. A
+clean complete diff, pre-commit-push or bare push-gate check removes committed
+slots while preserving another process's pending reservation. Empty branch
+state is removed. Pending or incomplete slots older than seven days are
+recoverable after a killed process. `max_review_rounds` defaults to 3;
+`--max-review-rounds N` raises it for one run and `--unlimited-reviews` is the
+explicit escape hatch.
 
 ## Input and diff modes
 
@@ -286,7 +306,7 @@ provider chain, and no cache.
 `drep.toml`, discovered under the repository root. `api_key` names an
 environment variable rather than holding a secret, and `config::env_var_refs_in`
 is the single definition of a `${VAR}` reference, shared by the substituter and
-by `doctor`.
+by `doctor`. The top-level `max_review_rounds` defaults to 3 and rejects zero.
 
 `backend` defaults to `http`. HTTP entries
 accept `endpoint`, `api_key`, `protocol`, `temperature`, `max_tokens` and

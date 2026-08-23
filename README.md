@@ -95,14 +95,16 @@ cold review. When every review is cached, the push continues immediately. On a
 cache miss, drep completes and caches the review but deliberately stops that
 push with exit 3; run `git push` again and the cache-only retry reconnects and
 finishes quickly. Findings and analysis failures keep their normal exit codes,
-so only a successful cache warm asks for the retry.
+so only a successful cache warm asks for the retry. Fresh semantic remediation
+is bounded to three finding-producing rounds by default; cached reviews remain
+available after that limit.
 
 To adopt drep through [pre-commit](https://pre-commit.com) instead:
 
 ```yaml
 repos:
   - repo: https://github.com/slb350/drep
-    rev: v2.5.1
+    rev: v2.6.0
     hooks:
       - id: drep-check-push   # pre-push: what the push touches
       # - id: drep-check      # pre-commit: staged files
@@ -123,6 +125,8 @@ drep check --staged             # what is staged, for a pre-commit hook
 drep check --diff origin/main   # what changed since a ref, for pre-push
 drep check --cache-only         # cached LLM reviews only; miss exits 3
 drep check --push-gate          # warm cold reviews, then ask for a fresh push
+drep check --max-review-rounds 5 # authorize a larger remediation cycle
+drep check --unlimited-reviews  # explicitly remove the limit for this run
 drep check --fail-on error      # also block on LLM findings
 drep check --format json        # machine-readable
 drep acknowledge <fingerprint>  # hide a reviewed false positive until code changes
@@ -142,7 +146,9 @@ Exit codes (`3` is specific to `check`):
 | 3 | Cache-only miss, or a successful push-gate warm requiring a fresh push |
 
 In JSON, `retry_push: true` identifies the successful warm-and-reconnect case;
-a plain `--cache-only` miss leaves it false.
+a plain `--cache-only` miss leaves it false. The `review` object reports a
+counted round, reset, or explicitly unlimited review. Reaching the fresh-review
+limit is an unanalyzed result and exits 2 rather than silently passing.
 
 Exit 2 is the one that matters. An unreachable endpoint, a file too large for
 the model, a configured tool that is not installed: none of those are a pass,
@@ -201,13 +207,19 @@ for review again.
 
 ### Autonomous remediation
 
-An agent that fixes advisory LLM findings should default to at most three
-drep-driven remediation rounds for one change set. After that, it should still
-fix deterministic failures and analysis failures, but hand any new advisory
-LLM findings to a person (or acknowledge a confirmed false positive) instead
-of continuing automatically. This is an orchestrator policy, not a drep
-shutoff: drep keeps reviewing every pushed change, because a fourth review can
-contain a real regression and a hidden counter must never wave it through.
+drep enforces at most three fresh, finding-producing semantic remediation
+rounds per branch and worktree by default. `--staged`, `--diff`,
+`--pre-commit-push`, and a bare `--push-gate` participate; named-path checks do
+not. A round is retained only when an uncached provider response still has an
+actionable finding after compiler-grounded suppression and acknowledgements.
+Clean responses and pure analysis failures refund their reservation, while a
+clean complete diff or push-gate check resets the completed cycle.
+
+At the limit, deterministic checks and cached LLM verdicts still run, but a
+cold semantic cache miss exits 2 without contacting a provider. Raise the
+top-level `max_review_rounds`, pass `--max-review-rounds N`, or explicitly pass
+`--unlimited-reviews` when a longer cycle is warranted. State is private to the
+worktree's Git metadata and pending reservations expire after a crashed run.
 
 ## Markdown
 
@@ -233,12 +245,17 @@ over a long line is a hook that gets deleted.
 `drep.toml`, written by `drep init`:
 
 ```toml
+max_review_rounds = 3
+
 [[llm]]
 endpoint = "https://openrouter.ai/api/v1"
 model = "deepseek/deepseek-v4-pro-0813"
 api_key = "${OPENROUTER_API_KEY}"
 timeout_secs = 1800
 ```
+
+`max_review_rounds` must be at least 1. It defaults to 3 when omitted, so older
+configurations receive the bounded behavior without regeneration.
 
 HTTP is the default backend, so existing configurations remain valid without a
 `backend` field. OpenAI API usage is the `openai` preset and uses per-token API

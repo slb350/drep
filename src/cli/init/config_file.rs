@@ -146,6 +146,13 @@ pub fn render_chain(choices: &[Choice]) -> String {
         body.push_str("# Codex owns ChatGPT subscription login and token refresh.\n");
         body.push_str("# Run `codex login`; drep never reads or stores those credentials.\n");
     }
+    body.push_str("#\n");
+    body.push_str("# Fresh semantic reviews are bounded per remediation cycle. Cached verdicts\n");
+    body.push_str("# and deterministic tools remain available after the limit is reached.\n");
+    body.push_str(&format!(
+        "max_review_rounds = {}\n",
+        crate::config::DEFAULT_MAX_REVIEW_ROUNDS
+    ));
 
     for choice in choices {
         body.push('\n');

@@ -191,6 +191,28 @@ mod tests {
         assert_eq!(args.fail_on, None);
         assert!(!args.cache_only);
         assert!(!args.push_gate);
+        assert_eq!(args.max_review_rounds, None);
+        assert!(!args.unlimited_reviews);
+    }
+
+    #[test]
+    fn review_limit_override_and_unlimited_mode_are_mutually_exclusive() {
+        assert_eq!(
+            check_args(["drep", "check", "--max-review-rounds", "7"]).max_review_rounds,
+            Some(7)
+        );
+        assert!(check_args(["drep", "check", "--unlimited-reviews"]).unlimited_reviews);
+        assert!(
+            Cli::try_parse_from([
+                "drep",
+                "check",
+                "--max-review-rounds",
+                "7",
+                "--unlimited-reviews",
+            ])
+            .is_err()
+        );
+        assert!(Cli::try_parse_from(["drep", "check", "--max-review-rounds", "0"]).is_err());
     }
 
     #[test]

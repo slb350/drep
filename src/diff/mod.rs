@@ -181,6 +181,21 @@ pub(crate) async fn run_git(root: &Path, args: &[&str]) -> Result<String, GitErr
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
 }
 
+/// Resolve a path printed by `git rev-parse` against the queried repository.
+///
+/// Git prints an absolute path for some worktree layouts and a repository-
+/// relative path for others. Callers must not independently guess which form
+/// they received.
+pub(crate) async fn git_path(root: &Path, args: &[&str]) -> Result<PathBuf, GitError> {
+    let raw = run_git(root, args).await?;
+    let path = PathBuf::from(raw);
+    Ok(if path.is_absolute() {
+        path
+    } else {
+        root.join(path)
+    })
+}
+
 /// Parse the newline-delimited output of `git diff --name-only` into paths,
 /// then keep only those the caller analyzes.
 ///

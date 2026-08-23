@@ -9,6 +9,11 @@ fn openrouter_render_parses_and_carries_literal_api_key_reference() {
     let body = super::support::render_one(preset, "m", "http://e/v1");
 
     let value: toml::Value = toml::from_str(&body).expect("renders as valid TOML");
+    assert_eq!(
+        value.get("max_review_rounds").and_then(|v| v.as_integer()),
+        Some(3),
+        "new repositories must state the bounded remediation default"
+    );
     let entries = value
         .get("llm")
         .and_then(|v| v.as_array())

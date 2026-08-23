@@ -8,7 +8,7 @@
 //!   block if any, and the exact `No issues found.\n` when nothing was
 //!   produced and nothing failed.
 //! - **JSON**: one object, pretty-printed, with `findings`, `unanalyzed`,
-//!   `providers`, and `exit`. The `unanalyzed` and `providers` fields are
+//!   `providers`, `review`, and `exit`. The `unanalyzed` and `providers` fields are
 //!   **always present** — even when empty — so a consumer can distinguish "no
 //!   failures" from "this build of drep does not report them". Each
 //!   `unanalyzed` entry carries a machine-readable `kind`, plus `status` for
@@ -34,7 +34,7 @@ use serde_json::json;
 use crate::analysis::findings::Finding;
 use crate::analysis::result::{FailureReason, ProviderFailure};
 use crate::cli::OutputFormat;
-use crate::cli::check::{CheckOutcome, ProviderUse};
+use crate::cli::check::{CheckOutcome, ProviderUse, ReviewActivity};
 use crate::cli::render::{finding_line, write_failures};
 
 /// Render the outcome to stdout in the requested format.
@@ -86,6 +86,7 @@ fn render_text<W: Write>(out: &mut W, outcome: &CheckOutcome) -> Result<()> {
     write_failures(out, &outcome.failures, !by_position.is_empty())?;
 
     write_provider_block(out, &outcome.provider_uses)?;
+    write_review_activity(out, outcome.review_activity.as_ref())?;
 
     if outcome.retry_push {
         writeln!(out)?;
@@ -95,6 +96,28 @@ fn render_text<W: Write>(out: &mut W, outcome: &CheckOutcome) -> Result<()> {
         )?;
     } else if clean {
         writeln!(out, "No issues found.")?;
+    }
+    Ok(())
+}
+
+fn write_review_activity<W: Write>(out: &mut W, activity: Option<&ReviewActivity>) -> Result<()> {
+    match activity {
+        Some(ReviewActivity::Counted { round, limit }) => {
+            writeln!(out)?;
+            writeln!(out, "Fresh LLM review round {round} of {limit}.")?;
+        }
+        Some(ReviewActivity::Reset) => {
+            writeln!(out)?;
+            writeln!(
+                out,
+                "Fresh LLM review was clean; review-round counter reset."
+            )?;
+        }
+        Some(ReviewActivity::Unlimited) => {
+            writeln!(out)?;
+            writeln!(out, "Fresh LLM review ran with no round limit.")?;
+        }
+        None => {}
     }
     Ok(())
 }
@@ -164,6 +187,14 @@ fn render_json<W: Write>(out: &mut W, outcome: &CheckOutcome) -> Result<()> {
         .iter()
         .map(provider_use_json)
         .collect();
+    let review = match &outcome.review_activity {
+        Some(ReviewActivity::Counted { round, limit }) => {
+            json!({"kind": "counted", "round": round, "limit": limit})
+        }
+        Some(ReviewActivity::Reset) => json!({"kind": "reset"}),
+        Some(ReviewActivity::Unlimited) => json!({"kind": "unlimited"}),
+        None => serde_json::Value::Null,
+    };
 
     // The gate's verdict, passed in - never recomputed. A second exit
     // computation here ignored `--fail-on`, so a run with an LLM finding and no
@@ -173,6 +204,7 @@ fn render_json<W: Write>(out: &mut W, outcome: &CheckOutcome) -> Result<()> {
         "findings": findings,
         "unanalyzed": unanalyzed,
         "providers": providers,
+        "review": review,
         "retry_push": outcome.retry_push,
         "exit": exit,
     });
@@ -197,6 +229,7 @@ fn failure_kind(reason: &FailureReason) -> &'static str {
         FailureReason::Backend { .. } => "backend",
         FailureReason::Unparseable(_) => "unparseable",
         FailureReason::CacheMiss => "cache_miss",
+        FailureReason::ReviewLimit { .. } => "review_limit",
         FailureReason::ModelStopped { .. } => "model_stopped",
         FailureReason::Truncated => "truncated",
         FailureReason::MalformedFinding(_) => "malformed_finding",
@@ -269,6 +302,10 @@ fn insert_reason(obj: &mut serde_json::Map<String, serde_json::Value>, reason: &
     obj.insert("kind".to_owned(), json!(failure_kind(reason)));
     if let FailureReason::Backend { kind, .. } = reason {
         obj.insert("backend_kind".to_owned(), json!(kind.as_str()));
+    }
+    if let FailureReason::ReviewLimit { completed, limit } = reason {
+        obj.insert("completed".to_owned(), json!(completed));
+        obj.insert("limit".to_owned(), json!(limit));
     }
     if let Some(status) = reason.status() {
         obj.insert("status".to_owned(), json!(status));

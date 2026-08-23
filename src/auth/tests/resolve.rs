@@ -6,6 +6,7 @@ use crate::config::LlmConfig;
 /// A config of `n` enabled entries, each with an endpoint and no api_key.
 fn config_with(endpoints: &[&str]) -> Config {
     Config {
+        max_review_rounds: crate::config::DEFAULT_MAX_REVIEW_ROUNDS,
         llm: endpoints
             .iter()
             .map(|endpoint| LlmConfig {
@@ -102,6 +103,7 @@ fn an_entry_with_no_endpoint_resolves_to_missing_rather_than_panicking() {
     // `LlmClient::new` is what rejects a config naming no endpoint, with a
     // message about the endpoint. This pass must not get there first.
     let mut config = Config {
+        max_review_rounds: crate::config::DEFAULT_MAX_REVIEW_ROUNDS,
         llm: vec![LlmConfig {
             model: Some("m".to_string()),
             ..LlmConfig::default()

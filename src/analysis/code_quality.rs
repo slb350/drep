@@ -10,7 +10,9 @@
 //! 2. Empty hunks → empty result, no LLM call.
 //! 3. Build the payload with `payload::render`. `None` → empty result.
 //! 4. Cache first. A hit is parsed exactly as a `Complete` response would
-//!    be, and the duplicate is silent — the caller's view is identical.
+//!    be, and the duplicate is silent — the caller's view is identical. The
+//!    explicitly live pass after cache-only preflight bypasses cache, because
+//!    only a fresh provider response may consume a remediation round.
 //! 5. Concurrency. A limiter slot is acquired before the LLM call and held
 //!    for the duration. A cache hit must not acquire a slot: the slot
 //!    represents in-flight HTTP work, and a cache read is not in-flight.
@@ -68,6 +70,13 @@ pub struct CodeQualityAnalyzer {
     cache_only: bool,
 }
 
+#[derive(Clone, Copy)]
+enum CacheMode {
+    Prefer,
+    Only,
+    Bypass,
+}
+
 impl CodeQualityAnalyzer {
     /// Build from a provider chain and a shared cache.
     ///
@@ -103,11 +112,11 @@ impl CodeQualityAnalyzer {
     /// bare `Vec<Finding>`; the failure axis is part of the return type so
     /// the caller cannot forget it.
     pub async fn analyze_file(&self, hunks: &[Hunk]) -> AnalysisResult {
-        self.analyze_files_in_mode(std::iter::once(hunks), self.cache_only)
+        self.analyze_files_in_mode(std::iter::once(hunks), self.configured_cache_mode())
             .await
     }
 
-    async fn analyze_file_in_mode(&self, hunks: &[Hunk], cache_only: bool) -> AnalysisResult {
+    async fn analyze_file_in_mode(&self, hunks: &[Hunk], cache_mode: CacheMode) -> AnalysisResult {
         // Rule 1: no language, no analysis. `languages::detect` on the
         // first hunk's file path is enough because every hunk in `by_file`
         // shares a path (the diff module groups by file).
@@ -151,23 +160,31 @@ impl CodeQualityAnalyzer {
         // slot represents in-flight HTTP work), and the key comes back naming
         // whoever answered. Computing a key here would be computing it for a
         // provider that may not be the one that serves the file.
-        let served = if cache_only {
-            match self
-                .chain
-                .cached_json(&system_prompt, &payload.text, &self.cache)
-            {
-                Some(served) => Ok(served),
-                None => {
-                    return AnalysisResult::failed(
-                        first.file_path.clone(),
-                        FailureReason::CacheMiss,
-                    );
+        let served = match cache_mode {
+            CacheMode::Only => {
+                match self
+                    .chain
+                    .cached_json(&system_prompt, &payload.text, &self.cache)
+                {
+                    Some(served) => Ok(served),
+                    None => {
+                        return AnalysisResult::failed(
+                            first.file_path.clone(),
+                            FailureReason::CacheMiss,
+                        );
+                    }
                 }
             }
-        } else {
-            self.chain
-                .complete_json(&system_prompt, &payload.text, &self.cache)
-                .await
+            CacheMode::Prefer => {
+                self.chain
+                    .complete_json(&system_prompt, &payload.text, &self.cache)
+                    .await
+            }
+            CacheMode::Bypass => {
+                self.chain
+                    .complete_json_fresh(&system_prompt, &payload.text, &self.cache)
+                    .await
+            }
         };
 
         match served {
@@ -212,29 +229,41 @@ impl CodeQualityAnalyzer {
     /// in-flight requests, so we spawn them all and let it queue. The
     /// per-file results are merged with [`AnalysisResult::merge`].
     pub async fn analyze_files(&self, by_file: &[Vec<Hunk>]) -> AnalysisResult {
-        self.analyze_files_in_mode(by_file.iter().map(Vec::as_slice), self.cache_only)
-            .await
+        self.analyze_files_in_mode(
+            by_file.iter().map(Vec::as_slice),
+            self.configured_cache_mode(),
+        )
+        .await
     }
 
     /// Analyze selected cache misses without rebuilding the provider chain.
     ///
-    /// Push-gate mode uses this after its cache-only pass, preserving sticky
-    /// demotion and backend diagnostics while avoiding a second pass over
-    /// every cache hit in the diff.
+    /// Push-gate and bounded-review modes use this after cache-only preflight.
+    /// It bypasses cache while preserving sticky demotion and backend
+    /// diagnostics, so another process cannot populate an entry between the
+    /// preflight and this call and make a cached verdict count as fresh.
     pub async fn analyze_files_live(&self, by_file: &[&[Hunk]]) -> AnalysisResult {
-        self.analyze_files_in_mode(by_file.iter().copied(), false)
+        self.analyze_files_in_mode(by_file.iter().copied(), CacheMode::Bypass)
             .await
+    }
+
+    fn configured_cache_mode(&self) -> CacheMode {
+        if self.cache_only {
+            CacheMode::Only
+        } else {
+            CacheMode::Prefer
+        }
     }
 
     async fn analyze_files_in_mode<'a>(
         &self,
         by_file: impl IntoIterator<Item = &'a [Hunk]>,
-        cache_only: bool,
+        cache_mode: CacheMode,
     ) -> AnalysisResult {
         let groups: Vec<HunkGroup<'a>> = by_file.into_iter().flat_map(partition_hunks).collect();
         let futures = groups
             .iter()
-            .map(|group| self.analyze_file_in_mode(group.as_slice(), cache_only));
+            .map(|group| self.analyze_file_in_mode(group.as_slice(), cache_mode));
         let results = join_all(futures).await;
         let mut merged = AnalysisResult::default();
         for result in results {

@@ -1,6 +1,6 @@
 [package]
 name = "drep-ai"
-version = "2.5.1"
+version = "2.6.0"
 edition = "2024"
 # `ignore` 0.4.30 introduced let-chains that require Rust 1.88 without
 # declaring that floor. The current `ignore` now declares 1.88 itself;
@@ -58,6 +58,7 @@ ignore = "0.4"
 # unchanged - see `run_one_query` in src/llm/client/mod.rs.
 open-agent-sdk = "0.10.0"
 futures = "0.3"
+fs2 = "0.4.3"
 serde = { version = "1.0", features = ["derive"] }
 thiserror = "2.0"
 toml = "1.1"

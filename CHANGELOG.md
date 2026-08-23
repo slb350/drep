@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.6.0] - 2026-08-22
+
+### Added
+
+- Authoritative semantic checks now enforce a three-round remediation budget
+  per branch and worktree. A round counts only when a fresh provider response
+  still contains an actionable finding after compiler-grounded suppression and
+  acknowledgements. Cached verdicts and deterministic tools remain available
+  at the limit; a cold fourth review exits 2 without contacting a provider.
+- `max_review_rounds` configures the default, while
+  `--max-review-rounds N` and `--unlimited-reviews` explicitly authorize a
+  longer cycle. Text and JSON output report counted, reset, unlimited and
+  limit-reached states.
+
+### Changed
+
+- Clean complete diff and push checks reset the remediation cycle. Clean
+  staged subsets and named-path checks do not erase full-branch accounting;
+  clean responses, acknowledged or compiler-disproved findings, and pure
+  analysis failures refund their pending reservation.
+- Review-round state is stored outside the response cache under worktree-local
+  Git metadata. Atomic slot claims prevent concurrent oversubscription, and
+  stale pending or incomplete claims recover after a killed process.
+
 ## [2.5.1] - 2026-08-22
 
 ### Changed
@@ -467,7 +491,8 @@ LLM for review, and gates commits and pushes on the result. That is all it does.
 - Python, JavaScript, TypeScript, Go and Rust are all first-class. Adding a
   language is an entry in one table.
 
-[Unreleased]: https://github.com/slb350/drep/compare/v2.5.1...HEAD
+[Unreleased]: https://github.com/slb350/drep/compare/v2.6.0...HEAD
+[2.6.0]: https://github.com/slb350/drep/compare/v2.5.1...v2.6.0
 [2.5.1]: https://github.com/slb350/drep/compare/v2.5.0...v2.5.1
 [2.5.0]: https://github.com/slb350/drep/compare/v2.4.0...v2.5.0
 [2.4.0]: https://github.com/slb350/drep/compare/v2.3.0...v2.4.0

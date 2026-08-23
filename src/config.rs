@@ -30,6 +30,8 @@ use toml::Value;
 mod backend;
 pub use backend::{BackendKind, LlmConfig, ReasoningEffort};
 
+pub const DEFAULT_MAX_REVIEW_ROUNDS: u32 = 3;
+
 /// The whole configuration tree, rooted at the file.
 ///
 /// `llm` is an **array of tables** (`[[llm]]`), not a single `[llm]` section,
@@ -39,10 +41,20 @@ pub use backend::{BackendKind, LlmConfig, ReasoningEffort};
 /// `#[serde(default)]` means a file with an empty body deserializes
 /// successfully; `validate` is what then rejects it, because a config
 /// declaring no provider cannot run the mandatory LLM layer.
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Deserialize)]
 #[serde(default)]
 pub struct Config {
+    pub max_review_rounds: u32,
     pub llm: Vec<LlmConfig>,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            max_review_rounds: DEFAULT_MAX_REVIEW_ROUNDS,
+            llm: Vec::new(),
+        }
+    }
 }
 
 impl Config {
@@ -101,6 +113,9 @@ pub enum ConfigError {
 
     #[error("[[llm]] #{} in file order: max_tokens must be at least 1 when set", index + 1)]
     ZeroMaxTokens { index: usize },
+
+    #[error("max_review_rounds must be at least 1")]
+    ZeroReviewRounds,
 
     /// Rejected rather than defaulted: falling back to `openai` would post
     /// chat-completions bytes to a `/messages` endpoint, and the resulting 404
@@ -232,6 +247,9 @@ fn validate(
     path: &Path,
     explicit_fields: &[backend::ExplicitFields],
 ) -> Result<(), ConfigError> {
+    if config.max_review_rounds == 0 {
+        return Err(ConfigError::ZeroReviewRounds);
+    }
     if config.llm.is_empty() {
         return Err(ConfigError::NoProviders(path.to_path_buf()));
     }

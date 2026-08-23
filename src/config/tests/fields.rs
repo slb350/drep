@@ -14,6 +14,8 @@ fn full_toml_round_trips_into_config_with_every_field_correct() {
     let path = write_config(
         &temp,
         r#"
+max_review_rounds = 7
+
 [[llm]]
 enabled = true
 endpoint = "http://localhost:11434/v1"
@@ -28,6 +30,7 @@ max_concurrent = 8
     );
 
     let config = load(&path).expect("load");
+    assert_eq!(config.max_review_rounds, 7);
     let llm = &config.llm[0];
     assert!(llm.enabled);
     assert_eq!(llm.endpoint.as_deref(), Some("http://localhost:11434/v1"));
@@ -58,6 +61,10 @@ model = "qwen3:8b"
     );
 
     let config = load(&path).expect("load");
+    assert_eq!(
+        config.max_review_rounds, DEFAULT_MAX_REVIEW_ROUNDS,
+        "default semantic review budget"
+    );
     let llm = &config.llm[0];
     assert!(llm.enabled);
     assert_eq!(llm.model.as_deref(), Some("qwen3:8b"));
@@ -77,6 +84,18 @@ model = "qwen3:8b"
     assert_eq!(llm.timeout_secs, 60, "default timeout");
     assert_eq!(llm.max_retries, 3, "default max_retries");
     assert_eq!(llm.max_concurrent, 3, "default max_concurrent");
+}
+
+#[test]
+fn zero_max_review_rounds_is_rejected() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let path = write_config(&temp, "max_review_rounds = 0\n\n[[llm]]\nmodel = \"m\"\n");
+
+    let err = load(&path).expect_err("zero cannot bound a review loop");
+    assert!(
+        matches!(err, ConfigError::ZeroReviewRounds),
+        "expected ZeroReviewRounds, got {err:?}"
+    );
 }
 
 #[test]

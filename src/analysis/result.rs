@@ -48,6 +48,10 @@ pub enum FailureReason {
     Unparseable(String),
     /// Cache-only review found no response for this exact prompt and provider.
     CacheMiss,
+    /// A fresh semantic review was required after the configured remediation
+    /// budget had already been consumed. This is fail-closed: cached reviews
+    /// remain usable, but uncached code is never waved through unseen.
+    ReviewLimit { completed: u32, limit: u32 },
     /// The model stopped before producing JSON, and the server said why.
     ///
     /// Distinct from [`Self::Unparseable`] because the cause is known and
@@ -181,6 +185,16 @@ impl FailureReason {
             FailureReason::CacheMiss => {
                 "LLM review is not cached; run a normal check to warm it".to_owned()
             }
+            FailureReason::ReviewLimit { completed, limit } if completed < limit => format!(
+                "fresh LLM review capacity is currently reserved ({completed} completed of \
+                 {limit}); wait for the in-flight review, pass `--max-review-rounds N`, or pass \
+                 `--unlimited-reviews` to authorize another round"
+            ),
+            FailureReason::ReviewLimit { completed, limit } => format!(
+                "fresh LLM review limit reached ({completed} of {limit}); raise \
+                 `max_review_rounds`, pass `--max-review-rounds N`, or pass \
+                 `--unlimited-reviews` to authorize another round"
+            ),
             FailureReason::Backend { kind, message } => {
                 format!("LLM backend {kind}: {message}")
             }

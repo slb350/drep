@@ -329,16 +329,10 @@ pub async fn install<W: Write>(
 /// worktree or a submodule `.git` is a *file*, so the literal path does not
 /// exist and the hook silently never runs.
 async fn locate_hooks_dir(root: &Path) -> Result<PathBuf> {
-    let common = diff::run_git(root, &["rev-parse", "--git-common-dir"])
+    let common = diff::git_path(root, &["rev-parse", "--git-common-dir"])
         .await
         .with_context(|| format!("could not locate git common dir under {}", root.display()))?;
-    let common = PathBuf::from(common);
-    let hooks_dir = if common.is_absolute() {
-        common
-    } else {
-        root.join(common)
-    };
-    Ok(hooks_dir.join("hooks"))
+    Ok(common.join("hooks"))
 }
 
 /// Query `core.hooksPath`. `Ok(None)` when genuinely unset.

@@ -14,10 +14,27 @@ use std::time::Duration;
 use assert_cmd::Command;
 
 use crate::Exit;
-use crate::analysis::findings::Finding;
+use crate::analysis::findings::{Finding, Severity};
 use crate::analysis::result::FailureReason;
 use crate::cli::OutputFormat;
-use crate::cli::check::{CheckOutcome, ProviderUse, render};
+use crate::cli::check::{CheckArgs, CheckOutcome, ProviderUse, render};
+
+/// Build the common paths-mode check arguments used across orchestration tests.
+pub(super) fn check_args(paths: Vec<PathBuf>, fail_on: Option<Severity>) -> CheckArgs {
+    CheckArgs {
+        paths,
+        staged: false,
+        diff: None,
+        tip: None,
+        pre_commit_push: false,
+        format: OutputFormat::Text,
+        fail_on,
+        cache_only: false,
+        push_gate: false,
+        max_review_rounds: None,
+        unlimited_reviews: false,
+    }
+}
 
 /// Run the drep test binary with an isolated cache and bounded network access.
 pub(super) fn run_drep(dir: &Path, args: &[&str]) -> std::process::Output {
@@ -49,6 +66,7 @@ pub(super) fn outcome() -> CheckOutcome {
         failures: BTreeMap::new(),
         provider_uses: Vec::new(),
         retry_push: false,
+        review_activity: None,
         exit: Exit::Clean,
     }
 }
