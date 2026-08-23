@@ -65,6 +65,13 @@ async fn run_paths(path: std::path::PathBuf, dir: &Path) -> check::Exit {
 
 #[test]
 fn push_warm_requires_cache_misses_and_every_deterministic_input_to_be_clean() {
+    assert!(!check::push_warm_eligible(
+        &AnalysisResult::default(),
+        true,
+        true,
+        true
+    ));
+
     let cached = AnalysisResult::failed(PathBuf::from("src/lib.py"), FailureReason::CacheMiss);
     assert!(check::push_warm_eligible(&cached, true, true, true));
     assert!(!check::push_warm_eligible(&cached, false, true, true));

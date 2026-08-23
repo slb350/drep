@@ -60,6 +60,7 @@ const RELEASE_TARGET_RUNNERS: [(&str, &str); 4] = [
 #[test]
 fn github_ci_uses_only_guarded_homelab_runners() {
     let workflow = rust_workflow();
+    let expected_guard = format!("    if: {SAME_REPOSITORY_PR_GUARD}");
     for (job_name, runner) in [
         ("linux", "[self-hosted, linux, x64, drep-linux]"),
         ("test-macos", "[self-hosted, macos, arm64, drep-macos]"),
@@ -70,7 +71,7 @@ fn github_ci_uses_only_guarded_homelab_runners() {
             "{job_name} must run on its repository-scoped homelab runner"
         );
         assert!(
-            job.contains(SAME_REPOSITORY_PR_GUARD),
+            job.lines().any(|line| line == expected_guard),
             "{job_name} must reject forked pull requests before using a homelab runner"
         );
     }

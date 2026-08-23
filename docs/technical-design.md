@@ -122,6 +122,12 @@ recoverable after a killed process. `max_review_rounds` defaults to 3;
 `--max-review-rounds N` raises it for one run and `--unlimited-reviews` is the
 explicit escape hatch.
 
+Claim, commit and reset writes fail closed. They are authoritative quota state,
+not disposable response-cache maintenance: reporting a clean reset that could
+not be persisted would make the rendered cycle state disagree with the next
+invocation. Cache eviction remains best-effort because losing cached responses
+changes only latency, not authorization.
+
 ## Input and diff modes
 
 `files::expand_named` is the single answer to "what did the user ask for, and

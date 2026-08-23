@@ -407,6 +407,9 @@ pub(crate) async fn run_against(
         && llm_result.findings.is_empty()
         && llm_result.failed_files.is_empty()
     {
+        // Reset is an authoritative quota-state transition, not cache
+        // maintenance. Failing it closed keeps this result from claiming a
+        // cycle reset that the next invocation cannot observe.
         let reset = if let Some(budget) = &budget {
             budget.reset()?
         } else {
@@ -451,10 +454,11 @@ fn push_warm_eligible(
     tools_analyzed: bool,
     tools_clean: bool,
 ) -> bool {
-    cached
-        .failed_files
-        .values()
-        .all(|reason| matches!(reason, FailureReason::CacheMiss))
+    cached.has_failures()
+        && cached
+            .failed_files
+            .values()
+            .all(|reason| matches!(reason, FailureReason::CacheMiss))
         && reads_clean
         && tools_analyzed
         && tools_clean
