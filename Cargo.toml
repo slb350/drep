@@ -78,6 +78,11 @@ rpassword = "7.5"
 # Already present transitively via the SDK, so this costs no new build.
 reqwest = { version = "0.12", features = ["json", "gzip"] }
 
+# The SDK enables reqwest's default native TLS backend. Only this cross target
+# needs to compile OpenSSL rather than discover it in the host's system paths.
+[target.'cfg(all(target_os = "linux", target_arch = "aarch64"))'.dependencies]
+reqwest = { version = "0.12", features = ["native-tls-vendored"] }
+
 [dev-dependencies]
 assert_cmd = "2.2"
 wiremock = "0.6"

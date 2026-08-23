@@ -126,6 +126,16 @@ jobs:
             curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
             echo "$HOME/.cargo/bin" >> $GITHUB_PATH
           fi
+      - name: "Install Zig for arm64 Linux cross-builds"
+        uses: "mlugg/setup-zig@v2.2.1"
+        if: "contains(matrix.targets, 'aarch64-unknown-linux-gnu')"
+        with:
+          "version": "0.16.0"
+      - name: "Install cargo-zigbuild for arm64 Linux cross-builds"
+        uses: "taiki-e/install-action@v2"
+        if: "contains(matrix.targets, 'aarch64-unknown-linux-gnu')"
+        with:
+          "tool": "cargo-zigbuild@0.23.0"
       - name: Install dist
         run: ${{ matrix.install_dist.run }}
       # Get the dist-manifest

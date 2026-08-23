@@ -4,10 +4,10 @@
 //! `dist`, while `.github/workflows/rust.yml` owns self-hosted validation. Nothing
 //! else in the Rust suite reads those delivery contracts, and the first sign of
 //! a mistake is a release that already happened or a job that never runs. As in
-//! `published_hooks.rs`, these assertions are textual: adding TOML and YAML
-//! parsers to state a few exact facts would buy nothing. `Cargo.toml` is the
-//! other case - this project hand-edits it - so the one assertion over it
-//! parses.
+//! `published_hooks.rs`, most assertions are textual: adding parsers to state a
+//! few exact facts would buy nothing. The hand-edited Cargo manifest and the
+//! native-versus-cross runner mapping are parsed where formatting is not part
+//! of the contract.
 
 mod common;
 
@@ -25,6 +25,14 @@ fn mutation_workflow() -> String {
 
 fn release_workflow() -> String {
     common::without_comments(".github/workflows/release.yml")
+}
+
+fn release_build_setup() -> String {
+    common::without_comments(".github/build-setup.yml")
+}
+
+fn parsed_toml(relative: &str) -> toml::Table {
+    toml::from_str(&common::read(relative)).unwrap_or_else(|e| panic!("{relative} must parse: {e}"))
 }
 
 fn workflow_job<'a>(workflow: &'a str, name: &str) -> &'a str {
@@ -45,11 +53,33 @@ fn workflow_job<'a>(workflow: &'a str, name: &str) -> &'a str {
 }
 
 const SAME_REPOSITORY_PR_GUARD: &str = "github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository";
-const RELEASE_TARGET_RUNNERS: [(&str, &str); 4] = [
-    ("aarch64-apple-darwin", "drep-macos"),
-    ("aarch64-unknown-linux-gnu", "drep-linux"),
-    ("x86_64-apple-darwin", "drep-macos"),
-    ("x86_64-unknown-linux-gnu", "drep-linux"),
+struct ReleaseTarget {
+    triple: &'static str,
+    runner: &'static str,
+    host: Option<&'static str>,
+}
+
+const RELEASE_TARGETS: [ReleaseTarget; 4] = [
+    ReleaseTarget {
+        triple: "aarch64-apple-darwin",
+        runner: "drep-macos",
+        host: None,
+    },
+    ReleaseTarget {
+        triple: "aarch64-unknown-linux-gnu",
+        runner: "drep-linux",
+        host: Some("x86_64-unknown-linux-gnu"),
+    },
+    ReleaseTarget {
+        triple: "x86_64-apple-darwin",
+        runner: "drep-macos",
+        host: None,
+    },
+    ReleaseTarget {
+        triple: "x86_64-unknown-linux-gnu",
+        runner: "drep-linux",
+        host: None,
+    },
 ];
 
 /// Trusted changes are validated on the two repository-scoped homelab runners.
@@ -192,15 +222,21 @@ fn remote_full_mutation_sweep_passes_no_phantom_argument() {
 ///
 /// A target that falls out of this list does not fail anything: the installer
 /// keeps working everywhere else and tells that one user "unsupported
-/// platform". Both Linux triples are built on native runners, so dropping one
-/// saves nothing that would justify it.
+/// platform". Both Linux triples build on Strix, with its x86_64 host
+/// cross-compiling arm64, so dropping one saves nothing that would justify it.
 #[test]
 fn every_supported_platform_is_built() {
-    let config = dist_config();
-    for (target, _) in RELEASE_TARGET_RUNNERS {
+    let manifest = parsed_toml("dist-workspace.toml");
+    let targets = manifest["dist"]["targets"]
+        .as_array()
+        .expect("cargo-dist targets must be an array");
+    for target in RELEASE_TARGETS {
         assert!(
-            config.contains(target),
-            "a release no longer builds for {target}"
+            targets
+                .iter()
+                .any(|value| value.as_str() == Some(target.triple)),
+            "a release no longer builds for {}",
+            target.triple
         );
     }
 }
@@ -213,20 +249,27 @@ fn every_supported_platform_is_built() {
 /// homelab machine through the release workflow.
 #[test]
 fn every_release_job_uses_a_homelab_runner() {
-    let config = dist_config();
-    for (target, runner) in RELEASE_TARGET_RUNNERS
-        .into_iter()
-        .chain([("global", "drep-linux")])
-    {
-        assert!(
-            config.contains(&format!(r#"{target} = "{runner}""#)),
-            "cargo-dist must route {target} work to {runner}"
-        );
+    let manifest = parsed_toml("dist-workspace.toml");
+    let dist = manifest["dist"]
+        .as_table()
+        .expect("cargo-dist configuration must be a table");
+    let runners = dist["github-custom-runners"]
+        .as_table()
+        .expect("cargo-dist custom runners must be a table");
+    for target in RELEASE_TARGETS {
+        match target.host {
+            Some(host) => {
+                let mapping = runners[target.triple]
+                    .as_table()
+                    .expect("a cross-runner mapping must be a table");
+                assert_eq!(mapping["runner"].as_str(), Some(target.runner));
+                assert_eq!(mapping["host"].as_str(), Some(host));
+            }
+            None => assert_eq!(runners[target.triple].as_str(), Some(target.runner)),
+        }
     }
-    assert!(
-        config.contains(r#"pr-run-mode = "skip""#),
-        "the release workflow must not execute repository content for pull requests"
-    );
+    assert_eq!(runners["global"].as_str(), Some("drep-linux"));
+    assert_eq!(dist["pr-run-mode"].as_str(), Some("skip"));
     let workflow = release_workflow();
     let trigger = workflow
         .split_once("\njobs:")
@@ -250,6 +293,69 @@ fn every_release_job_uses_a_homelab_runner() {
                     || line.contains("windows-"))
         }),
         "release.yml must not contain a GitHub-hosted runs-on label"
+    );
+}
+
+#[test]
+fn arm64_linux_cross_build_tools_are_reproducibly_provisioned() {
+    let manifest = parsed_toml("dist-workspace.toml");
+    assert_eq!(
+        manifest["dist"]["github-build-setup"].as_str(),
+        Some("../build-setup.yml"),
+        "cargo-dist must inject the repository-owned cross-build setup"
+    );
+
+    let setup = release_build_setup();
+    for target in RELEASE_TARGETS
+        .iter()
+        .filter(|target| target.host.is_some())
+    {
+        let condition = format!("contains(matrix.targets, '{}')", target.triple);
+        assert!(
+            setup.contains(&condition),
+            "the cross-build setup must select {}",
+            target.triple
+        );
+    }
+    assert!(
+        setup.contains("uses: mlugg/setup-zig@v2.2.1")
+            && setup.contains("version: 0.16.0")
+            && setup.contains("uses: taiki-e/install-action@v2")
+            && setup.contains("tool: cargo-zigbuild@0.23.0"),
+        "only the arm64 Linux lane must install the pinned Zig cross-build tools"
+    );
+
+    let workflow = release_workflow();
+    let local_build = workflow_job(&workflow, "build-local-artifacts");
+    assert!(
+        local_build.contains("mlugg/setup-zig@v2.2.1")
+            && local_build.contains("cargo-zigbuild@0.23.0"),
+        "the generated release workflow must include the configured cross-build setup"
+    );
+}
+
+#[test]
+fn linux_release_tls_is_self_contained_for_cross_compilation() {
+    let manifest = parsed_toml("Cargo.toml");
+    let native_features = manifest["dependencies"]["reqwest"]["features"]
+        .as_array()
+        .expect("reqwest features must be an array");
+    assert!(
+        native_features
+            .iter()
+            .all(|feature| feature.as_str() != Some("native-tls-vendored")),
+        "native targets must not compile a vendored OpenSSL"
+    );
+    let cross_features = manifest["target"]
+        ["cfg(all(target_os = \"linux\", target_arch = \"aarch64\"))"]["dependencies"]
+        ["reqwest"]["features"]
+        .as_array()
+        .expect("arm64 Linux reqwest features must be an array");
+    assert!(
+        cross_features
+            .iter()
+            .any(|feature| feature.as_str() == Some("native-tls-vendored")),
+        "Linux release builds must compile OpenSSL instead of depending on a target sysroot"
     );
 }
 
@@ -341,9 +447,7 @@ fn release_workflow_needs_no_manual_ci_exception() {
 /// and reformatting the line is not the mistake being guarded against.
 #[test]
 fn released_binaries_inherit_the_tuned_release_profile() {
-    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/Cargo.toml");
-    let raw = std::fs::read_to_string(path).expect("Cargo.toml must be readable");
-    let manifest: toml::Table = toml::from_str(&raw).expect("Cargo.toml must parse");
+    let manifest = parsed_toml("Cargo.toml");
     let profile = manifest["profile"]
         .get("dist")
         .and_then(toml::Value::as_table)

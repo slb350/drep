@@ -31,6 +31,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   runner allocation, and the full mutation sweep starts only after successful
   main-push validation. The Mac validation toolchain includes Clippy because
   the suite verifies compiler-grounded review suppression with a real fixture.
+  The arm64 Linux release lane declares Strix's x86_64 host explicitly so
+  cargo-dist selects cross-compilation, and its build setup installs pinned Zig
+  0.16.0 and cargo-zigbuild 0.23.0 without relying on system Python writes.
+  Native TLS is vendored for releases so that cross-build compiles OpenSSL for
+  arm64 instead of requiring a target sysroot on Strix.
 - Clean complete diff and push checks reset the remediation cycle. Clean
   staged subsets and named-path checks do not erase full-branch accounting;
   clean responses, acknowledged or compiler-disproved findings, and pure

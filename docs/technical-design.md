@@ -337,7 +337,15 @@ global plan, host and Homebrew publication work, while the arm64 Mac mini uses
 the native macOS SDK to build both Apple targets. The generated
 `.github/workflows/release.yml` is tag-only and creates the GitHub release and
 Homebrew publication. crates.io remains a separate `cargo publish --locked`
-operation because cargo-dist does not publish Rust crates.
+operation because cargo-dist does not publish Rust crates. The arm64 Linux
+runner mapping names Strix's x86_64 host explicitly; cargo-dist uses that host
+fact to provision cargo-zigbuild and Zig instead of assuming native arm64.
+`.github/build-setup.yml` installs pinned Zig 0.16.0 and cargo-zigbuild 0.23.0
+for that matrix row before cargo-dist's generated dependency step. That avoids
+the generated pip fallback, which Strix's PEP 668-managed Python rejects.
+Reqwest enables `native-tls-vendored` only for arm64 Linux, which compiles
+OpenSSL for that target instead of requiring an arm64 OpenSSL sysroot on the
+x86_64 host or adding the source build to native targets.
 
 `.github/workflows/rust.yml` runs format, clippy, tests and the 1.88 MSRV check
 in one Strix allocation, plus the test suite on the native Mac mini. Both
