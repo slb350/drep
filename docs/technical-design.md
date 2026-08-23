@@ -340,7 +340,9 @@ Homebrew publication. crates.io remains a separate `cargo publish --locked`
 operation because cargo-dist does not publish Rust crates.
 
 `.github/workflows/rust.yml` runs format, clippy, tests and the 1.88 MSRV check
-in one Strix allocation, plus the test suite on the native Mac mini. Its jobs
+in one Strix allocation, plus the test suite on the native Mac mini. Both
+stable toolchains include Clippy: the test suite runs a real Rust fixture to
+verify compiler-grounded semantic suppression. Its jobs
 accept pushes and same-repository pull requests but skip forked pull requests
 before a LAN runner is selected. `.github/workflows/mutants.yml` follows the
 successful `rust` workflow for a push to `main` and checks out that exact SHA on

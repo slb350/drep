@@ -84,6 +84,11 @@ fn github_ci_uses_only_guarded_homelab_runners() {
             && linux.contains("cargo +1.88.0 check"),
         "the single Strix lane must retain format, clippy, test and MSRV gates"
     );
+    let macos = workflow_job(&workflow, "test-macos");
+    assert!(
+        macos.contains("components: clippy"),
+        "the Mac test lane must install clippy because the suite exercises configured Rust compilers"
+    );
     assert!(
         !workflow.contains("\n  lint:\n")
             && !workflow.contains("\n  test-linux:\n")
