@@ -7,8 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.6.1] - 2026-08-23
+
 ### Fixed
 
+- Credential-store updates now use a randomly named, exclusively created 0600
+  sibling before atomic publication. A pre-planted symlink at the former
+  predictable temporary filename can no longer receive serialized API keys.
+- Hand-maintained GitHub workflows now pin every external Action to a verified
+  upstream commit instead of a mutable tag. GitHub vulnerability alerts and
+  automated security updates are enabled, and a weekly Dependabot lane keeps
+  workflow Action revisions current; the release build-setup source is pinned
+  and covered by the weekly security inspection. Validation explicitly
+  requests only read access to repository contents. The cargo-dist workflow
+  remains generator-owned.
+- `scripts/mutants-run.sh` now exports `TMPDIR` as a sibling of the checkout
+  (`<checkout>.mutants-tmp`, override with `DREP_MUTANTS_TMPDIR`), sweeps
+  stale `cargo-mutants-*.tmp` copies before each run and removes its own on
+  exit. cargo-mutants deletes its per-job tree copies only on a clean exit,
+  and Strix mounts `/tmp` as a tmpfs, so copies stranded by a cancelled or
+  timed-out job were pinning RAM (31 GiB from five runs in a sibling
+  repository). Interrupted child tests are covered too: their known
+  `drep-diff-test-*` repositories share the dedicated scratch root. Cleanup is
+  narrowly scoped through `find -delete` and never invokes `rm` or `rmdir`. A
+  config test pins the location and the sweep.
 - macOS release matrix jobs now install their own stable Rust toolchain and
   declared target before cargo-dist runs, so a runner service does not depend
   on an interactive shell's Cargo path or mutable machine-global toolchain.
@@ -510,7 +532,8 @@ LLM for review, and gates commits and pushes on the result. That is all it does.
 - Python, JavaScript, TypeScript, Go and Rust are all first-class. Adding a
   language is an entry in one table.
 
-[Unreleased]: https://github.com/slb350/drep/compare/v2.6.0...HEAD
+[Unreleased]: https://github.com/slb350/drep/compare/v2.6.1...HEAD
+[2.6.1]: https://github.com/slb350/drep/compare/v2.6.0...v2.6.1
 [2.6.0]: https://github.com/slb350/drep/compare/v2.5.1...v2.6.0
 [2.5.1]: https://github.com/slb350/drep/compare/v2.5.0...v2.5.1
 [2.5.0]: https://github.com/slb350/drep/compare/v2.4.0...v2.5.0

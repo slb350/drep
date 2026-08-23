@@ -12,7 +12,8 @@ pr-run-mode = "skip"
 # The x86_64 Strix runner cross-builds arm64 Linux. Cargo-dist's generated pip
 # fallback is incompatible with Strix's PEP 668-managed Python, so inject the
 # pinned native tools before its dependency step; that step then becomes a
-# no-op because cargo-zigbuild is already on PATH.
+# no-op because cargo-zigbuild is already on PATH. Cargo-dist copies this file
+# into release.yml, so changing either source requires `dist init`.
 github-build-setup = "../build-setup.yml"
 # The installers to generate for each app
 installers = ["shell", "homebrew"]

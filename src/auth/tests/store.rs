@@ -394,6 +394,42 @@ fn saving_leaves_no_temporary_beside_the_store() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn a_preexisting_temporary_symlink_cannot_receive_credentials() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("auth.toml");
+    let victim = dir.path().join("unrelated");
+    std::fs::write(&victim, "leave me alone").expect("victim");
+    std::os::unix::fs::symlink(&victim, path.with_file_name("auth.toml.drep-tmp"))
+        .expect("plant predictable temporary symlink");
+    let mut store = AuthStore::new();
+    store
+        .set("https://api.z.ai/v1", "sk-must-not-leak")
+        .expect("set");
+
+    store.save(&path).expect("save through a fresh temporary");
+
+    assert_eq!(
+        std::fs::read_to_string(&victim).expect("victim remains readable"),
+        "leave me alone",
+        "the credential writer must not follow a planted temporary symlink"
+    );
+    assert_eq!(
+        AuthStore::load(&path)
+            .expect("load")
+            .get("https://api.z.ai/v1"),
+        Some("sk-must-not-leak")
+    );
+}
+
+#[test]
+fn the_private_temporary_is_created_beside_the_store() {
+    let nested = Path::new("configured/drep/auth.toml");
+    assert_eq!(temporary_parent(nested), Path::new("configured/drep"));
+    assert_eq!(temporary_parent(Path::new("auth.toml")), Path::new("."));
+}
+
 #[test]
 fn a_save_that_cannot_be_published_leaves_the_previous_store_readable() {
     // The reason the rename exists. Renaming onto a non-empty directory fails,
@@ -427,10 +463,6 @@ fn a_save_that_cannot_be_published_leaves_the_previous_store_readable() {
     assert!(
         path.join("occupied").exists(),
         "and what was there is untouched"
-    );
-    assert!(
-        !path.with_file_name("auth.toml.drep-tmp").exists(),
-        "with no temporary left holding the credentials"
     );
 }
 

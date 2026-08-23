@@ -383,10 +383,10 @@ pub(crate) fn ensure_dir_private(dir: &Path) -> Result<(), AuthError> {
 /// Write `body` to `path`, creating it readable only by its owner.
 ///
 /// `File::create` plus a later `chmod` leaves the key in a 0644 file for the
-/// duration of the write. `OpenOptions::mode` applies the mode at *creation*,
-/// so there is no window. The mode is re-applied afterwards because it only
-/// affects creation - an existing file keeps whatever mode it had, including
-/// one a user widened.
+/// duration of the write. `NamedTempFile` exclusively creates a random 0600
+/// sibling, so there is no readable window and no predictable name for a
+/// planted symlink. The mode is re-applied before publication as an explicit
+/// invariant rather than depending on the temporary-file crate's default.
 ///
 /// One function with the `cfg` around the mode call, rather than two whole
 /// implementations: a `#[cfg(not(unix))]` twin is not compiled here, so
@@ -404,50 +404,37 @@ fn write_private(path: &Path, body: &str) -> Result<(), AuthError> {
     // directory, so a reader sees either the whole old store or the whole new
     // one, which is why the temporary is a sibling rather than in the system
     // temp dir.
-    let temporary = temp_beside(path);
-
-    let mut options = std::fs::OpenOptions::new();
-    options.write(true).create(true).truncate(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-
-    let mut file = options
-        .open(&temporary)
-        .map_err(|err| AuthError::Write(temporary.clone(), err))?;
-    file.write_all(body.as_bytes())
-        .map_err(|err| AuthError::Write(temporary.clone(), err))?;
+    let parent = temporary_parent(path);
+    // A random, exclusively-created name prevents an attacker from planting a
+    // sibling symlink that receives the serialized credentials when opened.
+    let mut temporary = tempfile::NamedTempFile::new_in(parent)
+        .map_err(|err| AuthError::Write(path.to_path_buf(), err))?;
+    temporary
+        .write_all(body.as_bytes())
+        .map_err(|err| AuthError::Write(path.to_path_buf(), err))?;
     // Before the rename, not after: a rename that publishes a file whose
     // contents are still in the page cache can survive a crash as an empty one.
-    file.sync_all()
-        .map_err(|err| AuthError::Write(temporary.clone(), err))?;
-    drop(file);
+    temporary
+        .as_file()
+        .sync_all()
+        .map_err(|err| AuthError::Write(path.to_path_buf(), err))?;
 
     // The temporary carries the mode, and `rename` keeps it - so the published
     // store is 0600 whatever the mode of the file it replaced, which is how a
     // store a user widened is narrowed again.
-    restrict(&temporary, 0o600)?;
+    restrict(temporary.path(), 0o600)?;
 
-    std::fs::rename(&temporary, path).map_err(|err| {
-        // Otherwise a repeatedly-failing save leaves one temporary per attempt
-        // beside the store.
-        let _ = std::fs::remove_file(&temporary);
-        AuthError::Write(path.to_path_buf(), err)
-    })
+    temporary
+        .persist(path)
+        .map(|_| ())
+        .map_err(|err| AuthError::Write(path.to_path_buf(), err.error))
 }
 
-/// A sibling of `path` to write before renaming over it.
-///
-/// The whole file name is kept and a suffix appended, rather than
-/// `with_extension`, which would turn `auth.toml` into `auth.tmp` and collide
-/// with anything else following the same convention. `DREP_AUTH_PATH` can name
-/// a file with no extension at all.
-fn temp_beside(path: &Path) -> std::path::PathBuf {
-    let mut name = path.file_name().unwrap_or_default().to_os_string();
-    name.push(".drep-tmp");
-    path.with_file_name(name)
+/// Directory in which an atomic replacement must be created.
+fn temporary_parent(path: &Path) -> &Path {
+    path.parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."))
 }
 
 /// Narrow `path` to `mode` on Unix. A no-op elsewhere.

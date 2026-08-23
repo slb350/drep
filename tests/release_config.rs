@@ -10,6 +10,8 @@
 //! of the contract.
 
 mod common;
+#[path = "release_config/mutation_cleanup.rs"]
+mod mutation_cleanup;
 
 fn dist_config() -> String {
     common::without_comments("dist-workspace.toml")
@@ -53,6 +55,9 @@ fn workflow_job<'a>(workflow: &'a str, name: &str) -> &'a str {
 }
 
 const SAME_REPOSITORY_PR_GUARD: &str = "github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository";
+const RUST_TOOLCHAIN_ACTION: &str =
+    "dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c";
+const SETUP_ZIG_ACTION: &str = "mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29";
 struct ReleaseTarget {
     triple: &'static str,
     runner: &'static str,
@@ -90,6 +95,10 @@ const RELEASE_TARGETS: [ReleaseTarget; 4] = [
 #[test]
 fn github_ci_uses_only_guarded_homelab_runners() {
     let workflow = rust_workflow();
+    assert!(
+        workflow.contains("permissions:\n  contents: read"),
+        "validation must explicitly request read-only repository contents"
+    );
     let expected_guard = format!("    if: {SAME_REPOSITORY_PR_GUARD}");
     for (job_name, runner) in [
         ("linux", "[self-hosted, linux, x64, drep-linux]"),
@@ -130,6 +139,43 @@ fn github_ci_uses_only_guarded_homelab_runners() {
         !workflow.contains("ubuntu-latest") && !workflow.contains("macos-latest"),
         "validation must not consume GitHub-hosted runner minutes"
     );
+}
+
+/// Hand-maintained workflows use immutable upstream Action revisions.
+///
+/// `release.yml` is deliberately absent: cargo-dist owns that generated file,
+/// and changing it anywhere except `dist init` creates an unreproducible diff.
+#[test]
+fn maintained_actions_are_pinned_to_full_commit_shas() {
+    let assert_pinned = |path| {
+        for line in common::read(path).lines() {
+            let trimmed = line.trim_start();
+            let action = trimmed
+                .strip_prefix("- uses: ")
+                .or_else(|| trimmed.strip_prefix("uses: "));
+            let Some(action) = action.filter(|action| !action.starts_with("./")) else {
+                continue;
+            };
+            let sha = action
+                .split_once('@')
+                .expect("action reference")
+                .1
+                .split_whitespace()
+                .next()
+                .expect("action revision");
+            assert!(
+                sha.len() == 40 && sha.bytes().all(|byte| byte.is_ascii_hexdigit()),
+                "{path}: action is not pinned to a full commit SHA: {action}"
+            );
+        }
+    };
+    for path in [
+        ".github/workflows/rust.yml",
+        ".github/workflows/mutants.yml",
+        ".github/build-setup.yml",
+    ] {
+        assert_pinned(path);
+    }
 }
 
 /// Full mutation testing runs once, after trusted main validation succeeds.
@@ -318,9 +364,10 @@ fn arm64_linux_cross_build_tools_are_reproducibly_provisioned() {
         );
     }
     assert!(
-        setup.contains("uses: mlugg/setup-zig@v2.2.1")
+        setup.contains(&format!("uses: {SETUP_ZIG_ACTION}"))
             && setup.contains("version: 0.16.0")
-            && setup.contains("uses: taiki-e/install-action@v2")
+            && setup
+                .contains("uses: taiki-e/install-action@6cd13508893c0e7eab5f273c2575d3859bd7229a")
             && setup.contains("tool: cargo-zigbuild@0.23.0"),
         "only the arm64 Linux lane must install the pinned Zig cross-build tools"
     );
@@ -328,8 +375,7 @@ fn arm64_linux_cross_build_tools_are_reproducibly_provisioned() {
     let workflow = release_workflow();
     let local_build = workflow_job(&workflow, "build-local-artifacts");
     assert!(
-        local_build.contains("mlugg/setup-zig@v2.2.1")
-            && local_build.contains("cargo-zigbuild@0.23.0"),
+        local_build.contains(SETUP_ZIG_ACTION) && local_build.contains("cargo-zigbuild@0.23.0"),
         "the generated release workflow must include the configured cross-build setup"
     );
 }
@@ -342,7 +388,8 @@ fn macos_release_builds_provision_their_rust_targets() {
     let setup = release_build_setup();
     assert!(
         setup.contains("if: runner.os == 'macOS'")
-            && setup.contains("uses: dtolnay/rust-toolchain@stable")
+            && setup.contains(&format!("uses: {RUST_TOOLCHAIN_ACTION}"))
+            && setup.contains("toolchain: stable")
             && setup.contains("targets: ${{ join(matrix.targets, ',') }}"),
         "Mac release builds must not depend on runner-global Rust PATH state"
     );
@@ -350,7 +397,7 @@ fn macos_release_builds_provision_their_rust_targets() {
     let workflow = release_workflow();
     let local_build = workflow_job(&workflow, "build-local-artifacts");
     assert!(
-        local_build.contains("dtolnay/rust-toolchain@stable")
+        local_build.contains(RUST_TOOLCHAIN_ACTION)
             && local_build.contains("join(matrix.targets, ',')"),
         "the generated release workflow must include the Mac Rust bootstrap"
     );

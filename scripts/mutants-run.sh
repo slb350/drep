@@ -15,10 +15,46 @@ set -euo pipefail
 # mutants-common.sh, because all three scripts in this trio need it. This is not
 # concurrency protection: two runs in the same checkout share this directory
 # exactly as they shared a cwd-relative `mutants.out`.
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=scripts/mutants-common.sh
-. "$(dirname "$0")/mutants-common.sh"
+. "$SCRIPT_DIR/mutants-common.sh"
 OUT_DIR="$MUTANTS_OUT_DIR"
 mkdir -p "$OUT_DIR"
+
+# Scratch copies go beside the checkout, not in the system temp dir.
+#
+# cargo-mutants copies the whole tree, target/ included, into `$TMPDIR` once per
+# job and deletes the copies only on a clean exit. A run that is cancelled or
+# hits the job timeout strands them, and Strix mounts `/tmp` as a tmpfs: in
+# another repository five such sweeps pinned 31 GiB of RAM with nothing else
+# running. The `github-drep` service's PrivateTmp lands on that same tmpfs.
+# Here the copies sit on the NVMe and a stale one costs disk.
+#
+# A sibling of the checkout rather than a child, because cargo-mutants' copy
+# excludes only `mutants.out`: a scratch copy under `target/` would itself be
+# copied into every later copy. The root is taken from this script's location
+# rather than the cwd so every caller resolves the same directory.
+ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+export TMPDIR="${DREP_MUTANTS_TMPDIR:-${ROOT}.mutants-tmp}"
+mkdir -p "$TMPDIR"
+
+# Sweep what the last run left. cargo-mutants never sees a SIGKILL, and the
+# runner's cancellation ends in one, so the trap below is the common case and
+# this is the backstop. The caller's lock means nothing else is copying into
+# this directory right now.
+cleanup_mutation_scratch() {
+  # `find` does not follow symlinks by default. Descendants match the path arm,
+  # then -depth removes the matching top-level cargo-mutants directory last.
+  # No other entry directly under a caller-supplied TMPDIR can match.
+  find "$TMPDIR" -depth -mindepth 1 \
+    \( -name 'cargo-mutants-*.tmp' -o \
+    -path "$TMPDIR"/'cargo-mutants-*.tmp/*' -o \
+    -name 'drep-diff-test-*' -o \
+    -path "$TMPDIR"/'drep-diff-test-*/*' \) -delete
+}
+
+cleanup_mutation_scratch
+trap cleanup_mutation_scratch EXIT
 
 # --minimum-test-timeout: cargo-mutants derives the per-mutant timeout from the
 # unmutated baseline, which on a fast suite is a second or two. With -j running
