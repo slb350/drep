@@ -213,6 +213,20 @@ pub enum ConfigError {
          deterministic-only mode. Re-enable one, or run `drep init` to write another."
     )]
     NoEnabledProviders(PathBuf),
+
+    /// Rejected rather than ignored, which is the one behaviour that would be
+    /// worse than either: serde drops an unknown key without a word, so a
+    /// developer reads `refuse_markers` in their own config, believes the
+    /// repository is protected, and every review still ships its source. It is
+    /// refused here rather than honoured because `drep init` gitignores this
+    /// file - a copy of the control would be per-developer, and a refusal a
+    /// developer can delete is not one.
+    #[error(
+        "{path} sets `{field}`, which is machine site policy and is read only from the site \
+         policy file; this file is gitignored by `drep init`, so a copy here would be \
+         per-developer and could be deleted by the developer it constrains"
+    )]
+    SiteOnlyField { path: PathBuf, field: &'static str },
 }
 
 /// The conventional config file location: `drep.toml` in the current directory.
@@ -260,6 +274,17 @@ pub fn load(path: &Path) -> Result<Config, ConfigError> {
         ConfigError::Parse(path.to_path_buf(), err.message().to_owned())
     })?;
 
+    // Read off the raw tree, the way `disabled_provider_indices` and
+    // `backend::explicit_fields` are: `Config` has no `refuse_markers` field and
+    // no `deny_unknown_fields`, so serde would deserialize this file happily and
+    // say nothing.
+    if let Some(field) = site_only_field(&tree) {
+        return Err(ConfigError::SiteOnlyField {
+            path: path.to_path_buf(),
+            field,
+        });
+    }
+
     // Disabled providers are pruned from expansion, not from the tree: a
     // parked entry is inert, so an unset `${OPENROUTER_API_KEY}` in the cloud
     // block a user just switched off must not refuse to load the file. It stays
@@ -275,6 +300,18 @@ pub fn load(path: &Path) -> Result<Config, ConfigError> {
 
     validate(&config, path, &explicit_fields)?;
     Ok(config)
+}
+
+/// The site-policy key this file declared, if it declared one.
+///
+/// One name, not a list, because there is exactly one control the two files must
+/// not both be able to state: `refuse_markers` reads as a security decision, and a
+/// repository able to make it - or to appear to make it - is the whole thing the
+/// site layer exists to take away. `max_concurrent_ceiling` is deliberately not
+/// here: written in `drep.toml` it changes nothing a repository could not already
+/// do by lowering its own `max_concurrent`.
+fn site_only_field(tree: &Value) -> Option<&'static str> {
+    tree.get("refuse_markers").map(|_| "refuse_markers")
 }
 
 /// Validate what serde cannot enforce from the type alone.

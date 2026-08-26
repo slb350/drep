@@ -127,3 +127,34 @@ fn fail_on_error_still_exits_two_for_a_file_it_could_not_read() {
     assert!(outcome.findings.is_empty());
     assert_eq!(outcome.exit, Exit::Unanalyzed);
 }
+
+/// A marker file refuses semantic review, and this command has none.
+///
+/// `lint-docs` reads no config, builds no chain and opens no cache, so it is
+/// unaffected by construction. The test is here to keep it that way: the failure
+/// mode is someone wiring the refusal into a layer both commands touch, and it
+/// would surface as markdown silently stopping being linted in exactly the
+/// repositories that most need every local check they can get.
+#[test]
+fn markdown_linting_is_unaffected_by_a_refusal_marker() {
+    let dir = repo(&[
+        ("README.md", "#Heading\n"),
+        (".drep-no-llm", ""),
+        ("site.toml", "refuse_markers = [\".drep-no-llm\"]\n"),
+    ]);
+
+    let lenient = run_in(dir.path(), &[], false);
+    assert!(
+        !lenient.findings.is_empty(),
+        "the markdown checks still ran"
+    );
+    assert_eq!(lenient.exit, Exit::Clean);
+
+    let strict = run_in(dir.path(), &[], true);
+    assert_eq!(strict.findings, lenient.findings);
+    assert_eq!(
+        strict.exit,
+        Exit::FoundIssues,
+        "and `--fail-on` still gates on what they found"
+    );
+}

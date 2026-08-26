@@ -9,6 +9,7 @@ use super::input::Work;
 use super::review_budget::{Budget, Claim, Reservation};
 use crate::analysis::code_quality::CodeQualityAnalyzer;
 use crate::analysis::result::{AnalysisResult, FailureReason};
+use crate::config::site::Refusal;
 
 /// Whether this invocation may turn cache misses into fresh semantic reviews.
 ///
@@ -141,6 +142,45 @@ pub(super) async fn complete(
 
 fn fresh_answered(before: usize, after: usize) -> bool {
     after > before
+}
+
+/// The pass a repository gets when site policy refuses semantic review.
+///
+/// Every file drep was asked about is recorded as unanalyzed, one entry each,
+/// exactly as a dead endpoint already renders. The alternative - one run-level
+/// line - would be a second reporting mechanism outside the `unanalyzed`
+/// contract, and a consumer would have to learn both.
+///
+/// Built here because [`Pass`] is this module's type and its fields are
+/// `pub(super)`, and the fields it leaves at their inert values are what carry
+/// the invariants: no reservation is claimed, no round is consumed, and
+/// `should_review_live = false` keeps a refused run structurally unable to reach
+/// the exit-3 push handshake. The reset guard in `run_against` cannot fire
+/// either, because `failed_files` is not empty.
+pub(super) fn refused(work: &Work, refusal: &Refusal) -> Pass {
+    let mut cached = AnalysisResult::default();
+    for hunks in &work.by_file {
+        // Keyed off the first hunk, the way `complete` identifies its misses:
+        // every hunk in a `by_file` entry shares a path.
+        if let Some(first) = hunks.first() {
+            cached.failed_files.insert(
+                first.file_path.clone(),
+                FailureReason::SitePolicyRefused {
+                    marker: refusal.marker.clone(),
+                    policy: refusal.policy.clone(),
+                },
+            );
+        }
+    }
+    Pass {
+        cached,
+        live: AnalysisResult::default(),
+        live_review: LiveReview::Skip,
+        budget: None,
+        should_review_live: false,
+        limit_reached: false,
+        live_answered: false,
+    }
 }
 
 #[cfg(test)]

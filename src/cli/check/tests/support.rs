@@ -37,7 +37,22 @@ pub(super) fn check_args(paths: Vec<PathBuf>, fail_on: Option<Severity>) -> Chec
 }
 
 /// Run the drep test binary with an isolated cache and bounded network access.
+///
+/// The policy file is pointed at a path inside `dir`, which nothing writes. A
+/// developer whose machine carries a real fleet policy would otherwise see this
+/// whole suite behave differently from CI - and a policy naming `refuse_markers`
+/// would refuse every one of these runs. Same isolation `HOME` and
+/// `XDG_CACHE_HOME` already provide, for the same reason.
 pub(super) fn run_drep(dir: &Path, args: &[&str]) -> std::process::Output {
+    run_drep_with_site(dir, &dir.join("absent-site.toml"), args)
+}
+
+/// [`run_drep`] against a named site policy file.
+pub(super) fn run_drep_with_site(
+    dir: &Path,
+    site_path: &Path,
+    args: &[&str],
+) -> std::process::Output {
     let bin = assert_cmd::cargo::cargo_bin("drep");
     let mut command = Command::new(bin);
     command
@@ -45,6 +60,7 @@ pub(super) fn run_drep(dir: &Path, args: &[&str]) -> std::process::Output {
         .current_dir(dir)
         .env("HOME", dir)
         .env("XDG_CACHE_HOME", dir)
+        .env(crate::config::site::PATH_VAR, site_path)
         .env_remove("HTTP_PROXY")
         .env_remove("HTTPS_PROXY")
         .env_remove("ALL_PROXY")
@@ -53,6 +69,18 @@ pub(super) fn run_drep(dir: &Path, args: &[&str]) -> std::process::Output {
         .env_remove("all_proxy")
         .timeout(Duration::from_secs(15));
     command.output().expect("drep spawns and finishes")
+}
+
+/// Write a site policy under `dir` naming `markers`, and return its path.
+///
+/// Each test states its own policy and passes the path in, so none of them reads
+/// whatever this machine has installed.
+pub(super) fn write_site_policy(dir: &Path, markers: &[&str]) -> PathBuf {
+    let quoted: Vec<String> = markers.iter().map(|m| format!("{m:?}")).collect();
+    let path = dir.join("site.toml");
+    std::fs::write(&path, format!("refuse_markers = [{}]\n", quoted.join(", ")))
+        .expect("site policy");
+    path
 }
 
 /// A `CheckOutcome` with everything empty and the gate clean.

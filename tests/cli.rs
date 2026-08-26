@@ -10,7 +10,24 @@ use assert_cmd::Command;
 use tempfile::TempDir;
 
 fn drep() -> Command {
-    Command::cargo_bin("drep").expect("binary builds")
+    let mut command = Command::cargo_bin("drep").expect("binary builds");
+    // Machine-level policy, pointed at a file nothing creates. A developer or a
+    // runner carrying a real fleet policy would otherwise see this suite behave
+    // differently from CI - and a policy naming `refuse_markers` would make every
+    // `check` here fail closed, since none of these fixtures is a repository. The
+    // one test that wants a policy sets the variable again, and the later value
+    // wins.
+    command.env("DREP_SITE_CONFIG", absent_site_policy());
+    command
+}
+
+/// A path in the temporary directory that no test writes.
+///
+/// Not the empty string: `DREP_SITE_CONFIG=` deliberately falls back to the
+/// machine path rather than switching enforcement off, so an empty override would
+/// isolate nothing.
+fn absent_site_policy() -> std::path::PathBuf {
+    std::env::temp_dir().join("drep-tests-absent-site-policy.toml")
 }
 
 /// A directory holding one file, for the `lint-docs` and `check` cases.

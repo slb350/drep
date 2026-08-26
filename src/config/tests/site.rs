@@ -323,3 +323,82 @@ fn clamping_can_never_produce_a_zero_permit_provider() {
         }
     }
 }
+
+/// An unaffected machine gains neither a git spawn nor a new failure mode.
+///
+/// Real proxy for "no git was asked": the directory is not a repository, so a
+/// probe that failed to short circuit would return `MarkerRootUnresolved` here.
+/// That is the whole reason `drep check` outside a repository keeps working on
+/// every machine that installed no marker policy.
+#[tokio::test]
+async fn no_configured_markers_never_asks_git() {
+    let temp = tempfile::tempdir().expect("tempdir");
+
+    let refusal = SiteConfig::default()
+        .refusal_for(temp.path(), &temp.path().join("site.toml"))
+        .await
+        .expect("a policy naming no markers evaluates without git");
+
+    assert!(refusal.is_none());
+}
+
+/// A policy that cannot be evaluated must not evaluate to "allowed".
+///
+/// Markers configured, no repository to resolve them against. Returning
+/// `Ok(None)` here would be the unenforced policy reported as compliance that
+/// every message in this module refuses - and it would be silent, because the run
+/// that followed would look exactly like an ordinary clean one.
+#[tokio::test]
+async fn configured_markers_outside_a_git_repository_fail_closed() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let policy = write_site(&temp, "refuse_markers = [\".drep-no-llm\"]\n");
+    let site = site::load(&policy)
+        .expect("the policy loads")
+        .expect("the policy is present");
+    // Not the `TempDir` itself: on a developer machine the temporary directory
+    // could sit inside a repository, and then git would answer.
+    let outside = std::path::Path::new("/");
+
+    let err = site
+        .refusal_for(outside, &policy)
+        .await
+        .expect_err("a policy that cannot be evaluated is not a policy that permits");
+
+    assert!(matches!(err, SiteConfigError::MarkerRootUnresolved { .. }));
+    let message = err.to_string();
+    assert!(
+        message.contains(&policy.display().to_string()),
+        "names the policy: {message}"
+    );
+    assert!(
+        message.contains("refuses to run"),
+        "and states the consequence: {message}"
+    );
+}
+
+/// The marker found is reported with the repository root it was found at, not as
+/// the bare filename the policy wrote.
+///
+/// A developer seeing only `.drep-no-llm` in a monorepo of worktrees cannot tell
+/// which checkout answered.
+#[tokio::test]
+async fn a_found_marker_is_reported_at_the_repository_root() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    crate::test_support::git_init(temp.path());
+    let policy = write_site(&temp, "refuse_markers = [\".drep-no-llm\"]\n");
+    let site = site::load(&policy).expect("loads").expect("present");
+    std::fs::write(temp.path().join(".drep-no-llm"), "").expect("marker");
+
+    let refusal = site
+        .refusal_for(temp.path(), &policy)
+        .await
+        .expect("evaluating the policy")
+        .expect("the marker is present");
+
+    assert_eq!(
+        refusal.marker.file_name().and_then(|n| n.to_str()),
+        Some(".drep-no-llm")
+    );
+    assert!(refusal.marker.is_absolute(), "got {:?}", refusal.marker);
+    assert_eq!(refusal.policy, policy);
+}

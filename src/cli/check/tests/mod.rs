@@ -12,6 +12,8 @@ mod failover_report;
 mod failures;
 mod gating;
 mod input;
+mod marker_refusal;
+mod marker_refusal_modes;
 mod output;
 mod resolution;
 mod review_budget;

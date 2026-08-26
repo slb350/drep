@@ -163,3 +163,84 @@ async fn the_site_block_precedes_the_llm_block_with_and_without_source_files() {
         );
     }
 }
+
+/// The refusal is reported where the policy is, and named.
+///
+/// `drep check` exits 2 in this repository. An operator who has just watched that
+/// happen runs `doctor`, and this block is where the answer has to be.
+#[tokio::test]
+async fn a_marked_repository_says_semantic_review_is_refused_here() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    crate::test_support::git_init(dir.path());
+    write_source(dir.path());
+    write_provider(dir.path());
+    let site = dir.path().join("site.toml");
+    std::fs::write(&site, "refuse_markers = [\".drep-no-llm\"]\n").expect("site.toml");
+    std::fs::write(dir.path().join(".drep-no-llm"), "").expect("marker");
+
+    let report = report_with_site(dir.path(), &site).await;
+
+    assert!(
+        report.contains("refuse_markers: .drep-no-llm"),
+        "got {report}"
+    );
+    assert!(
+        report.contains("refused"),
+        "an operator staring at exit 2 needs the word; got {report}"
+    );
+    assert!(
+        report.contains(".drep-no-llm is present"),
+        "and which file it was; got {report}"
+    );
+}
+
+/// The discriminating half: a configured marker that is absent refuses nothing,
+/// and the report has to say that too.
+///
+/// Without it, "print the refusal line whenever `refuse_markers` is set" passes
+/// the test above.
+#[tokio::test]
+async fn a_configured_marker_that_is_absent_is_reported_as_not_refusing() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    crate::test_support::git_init(dir.path());
+    write_source(dir.path());
+    write_provider(dir.path());
+    let site = dir.path().join("site.toml");
+    std::fs::write(&site, "refuse_markers = [\".drep-no-llm\"]\n").expect("site.toml");
+
+    let report = report_with_site(dir.path(), &site).await;
+
+    assert!(
+        report.contains("refuse_markers: .drep-no-llm"),
+        "got {report}"
+    );
+    assert!(
+        !report.contains("is present"),
+        "reporting a refusal that is not happening is worse than silence; got {report}"
+    );
+}
+
+/// A policy that cannot be evaluated is described, and `doctor` still finishes.
+///
+/// `drep check` fails closed here, so this is again the command someone runs to
+/// find out why - and failing out would suppress the rest of the answer.
+#[tokio::test]
+async fn a_policy_that_cannot_be_evaluated_is_described_rather_than_failing_doctor() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    write_source(dir.path());
+    write_provider(dir.path());
+    let site = dir.path().join("site.toml");
+    std::fs::write(&site, "refuse_markers = [\".drep-no-llm\"]\n").expect("site.toml");
+
+    let report = report_with_site(dir.path(), &site).await;
+
+    assert!(
+        report.contains("could not be resolved"),
+        "a policy naming markers outside a repository cannot be evaluated at \
+         all, and the report has to say so; got {report}"
+    );
+    assert!(
+        report.contains("LLM analysis"),
+        "and the rest of the report still has to arrive; got {report}"
+    );
+}

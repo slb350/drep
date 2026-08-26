@@ -151,7 +151,8 @@ counted round, reset, or explicitly unlimited review. Reaching the fresh-review
 limit is an unanalyzed result and exits 2 rather than silently passing.
 
 Exit 2 is the one that matters. An unreachable endpoint, a file too large for
-the model, a configured tool that is not installed: none of those are a pass,
+the model, a configured tool that is not installed, a repository whose site
+policy refuses semantic review: none of those are a pass,
 and a gate that reports them as one is worse than no gate.
 
 ## What will run here
@@ -314,11 +315,22 @@ points drep at a different store.
 # /Library/Application Support/drep/site.toml   (macOS)
 # /etc/drep/site.toml                           (everywhere else)
 max_concurrent_ceiling = 4
+refuse_markers = [".drep-no-llm"]
 ```
 
 A repository can lower its own `max_concurrent`, but not raise it past the ceiling. `DREP_SITE_CONFIG` points drep at a different file. The location is deliberately a system path rather than your config directory: a policy file the developer can edit without privilege is not a policy file, which is also why nothing in it is `${VAR}`-expanded.
 
 No file means no policy, which is the normal state. A file that exists and drep cannot read or parse exits 2 rather than running without it — a policy that silently fails to load is worse than none, because the unconstrained run reports as compliance. Unknown keys are rejected, so a typo is loud, and there is no `[[llm]]`, no endpoint and no credential in this file. `drep doctor` says whether a policy is in effect, which file it came from, and which providers it lowered.
+
+### Repositories whose source must never reach a model
+
+`refuse_markers` names files whose presence at a repository's root means exactly that. Create `.drep-no-llm` at the root of such a checkout and `drep check` will not send it to a provider — not on a fresh review, and not as a lookup of a review it already has cached.
+
+Presence is the whole signal. drep never opens the marker, so its contents cannot say `allow`, and a directory or a broken symlink bearing the name counts too: either would otherwise be a way to switch the policy off while appearing to invoke it. Only the repository root is consulted, resolved through git, so a check run from a subdirectory is refused as well and a vendored copy of the filename deeper in the tree changes nothing. Each marker must name one file; a path with a separator in it is rejected when the policy loads.
+
+A refused semantic review is an unanalyzed result and exits 2. It is not a pass and not a quiet skip: `--format json` reports it in `unanalyzed` with `kind: "site_policy_refused"` beside the marker and policy paths, and the text output names the marker that was found. Deterministic tools still run and still gate — they are local, they contact nothing, and they are the half of drep that works without a model. `drep lint-docs` is rule-based and unaffected.
+
+The field is readable only from the site file. It is rejected in `drep.toml`, because `drep init` gitignores that file: a copy of the control there would be per-developer and deletable by the developer it constrains, and a control that is silently ignored is worse than one that was never written.
 
 ### Credentials that expire in minutes
 

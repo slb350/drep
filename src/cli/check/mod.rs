@@ -11,6 +11,9 @@
 //!   `Unavailable` — the per-tool/per-file join the exit-2 contract rests on.
 //! - `render` turns the two layers' findings plus the failure map into the
 //!   text or JSON output the user sees.
+//! - `refusal` answers whether site policy permits a semantic layer here at
+//!   all, and owns the ordering that keeps a refused repository from ever
+//!   reaching a credential, a chain or the cache.
 //!
 //! The split is by topic, not by file size, because the smallest meaningful
 //! unit of `check` is "one input mode" or "one output format" and the
@@ -18,11 +21,13 @@
 //! only place where the layers meet, which is what the loading-order
 //! invariants and the exit-code precedence are pinned against.
 
+mod args;
 mod deterministic;
 // `pub(crate)` for `READ_MAX_BYTES` alone: the guard's relationship to
 // `analysis::payload::PAYLOAD_MAX_BYTES` is load-bearing (it must never sit
 // below it), and the assertion pinning that has to see both constants.
 pub(crate) mod input;
+mod refusal;
 mod render;
 mod review_budget;
 mod semantic;
@@ -31,109 +36,17 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, anyhow};
-use clap::{ArgGroup, Args};
 
 use crate::analysis::acknowledgements;
 use crate::analysis::findings::{self, Finding, Severity};
 use crate::analysis::result::{FailureReason, union_failures};
 use crate::auth;
-use crate::cli::{OutputFormat, severity_parser};
 use crate::config;
 use crate::llm::cache::Cache;
 use crate::llm::chain::ProviderChain;
 use review_budget::Budget;
 
-#[derive(Debug, Args)]
-// One rule, stated once. Paired `conflicts_with_all` attributes say the same
-// thing from each side and have to be kept in agreement; a fourth input mode
-// would mean editing every existing one, and missing a single edit silently
-// permits an illegal combination.
-// Deliberately NOT `.required(true)`. Bare `drep check` is a supported
-// invocation meaning "the whole tree": `input::resolve` expands `root` through
-// `files::expand_paths`, exactly as an explicit `.` would. Requiring one of the
-// three would turn the plainest invocation into a usage error. Pinned by
-// `bare_check_with_no_paths_expands_the_root_instead_of_reading_a_directory`,
-// which exists because an earlier version passed the root through as a *file*
-// and exited 2 without analyzing anything.
-#[command(
-    group(
-        ArgGroup::new("input")
-            .args(["paths", "staged", "diff", "pre_commit_push"])
-            .multiple(false)
-    ),
-    group(ArgGroup::new("cache_mode").args(["cache_only", "push_gate"]).multiple(false))
-)]
-pub struct CheckArgs {
-    /// Files or directories to check. Duplicates and overlaps are collapsed,
-    /// so `drep check a.rs .` analyzes `a.rs` once.
-    #[arg(value_name = "PATH")]
-    pub paths: Vec<PathBuf>,
-
-    /// Check the files staged for commit. For a pre-commit hook.
-    #[arg(long)]
-    pub staged: bool,
-
-    /// Check the files changed since REF, e.g. `origin/main`. For pre-push.
-    #[arg(long, value_name = "REF")]
-    pub diff: Option<String>,
-
-    /// The commit to diff *to*. Defaults to `HEAD`. Only valid with `--diff`.
-    ///
-    /// A pre-push hook needs this: git can push a ref that is not the
-    /// checked-out one (`git push origin feature:feature` from another branch,
-    /// or `git push --all`), and diffing to `HEAD` there reviews a different
-    /// branch and lets the pushed code through unseen.
-    #[arg(long, value_name = "REF", requires = "diff")]
-    pub tip: Option<String>,
-
-    /// Read the pushed base and tip from pre-commit's hook environment.
-    ///
-    /// Used by the published `drep-check-push` hook. pre-commit otherwise
-    /// passes filenames, which would make drep review whole files instead of
-    /// the hunks between `PRE_COMMIT_FROM_REF` and `PRE_COMMIT_TO_REF`.
-    #[arg(long)]
-    pub pre_commit_push: bool,
-
-    #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
-    pub format: OutputFormat,
-
-    /// Also block on LLM findings at or above this severity.
-    ///
-    /// Deterministic tool findings always block; this opts the LLM's findings
-    /// into gating too. Left unset, they inform without blocking - which is
-    /// the useful default, because the model emits style suggestions on
-    /// nearly every file.
-    #[arg(long, value_name = "SEVERITY", value_parser = severity_parser())]
-    pub fail_on: Option<Severity>,
-
-    /// Use cached LLM reviews only; never contact a provider.
-    ///
-    /// An uncached file exits 3 without warming it; run a normal check to
-    /// populate the missing entry. The generated pre-push hook uses
-    /// `--push-gate` for the full warm-and-reconnect handshake.
-    #[arg(long)]
-    pub cache_only: bool,
-
-    /// Prepare a push without resuming a stale remote connection.
-    ///
-    /// Cached reviews pass immediately. A cold review is completed and cached,
-    /// then exits 3 so Git reconnects; repeating `git push` uses the cache.
-    #[arg(long)]
-    pub push_gate: bool,
-
-    /// Override the repository's maximum fresh LLM review rounds.
-    #[arg(
-        long,
-        value_name = "N",
-        value_parser = clap::value_parser!(u32).range(1..),
-        conflicts_with = "unlimited_reviews"
-    )]
-    pub max_review_rounds: Option<u32>,
-
-    /// Permit fresh LLM review rounds without a limit for this invocation.
-    #[arg(long)]
-    pub unlimited_reviews: bool,
-}
+pub use args::CheckArgs;
 
 /// Everything one `check` run produced.
 ///
@@ -281,31 +194,23 @@ pub(crate) async fn run_against(
         site.apply(&mut config);
     }
 
-    // Fill in the keys the file left unset from the user-level store, and run any
-    // `api_key_command` an entry declares. An explicit `api_key` in `drep.toml`
-    // always wins, so this cannot change what an existing config does; it only
-    // supplies what `drep init` stopped writing into the repository. A store that
-    // cannot be read is fatal rather than treated as empty - running the gate
-    // unauthenticated would surface as a 401 per file, which reads as a broken key
-    // rather than a broken store. A failing `api_key_command` is fatal here for
-    // the same reason and one more: the chain does not exist yet, so there is
-    // nothing to fail over to, and routing around a broken credential path is
-    // what hides it.
-    let store = auth::AuthStore::load(auth_path)
-        .with_context(|| format!("could not read the auth store at {}", auth_path.display()))?;
-    auth::resolve(&mut config, &store).await?;
-    // The whole enabled chain, not just its head: `providers()` is the
-    // failover order, and `load` has already rejected a config with none.
-    // The `is_empty` guard stays because `Config` is constructible without
-    // going through `load`, and a panic inside the commit gate is a worse
-    // failure than a message naming the file. The error is `load`'s own rather
-    // than a second sentence written here: two hand-written copies of "no
-    // provider configured" drift, and the copy that lived here had already
-    // lost the actionable "run `drep init`" half.
-    let providers = config.providers();
-    if providers.is_empty() {
-        return Err(config::ConfigError::NoProviders(config_path.clone()).into());
-    }
+    // Fill in the keys the file left unset, and build the analyzer - unless site
+    // policy refuses review of this repository, in which case none of that
+    // happens at all. `refusal` owns that ordering; see its module doc.
+    let authoritative = review_budget::is_authoritative(args);
+    let source = refusal::source(
+        &refusal::Locations {
+            root,
+            config: &config_path,
+            auth: auth_path,
+            policy: site_path,
+        },
+        &mut config,
+        site.as_ref(),
+        cache.clone(),
+        args.cache_only || args.push_gate || authoritative,
+    )
+    .await?;
 
     // Resolved *after* the config, because a missing config is fatal and
     // resolution is not free: in `--staged` mode it spawns git, and in paths
@@ -316,60 +221,31 @@ pub(crate) async fn run_against(
         .with_context(|| format!("could not resolve input under {}", root.display()))?;
     let acknowledgements = acknowledgements::Store::load(root)?;
 
-    let authoritative = review_budget::is_authoritative(args);
     let effective_limit = args.max_review_rounds.unwrap_or(config.max_review_rounds);
     let semantic_policy = semantic::Policy {
         authoritative,
         limit: effective_limit,
     };
-    let chain =
-        ProviderChain::new(&providers).map_err(|e| anyhow!("could not build LLM analyzer: {e}"))?;
-    let analyzer = crate::analysis::code_quality::CodeQualityAnalyzer::new(chain, cache.clone())
-        .with_cache_only(args.cache_only || args.push_gate || authoritative);
 
     // The two layers share no data - they only both report failures - so they
     // run concurrently. The deterministic leg is pure added latency otherwise:
     // a warm `cargo clippy` on this repo is ~3.5s, and the LLM leg is
     // multi-second regardless, so joining hides essentially all of it.
-    let semantic = async {
-        let cached = analyzer.analyze_files(&work.by_file).await;
-        if args.push_gate {
-            Ok(semantic::Stage::Deferred(cached))
-        } else {
-            semantic::complete(args, root, &work, &analyzer, semantic_policy, cached, true)
-                .await
-                .map(Box::new)
-                .map(semantic::Stage::Complete)
+    //
+    // A refusal has no second leg to overlap with. The deterministic tools still
+    // run and still gate: they are local, they contact nothing, and they are the
+    // half of drep that works without a model.
+    let (deterministic_result, semantic_pass, eligible_push_warm) = match &source {
+        refusal::Source::Refused(refusal) => (
+            deterministic::run(&work, root).await,
+            semantic::refused(&work, refusal),
+            false,
+        ),
+        refusal::Source::Analyze(analyzer) => {
+            analyzed(args, root, &work, analyzer, semantic_policy).await?
         }
     };
-    let (deterministic_result, semantic_stage) =
-        tokio::join!(deterministic::run(&work, root), semantic,);
     let (tool_findings, tool_failures, compiled_files) = deterministic_result;
-    let semantic_stage = semantic_stage?;
-    let (semantic_pass, eligible_push_warm) = match semantic_stage {
-        semantic::Stage::Deferred(cached) => {
-            let eligible = push_warm_eligible(
-                &cached,
-                work.read_failures.is_empty(),
-                tool_failures.is_empty(),
-                tool_findings.is_empty(),
-            );
-            (
-                semantic::complete(
-                    args,
-                    root,
-                    &work,
-                    &analyzer,
-                    semantic_policy,
-                    cached,
-                    eligible,
-                )
-                .await?,
-                eligible,
-            )
-        }
-        semantic::Stage::Complete(pass) => (*pass, false),
-    };
     let semantic::Pass {
         cached: mut llm_result,
         live: mut live_result,
@@ -379,12 +255,19 @@ pub(crate) async fn run_against(
         limit_reached,
         live_answered,
     } = semantic_pass;
-    let provider_uses = provider_uses(analyzer.chain());
+    // Empty for a refusal, and deliberately: the report answers "who reviewed
+    // this code", and nobody did.
+    let provider_uses = match &source {
+        refusal::Source::Refused(_) => Vec::new(),
+        refusal::Source::Analyze(analyzer) => provider_uses(analyzer.chain()),
+    };
 
     // All concurrent writers have finished, so one oldest-first pass can
     // enforce the configured disk ceiling without racing another put. Cache
     // maintenance is best-effort: an unreadable cache must never turn an
-    // otherwise valid review into an unanalyzed file.
+    // otherwise valid review into an unanalyzed file. Unconditional under a
+    // refusal too: it bounds a user-level directory and reads no verdict for
+    // this repository, which is the only thing the refusal is about.
     let _ = cache.evict_if_needed();
 
     adjudicate_findings(
@@ -473,6 +356,63 @@ pub(crate) async fn run_against(
 
     render::render(&outcome, args.format)?;
     Ok(outcome.exit)
+}
+
+/// What the deterministic leg produced: findings, failures, and the files a
+/// configured compiler successfully checked.
+type Deterministic = (
+    Vec<Finding>,
+    BTreeMap<PathBuf, FailureReason>,
+    BTreeSet<PathBuf>,
+);
+
+/// Both legs, for a repository site policy permits review of.
+///
+/// Split out of `run_against` so the refusal is a two-arm match there rather than
+/// a flag threaded through this. It also keeps `semantic::Stage::Deferred` unable
+/// to escape the one scope that holds an analyzer: the push gate defers its live
+/// pass until the deterministic verdict is in, and there is no analyzer to resume
+/// it with in the refused arm.
+async fn analyzed(
+    args: &CheckArgs,
+    root: &Path,
+    work: &input::Work,
+    analyzer: &crate::analysis::code_quality::CodeQualityAnalyzer,
+    policy: semantic::Policy,
+) -> Result<(Deterministic, semantic::Pass, bool)> {
+    let semantic = async {
+        let cached = analyzer.analyze_files(&work.by_file).await;
+        if args.push_gate {
+            Ok(semantic::Stage::Deferred(cached))
+        } else {
+            semantic::complete(args, root, work, analyzer, policy, cached, true)
+                .await
+                .map(Box::new)
+                .map(semantic::Stage::Complete)
+        }
+    };
+    let (deterministic, stage) = tokio::join!(deterministic::run(work, root), semantic);
+    let (tool_findings, tool_failures, compiled_files) = deterministic;
+    let (pass, eligible) = match stage? {
+        semantic::Stage::Deferred(cached) => {
+            let eligible = push_warm_eligible(
+                &cached,
+                work.read_failures.is_empty(),
+                tool_failures.is_empty(),
+                tool_findings.is_empty(),
+            );
+            (
+                semantic::complete(args, root, work, analyzer, policy, cached, eligible).await?,
+                eligible,
+            )
+        }
+        semantic::Stage::Complete(pass) => (*pass, false),
+    };
+    Ok((
+        (tool_findings, tool_failures, compiled_files),
+        pass,
+        eligible,
+    ))
 }
 
 fn push_warm_eligible(

@@ -21,6 +21,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   carries no provider and no credential. `drep doctor` reports whether a policy
   is in effect, the path it came from, and which providers it lowered.
 
+- `refuse_markers` in the site policy file names files whose presence at a
+  repository's root refuses semantic review, for repositories whose source must
+  never be sent to a third-party model. Presence is the whole signal: drep never
+  opens the marker, and a directory or a broken symlink bearing the name counts
+  too. Only the repository root is consulted, resolved through git, so a check
+  run from a subdirectory is refused as well. A refused review is an unanalyzed
+  result and exits 2, reported in `--format json` as `kind:
+  "site_policy_refused"` with the marker and policy paths; no provider is
+  contacted and no cached verdict is served, including under `--cache-only` and
+  `--push-gate`. Deterministic tools still run and still gate, and
+  `drep lint-docs` is unaffected. The field is site-only and is rejected in
+  `drep.toml`, which `drep init` gitignores.
+
 ### Changed
 
 - Dependabot now excludes cargo-dist's generated release workflow so Action

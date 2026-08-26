@@ -289,3 +289,37 @@ endpoint = "http://b/v1"
     let config = load(&path).expect("a parked entry is inert");
     assert_eq!(config.providers().len(), 1);
 }
+
+#[test]
+fn refuse_markers_in_drep_toml_is_rejected_rather_than_ignored() {
+    // The worst failure available here. `Config` has no such field, so serde
+    // would drop the key without a word: a developer reads their own config,
+    // believes the repository is protected, and every review still ships its
+    // source. Rejecting it is also what tells them where the field does belong.
+    let temp = tempfile::tempdir().expect("tempdir");
+    let path = write_config(
+        &temp,
+        r#"
+refuse_markers = [".drep-no-llm"]
+
+[[llm]]
+model = "a"
+endpoint = "http://a/v1"
+"#,
+    );
+
+    let err = load(&path).expect_err("a repository cannot declare site policy");
+    let message = err.to_string();
+    assert!(
+        message.contains("refuse_markers"),
+        "names the field: {message}"
+    );
+    assert!(
+        message.contains("site policy"),
+        "and says where it belongs: {message}"
+    );
+    assert!(
+        message.contains(&path.display().to_string()),
+        "and which file it was read from: {message}"
+    );
+}

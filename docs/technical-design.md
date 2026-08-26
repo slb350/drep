@@ -33,7 +33,7 @@ source, `files::is_markdown` is markdown, and nothing satisfies both.
 | Module | Responsibility |
 |---|---|
 | `main.rs` | clap entry point; turns every error into an `ExitCode` |
-| `cli/check/` | `input`, deterministic tools, `review_budget`, rendering and exit codes |
+| `cli/check/` | `input`, deterministic tools, `refusal`, `review_budget`, rendering and exit codes |
 | `cli/lint_docs/` | markdown command, `--staged`, `--fail-on` |
 | `cli/doctor.rs` | what languages and tools are visible here, and which providers |
 | `cli/init/` | `drep.toml` and native git hooks; `presets`, `config_file`, `hooks` |
@@ -58,7 +58,7 @@ source, `files::is_markdown` is markdown, and nothing satisfies both.
 | `docs/` | the markdown checks: `fence`, `lines`, `links`, `blocks` |
 | `config.rs` | `drep.toml`: parse, `${VAR}` expansion, validation |
 | `config/env.rs` | `${VAR}` substitution and the one definition of a reference |
-| `config/site.rs` | the machine-level policy file, and the concurrency ceiling |
+| `config/site.rs` | the machine-level policy file, the concurrency ceiling, and the marker refusal |
 | `auth.rs` | the per-machine credential store, keyed by endpoint |
 | `auth/command.rs` | resolving a provider credential by running a configured argv |
 | `text.rs` | `excerpt`, the only bounding of text drep did not write |
@@ -351,6 +351,18 @@ A missing file is no policy and is not an error, because most machines have none
 `max_concurrent_ceiling` lowers every enabled entry's `max_concurrent`: a checkout may lower its concurrency but not raise it past what the site allows. It applies to the effective value whether the repository wrote the field or inherited the default, since skipping the defaulted ones would let a repository raise itself by deleting a line. A ceiling of zero is rejected at site load, because the clamp runs after `config::validate` and would otherwise rebuild the no-permit hang that validation exists to prevent. A clamp is not an error; `doctor` reports it, on the provider it changes. `refuse_markers` is parsed and validated here — each entry must name one file — and is consumed by the marker refusal.
 
 The clamp is applied by the caller, after `config::load` returns, which is what keeps `ConfigError` a statement about `drep.toml` alone: every one of its messages numbers `[[llm]]` entries in that file's order, and a bare `#2` that could mean either file is the ambiguity those messages exist to avoid. The policy is read before the repository config, so a broken policy cannot hide behind a broken `drep.toml`. Both paths are parameters threaded from the entry point, exactly as the auth store already is, so no test reads real machine state.
+
+`refuse_markers` is the one control the two files must not both be able to state, so `config::load` reads it off the raw tree and rejects it in `drep.toml` with `ConfigError::SiteOnlyField`. Rejected rather than ignored, which is the behaviour that would be worse than either: `Config` has no such field and no `deny_unknown_fields`, so serde would drop the key silently and a developer would read their own config, believe the repository was protected, and keep shipping its source. `max_concurrent_ceiling` is deliberately not rejected there - written in `drep.toml` it grants nothing a repository could not already do by lowering its own `max_concurrent`.
+
+### The marker refusal
+
+`SiteConfig::refusal_for` returns the first configured marker present at the repository root, and `cli/check/refusal.rs` is the only caller in the gate. Its ordering is the feature: the probe runs before the credential store is opened, before any `api_key_command` subprocess, and before `ProviderChain::new`, which for a `codex` entry spawns the CLI to read login state. It also precedes every cache read, so `--cache-only` and `--push-gate` cannot serve a model's verdict on a repository whose source was never allowed to reach one. `Source` has two arms and no arm holding both a refusal and an analyzer, which makes "refused implies no chain" structural rather than a convention two call sites keep.
+
+An empty `refuse_markers` short-circuits before git is spawned, so a machine that installed no marker policy gains neither the latency nor a new failure mode. A machine that did installs a fail-closed one: a policy naming markers outside a repository is `SiteConfigError::MarkerRootUnresolved`, because "cannot be evaluated" must not become "evaluates to allowed".
+
+The repository root comes from `diff::repository_root`, so the query goes through the one place drep spawns git and inherits its `GIT_DIR`/`GIT_WORK_TREE` scrubbing - a marker checked against the tree a hook's environment named instead of the tree being checked is a policy bypass. Presence is `symlink_metadata`, not `metadata` and not `is_file`: a directory, or a symlink whose target is gone, is still a name someone deliberately placed, and either narrower reading is a way to disable the policy while appearing to invoke it. Nothing opens the file.
+
+The refusal arrives as `FailureReason::SitePolicyRefused`, one entry per file drep was asked about, which is what makes `gate`, the text failure block, the JSON `unanalyzed` array and the clean-cycle reset guard all treat it correctly with no second mechanism. `semantic::refused` claims no review round and leaves `should_review_live` false, so a refused run is structurally unable to reach the exit-3 push handshake. Deterministic tools still run and still gate; `lint-docs` reads no config and is untouched.
 
 ## Distribution
 

@@ -156,6 +156,12 @@ pub(crate) async fn run_at_with_codex<W: Write>(
 /// comes first because it governs the chain the block below it describes, and the
 /// policy file is loaded once here rather than in each block: two loads of the
 /// same file could disagree about it within one report.
+///
+/// The marker refusal is evaluated here too, through the same
+/// `SiteConfig::refusal_for` the gate consults, so the report cannot describe a
+/// policy that would behave differently at the gate. Its error is carried rather
+/// than propagated: `drep check` fails closed on a policy it cannot evaluate, and
+/// this is the command someone runs to find out why.
 async fn write_configuration<W: Write>(
     out: &mut W,
     args: &DoctorArgs,
@@ -165,8 +171,12 @@ async fn write_configuration<W: Write>(
     codex_probe: &dyn Fn() -> Result<crate::llm::codex::CodexStatus, String>,
 ) -> Result<()> {
     let site = crate::config::site::load(site_path);
-    site_section::write_site_section(out, site_path, &site)?;
     let in_effect = site.as_ref().ok().and_then(Option::as_ref);
+    let refusal = match in_effect {
+        Some(site) => site.refusal_for(root, site_path).await,
+        None => Ok(None),
+    };
+    site_section::write_site_section(out, site_path, &site, &refusal)?;
     llm::write_llm_section(out, args, root, auth_path, in_effect, codex_probe).await
 }
 

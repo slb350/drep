@@ -145,6 +145,35 @@ pub enum SiteConfigError {
          each marker names one file to look for, such as `.drep-no-llm`"
     )]
     UnusableRefuseMarker { path: PathBuf, marker: String },
+
+    /// Fails closed. A policy naming markers cannot be evaluated outside a
+    /// repository, and "cannot be evaluated" must not become "evaluates to
+    /// allowed": that is the unenforced policy reported as compliance which
+    /// every message here refuses. `cause` rather than `source` because
+    /// `main.rs` prints `{err:#}`, which would otherwise print it twice.
+    #[error(
+        "the site policy file {path} names refuse_markers, but the repository root above {root} \
+         could not be resolved: {cause}; `drep check` refuses to run rather than report an \
+         unenforced policy as compliance"
+    )]
+    MarkerRootUnresolved {
+        path: PathBuf,
+        root: PathBuf,
+        cause: crate::diff::GitError,
+    },
+}
+
+/// A repository the site policy refuses to have reviewed by a model.
+///
+/// Carries both paths because the message has to answer two questions at once: a
+/// developer who has never seen this needs to know which file caused it, and
+/// that it came from machine policy rather than a broken install.
+#[derive(Debug, Clone)]
+pub struct Refusal {
+    /// The marker as found, at the repository root.
+    pub marker: PathBuf,
+    /// The policy file that named it.
+    pub policy: PathBuf,
 }
 
 /// Read the policy at `path`.
@@ -231,5 +260,51 @@ impl SiteConfig {
         for llm in config.llm.iter_mut().filter(|llm| llm.enabled) {
             llm.max_concurrent = self.clamp_concurrency(llm.max_concurrent);
         }
+    }
+
+    /// The first configured marker present at the repository root above `root`.
+    ///
+    /// `Ok(None)` on a machine that configured none, decided before git is
+    /// spawned. That short circuit is the whole reason an unaffected machine
+    /// gains neither the latency nor the new failure mode: `drep check` outside a
+    /// repository keeps working exactly as it does today, and only a machine that
+    /// asked for the policy pays for evaluating it.
+    ///
+    /// The repository root, not `root`: a check run from a subdirectory of a
+    /// marked repository is still a check on that repository's source, and
+    /// consulting the current directory would let `cd src && drep check` walk
+    /// straight past the policy.
+    ///
+    /// Presence is decided by [`std::fs::symlink_metadata`], and nothing opens
+    /// the file. Not `metadata`, which follows a symlink and so answers "no" for
+    /// a marker whose target is gone; not `is_file()`, which answers "no" for a
+    /// directory. Both are names someone deliberately placed at the root, and
+    /// either reading would let a marker silently disable the policy it was put
+    /// there to invoke. Contents are never read for the same reason: a marker
+    /// whose text said `allow` would be a second grammar nobody documented.
+    pub async fn refusal_for(
+        &self,
+        root: &Path,
+        policy: &Path,
+    ) -> Result<Option<Refusal>, SiteConfigError> {
+        if self.refuse_markers.is_empty() {
+            return Ok(None);
+        }
+        let repository_root = crate::diff::repository_root(root).await.map_err(|cause| {
+            SiteConfigError::MarkerRootUnresolved {
+                path: policy.to_path_buf(),
+                root: root.to_path_buf(),
+                cause,
+            }
+        })?;
+        Ok(self.refuse_markers.iter().find_map(|marker| {
+            let candidate = repository_root.join(marker);
+            std::fs::symlink_metadata(&candidate)
+                .is_ok()
+                .then(|| Refusal {
+                    marker: candidate,
+                    policy: policy.to_path_buf(),
+                })
+        }))
     }
 }

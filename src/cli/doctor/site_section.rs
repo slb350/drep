@@ -16,13 +16,19 @@ use anyhow::Result;
 use toml::Value;
 
 use crate::config;
-use crate::config::site::{SiteConfig, SiteConfigError};
+use crate::config::site::{Refusal, SiteConfig, SiteConfigError};
 
 /// `Site policy:` block, for all three states a policy file can be in.
+///
+/// `refusal` is the marker probe's answer, evaluated by the caller through the
+/// same `SiteConfig::refusal_for` the gate uses, and passed in rather than taken
+/// here because this function is synchronous and the probe asks git. All three of
+/// its states print: refused, not refused, and could not be evaluated.
 pub(super) fn write_site_section<W: Write>(
     out: &mut W,
     path: &Path,
     loaded: &Result<Option<SiteConfig>, SiteConfigError>,
+    refusal: &Result<Option<Refusal>, SiteConfigError>,
 ) -> Result<()> {
     writeln!(out)?;
     writeln!(out, "Site policy:")?;
@@ -36,10 +42,44 @@ pub(super) fn write_site_section<W: Write>(
                 Some(ceiling) => writeln!(out, "  max_concurrent ceiling: {ceiling}")?,
                 None => writeln!(out, "  no max_concurrent ceiling")?,
             }
+            write_markers(out, site, refusal)?;
         }
         // The error's own message names the file and states that `drep check`
         // refuses to run. Written once, in `SiteConfigError`, so the gate and the
         // diagnostic cannot describe the same failure differently.
+        Err(err) => writeln!(out, "  {err}")?,
+    }
+    Ok(())
+}
+
+/// The configured markers, and what they do to *this* repository.
+///
+/// The list alone is not the answer an operator needs. "`refuse_markers` is set"
+/// and "this checkout is refused" are different facts, and a report that only
+/// carried the first would leave them guessing at the second - which is the
+/// question they actually came with, because `drep check` has just exited 2.
+///
+/// The effect line is printed only when a marker is configured. Reporting "not
+/// refused" on a machine with no marker policy would be a line about a mechanism
+/// nobody here is using.
+fn write_markers<W: Write>(
+    out: &mut W,
+    site: &SiteConfig,
+    refusal: &Result<Option<Refusal>, SiteConfigError>,
+) -> Result<()> {
+    if site.refuse_markers.is_empty() {
+        return writeln!(out, "  no refuse_markers").map_err(Into::into);
+    }
+    writeln!(out, "  refuse_markers: {}", site.refuse_markers.join(", "))?;
+    match refusal {
+        Ok(Some(refusal)) => writeln!(
+            out,
+            "  semantic review is refused here: {} is present",
+            refusal.marker.display()
+        )?,
+        Ok(None) => writeln!(out, "  none of those files is here, so review runs")?,
+        // Same reasoning as the broken-file arm above: the error's own message is
+        // the single wording of this failure, and `drep check` fails closed on it.
         Err(err) => writeln!(out, "  {err}")?,
     }
     Ok(())
