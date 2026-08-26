@@ -213,6 +213,23 @@ fn a_site_file_that_names_no_markers_carries_an_empty_list() {
     );
 }
 
+/// The preflight is what lets callers skip both source-directory collection
+/// and Git repository resolution when a policy only sets a concurrency ceiling.
+/// Pin both branches directly because `refusal_among` has its own empty-list
+/// guard, which would otherwise hide a broken preflight from behavioural tests.
+#[test]
+fn marker_preflight_distinguishes_empty_from_configured_lists() {
+    assert!(!ceiling_of(4).has_refuse_markers());
+
+    let temp = tempfile::tempdir().expect("tempdir");
+    let path = write_site(&temp, "refuse_markers = [\".drep-no-llm\"]\n");
+    let site = site::load(&path)
+        .expect("the marker policy loads")
+        .expect("the marker policy is present");
+
+    assert!(site.has_refuse_markers());
+}
+
 /// A marker that is not a filename matches no file, so the policy it declares
 /// refuses nothing - the silent no-op requirement 3 exists to refuse, one field
 /// down.
