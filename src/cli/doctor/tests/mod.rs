@@ -41,3 +41,48 @@ async fn run_scoped<W: std::io::Write>(
     )
     .await
 }
+
+/// Capture a doctor report against one explicit policy path.
+async fn report_scoped_with_policy(dir: &std::path::Path, policy: &std::path::Path) -> String {
+    let mut out = Vec::new();
+    let exit = super::run_at(
+        &mut out,
+        &super::DoctorArgs {
+            path: dir.to_path_buf(),
+            config: None,
+        },
+        &crate::cli::MachineFiles {
+            auth: &dir.join("auth.toml"),
+            policy,
+        },
+    )
+    .await
+    .expect("doctor remains diagnostic");
+    assert_eq!(exit, crate::Exit::Clean, "doctor reports but never gates");
+    String::from_utf8(out).expect("doctor output is UTF-8")
+}
+
+/// Capture a doctor report with an injected Codex readiness probe.
+async fn report_scoped_with_codex(
+    dir: &std::path::Path,
+    policy: &std::path::Path,
+    probe: &dyn Fn() -> Result<crate::llm::codex::CodexStatus, String>,
+) -> String {
+    let mut out = Vec::new();
+    let exit = super::run_at_with_codex(
+        &mut out,
+        &super::DoctorArgs {
+            path: dir.to_path_buf(),
+            config: None,
+        },
+        &crate::cli::MachineFiles {
+            auth: &dir.join("auth.toml"),
+            policy,
+        },
+        probe,
+    )
+    .await
+    .expect("doctor remains diagnostic");
+    assert_eq!(exit, crate::Exit::Clean, "doctor reports but never gates");
+    String::from_utf8(out).expect("doctor output is UTF-8")
+}

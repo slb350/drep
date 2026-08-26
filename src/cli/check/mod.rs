@@ -185,9 +185,12 @@ pub(crate) async fn run_against(
     //
     // And *before* the refusal, because the refusal is a question about the
     // files this run would review rather than about `root` alone - see
-    // `refusal::reviewed_directories`. Resolution reads local files and contacts
-    // nothing, so the ordering the refusal owns is untouched by it.
-    let work = input::resolve(args, root)
+    // `input::Work::reviewed_directories`. Resolution reads local files and
+    // contacts nothing, so the ordering the refusal owns is untouched by it.
+    let collect_policy_scope = site
+        .as_ref()
+        .is_some_and(config::site::SiteConfig::has_refuse_markers);
+    let work = input::resolve(args, root, collect_policy_scope)
         .await
         .with_context(|| format!("could not resolve input under {}", root.display()))?;
 
@@ -197,7 +200,6 @@ pub(crate) async fn run_against(
     let authoritative = review_budget::is_authoritative(args);
     let source = refusal::source(
         &refusal::Locations {
-            root,
             config: &config_path,
             machine,
         },
@@ -225,40 +227,44 @@ pub(crate) async fn run_against(
     // A refusal has no second leg to overlap with. The deterministic tools still
     // run and still gate: they are local, they contact nothing, and they are the
     // half of drep that works without a model.
-    let (deterministic_result, semantic_pass, eligible_push_warm) = match &source {
-        refusal::Source::Refused(refusal) => (
-            deterministic::run(&work, root).await,
-            semantic::refused(&work, refusal),
-            false,
-        ),
-        refusal::Source::Analyze(analyzer) => {
-            analyzed(args, root, &work, analyzer, semantic_policy).await?
-        }
-    };
+    let (deterministic_result, semantic_pass, eligible_push_warm, provider_uses, maintain_cache) =
+        match source {
+            refusal::Source::Refused(refusal) => (
+                deterministic::run(&work, root).await,
+                semantic::refused(&work, &refusal),
+                false,
+                Vec::new(),
+                false,
+            ),
+            refusal::Source::Analyze(analyzer) => {
+                let (deterministic, pass, eligible) =
+                    analyzed(args, root, &work, &analyzer, semantic_policy).await?;
+                (
+                    deterministic,
+                    pass,
+                    eligible,
+                    provider_uses(analyzer.chain()),
+                    true,
+                )
+            }
+        };
     let (tool_findings, tool_failures, compiled_files) = deterministic_result;
     let semantic::Pass {
         cached: mut llm_result,
         live: mut live_result,
         live_review,
         budget,
-        should_review_live,
-        limit_reached,
         live_answered,
     } = semantic_pass;
-    // Empty for a refusal, and deliberately: the report answers "who reviewed
-    // this code", and nobody did.
-    let provider_uses = match &source {
-        refusal::Source::Refused(_) => Vec::new(),
-        refusal::Source::Analyze(analyzer) => provider_uses(analyzer.chain()),
-    };
-
     // All concurrent writers have finished, so one oldest-first pass can
     // enforce the configured disk ceiling without racing another put. Cache
     // maintenance is best-effort: an unreadable cache must never turn an
-    // otherwise valid review into an unanalyzed file. Unconditional under a
-    // refusal too: it bounds a user-level directory and reads no verdict for
-    // this repository, which is the only thing the refusal is about.
-    let _ = cache.evict_if_needed();
+    // otherwise valid review into an unanalyzed file. A refusal has no semantic
+    // layer, so it neither creates this directory nor evicts entries belonging
+    // to permitted repositories.
+    if maintain_cache {
+        let _ = cache.evict_if_needed();
+    }
 
     adjudicate_findings(
         &mut llm_result.findings,
@@ -273,6 +279,11 @@ pub(crate) async fn run_against(
         &acknowledgements,
     );
 
+    let warmed_for_push = eligible_push_warm
+        && matches!(
+            &live_review,
+            semantic::LiveReview::Unbounded | semantic::LiveReview::Reserved(_)
+        );
     let mut review_activity = None;
     match live_review {
         semantic::LiveReview::Reserved(claim) => {
@@ -319,8 +330,6 @@ pub(crate) async fn run_against(
             review_activity = Some(ReviewActivity::Reset);
         }
     }
-
-    let warmed_for_push = eligible_push_warm && should_review_live && !limit_reached;
 
     let mut failures: BTreeMap<PathBuf, FailureReason> = BTreeMap::new();
     // Union order is the reporting priority: a file that could not be read

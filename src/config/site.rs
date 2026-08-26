@@ -115,7 +115,13 @@ pub fn machine_path() -> &'static Path {
 /// involved and a system path exists on every platform drep ships to.
 pub fn path_from(overridden: Option<std::ffi::OsString>, machine: &Path) -> PathBuf {
     match overridden {
-        Some(path) if !path.is_empty() && std::fs::symlink_metadata(machine).is_err() => {
+        Some(path)
+            if !path.is_empty()
+                && matches!(
+                    std::fs::symlink_metadata(machine),
+                    Err(ref err) if err.kind() == std::io::ErrorKind::NotFound
+                ) =>
+        {
             PathBuf::from(path)
         }
         _ => machine.to_path_buf(),
@@ -162,11 +168,10 @@ pub struct SiteConfig {
 /// is the one outcome [`super::ConfigError::SiteOnlyField`] exists to prevent, and
 /// it would have been reintroduced by the ordinary act of adding a policy field.
 ///
-/// `max_concurrent_ceiling` is deliberately absent. Written in `drep.toml` it
-/// changes nothing a repository could not already do by lowering its own
-/// `max_concurrent`, so refusing it would be noise; the cost is that a developer
-/// who writes it there is not told it does nothing.
-pub const SITE_ONLY_FIELDS: &[&str] = &["refuse_markers"];
+/// Both fields are rejected in `drep.toml`. A repository can already lower its
+/// own `max_concurrent`, but silently dropping the ceiling spelling makes a
+/// developer believe a cross-provider policy is active when it is not.
+pub const SITE_ONLY_FIELDS: &[&str] = &["refuse_markers", "max_concurrent_ceiling"];
 
 /// Fails to compile when a field is added to [`SiteConfig`] without a decision
 /// about whether `drep.toml` may state it.
@@ -181,7 +186,7 @@ fn _every_policy_field_is_classified(site: &SiteConfig) {
     let SiteConfig {
         // Site-only: named in SITE_ONLY_FIELDS.
         refuse_markers: _,
-        // Not site-only: harmless in `drep.toml`, see the note above.
+        // Site-only: named in SITE_ONLY_FIELDS.
         max_concurrent_ceiling: _,
     } = site;
 }
@@ -240,6 +245,19 @@ pub enum SiteConfigError {
         root: PathBuf,
         cause: crate::diff::GitError,
     },
+
+    /// Only `NotFound` means the marker is absent. Every other metadata error
+    /// means the policy could not be evaluated and must fail closed.
+    #[error(
+        "the site policy file {path} names the marker {marker}, but its presence could not be \
+         checked: {cause}; `drep check` refuses to run rather than report an unenforced policy \
+         as compliance"
+    )]
+    MarkerUnreadable {
+        path: PathBuf,
+        marker: PathBuf,
+        cause: std::io::Error,
+    },
 }
 
 /// A repository the site policy refuses to have reviewed by a model.
@@ -263,11 +281,18 @@ pub struct Refusal {
 /// "a policy that permits everything", and the two states print differently in
 /// `doctor`.
 pub fn load(path: &Path) -> Result<Option<SiteConfig>, SiteConfigError> {
-    let content = match std::fs::read_to_string(path) {
-        Ok(content) => content,
+    // Inspect the directory entry without following it before reading. A
+    // missing name is no policy; a dangling symlink is an installed policy
+    // that cannot be read. Letting `read_to_string` collapse both through its
+    // followed-target `NotFound` result switches enforcement off while the
+    // machine path still visibly contains a policy entry.
+    match std::fs::symlink_metadata(path) {
+        Ok(_) => {}
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(err) => return Err(SiteConfigError::Read(path.to_path_buf(), err)),
-    };
+    }
+    let content = std::fs::read_to_string(path)
+        .map_err(|err| SiteConfigError::Read(path.to_path_buf(), err))?;
     let site: SiteConfig = toml::from_str(&content).map_err(|err: toml::de::Error| {
         SiteConfigError::Parse(path.to_path_buf(), err.message().to_owned())
     })?;
@@ -341,20 +366,6 @@ impl SiteConfig {
         }
     }
 
-    /// The first configured marker present at the repository root above `root`.
-    ///
-    /// The single-directory case, for `doctor`, which reports on one directory.
-    /// The gate asks [`Self::refusal_among`], because the files a check reviews
-    /// are not always in the repository it was rooted in.
-    pub async fn refusal_for(
-        &self,
-        root: &Path,
-        policy: &Path,
-    ) -> Result<Option<Refusal>, SiteConfigError> {
-        self.refusal_among(&BTreeSet::from([root.to_path_buf()]), policy)
-            .await
-    }
-
     /// The first configured marker present at the repository root above any of
     /// `directories`.
     ///
@@ -402,32 +413,30 @@ impl SiteConfig {
         // cheap by luck and the permitted case - which is every commit - paid all
         // of them.
         //
-        // Collected, then walked in the directories' own order: a `BTreeSet` input
-        // means that order is stable, and the first failure and the first marker
-        // have to be the same ones a sequential walk would have found. Resolving
-        // out of order and reporting in order is what keeps that.
-        let mut resolved: Vec<Result<PathBuf, SiteConfigError>> =
-            futures::stream::iter(directories)
-                .map(|directory| async move {
-                    crate::diff::repository_root(directory)
-                        .await
-                        .map_err(|cause| SiteConfigError::MarkerRootUnresolved {
-                            path: policy.to_path_buf(),
-                            root: directory.to_path_buf(),
-                            cause,
-                        })
-                })
-                .buffered(ROOT_RESOLUTION_CONCURRENCY)
-                .collect()
-                .await;
+        // `buffered` resolves concurrently but yields in the `BTreeSet`'s stable
+        // order, so the first failure and first marker remain the same ones a
+        // sequential walk would have found. Consume incrementally: an early
+        // refusal or error can drop the remaining in-flight work instead of
+        // waiting for every repository query and storing every result.
+        let mut resolved = futures::stream::iter(directories)
+            .map(|directory| async move {
+                crate::diff::repository_root(directory)
+                    .await
+                    .map_err(|cause| SiteConfigError::MarkerRootUnresolved {
+                        path: policy.to_path_buf(),
+                        root: directory.to_path_buf(),
+                        cause,
+                    })
+            })
+            .buffered(ROOT_RESOLUTION_CONCURRENCY);
 
         let mut probed: BTreeSet<PathBuf> = BTreeSet::new();
-        for outcome in resolved.drain(..) {
+        while let Some(outcome) = resolved.next().await {
             let repository_root = outcome?;
             if !probed.insert(repository_root.clone()) {
                 continue;
             }
-            if let Some(refusal) = self.marker_at(&repository_root, policy) {
+            if let Some(refusal) = self.marker_at(&repository_root, policy)? {
                 return Ok(Some(refusal));
             }
         }
@@ -444,15 +453,30 @@ impl SiteConfig {
     }
 
     /// The first configured marker present at one repository root.
-    fn marker_at(&self, repository_root: &Path, policy: &Path) -> Option<Refusal> {
-        self.refuse_markers.iter().find_map(|marker| {
+    fn marker_at(
+        &self,
+        repository_root: &Path,
+        policy: &Path,
+    ) -> Result<Option<Refusal>, SiteConfigError> {
+        for marker in &self.refuse_markers {
             let candidate = repository_root.join(marker);
-            std::fs::symlink_metadata(&candidate)
-                .is_ok()
-                .then(|| Refusal {
-                    marker: candidate,
-                    policy: policy.to_path_buf(),
-                })
-        })
+            match std::fs::symlink_metadata(&candidate) {
+                Ok(_) => {
+                    return Ok(Some(Refusal {
+                        marker: candidate,
+                        policy: policy.to_path_buf(),
+                    }));
+                }
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+                Err(cause) => {
+                    return Err(SiteConfigError::MarkerUnreadable {
+                        path: policy.to_path_buf(),
+                        marker: candidate,
+                        cause,
+                    });
+                }
+            }
+        }
+        Ok(None)
     }
 }

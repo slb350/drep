@@ -2,28 +2,46 @@
 
 use std::path::Path;
 
-use crate::cli::MachineFiles;
-use crate::cli::doctor::{DoctorArgs, run_at_with_codex};
 use crate::llm::codex::CodexStatus;
+use crate::test_support::write_site_policy;
 
 async fn report_with_probe(dir: &Path, probe: &dyn Fn() -> Result<CodexStatus, String>) -> String {
-    let args = DoctorArgs {
-        path: dir.to_path_buf(),
-        config: None,
-    };
-    let mut out = Vec::new();
-    run_at_with_codex(
-        &mut out,
-        &args,
-        &MachineFiles {
-            auth: &dir.join("auth.toml"),
-            policy: &dir.join("absent-site.toml"),
-        },
-        probe,
+    report_with_probe_and_policy(dir, &dir.join("absent-site.toml"), probe).await
+}
+
+async fn report_with_probe_and_policy(
+    dir: &Path,
+    policy: &Path,
+    probe: &dyn Fn() -> Result<CodexStatus, String>,
+) -> String {
+    super::report_scoped_with_codex(dir, policy, probe).await
+}
+
+#[tokio::test]
+async fn a_refused_repository_does_not_probe_codex_readiness() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    crate::test_support::git_init(dir.path());
+    std::fs::write(dir.path().join("a.py"), "x = 1\n").expect("source");
+    std::fs::write(
+        dir.path().join("drep.toml"),
+        "[[llm]]\nbackend = \"codex\"\nmodel = \"gpt-5.6-sol\"\n",
     )
-    .await
-    .expect("doctor remains diagnostic");
-    String::from_utf8(out).expect("utf8")
+    .expect("config");
+    let policy = write_site_policy(dir.path(), &[".drep-no-llm"]);
+    std::fs::write(dir.path().join(".drep-no-llm"), "").expect("marker");
+    let calls = std::cell::Cell::new(0);
+
+    let report = report_with_probe_and_policy(dir.path(), &policy, &|| {
+        calls.set(calls.get() + 1);
+        Ok(CodexStatus::new("unused"))
+    })
+    .await;
+
+    assert_eq!(calls.get(), 0, "doctor started Codex for a refused review");
+    assert!(
+        report.contains("not attempted") && report.contains("site policy"),
+        "the skipped readiness probe needs an explicit reason: {report}"
+    );
 }
 
 #[tokio::test]

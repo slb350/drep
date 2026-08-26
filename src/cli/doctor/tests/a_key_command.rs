@@ -8,36 +8,11 @@
 
 use std::path::Path;
 
-use crate::cli::MachineFiles;
-use crate::cli::doctor::{DoctorArgs, run_at};
-use crate::test_support::write_executable;
-
-fn args(dir: &Path) -> DoctorArgs {
-    DoctorArgs {
-        path: dir.to_path_buf(),
-        config: None,
-    }
-}
+use crate::test_support::{write_executable, write_site_policy};
 
 /// Run `doctor` against `dir` with an auth store and a policy file scoped to it.
 async fn report_with_policy(dir: &Path, policy: &Path) -> String {
-    let mut out = Vec::new();
-    let exit = run_at(
-        &mut out,
-        &args(dir),
-        &MachineFiles {
-            auth: &dir.join("auth.toml"),
-            policy,
-        },
-    )
-    .await
-    .expect("run_at");
-    assert_eq!(
-        exit,
-        crate::Exit::Clean,
-        "a credential diagnosis is never a gate failure"
-    );
-    String::from_utf8(out).expect("utf8")
+    super::report_scoped_with_policy(dir, policy).await
 }
 
 /// Run `doctor` against `dir` with an auth store scoped to it.
@@ -105,6 +80,20 @@ async fn a_failing_command_is_reported_with_its_status_and_never_its_output() {
 }
 
 #[tokio::test]
+async fn a_malformed_command_reference_never_echoes_argv_secrets() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    write_config_running(dir.path(), "\"helper\", \"--token=doctor-sentinel${\"");
+
+    let report = report_for(dir.path()).await;
+
+    assert!(
+        !report.contains("doctor-sentinel"),
+        "doctor leaked argv: {report}"
+    );
+    assert!(report.contains("unterminated"), "got {report}");
+}
+
+#[tokio::test]
 async fn a_command_naming_an_unset_variable_is_reported_as_not_attempted() {
     // The probe runs the *expanded* argv, so when the config does not load there
     // is no argv to run. Executing the raw one would report on a command
@@ -149,8 +138,7 @@ async fn a_refused_repository_is_not_probed_for_a_credential() {
         ),
     );
     write_config_running(dir.path(), &format!("{:?}", stub.to_string_lossy()));
-    let policy = dir.path().join("site.toml");
-    std::fs::write(&policy, "refuse_markers = [\".drep-no-llm\"]\n").expect("site.toml");
+    let policy = write_site_policy(dir.path(), &[".drep-no-llm"]);
     std::fs::write(dir.path().join(".drep-no-llm"), "").expect("marker");
 
     let report = report_with_policy(dir.path(), &policy).await;
@@ -162,6 +150,32 @@ async fn a_refused_repository_is_not_probed_for_a_credential() {
     assert!(
         report.contains("not attempted, because site policy refuses semantic review here"),
         "and the reader has to be told why the line says nothing about the helper: {report}"
+    );
+}
+
+/// A refused run never opens the HTTP credential store either.
+///
+/// The store may be corrupt while remaining irrelevant to a repository whose
+/// semantic layer is structurally absent. Doctor should report the policy
+/// refusal, not a setup failure `check` never reaches.
+#[tokio::test]
+async fn a_refused_repository_does_not_read_the_auth_store() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    crate::test_support::git_init(dir.path());
+    write_config_running(dir.path(), "\"unused-helper\"");
+    std::fs::write(dir.path().join("auth.toml"), "not valid toml {{{").expect("corrupt store");
+    let policy = write_site_policy(dir.path(), &[".drep-no-llm"]);
+    std::fs::write(dir.path().join(".drep-no-llm"), "").expect("marker");
+
+    let report = report_with_policy(dir.path(), &policy).await;
+
+    assert!(
+        report.contains("site policy refuses semantic review"),
+        "got {report}"
+    );
+    assert!(
+        !report.contains("auth store could not be read"),
+        "doctor opened state the refused check never reaches: {report}"
     );
 }
 
@@ -182,8 +196,7 @@ async fn an_unmarked_repository_under_a_marker_policy_is_still_probed() {
         ),
     );
     write_config_running(dir.path(), &format!("{:?}", stub.to_string_lossy()));
-    let policy = dir.path().join("site.toml");
-    std::fs::write(&policy, "refuse_markers = [\".drep-no-llm\"]\n").expect("site.toml");
+    let policy = write_site_policy(dir.path(), &[".drep-no-llm"]);
 
     let report = report_with_policy(dir.path(), &policy).await;
 
@@ -247,8 +260,7 @@ async fn a_policy_whose_marker_probe_cannot_resolve_a_root_is_not_probed() {
         ),
     );
     write_config_running(dir.path(), &format!("{:?}", stub.to_string_lossy()));
-    let policy = dir.path().join("site.toml");
-    std::fs::write(&policy, "refuse_markers = [\".drep-no-llm\"]\n").expect("site.toml");
+    let policy = write_site_policy(dir.path(), &[".drep-no-llm"]);
 
     let report = report_with_policy(dir.path(), &policy).await;
 

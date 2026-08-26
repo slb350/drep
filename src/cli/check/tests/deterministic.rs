@@ -36,6 +36,7 @@ use crate::test_support::write_executable;
 fn work_for(paths: &[PathBuf]) -> Work {
     Work {
         lint_only: Vec::new(),
+        reviewed_directories: std::collections::BTreeSet::new(),
         by_file: paths
             .iter()
             .map(|p| vec![Hunk::whole_file(p.clone(), "x = 1\n")])

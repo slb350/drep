@@ -340,6 +340,19 @@ max_retries = 1
     std::fs::write(dir.join("drep.toml"), body).expect("drep.toml");
 }
 
+/// Write an arbitrary machine-policy fixture beside a test repository.
+pub(crate) fn write_site_policy_body(dir: &std::path::Path, body: &str) -> std::path::PathBuf {
+    let path = dir.join("site.toml");
+    std::fs::write(&path, body).expect("write site policy");
+    path
+}
+
+/// Write a machine-policy fixture naming `markers`.
+pub(crate) fn write_site_policy(dir: &std::path::Path, markers: &[&str]) -> std::path::PathBuf {
+    let quoted: Vec<String> = markers.iter().map(|marker| format!("{marker:?}")).collect();
+    write_site_policy_body(dir, &format!("refuse_markers = [{}]\n", quoted.join(", ")))
+}
+
 /// A `git` command scoped to `dir` and nothing else.
 ///
 /// The environment scrubbing matters more than it looks. These tests run under

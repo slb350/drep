@@ -124,7 +124,7 @@ pub(crate) async fn run_at_with_codex<W: Write>(
         // one whose languages drep does not register - is exactly where they
         // are most likely to be asking it. Returning here answered it with
         // silence.
-        write_configuration(out, args, &root, machine, codex_probe).await?;
+        write_configuration(out, args, &root, &files, machine, codex_probe).await?;
         return Ok(Exit::Clean);
     }
 
@@ -134,7 +134,7 @@ pub(crate) async fn run_at_with_codex<W: Write>(
     // tool - each call stats the config files and walks PATH - and, worse,
     // left room for the summary to disagree with the lines above it.
     let missing = write_tools_section(out, &buckets, &root)?;
-    write_configuration(out, args, &root, machine, codex_probe).await?;
+    write_configuration(out, args, &root, &files, machine, codex_probe).await?;
 
     // Deliberately last, after the LLM block: the user reads their coverage
     // report before being told what is wrong with it.
@@ -154,10 +154,11 @@ pub(crate) async fn run_at_with_codex<W: Write>(
 /// same file could disagree about it within one report.
 ///
 /// The marker refusal is evaluated here too, through the same
-/// `SiteConfig::refusal_for` the gate consults, so the report cannot describe a
-/// policy that would behave differently at the gate. Its error is carried rather
-/// than propagated: `drep check` fails closed on a policy it cannot evaluate, and
-/// this is the command someone runs to find out why.
+/// `SiteConfig::refusal_among` the gate consults and against the directories of
+/// the source files doctor found, so the report cannot describe a policy that
+/// would behave differently at the gate. Its error is carried rather than
+/// propagated: `drep check` fails closed on a policy it cannot evaluate, and this
+/// is the command someone runs to find out why.
 ///
 /// The answer is then handed to the LLM block, because a refusal governs it too:
 /// `check` never mints a credential for a refused repository, and a `doctor` that
@@ -167,13 +168,17 @@ async fn write_configuration<W: Write>(
     out: &mut W,
     args: &DoctorArgs,
     root: &Path,
+    source_files: &[PathBuf],
     machine: &MachineFiles<'_>,
     codex_probe: &dyn Fn() -> Result<crate::llm::codex::CodexStatus, String>,
 ) -> Result<()> {
     let site = crate::config::site::load(machine.policy);
     let in_effect = site.as_ref().ok().and_then(Option::as_ref);
     let refusal = match in_effect {
-        Some(site) => site.refusal_for(root, machine.policy).await,
+        Some(site) => {
+            let directories = doctor_policy_directories(root, source_files);
+            site.refusal_among(&directories, machine.policy).await
+        }
         None => Ok(None),
     };
     site_section::write_site_section(out, machine.policy, &site, &refusal)?;
@@ -187,6 +192,23 @@ async fn write_configuration<W: Write>(
         codex_probe,
     )
     .await
+}
+
+/// Repository-discovery starting points for the source doctor found.
+///
+/// `files::expand_paths` walks nested repositories, so asking only `root`
+/// reports permission for a run that `check` refuses on an inner file. When no
+/// recognized source exists, keep the root-level diagnostic: an operator still
+/// needs to see that this checkout is marked even though there is currently no
+/// semantic payload.
+fn doctor_policy_directories(root: &Path, source_files: &[PathBuf]) -> BTreeSet<PathBuf> {
+    if source_files.is_empty() {
+        return BTreeSet::from([root.to_path_buf()]);
+    }
+    source_files
+        .iter()
+        .filter_map(|file| file.parent().map(Path::to_path_buf))
+        .collect()
 }
 
 /// What the policy said about semantic review in this repository.
@@ -221,6 +243,19 @@ pub(super) enum Semantic {
 }
 
 impl Semantic {
+    /// Why semantic setup is not attempted, when policy did not permit it.
+    pub(super) fn skip_reason(self) -> Option<&'static str> {
+        match self {
+            Self::Permitted => None,
+            Self::Refused => {
+                Some("not attempted, because site policy refuses semantic review here")
+            }
+            Self::Unevaluable => {
+                Some("not attempted, because the site policy above could not be evaluated")
+            }
+        }
+    }
+
     /// Collapse the two results the report already holds into the one verdict
     /// that governs whether a credential may be spent.
     ///

@@ -112,18 +112,6 @@ fn spawn_drep(
     command.output().expect("drep spawns and finishes")
 }
 
-/// Write a site policy under `dir` naming `markers`, and return its path.
-///
-/// Each test states its own policy and passes the path in, so none of them reads
-/// whatever this machine has installed.
-pub(super) fn write_site_policy(dir: &Path, markers: &[&str]) -> PathBuf {
-    let quoted: Vec<String> = markers.iter().map(|m| format!("{m:?}")).collect();
-    let path = dir.join("site.toml");
-    std::fs::write(&path, format!("refuse_markers = [{}]\n", quoted.join(", ")))
-        .expect("site policy");
-    path
-}
-
 /// A `CheckOutcome` with everything empty and the gate clean.
 ///
 /// Callers fill in only the field their test is about, so a new field on

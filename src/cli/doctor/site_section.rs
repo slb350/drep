@@ -21,7 +21,7 @@ use crate::config::site::{Refusal, SiteConfig, SiteConfigError};
 /// `Site policy:` block, for all three states a policy file can be in.
 ///
 /// `refusal` is the marker probe's answer, evaluated by the caller through the
-/// same `SiteConfig::refusal_for` the gate uses, and passed in rather than taken
+/// same `SiteConfig::refusal_among` the gate uses, and passed in rather than taken
 /// here because this function is synchronous and the probe asks git. All three of
 /// its states print: refused, not refused, and could not be evaluated.
 pub(super) fn write_site_section<W: Write>(

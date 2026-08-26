@@ -14,7 +14,7 @@
 //!   *failure*, not a skip. The orchestrator's exit-2 contract depends on
 //!   every file either getting a hunk or getting a `FailureReason`.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
@@ -72,6 +72,18 @@ pub struct Work {
     /// modes never consulted the read guard. The file is still a failure (the
     /// LLM never saw it), but its linters keep running.
     pub lint_only: Vec<PathBuf>,
+    /// Directories whose repositories contain the bytes semantic review would
+    /// send.
+    ///
+    /// Paths mode records the canonical target directory after resolving an
+    /// explicit symlink and reads from that same canonical path. Diff modes
+    /// record the repository-relative hunk locations because deleted files may
+    /// no longer exist on disk. Keeping this beside the work set makes policy
+    /// scope a property of the bytes that were resolved, not a second walk over
+    /// display paths that can point somewhere else. It remains empty when the
+    /// loaded site policy names no refusal markers, avoiding path allocations on
+    /// unaffected machines.
+    pub(super) reviewed_directories: BTreeSet<PathBuf>,
 }
 
 /// The pushed range pre-commit derived from git's pre-push stdin.
@@ -139,9 +151,11 @@ impl PreCommitPush {
 /// the deterministic layer and the LLM layer both consume `Vec<Vec<Hunk>>`,
 /// so resolving differently per mode would mean a parallel code path
 /// downstream. The point is to pay the per-mode divergence once, here.
-pub async fn resolve(args: &CheckArgs, root: &Path) -> Result<Work> {
+/// `collect_policy_scope` is true only when site policy names refusal markers;
+/// the source-location bookkeeping is otherwise unnecessary.
+pub async fn resolve(args: &CheckArgs, root: &Path, collect_policy_scope: bool) -> Result<Work> {
     if args.pre_commit_push {
-        return resolve_pre_commit(root, &PreCommitPush::from_env()?).await;
+        return resolve_pre_commit(root, &PreCommitPush::from_env()?, collect_policy_scope).await;
     }
 
     let hunks = if args.staged {
@@ -149,10 +163,12 @@ pub async fn resolve(args: &CheckArgs, root: &Path) -> Result<Work> {
     } else if let Some(git_ref) = args.diff.as_deref() {
         diff::hunks_between(root, git_ref, args.tip.as_deref(), files::is_scan_target).await?
     } else {
-        return resolve_paths(&args.paths, root);
+        return resolve_paths(&args.paths, root, collect_policy_scope);
     };
+    let by_file = group_by_file(hunks);
     Ok(Work {
-        by_file: group_by_file(hunks),
+        reviewed_directories: hunk_directories(root, &by_file, collect_policy_scope),
+        by_file,
         read_failures: BTreeMap::new(),
         lint_only: Vec::new(),
     })
@@ -162,7 +178,11 @@ pub async fn resolve(args: &CheckArgs, root: &Path) -> Result<Work> {
 ///
 /// The seam keeps environment access at the production boundary and lets the
 /// tests prove range and all-files behavior without racing on `set_var`.
-pub(crate) async fn resolve_pre_commit(root: &Path, pre_commit: &PreCommitPush) -> Result<Work> {
+pub(crate) async fn resolve_pre_commit(
+    root: &Path,
+    pre_commit: &PreCommitPush,
+    collect_policy_scope: bool,
+) -> Result<Work> {
     // The name-only queries used to run first as an error probe and have
     // their results discarded. They buy nothing: `staged_hunks` and
     // `hunks_since` go through the same `staged_diff`/`since_diff` helpers,
@@ -175,10 +195,12 @@ pub(crate) async fn resolve_pre_commit(root: &Path, pre_commit: &PreCommitPush) 
         PreCommitPush::Range { from, to } => {
             diff::hunks_between(root, from, Some(to), files::is_scan_target).await?
         }
-        PreCommitPush::AllFiles => return resolve_paths(&[], root),
+        PreCommitPush::AllFiles => return resolve_paths(&[], root, collect_policy_scope),
     };
+    let by_file = group_by_file(hunks);
     Ok(Work {
-        by_file: group_by_file(hunks),
+        reviewed_directories: hunk_directories(root, &by_file, collect_policy_scope),
+        by_file,
         read_failures: BTreeMap::new(),
         lint_only: Vec::new(),
     })
@@ -188,7 +210,7 @@ pub(crate) async fn resolve_pre_commit(root: &Path, pre_commit: &PreCommitPush) 
 /// hunk. I/O and UTF-8 errors land in `read_failures` rather than being
 /// swallowed, so a file drep declined to analyze reaches the gate as a
 /// failure rather than a reported-clean.
-fn resolve_paths(paths: &[PathBuf], root: &Path) -> Result<Work> {
+fn resolve_paths(paths: &[PathBuf], root: &Path, collect_policy_scope: bool) -> Result<Work> {
     // `files::expand_named` owns the whole "what did the user ask for, and what
     // could I not do with it" question, including the no-arguments default and
     // the named-path rejections. This function used to re-walk `paths` itself
@@ -201,6 +223,7 @@ fn resolve_paths(paths: &[PathBuf], root: &Path) -> Result<Work> {
     let mut by_file: Vec<Vec<Hunk>> = Vec::new();
     let mut read_failures: BTreeMap<PathBuf, FailureReason> = BTreeMap::new();
     let mut lint_only: Vec<PathBuf> = Vec::new();
+    let mut reviewed_directories: BTreeSet<PathBuf> = BTreeSet::new();
 
     for (path, why) in rejected {
         let reason = match why {
@@ -217,7 +240,19 @@ fn resolve_paths(paths: &[PathBuf], root: &Path) -> Result<Work> {
     }
 
     for path in targets {
-        let bytes = match std::fs::metadata(&path) {
+        // Resolve once, then use the resolved location for both the read and
+        // policy scope. Reading through the lexical symlink and canonicalizing
+        // later leaves a target-swap window where the two operations answer
+        // about different source. The lexical path remains on the Hunk so
+        // findings still name what the user typed.
+        let source_path = match std::fs::canonicalize(&path) {
+            Ok(path) => path,
+            Err(err) => {
+                read_failures.insert(path, FailureReason::Unreadable(err.to_string()));
+                continue;
+            }
+        };
+        let bytes = match std::fs::metadata(&source_path) {
             Ok(meta) => meta.len(),
             Err(err) => {
                 read_failures.insert(path, FailureReason::Unreadable(err.to_string()));
@@ -251,18 +286,43 @@ fn resolve_paths(paths: &[PathBuf], root: &Path) -> Result<Work> {
             lint_only.push(path);
             continue;
         }
-        let content = match std::fs::read_to_string(&path) {
+        let content = match std::fs::read_to_string(&source_path) {
             Ok(content) => content,
             Err(err) => {
                 read_failures.insert(path.clone(), FailureReason::Unreadable(err.to_string()));
                 continue;
             }
         };
+        if collect_policy_scope && let Some(parent) = source_path.parent() {
+            reviewed_directories.insert(parent.to_path_buf());
+        }
         by_file.push(vec![Hunk::whole_file(path, &content)]);
     }
     Ok(Work {
         by_file,
         read_failures,
         lint_only,
+        reviewed_directories,
     })
+}
+
+/// Repository-discovery starting points for diff-backed hunks.
+///
+/// These paths may name deleted files, so canonicalizing them would turn a
+/// valid diff into an input failure. Git produced every hunk relative to
+/// `root`; its lexical parent is therefore the directory whose repository must
+/// answer the policy query.
+fn hunk_directories(
+    root: &Path,
+    by_file: &[Vec<Hunk>],
+    collect_policy_scope: bool,
+) -> BTreeSet<PathBuf> {
+    if !collect_policy_scope {
+        return BTreeSet::new();
+    }
+    by_file
+        .iter()
+        .filter_map(|hunks| hunks.first())
+        .filter_map(|hunk| root.join(&hunk.file_path).parent().map(Path::to_path_buf))
+        .collect()
 }

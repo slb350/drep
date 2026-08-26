@@ -155,9 +155,10 @@ pub(super) async fn write_llm_section<W: Write>(
     // Read once for the whole listing. A store that cannot be read is reported
     // rather than fatal: `doctor` exists to describe a broken setup, so failing
     // out here would suppress everything else it had to say.
-    let needs_auth_store = providers
-        .iter()
-        .any(|entry| entry_is_enabled(entry) && !entry_is_codex(entry));
+    let needs_auth_store = semantic.skip_reason().is_none()
+        && providers
+            .iter()
+            .any(|entry| entry_is_enabled(entry) && !entry_is_codex(entry));
     let store = match needs_auth_store
         .then(|| AuthStore::load(auth_path))
         .transpose()
@@ -205,14 +206,22 @@ pub(super) async fn write_llm_section<W: Write>(
                 writeln!(out, "     {note}")?;
             }
             if is_codex {
-                let status = codex_status.get_or_insert_with(codex_probe);
-                match status {
-                    Ok(status) => {
-                        writeln!(out, "     Codex CLI: {}", status.cli_version())?;
-                        writeln!(out, "     authentication: ChatGPT-managed")?;
-                        writeln!(out, "     isolation: ephemeral, read-only, tools disabled")?;
+                match semantic.skip_reason() {
+                    Some(reason) => writeln!(out, "     Codex CLI: {reason}")?,
+                    None => {
+                        let status = codex_status.get_or_insert_with(codex_probe);
+                        match status {
+                            Ok(status) => {
+                                writeln!(out, "     Codex CLI: {}", status.cli_version())?;
+                                writeln!(out, "     authentication: ChatGPT-managed")?;
+                                writeln!(
+                                    out,
+                                    "     isolation: ephemeral, read-only, tools disabled"
+                                )?;
+                            }
+                            Err(err) => writeln!(out, "     unavailable: {err}")?,
+                        }
                     }
-                    Err(err) => writeln!(out, "     unavailable: {err}")?,
                 }
             } else {
                 let line = key_source_line(
@@ -292,6 +301,14 @@ async fn key_source_line(
 ) -> String {
     let api_key = entry.get("api_key").and_then(|v| v.as_str());
 
+    if let Some(reason) = semantic.skip_reason() {
+        return if entry.get("api_key_command").is_some() {
+            format!("{} - {reason}", KeySource::Command.label())
+        } else {
+            reason.to_owned()
+        };
+    }
+
     // `enabled` is passed as true because this line is only printed for entries
     // the listing has already established are in the chain.
     let source = crate::auth::source_of(
@@ -322,7 +339,7 @@ async fn key_source_line(
         (KeySource::Command, _) => format!(
             "{} - {}",
             KeySource::Command.label(),
-            key_command_status(resolved_argv, semantic).await
+            key_command_status(resolved_argv).await
         ),
         (source, _) => source.label().to_string(),
     }
@@ -351,17 +368,7 @@ async fn key_source_line(
 /// rather than the credential so that is a property of the type here, not a rule
 /// this function has to remember - and the failure it returns names only the
 /// program and the status, for the same reason.
-async fn key_command_status(argv: Option<&[String]>, semantic: super::Semantic) -> String {
-    match semantic {
-        super::Semantic::Refused => {
-            return "not attempted, because site policy refuses semantic review here".to_owned();
-        }
-        super::Semantic::Unevaluable => {
-            return "not attempted, because the site policy above could not be evaluated"
-                .to_owned();
-        }
-        super::Semantic::Permitted => {}
-    }
+async fn key_command_status(argv: Option<&[String]>) -> String {
     let Some(argv) = argv else {
         return "not attempted, because the config below does not load".to_owned();
     };

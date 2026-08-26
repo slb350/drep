@@ -149,13 +149,15 @@ pub(crate) async fn run_bounded(argv: &[String]) -> Result<String, KeyCommandErr
 ///
 /// stdin is closed rather than inherited: a helper that decides to prompt would
 /// otherwise read the terminal drep's caller is using, and a git hook has no
-/// terminal to give it. stderr goes to `null`, which is what makes reading stdout
-/// to EOF and *then* waiting deadlock-free: there is no second pipe for a chatty
-/// helper to fill while nobody drains it. drep never reads a byte of stderr
+/// terminal to give it. stderr goes to `null`, so there is no second pipe for a
+/// chatty helper to fill while nobody drains it. drep never reads a byte of stderr
 /// anyway - the diagnostic names the program and the status and nothing else,
 /// because a misconfigured helper can print the token to either stream - so piping
-/// it bought only the obligation to drain it. `kill_on_drop` reaps the child on the
-/// timeout and over-limit branches.
+/// it bought only the obligation to drain it. The direct child's exit ends the
+/// read after a bounded final drain even when a background grandchild inherited
+/// stdout; otherwise that grandchild could keep credential resolution open until
+/// the timeout after the configured helper had already finished. `kill_on_drop`
+/// reaps the child on the timeout and over-limit branches.
 pub(crate) async fn run(argv: &[String], timeout: Duration) -> Result<String, KeyCommandError> {
     let Some((program, arguments)) = argv.split_first() else {
         return Err(KeyCommandError::NoProgram);
@@ -180,11 +182,14 @@ pub(crate) async fn run(argv: &[String], timeout: Duration) -> Result<String, Ke
     })?;
 
     // stdout is read with a ceiling rather than by `wait_with_output`, which
-    // buffers whatever the helper chose to print. One byte past the ceiling is
-    // read deliberately, so "exactly at the limit" and "over it" are
-    // distinguishable without a second read, and the over-limit branch returns
-    // before waiting - a child blocked writing into a pipe nobody is draining
-    // would otherwise be reported as a timeout, which names the wrong problem.
+    // buffers whatever the helper chose to print. The direct child's exit is
+    // polled beside the pipe and is decisive: a background grandchild that
+    // inherited stdout must not hold credential resolution open after the
+    // configured helper already printed its value and exited. `biased` drains
+    // bytes already ready in the pipe before observing that exit. The bounded
+    // final drain covers the remaining scheduler race: the process can become
+    // ready in Tokio just before the pipe readiness notification for bytes the
+    // helper wrote before exiting.
     let mut stdout = child
         .stdout
         .take()
@@ -192,24 +197,55 @@ pub(crate) async fn run(argv: &[String], timeout: Duration) -> Result<String, Ke
     let read_then_wait = async {
         use tokio::io::AsyncReadExt;
         let mut captured = Vec::new();
-        (&mut stdout)
-            .take(MAX_OUTPUT_BYTES as u64 + 1)
-            .read_to_end(&mut captured)
-            .await
-            .map_err(|cause| KeyCommandError::Spawn {
-                program: program.clone(),
-                cause,
-            })?;
-        if captured.len() > MAX_OUTPUT_BYTES {
-            return Err(KeyCommandError::TooMuchOutput {
-                program: program.clone(),
-                limit: MAX_OUTPUT_BYTES,
-            });
-        }
-        let status = child.wait().await.map_err(|cause| KeyCommandError::Spawn {
-            program: program.clone(),
-            cause,
-        })?;
+        let mut buffer = [0u8; 8192];
+        let status = loop {
+            tokio::select! {
+                biased;
+                read = stdout.read(&mut buffer) => {
+                    let read = read.map_err(|cause| KeyCommandError::Spawn {
+                        program: program.clone(),
+                        cause,
+                    })?;
+                    if read == 0 {
+                        break child.wait().await.map_err(|cause| KeyCommandError::Spawn {
+                            program: program.clone(),
+                            cause,
+                        })?;
+                    }
+                    append_output(program, &mut captured, &buffer[..read])?;
+                }
+                waited = child.wait() => {
+                    let status = waited.map_err(|cause| KeyCommandError::Spawn {
+                        program: program.clone(),
+                        cause,
+                    })?;
+                    let final_drain = async {
+                        loop {
+                            let read = stdout.read(&mut buffer).await.map_err(|cause| {
+                                KeyCommandError::Spawn {
+                                    program: program.clone(),
+                                    cause,
+                                }
+                            })?;
+                            if read == 0 {
+                                break;
+                            }
+                            append_output(program, &mut captured, &buffer[..read])?;
+                        }
+                        Ok(())
+                    };
+                    if let Ok(result) = tokio::time::timeout(
+                        Duration::from_millis(10),
+                        final_drain,
+                    )
+                    .await
+                    {
+                        result?;
+                    }
+                    break status;
+                }
+            }
+        };
         Ok((captured, status))
     };
 
@@ -260,4 +296,20 @@ pub(crate) async fn run(argv: &[String], timeout: Duration) -> Result<String, Ke
             program: program.clone(),
         },
     })
+}
+
+/// Append one stdout read while enforcing the credential-output ceiling.
+fn append_output(
+    program: &str,
+    captured: &mut Vec<u8>,
+    bytes: &[u8],
+) -> Result<(), KeyCommandError> {
+    if captured.len().saturating_add(bytes.len()) > MAX_OUTPUT_BYTES {
+        return Err(KeyCommandError::TooMuchOutput {
+            program: program.to_owned(),
+            limit: MAX_OUTPUT_BYTES,
+        });
+    }
+    captured.extend_from_slice(bytes);
+    Ok(())
 }

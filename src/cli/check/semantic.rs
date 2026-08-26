@@ -36,8 +36,6 @@ pub(super) struct Pass {
     pub(super) live: AnalysisResult,
     pub(super) live_review: LiveReview,
     pub(super) budget: Option<Budget>,
-    pub(super) should_review_live: bool,
-    pub(super) limit_reached: bool,
     pub(super) live_answered: bool,
 }
 
@@ -95,8 +93,6 @@ pub(super) async fn complete(
             Claim::LimitReached { completed, limit } => LiveReview::Denied { completed, limit },
         }
     };
-    let limit_reached = matches!(live_review, LiveReview::Denied { .. });
-
     let mut live = AnalysisResult::default();
     match &live_review {
         LiveReview::Unbounded | LiveReview::Reserved(_) => {
@@ -134,8 +130,6 @@ pub(super) async fn complete(
         live,
         live_review,
         budget,
-        should_review_live,
-        limit_reached,
         live_answered: fresh_answered(served_before_live, served_after_live),
     })
 }
@@ -154,9 +148,9 @@ fn fresh_answered(before: usize, after: usize) -> bool {
 /// Built here because [`Pass`] is this module's type and its fields are
 /// `pub(super)`, and the fields it leaves at their inert values are what carry
 /// the invariants: no reservation is claimed, no round is consumed, and
-/// `should_review_live = false` keeps a refused run structurally unable to reach
-/// the exit-3 push handshake. The reset guard in `run_against` cannot fire
-/// either, because `failed_files` is not empty.
+/// `LiveReview::Skip` keeps a refused run structurally unable to reach the
+/// exit-3 push handshake. The reset guard in `run_against` cannot fire either,
+/// because `failed_files` is not empty.
 pub(super) fn refused(work: &Work, refusal: &Refusal) -> Pass {
     let mut cached = AnalysisResult::default();
     for hunks in &work.by_file {
@@ -177,8 +171,6 @@ pub(super) fn refused(work: &Work, refusal: &Refusal) -> Pass {
         live: AnalysisResult::default(),
         live_review: LiveReview::Skip,
         budget: None,
-        should_review_live: false,
-        limit_reached: false,
         live_answered: false,
     }
 }

@@ -7,15 +7,16 @@
 //! root probe cannot see it: beside the root, and nested inside it.
 //!
 //! The other half of the file is the fail-closed arm reaching the gate. The unit
-//! test in `config::tests::site` pins `refusal_for` returning
+//! test in `config::tests::site` pins `refusal_among` returning
 //! `MarkerRootUnresolved`; nothing pinned `check` propagating it rather than
 //! reviewing, and every acceptance fixture next door is a git repository, so a
 //! swallowed error was invisible.
 
 use super::marker_refusal::{MARKER, check_paths, repo};
-use super::support::write_site_policy;
 use crate::cli::check;
-use crate::test_support::{git_init, git_unresolvable, request_count, server_returning};
+use crate::test_support::{
+    git_init, git_unresolvable, request_count, server_returning, write_site_policy,
+};
 
 /// A marked git repository holding one source file, of its own.
 fn marked_repository() -> tempfile::TempDir {
@@ -79,6 +80,54 @@ async fn a_marked_repository_nested_in_an_unmarked_one_is_refused() {
 
     assert_eq!(exit, check::Exit::Unanalyzed);
     assert_eq!(request_count(&server).await, 0);
+}
+
+/// The repository holding the bytes is authoritative even when the displayed
+/// path is a symlink in another checkout.
+///
+/// Paths mode follows an explicit source symlink when it reads the file. If the
+/// policy probe keeps only that lexical path, an unmarked checkout can expose a
+/// marked checkout's source through one alias and have the wrong repository
+/// answer the policy question.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_symlink_in_an_unmarked_repo_cannot_expose_a_marked_repos_source() {
+    let (unmarked, server, site) = repo(&[MARKER]).await;
+    let marked = marked_repository();
+    let alias = unmarked.path().join("alias.py");
+    std::os::unix::fs::symlink(marked.path().join("lib.py"), &alias).expect("source alias");
+
+    let exit = check_paths(unmarked.path(), unmarked.path(), &site, vec![alias])
+        .await
+        .expect("the marked target is a policy refusal");
+
+    assert_eq!(exit, check::Exit::Unanalyzed);
+    assert_eq!(
+        request_count(&server).await,
+        0,
+        "the target bytes left the machine after only the link repository was probed"
+    );
+}
+
+/// The converse pins the decision to the target bytes rather than banning
+/// symlinks categorically.
+#[cfg(unix)]
+#[tokio::test]
+async fn an_unmarked_target_is_not_refused_by_a_marker_beside_its_symlink() {
+    let (link_repo, server, site) = repo(&[MARKER]).await;
+    std::fs::write(link_repo.path().join(MARKER), "").expect("link-repo marker");
+    let target_repo = tempfile::tempdir().expect("target repo");
+    git_init(target_repo.path());
+    std::fs::write(target_repo.path().join("lib.py"), "x = 1\n").expect("target source");
+    let alias = link_repo.path().join("alias.py");
+    std::os::unix::fs::symlink(target_repo.path().join("lib.py"), &alias).expect("source alias");
+
+    let exit = check_paths(link_repo.path(), link_repo.path(), &site, vec![alias])
+        .await
+        .expect("the target repository is unmarked");
+
+    assert_eq!(exit, check::Exit::Clean);
+    assert_eq!(request_count(&server).await, 1);
 }
 
 /// The discriminating half: an unmarked repository beside an unmarked root still

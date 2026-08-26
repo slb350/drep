@@ -16,14 +16,12 @@ use std::path::{Path, PathBuf};
 
 use wiremock::MockServer;
 
-use super::support::{
-    check_args, run_drep_with_path_prefix, run_drep_with_site, write_site_policy,
-};
+use super::support::{check_args, run_drep_with_path_prefix, run_drep_with_site};
 use crate::cli::MachineFiles;
 use crate::cli::check;
 use crate::llm::cache::Cache;
 use crate::test_support::{
-    git_init, request_count, server_returning, write_drep_toml, write_executable,
+    git_init, request_count, server_returning, write_drep_toml, write_executable, write_site_policy,
 };
 
 /// The marker filename these tests configure.
@@ -106,6 +104,64 @@ async fn a_marker_at_the_repository_root_refuses_semantic_review() {
         0,
         "the point of the feature is that the source never leaves the machine; \
          stdout: {stdout}"
+    );
+}
+
+/// Refusal happens before the semantic cache acquires any on-disk state.
+#[tokio::test]
+async fn a_refused_run_does_not_create_an_absent_cache() {
+    let (dir, _server, site) = repo(&[MARKER]).await;
+    std::fs::write(dir.path().join(MARKER), "").expect("marker");
+    let cache_root = dir.path().join("never-created-cache");
+    let cache = Cache::new(cache_root.clone(), 30, 8 * 1024 * 1024);
+
+    let exit = check::run_against(
+        &check_args(vec![dir.path().join("lib.py")], None),
+        dir.path(),
+        cache,
+        &MachineFiles {
+            auth: &dir.path().join("auth.toml"),
+            policy: &site,
+        },
+    )
+    .await
+    .expect("refusal");
+
+    assert_eq!(exit, check::Exit::Unanalyzed);
+    assert!(
+        !cache_root.exists(),
+        "constructing a semantic cache mutated disk before policy permitted it"
+    );
+}
+
+/// Existing cache entries are equally outside a refused run's authority.
+#[tokio::test]
+async fn a_refused_run_does_not_evict_existing_cache_entries() {
+    let (dir, _server, site) = repo(&[MARKER]).await;
+    std::fs::write(dir.path().join(MARKER), "").expect("marker");
+    let cache = Cache::new(dir.path().join("preserved-cache"), 30, 0);
+    let key = cache.key("system", "source", "http", "m", "openai", None);
+    cache
+        .put(&key, &serde_json::json!({"issues": []}))
+        .expect("seed cache");
+    let entry = cache.entry_path(&key);
+
+    let exit = check::run_against(
+        &check_args(vec![dir.path().join("lib.py")], None),
+        dir.path(),
+        cache,
+        &MachineFiles {
+            auth: &dir.path().join("auth.toml"),
+            policy: &site,
+        },
+    )
+    .await
+    .expect("refusal");
+
+    assert_eq!(exit, check::Exit::Unanalyzed);
+    assert!(
+        entry.exists(),
+        "a refused run evicted an existing cache entry"
     );
 }
 

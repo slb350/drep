@@ -242,13 +242,13 @@ fn expand_string(s: &str, source: &Path) -> Result<String, ConfigError> {
         if !closed {
             return Err(ConfigError::Parse(
                 source.to_path_buf(),
-                format!("unterminated `${{` in `{s}`"),
+                "unterminated environment variable reference `${`".to_owned(),
             ));
         }
         if name.is_empty() {
             return Err(ConfigError::Parse(
                 source.to_path_buf(),
-                format!("empty environment variable reference in `{s}`"),
+                "empty environment variable reference `${}`".to_owned(),
             ));
         }
         let value = match env::var(&name) {

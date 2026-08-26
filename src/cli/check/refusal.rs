@@ -19,8 +19,7 @@
 //! [`reviewed_directories`]. It reads local files and contacts nothing, so it
 //! comes before everything the ordering above is about.
 
-use std::collections::BTreeSet;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use anyhow::{Context, Result, anyhow};
 
@@ -36,11 +35,10 @@ use super::input::Work;
 
 /// Where the files this resolution reads live.
 ///
-/// Grouped rather than passed one by one: `root`, the repository's config and the
-/// two machine files travel together everywhere in `check`, and all of them are
+/// Grouped rather than passed one by one: the repository's config and the two
+/// machine files travel together everywhere in `check`, and all of them are
 /// parameters precisely so no test reads real machine state.
 pub(super) struct Locations<'a> {
-    pub(super) root: &'a Path,
     pub(super) config: &'a Path,
     pub(super) machine: &'a MachineFiles<'a>,
 }
@@ -68,19 +66,14 @@ pub(super) async fn source(
     cache: Cache,
     cache_only: bool,
 ) -> Result<Source> {
-    // `has_refuse_markers` is asked before `reviewed_directories` is built, not
-    // inside `refusal_among` where the same guard also lives. A fleet policy that
-    // sets only `max_concurrent_ceiling` is an ordinary config, and it was paying
-    // for a `BTreeSet<PathBuf>` of every reviewed directory - two allocations per
-    // file on a five-hundred-file diff - to hand it to a function that returns
-    // immediately.
+    // `has_refuse_markers` was asked before input resolution, so a fleet policy
+    // that sets only `max_concurrent_ceiling` did not build this directory set.
+    // The guard stays here too because `Work` is constructible in tests and an
+    // empty marker list should never turn an absent scope into a policy error.
     if let Some(site) = site
         && site.has_refuse_markers()
         && let Some(refusal) = site
-            .refusal_among(
-                &reviewed_directories(locations.root, work),
-                locations.machine.policy,
-            )
+            .refusal_among(&work.reviewed_directories, locations.machine.policy)
             .await?
     {
         return Ok(Source::Refused(refusal));
@@ -120,50 +113,4 @@ pub(super) async fn source(
     Ok(Source::Analyze(
         CodeQualityAnalyzer::new(chain, cache).with_cache_only(cache_only),
     ))
-}
-
-/// Every directory whose repository policy this run has to be evaluated against.
-///
-/// The directory of each file drep would send, and nothing else. `work.by_file`
-/// is exactly the set whose source leaves the machine: `analyze_files` takes it,
-/// a live run's cache misses are a subset of it, and `read_failures` are never
-/// sent at all. Keying the decision on that set is what makes the answer about
-/// the source at stake.
-///
-/// Not the directory of each file *plus* `root`. That was the first fix for
-/// consulting `root` alone, which was wrong in the other direction: the files
-/// reviewed and the repository whose policy was consulted were two different
-/// things, because `files::expand_named` applies no confinement to `root`. Two
-/// invocations reached that, neither of them adversarial - `drep check <absolute
-/// path>` from an editor plugin or a CI step with a fixed working directory, and a
-/// marked repository checked out inside an unmarked one, which the walk descends
-/// into because it prunes `.git` and not the tree beside it. Either way the marked
-/// repository's source went to a provider and the run exited 0. Unioning `root` in
-/// closed that, but then keyed the decision on the working directory as well as
-/// the source: a run reviewing an unmarked repository was refused because the
-/// process happened to be standing in a marked one, and a run whose reviewed
-/// files all resolved still died with `MarkerRootUnresolved` when the working
-/// directory sat outside any repository at all - which is the invocation the fix
-/// was written for. The ordinary case is unaffected either way, because a diff
-/// mode's paths are under `root` and resolve to the same repository.
-///
-/// An empty work set sends nothing, so it yields no directories, no git spawn and
-/// no probe.
-///
-/// Joined onto `root` because a diff mode's paths are repository-relative while
-/// paths mode's may be absolute; `Path::join` takes the absolute one whole. A
-/// `BTreeSet` so a work set of two hundred files in one directory is one git
-/// query, and so the order the probe reports a failure in is stable.
-fn reviewed_directories(root: &Path, work: &Work) -> BTreeSet<PathBuf> {
-    let mut directories = BTreeSet::new();
-    for hunks in &work.by_file {
-        if let Some(parent) = hunks
-            .first()
-            .map(|first| root.join(&first.file_path))
-            .and_then(|path| path.parent().map(Path::to_path_buf))
-        {
-            directories.insert(parent);
-        }
-    }
-    directories
 }

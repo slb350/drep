@@ -426,8 +426,8 @@ pub async fn resolve(config: &mut Config, store: &AuthStore) -> Result<Vec<KeySo
             // the default here is unreachable through it; `command::run` reports
             // an empty argv rather than panicking if it ever becomes reachable.
             KeySource::Command => {
-                let argv = llm.api_key_command.clone().unwrap_or_default();
-                let key = command::run_bounded(&argv)
+                let argv = llm.api_key_command.as_deref().unwrap_or_default();
+                let key = command::run_bounded(argv)
                     .await
                     .map_err(|cause| AuthError::KeyCommand { index, cause })?;
                 llm.api_key = Some(key);

@@ -7,32 +7,11 @@
 
 use std::path::Path;
 
-use crate::cli::MachineFiles;
-use crate::cli::doctor::{DoctorArgs, run_at};
-
-fn args(dir: &Path) -> DoctorArgs {
-    DoctorArgs {
-        path: dir.to_path_buf(),
-        config: None,
-    }
-}
+use crate::test_support::write_site_policy;
 
 /// Run `doctor` against `dir` with a temporary store and the named policy file.
 async fn report_with_site(dir: &Path, site_path: &Path) -> String {
-    let mut out = Vec::new();
-    let machine = MachineFiles {
-        auth: &dir.join("auth.toml"),
-        policy: site_path,
-    };
-    let exit = run_at(&mut out, &args(dir), &machine)
-        .await
-        .expect("run_at");
-    assert_eq!(
-        exit,
-        crate::Exit::Clean,
-        "a policy diagnosis is never a gate failure"
-    );
-    String::from_utf8(out).expect("utf8")
+    super::report_scoped_with_policy(dir, site_path).await
 }
 
 /// One enabled provider, leaving `max_concurrent` at its default.
@@ -179,8 +158,7 @@ async fn a_marked_repository_says_semantic_review_is_refused_here() {
     crate::test_support::git_init(dir.path());
     write_source(dir.path());
     write_provider(dir.path());
-    let site = dir.path().join("site.toml");
-    std::fs::write(&site, "refuse_markers = [\".drep-no-llm\"]\n").expect("site.toml");
+    let site = write_site_policy(dir.path(), &[".drep-no-llm"]);
     std::fs::write(dir.path().join(".drep-no-llm"), "").expect("marker");
 
     let report = report_with_site(dir.path(), &site).await;
@@ -199,6 +177,37 @@ async fn a_marked_repository_says_semantic_review_is_refused_here() {
     );
 }
 
+/// Doctor describes the repositories holding discovered source, not only the
+/// directory it was pointed at.
+///
+/// A bare check walks nested repositories too. Reporting the unmarked outer
+/// root as permitted would let doctor spend credentials for a run that the gate
+/// refuses as soon as it reaches the marked inner source.
+#[tokio::test]
+async fn a_marked_nested_repository_is_refused_in_the_doctor_report() {
+    let outer = tempfile::tempdir().expect("tempdir");
+    crate::test_support::git_init(outer.path());
+    write_provider(outer.path());
+    write_source(outer.path());
+    let inner = outer.path().join("nested");
+    std::fs::create_dir(&inner).expect("nested repo");
+    crate::test_support::git_init(&inner);
+    std::fs::write(inner.join("inner.py"), "y = 2\n").expect("inner source");
+    std::fs::write(inner.join(".drep-no-llm"), "").expect("inner marker");
+    let site = write_site_policy(outer.path(), &[".drep-no-llm"]);
+
+    let report = report_with_site(outer.path(), &site).await;
+
+    assert!(
+        report.contains(&inner.join(".drep-no-llm").display().to_string()),
+        "doctor and check disagreed about the source repositories: {report}"
+    );
+    assert!(
+        report.contains("semantic review is refused"),
+        "got {report}"
+    );
+}
+
 /// The discriminating half: a configured marker that is absent refuses nothing,
 /// and the report has to say that too.
 ///
@@ -213,8 +222,7 @@ async fn a_configured_marker_that_is_absent_is_reported_as_not_refusing() {
     crate::test_support::git_init(dir.path());
     write_source(dir.path());
     write_provider(dir.path());
-    let site = dir.path().join("site.toml");
-    std::fs::write(&site, "refuse_markers = [\".drep-no-llm\"]\n").expect("site.toml");
+    let site = write_site_policy(dir.path(), &[".drep-no-llm"]);
 
     let report = report_with_site(dir.path(), &site).await;
 
@@ -247,8 +255,7 @@ async fn a_policy_that_cannot_be_evaluated_is_described_rather_than_failing_doct
     write_source(dir.path());
     write_provider(dir.path());
     crate::test_support::git_unresolvable(dir.path());
-    let site = dir.path().join("site.toml");
-    std::fs::write(&site, "refuse_markers = [\".drep-no-llm\"]\n").expect("site.toml");
+    let site = write_site_policy(dir.path(), &[".drep-no-llm"]);
 
     let report = report_with_site(dir.path(), &site).await;
 

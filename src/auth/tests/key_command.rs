@@ -393,6 +393,29 @@ async fn output_that_is_not_utf8_is_refused_rather_than_replaced_with_placeholde
     assert!(err.to_string().contains("binary"), "got {err}");
 }
 
+/// A helper's own exit is decisive even if it launched an unrelated descendant
+/// that inherited stdout.
+///
+/// Reading the pipe to EOF before waiting makes that descendant hold credential
+/// resolution open until the timeout, after the helper already printed a valid
+/// token and exited successfully.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_grandchild_inheriting_stdout_cannot_hold_credential_resolution_open() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let stub = dir.path().join("background-child");
+    write_executable(&stub, "#!/bin/sh\n(sleep 5) &\nprintf '%s' token\n");
+
+    let key = command::run(
+        &[stub.to_string_lossy().into_owned()],
+        std::time::Duration::from_secs(2),
+    )
+    .await
+    .expect("the direct helper exited successfully");
+
+    assert_eq!(key, "token");
+}
+
 /// A helper that prints more than any credential can be is refused, not read.
 ///
 /// The ceiling is what stops `api_key_command` pointed at the wrong program -

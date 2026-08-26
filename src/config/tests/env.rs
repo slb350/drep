@@ -45,6 +45,38 @@ nested = { inner = ["${DREP_ARRAY_PROBE}"] }
     );
 }
 
+/// A malformed reference inside argv must not echo the argv into an error.
+///
+/// Command arguments routinely contain bearer tokens. Reporting the whole
+/// source string for an unterminated `${` turns a harmless syntax error into a
+/// terminal, CI-log and doctor-output credential leak.
+#[test]
+fn a_malformed_reference_does_not_echo_a_secret_command_argument() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let path = write_config(
+        &temp,
+        r#"
+[[llm]]
+model = "m"
+endpoint = "http://e/v1"
+api_key_command = ["helper", "--token=sentinel-secret${"]
+"#,
+    );
+
+    let err = load(&path).expect_err("the malformed reference is rejected");
+    let displayed = err.to_string();
+    let debugged = format!("{err:?}");
+    assert!(
+        !displayed.contains("sentinel-secret"),
+        "leaked in Display: {displayed}"
+    );
+    assert!(
+        !debugged.contains("sentinel-secret"),
+        "leaked in Debug: {debugged}"
+    );
+    assert!(displayed.contains("unterminated"), "got {displayed}");
+}
+
 #[test]
 fn env_var_in_api_key_expands_from_environment() {
     let temp = tempfile::tempdir().expect("tempdir");

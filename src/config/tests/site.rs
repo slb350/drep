@@ -6,11 +6,27 @@
 //! through-line of every test here is that a policy which fails to load must
 //! never read as a policy that found nothing to complain about.
 
+use std::collections::BTreeSet;
 use std::ffi::OsString;
+use std::path::Path;
 
-use super::support::{write_config, write_site};
+use super::support::write_config;
 use crate::config::site::{self, SiteConfig, SiteConfigError};
 use crate::config::{Config, LlmConfig, load};
+use crate::test_support::write_site_policy_body;
+
+async fn refusal_for(
+    site: &SiteConfig,
+    root: &Path,
+    policy: &Path,
+) -> Result<Option<crate::config::site::Refusal>, SiteConfigError> {
+    site.refusal_among(&BTreeSet::from([root.to_path_buf()]), policy)
+        .await
+}
+
+fn write_site(temp: &tempfile::TempDir, body: &str) -> std::path::PathBuf {
+    write_site_policy_body(temp.path(), body)
+}
 
 /// A config whose entries carry only the enablement and concurrency the test is
 /// about.
@@ -90,6 +106,28 @@ fn an_unreadable_site_file_is_fatal_rather_than_treated_as_absent() {
         loaded.is_err(),
         "a loader that maps every I/O failure to `Ok(None)` reports an \
          unenforced policy as no policy; got {loaded:?}"
+    );
+}
+
+/// A dangling symlink is a policy name that exists but cannot be read.
+///
+/// `path_from` deliberately uses `symlink_metadata` so that name keeps the
+/// machine path authoritative. The loader must make the same distinction:
+/// following the link produces `NotFound`, but treating that as an absent
+/// policy silently turns enforcement off.
+#[cfg(unix)]
+#[test]
+fn a_dangling_site_policy_is_fatal_rather_than_absent() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let path = temp.path().join("site.toml");
+    std::os::unix::fs::symlink(temp.path().join("missing-target.toml"), &path)
+        .expect("dangling policy symlink");
+
+    let loaded = site::load(&path);
+
+    assert!(
+        matches!(loaded, Err(SiteConfigError::Read(_, _))),
+        "a policy name that exists cannot become no policy: {loaded:?}"
     );
 }
 
@@ -293,6 +331,34 @@ fn a_dangling_symlink_at_the_machine_path_still_holds_the_decision() {
     assert_eq!(path, installed);
 }
 
+/// Failure to inspect the privileged path is not proof that it is absent.
+///
+/// An administrator may deliberately make the policy directory unlistable to
+/// ordinary users. Letting any metadata error select `DREP_SITE_CONFIG` makes
+/// that installation replaceable by the process it constrains.
+#[cfg(unix)]
+#[test]
+fn an_uninspectable_machine_path_cannot_be_displaced_by_an_override() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let temp = tempfile::tempdir().expect("tempdir");
+    let locked = temp.path().join("locked");
+    std::fs::create_dir(&locked).expect("locked directory");
+    let machine = locked.join("site.toml");
+    std::fs::write(&machine, "max_concurrent_ceiling = 1\n").expect("machine policy");
+    let scratch = temp.path().join("scratch.toml");
+    std::fs::write(&scratch, "").expect("scratch policy");
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000))
+        .expect("make metadata lookup fail");
+
+    let selected = site::path_from(Some(scratch.into_os_string()), &machine);
+
+    // Restore traversal before asserting so TempDir can always clean itself up.
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o700))
+        .expect("restore fixture permissions");
+    assert_eq!(selected, machine);
+}
+
 /// `DREP_SITE_CONFIG=` naming nothing must not switch policy off: a set-but-empty
 /// variable silently disabling enforcement is the same defect class as a file
 /// that fails to load.
@@ -400,10 +466,13 @@ fn clamping_can_never_produce_a_zero_permit_provider() {
 async fn no_configured_markers_never_asks_git() {
     let temp = tempfile::tempdir().expect("tempdir");
 
-    let refusal = SiteConfig::default()
-        .refusal_for(temp.path(), &temp.path().join("site.toml"))
-        .await
-        .expect("a policy naming no markers evaluates without git");
+    let refusal = refusal_for(
+        &SiteConfig::default(),
+        temp.path(),
+        &temp.path().join("site.toml"),
+    )
+    .await
+    .expect("a policy naming no markers evaluates without git");
 
     assert!(refusal.is_none());
 }
@@ -425,8 +494,7 @@ async fn configured_markers_outside_a_git_repository_fail_closed() {
     // could sit inside a repository, and then git would answer.
     let outside = std::path::Path::new("/");
 
-    let err = site
-        .refusal_for(outside, &policy)
+    let err = refusal_for(&site, outside, &policy)
         .await
         .expect_err("a policy that cannot be evaluated is not a policy that permits");
 
@@ -439,6 +507,27 @@ async fn configured_markers_outside_a_git_repository_fail_closed() {
     assert!(
         message.contains("refuses to run"),
         "and states the consequence: {message}"
+    );
+}
+
+/// A marker probe error is not the same answer as a missing marker.
+///
+/// A single path component longer than the filesystem permits passes the
+/// grammar check but makes `symlink_metadata` return `ENAMETOOLONG`. Collapsing
+/// that error to `false` reports an unenforceable policy as permission.
+#[tokio::test]
+async fn a_marker_that_cannot_be_inspected_fails_closed() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    crate::test_support::git_init(temp.path());
+    let marker = "m".repeat(1024);
+    let policy = write_site(&temp, &format!("refuse_markers = [{marker:?}]\n"));
+    let site = site::load(&policy).expect("loads").expect("present");
+
+    let result = refusal_for(&site, temp.path(), &policy).await;
+
+    assert!(
+        result.is_err(),
+        "an inspection error must not silently mean the marker is absent"
     );
 }
 
@@ -455,8 +544,7 @@ async fn a_found_marker_is_reported_at_the_repository_root() {
     let site = site::load(&policy).expect("loads").expect("present");
     std::fs::write(temp.path().join(".drep-no-llm"), "").expect("marker");
 
-    let refusal = site
-        .refusal_for(temp.path(), &policy)
+    let refusal = refusal_for(&site, temp.path(), &policy)
         .await
         .expect("evaluating the policy")
         .expect("the marker is present");

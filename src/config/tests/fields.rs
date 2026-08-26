@@ -328,3 +328,23 @@ endpoint = "http://a/v1"
          told only where it does not: {message}"
     );
 }
+
+#[test]
+fn max_concurrent_ceiling_in_drep_toml_is_rejected_rather_than_ignored() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let path = write_config(
+        &temp,
+        r#"
+max_concurrent_ceiling = 2
+
+[[llm]]
+model = "a"
+endpoint = "http://a/v1"
+"#,
+    );
+
+    let err = load(&path).expect_err("a repository cannot declare a site ceiling");
+    let message = err.to_string();
+    assert!(message.contains("max_concurrent_ceiling"), "got {message}");
+    assert!(message.contains("site policy"), "got {message}");
+}
