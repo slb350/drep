@@ -55,8 +55,13 @@ ignore = "0.4"
 # and `k3` rejects any temperature at all. 0.10.0 delivers streamed text one
 # event per delta instead of one block at the end of the stream; drep
 # concatenates every text block it receives, so the assembled response is
-# unchanged - see `run_one_query` in src/llm/client/mod.rs.
-open-agent-sdk = "0.10.0"
+# unchanged - see `run_one_query` in src/llm/client/mod.rs. 0.11.0 adds
+# caller-supplied request headers, which is the only way to reach a gateway that
+# identifies a client by `User-Agent`, bills against a header, or authenticates
+# with something other than the protocol's default scheme; before it, the
+# reqwest client and the request builder were both private inside `query`, so no
+# header was expressible at all.
+open-agent-sdk = "0.11.0"
 futures = "0.3"
 fs2 = "0.4.3"
 serde = { version = "1.0", features = ["derive"] }
