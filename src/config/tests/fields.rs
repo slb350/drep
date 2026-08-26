@@ -322,4 +322,9 @@ endpoint = "http://a/v1"
         message.contains(&path.display().to_string()),
         "and which file it was read from: {message}"
     );
+    assert!(
+        message.contains(&crate::config::site::machine_path().display().to_string()),
+        "and where it does belong, so the reader can act on it rather than being \
+         told only where it does not: {message}"
+    );
 }

@@ -303,3 +303,92 @@ async fn stdout_is_taken_whole_rather_than_scanned_for_a_token_shaped_line() {
 
     assert_eq!(key, "Bearer abc.def-ghi");
 }
+
+#[tokio::test]
+async fn surrounding_whitespace_is_trimmed_at_both_ends() {
+    // A leading space is one `printf ' %s\n'` or one `cut` field away, and it
+    // cannot survive the wire: an HTTP header value has its leading whitespace
+    // stripped in transit, so what is sent is not what was checked and the
+    // endpoint answers 401 - which reads as a revoked key rather than a helper
+    // printing an extra byte. A space also passes the control-character guard
+    // below, so trimming one end alone accepted it silently. `AuthStore::set`
+    // trims a pasted key at both ends, and two credential paths disagreeing
+    // about the same value is the drift worth pinning. The interior of the value
+    // is untouched: see the test above.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let stub = dir.path().join("padded");
+    write_executable(&stub, "#!/bin/sh\nprintf ' %s\\n' tok\n");
+
+    let key = command::run(&[stub.to_string_lossy().into_owned()], generous())
+        .await
+        .expect("padding is the helper's, not the credential's");
+
+    assert_eq!(key, "tok");
+}
+
+/// A helper that exists but cannot be executed is not a helper that is absent.
+///
+/// `NotFound`'s own message sends the reader to PATH and to a typo in argv[0],
+/// which is the wrong place to look at a file whose mode is wrong. Collapsing the
+/// two arms compiles and passes every other test in this file.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_helper_that_cannot_be_executed_is_reported_separately_from_a_missing_one() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let stub = dir.path().join("not-executable");
+    std::fs::write(&stub, "#!/bin/sh\nprintf '%s' tok\n").expect("a file with no execute bit");
+
+    let err = command::run(&[stub.to_string_lossy().into_owned()], generous())
+        .await
+        .expect_err("a file that cannot be executed cannot mint a key");
+
+    assert!(matches!(err, KeyCommandError::Spawn { .. }), "got {err:?}");
+    let message = err.to_string();
+    assert!(message.contains("could not be started"), "got {message}");
+    assert!(
+        !message.contains("PATH"),
+        "the program was found; naming PATH sends the reader to the wrong fix: {message}"
+    );
+}
+
+/// A helper killed by a signal has no exit code to report.
+///
+/// Reaching for `Failed` here would have to invent one, and 0 is the one value
+/// that would read as success.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_helper_killed_by_a_signal_says_so_rather_than_inventing_a_status() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let stub = dir.path().join("suicidal");
+    write_executable(&stub, "#!/bin/sh\nkill -TERM $$\n");
+
+    let err = command::run(&[stub.to_string_lossy().into_owned()], generous())
+        .await
+        .expect_err("a helper that did not finish did not mint a key");
+
+    assert!(matches!(err, KeyCommandError::Signal { .. }), "got {err:?}");
+    assert!(err.to_string().contains("signal"), "got {err}");
+}
+
+/// Output that is not text is refused rather than repaired.
+///
+/// `from_utf8_lossy` would substitute U+FFFD, which is not a control character
+/// and so passes the header guard below it - the credential then differs from
+/// what the helper printed and fails at the transport, which is the confusing
+/// place this whole error vocabulary exists to avoid.
+#[tokio::test]
+async fn output_that_is_not_utf8_is_refused_rather_than_replaced_with_placeholders() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let stub = dir.path().join("binary");
+    write_executable(&stub, "#!/bin/sh\nprintf '\\377\\376'\n");
+
+    let err = command::run(&[stub.to_string_lossy().into_owned()], generous())
+        .await
+        .expect_err("a credential drep cannot read is not a credential");
+
+    assert!(
+        matches!(err, KeyCommandError::NotUtf8 { .. }),
+        "got {err:?}"
+    );
+    assert!(err.to_string().contains("binary"), "got {err}");
+}

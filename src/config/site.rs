@@ -15,16 +15,20 @@
 //!   silently fails to load is worse than no policy at all, because the
 //!   unconstrained run that follows reports as compliance. Every
 //!   [`SiteConfigError`] says so in its own message.
-//! - **The file is not per-user, and reads nothing from the environment.** The
-//!   location is a system path rather than the `ProjectDirs` directory holding
+//! - **The file is not per-user, and the process it constrains cannot move it.**
+//!   The location is a system path rather than the `ProjectDirs` directory holding
 //!   `auth.toml` and the response cache, because a policy file the policed
-//!   developer can edit without privilege is not a policy file. There is no
-//!   `${VAR}` expansion here for the same reason: a policy that takes its values
-//!   from the environment of the process it constrains constrains nothing.
+//!   developer can edit without privilege is not a policy file. [`PATH_VAR`] names
+//!   the file only on a machine where none is installed, for the same reason: an
+//!   override that could displace an installed policy would be one `export` away
+//!   from switching it off. There is no `${VAR}` expansion in the file either - a
+//!   policy that takes its values from the environment of the process it
+//!   constrains constrains nothing.
 //!
 //! The layering is applied by the caller, after [`super::load`] returns, which
 //! is what keeps [`super::ConfigError`] a statement about `drep.toml` alone.
 
+use std::collections::BTreeSet;
 use std::path::{Component, Path, PathBuf};
 
 use serde::Deserialize;
@@ -53,28 +57,59 @@ const MACHINE_PATH: &str = "/Library/Application Support/drep/site.toml";
 #[cfg(not(target_os = "macos"))]
 const MACHINE_PATH: &str = "/etc/drep/site.toml";
 
-/// The policy path: [`PATH_VAR`] if set, else the machine-wide path.
+/// The policy path: the machine-wide file, or [`PATH_VAR`] when there is none.
 pub fn default_path() -> PathBuf {
-    path_from(std::env::var_os(PATH_VAR))
+    path_from(std::env::var_os(PATH_VAR), machine_path())
 }
 
-/// [`default_path`] with the override supplied rather than read.
+/// The machine-wide path this platform installs policy at.
+///
+/// A function so `default_path` and its test read one thing rather than each
+/// restating the literal, and so the two `cfg` arms above have a single reader.
+pub fn machine_path() -> &'static Path {
+    Path::new(MACHINE_PATH)
+}
+
+/// [`default_path`] with the override and the machine path supplied rather than
+/// read.
 ///
 /// Split out for the reason `auth::path_from` is: `std::env::set_var` is
 /// `unsafe` in edition 2024 because another thread reading the environment is a
 /// data race, and `cargo test` is multi-threaded, so the override has to be
-/// suppliable to be testable at all.
+/// suppliable to be testable at all. The machine path joins it because a test
+/// cannot write to `/etc` either.
 ///
-/// An **empty** override falls back to the machine path rather than being
-/// honoured as a file that does not exist. `DREP_SITE_CONFIG=` quietly switching
-/// enforcement off is the same defect as a policy file that fails to load.
+/// **The override cannot displace an installed policy.** If a file exists at
+/// `machine`, that file is the policy and the variable is ignored. Otherwise the
+/// whole layer is one `export` away from off: the developer `refuse_markers`
+/// constrains points the variable at an empty file, the marker list is empty, the
+/// probe short-circuits before git is even spawned, and the run sends the
+/// repository's source and exits 0. `ConfigError::SiteOnlyField` refuses that
+/// field in `drep.toml` because a refusal a developer can delete is not one, and a
+/// per-process override is a way to delete it. The precedence is not silent
+/// either: `drep doctor` names the file in effect, so an administrator who moved
+/// the policy and left the old one behind can see which one answered.
+///
+/// So the variable names the policy on a machine that installed none - an
+/// installation that keeps the file elsewhere, and every test in this suite, which
+/// must not read whatever this machine happens to hold. An **empty** value falls
+/// back to the machine path rather than being honoured as a file that does not
+/// exist, because `DREP_SITE_CONFIG=` quietly switching enforcement off is the
+/// same defect as a policy file that fails to load.
+///
+/// Presence is [`std::fs::symlink_metadata`], matching the marker probe: a name
+/// someone deliberately placed is a name claiming to be the policy, and following
+/// the link would let a dangling symlink hand the decision back to the
+/// environment.
 ///
 /// Infallible, unlike `auth::path_from`, because no `ProjectDirs` lookup is
 /// involved and a system path exists on every platform drep ships to.
-pub fn path_from(overridden: Option<std::ffi::OsString>) -> PathBuf {
+pub fn path_from(overridden: Option<std::ffi::OsString>, machine: &Path) -> PathBuf {
     match overridden {
-        Some(path) if !path.is_empty() => PathBuf::from(path),
-        _ => PathBuf::from(MACHINE_PATH),
+        Some(path) if !path.is_empty() && std::fs::symlink_metadata(machine).is_err() => {
+            PathBuf::from(path)
+        }
+        _ => machine.to_path_buf(),
     }
 }
 
@@ -264,16 +299,38 @@ impl SiteConfig {
 
     /// The first configured marker present at the repository root above `root`.
     ///
+    /// The single-directory case, for `doctor`, which reports on one directory.
+    /// The gate asks [`Self::refusal_among`], because the files a check reviews
+    /// are not always in the repository it was rooted in.
+    pub async fn refusal_for(
+        &self,
+        root: &Path,
+        policy: &Path,
+    ) -> Result<Option<Refusal>, SiteConfigError> {
+        self.refusal_among(&BTreeSet::from([root.to_path_buf()]), policy)
+            .await
+    }
+
+    /// The first configured marker present at the repository root above any of
+    /// `directories`.
+    ///
     /// `Ok(None)` on a machine that configured none, decided before git is
     /// spawned. That short circuit is the whole reason an unaffected machine
     /// gains neither the latency nor the new failure mode: `drep check` outside a
     /// repository keeps working exactly as it does today, and only a machine that
     /// asked for the policy pays for evaluating it.
     ///
-    /// The repository root, not `root`: a check run from a subdirectory of a
-    /// marked repository is still a check on that repository's source, and
-    /// consulting the current directory would let `cd src && drep check` walk
-    /// straight past the policy.
+    /// The repository root, not the directory itself: a check run from a
+    /// subdirectory of a marked repository is still a check on that repository's
+    /// source, and consulting the given directory would let `cd src && drep
+    /// check` walk straight past the policy.
+    ///
+    /// Plural because one run can review files from more than one repository, and
+    /// then one repository's policy was consulted while another's source was
+    /// sent. Each directory is resolved on its own rather than being assumed to
+    /// share a root with the others: a nested checkout has its own root, and
+    /// deciding otherwise from the paths alone would reimplement git's discovery
+    /// rules here. The marker probe is then done once per distinct root.
     ///
     /// Presence is decided by [`std::fs::symlink_metadata`], and nothing opens
     /// the file. Not `metadata`, which follows a symlink and so answers "no" for
@@ -282,22 +339,37 @@ impl SiteConfig {
     /// either reading would let a marker silently disable the policy it was put
     /// there to invoke. Contents are never read for the same reason: a marker
     /// whose text said `allow` would be a second grammar nobody documented.
-    pub async fn refusal_for(
+    pub async fn refusal_among(
         &self,
-        root: &Path,
+        directories: &BTreeSet<PathBuf>,
         policy: &Path,
     ) -> Result<Option<Refusal>, SiteConfigError> {
         if self.refuse_markers.is_empty() {
             return Ok(None);
         }
-        let repository_root = crate::diff::repository_root(root).await.map_err(|cause| {
-            SiteConfigError::MarkerRootUnresolved {
-                path: policy.to_path_buf(),
-                root: root.to_path_buf(),
-                cause,
+        let mut probed: BTreeSet<PathBuf> = BTreeSet::new();
+        for directory in directories {
+            let repository_root =
+                crate::diff::repository_root(directory)
+                    .await
+                    .map_err(|cause| SiteConfigError::MarkerRootUnresolved {
+                        path: policy.to_path_buf(),
+                        root: directory.to_path_buf(),
+                        cause,
+                    })?;
+            if !probed.insert(repository_root.clone()) {
+                continue;
             }
-        })?;
-        Ok(self.refuse_markers.iter().find_map(|marker| {
+            if let Some(refusal) = self.marker_at(&repository_root, policy) {
+                return Ok(Some(refusal));
+            }
+        }
+        Ok(None)
+    }
+
+    /// The first configured marker present at one repository root.
+    fn marker_at(&self, repository_root: &Path, policy: &Path) -> Option<Refusal> {
+        self.refuse_markers.iter().find_map(|marker| {
             let candidate = repository_root.join(marker);
             std::fs::symlink_metadata(&candidate)
                 .is_ok()
@@ -305,6 +377,6 @@ impl SiteConfig {
                     marker: candidate,
                     policy: policy.to_path_buf(),
                 })
-        }))
+        })
     }
 }

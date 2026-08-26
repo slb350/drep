@@ -1,5 +1,6 @@
 //! A5, A6, A7, A8, A9: every shape of the LLM section.
 
+use crate::cli::MachineFiles;
 use crate::cli::doctor::{DoctorArgs, run_at, run_to};
 use std::path::Path;
 
@@ -477,8 +478,10 @@ async fn report_with_empty_store(dir: &Path) -> String {
     run_at(
         &mut out,
         &args(dir),
-        &dir.join("auth.toml"),
-        &dir.join("absent-site.toml"),
+        &MachineFiles {
+            auth: &dir.join("auth.toml"),
+            policy: &dir.join("absent-site.toml"),
+        },
     )
     .await
     .expect("run_at");

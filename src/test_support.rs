@@ -395,6 +395,20 @@ pub(crate) fn git_init(dir: &std::path::Path) {
     }
 }
 
+/// Make `dir` a directory git refuses to resolve a repository root for.
+///
+/// A plain `tempfile::tempdir()` is *usually* outside any repository, and a test
+/// that needs "no repository here" has been relying on that. It is a property of
+/// the developer's machine, not of the fixture: `TMPDIR` inside a checkout makes
+/// `git rev-parse --show-toplevel` answer, and a fail-closed test then passes for
+/// the wrong reason. A `.git` file holding something that is not a gitfile stops
+/// discovery at this directory with `fatal: invalid gitfile format`, whatever sits
+/// above it - and it denies the root through git's own discovery rather than by
+/// arranging the filesystem and hoping.
+pub(crate) fn git_unresolvable(dir: &std::path::Path) {
+    std::fs::write(dir.join(".git"), "not a gitfile\n").expect("unresolvable .git");
+}
+
 /// Stage `path` in the repository at `dir`.
 ///
 /// A tracked file is the one state where `.gitignore` silently does nothing, so

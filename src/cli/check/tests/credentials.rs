@@ -11,6 +11,7 @@ use std::path::Path;
 use wiremock::MockServer;
 
 use super::support::check_args as args;
+use crate::cli::MachineFiles;
 use crate::cli::check;
 use crate::llm::cache::Cache;
 use crate::test_support::{mount_sse, sse, write_executable};
@@ -49,8 +50,10 @@ async fn a_failing_api_key_command_exits_two_without_contacting_the_endpoint() {
         &args(vec![source], None),
         dir.path(),
         Cache::new(dir.path().join("test-cache"), 30, 8 * 1024 * 1024),
-        &dir.path().join("auth.toml"),
-        &dir.path().join("absent-site.toml"),
+        &MachineFiles {
+            auth: &dir.path().join("auth.toml"),
+            policy: &dir.path().join("absent-site.toml"),
+        },
     )
     .await;
 
@@ -88,8 +91,10 @@ async fn a_working_api_key_command_lets_the_run_complete() {
         &args(vec![source], None),
         dir.path(),
         Cache::new(dir.path().join("test-cache"), 30, 8 * 1024 * 1024),
-        &dir.path().join("auth.toml"),
-        &dir.path().join("absent-site.toml"),
+        &MachineFiles {
+            auth: &dir.path().join("auth.toml"),
+            policy: &dir.path().join("absent-site.toml"),
+        },
     )
     .await
     .expect("a minted credential is a working one");

@@ -66,6 +66,23 @@ pub(crate) fn severity_parser() -> impl TypedValueParser<Value = Severity> {
         .map(|name| name.parse::<Severity>().expect("possible values parse"))
 }
 
+/// The two machine-level files a command reads from outside the repository.
+///
+/// Grouped rather than passed as two adjacent `&Path` positionals, which is what
+/// `check::run_against` and `doctor::run_at` took. Transposing those compiles,
+/// and the transposition is silent in the worst direction: `AuthStore` has no
+/// `deny_unknown_fields`, so a policy file deserializes into an empty store, and
+/// `site::load` reads an absent `auth.toml` as no policy at all - so the swap
+/// leaves the fleet's ceiling and `refuse_markers` unapplied while the run
+/// reports as compliance. The same swap hazard `auth::Declared` and
+/// `check::refusal::Locations` already exist to remove.
+pub struct MachineFiles<'a> {
+    /// The credential store, from [`crate::auth::default_path`].
+    pub auth: &'a std::path::Path,
+    /// The site policy file, from [`crate::config::site::default_path`].
+    pub policy: &'a std::path::Path,
+}
+
 /// How findings are rendered.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum OutputFormat {

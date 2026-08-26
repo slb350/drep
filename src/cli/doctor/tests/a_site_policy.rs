@@ -7,6 +7,7 @@
 
 use std::path::Path;
 
+use crate::cli::MachineFiles;
 use crate::cli::doctor::{DoctorArgs, run_at};
 
 fn args(dir: &Path) -> DoctorArgs {
@@ -19,7 +20,11 @@ fn args(dir: &Path) -> DoctorArgs {
 /// Run `doctor` against `dir` with a temporary store and the named policy file.
 async fn report_with_site(dir: &Path, site_path: &Path) -> String {
     let mut out = Vec::new();
-    let exit = run_at(&mut out, &args(dir), &dir.join("auth.toml"), site_path)
+    let machine = MachineFiles {
+        auth: &dir.join("auth.toml"),
+        policy: site_path,
+    };
+    let exit = run_at(&mut out, &args(dir), &machine)
         .await
         .expect("run_at");
     assert_eq!(
@@ -198,7 +203,10 @@ async fn a_marked_repository_says_semantic_review_is_refused_here() {
 /// and the report has to say that too.
 ///
 /// Without it, "print the refusal line whenever `refuse_markers` is set" passes
-/// the test above.
+/// the test above. The positive wording is asserted, not just the absence of the
+/// refusal: an arm that printed nothing at all satisfies `!contains("is present")`
+/// and leaves an operator reading `refuse_markers: .drep-no-llm` with no statement
+/// of what it does here, which is the ambiguity the effect line exists to remove.
 #[tokio::test]
 async fn a_configured_marker_that_is_absent_is_reported_as_not_refusing() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -215,6 +223,10 @@ async fn a_configured_marker_that_is_absent_is_reported_as_not_refusing() {
         "got {report}"
     );
     assert!(
+        report.contains("none of those files is here, so review runs"),
+        "the list alone leaves the operator guessing at its effect; got {report}"
+    );
+    assert!(
         !report.contains("is present"),
         "reporting a refusal that is not happening is worse than silence; got {report}"
     );
@@ -224,11 +236,17 @@ async fn a_configured_marker_that_is_absent_is_reported_as_not_refusing() {
 ///
 /// `drep check` fails closed here, so this is again the command someone runs to
 /// find out why - and failing out would suppress the rest of the answer.
+///
+/// The fixture denies git a root through `git_unresolvable` rather than by being a
+/// plain temporary directory: whether a `TempDir` sits inside a repository is a
+/// property of the developer's machine, and on one whose `TMPDIR` does, this test
+/// would fail for a reason unrelated to the code.
 #[tokio::test]
 async fn a_policy_that_cannot_be_evaluated_is_described_rather_than_failing_doctor() {
     let dir = tempfile::tempdir().expect("tempdir");
     write_source(dir.path());
     write_provider(dir.path());
+    crate::test_support::git_unresolvable(dir.path());
     let site = dir.path().join("site.toml");
     std::fs::write(&site, "refuse_markers = [\".drep-no-llm\"]\n").expect("site.toml");
 

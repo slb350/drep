@@ -9,6 +9,7 @@
 use std::path::Path;
 
 use super::support::check_args as args;
+use crate::cli::MachineFiles;
 use crate::cli::check;
 use crate::llm::cache::Cache;
 use crate::test_support::write_drep_toml;
@@ -34,8 +35,10 @@ async fn run(
         &args(vec![source], None),
         dir,
         Cache::new(dir.join("test-cache"), 30, 8 * 1024 * 1024),
-        &dir.join("auth.toml"),
-        site_path,
+        &MachineFiles {
+            auth: &dir.join("auth.toml"),
+            policy: site_path,
+        },
     )
     .await
 }
@@ -98,5 +101,39 @@ async fn the_site_policy_is_read_before_the_repository_config() {
         !message.contains("[[llm]]"),
         "reporting the repository's missing provider first would let a broken \
          policy hide behind it; got {message}"
+    );
+}
+
+/// The ceiling reaches the config the run will actually use.
+///
+/// Every other ceiling test calls `SiteConfig::apply` or `clamp_concurrency`
+/// directly, so deleting the call from the orchestrator left the whole suite green
+/// while `max_concurrent_ceiling` constrained nothing - and `doctor`, which
+/// computes its note from the raw TOML tree, went on printing "lowered to 4" for a
+/// clamp that no longer happened. A documented policy that is a no-op and reports
+/// as enforced is the silent pass this layer exists to refuse.
+#[test]
+fn the_site_ceiling_lowers_the_config_the_run_will_use() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::write(
+        dir.path().join("drep.toml"),
+        "[[llm]]\nendpoint = \"http://e/v1\"\nmodel = \"m\"\nmax_concurrent = 8\n",
+    )
+    .expect("drep.toml");
+    let policy = dir.path().join("site.toml");
+    std::fs::write(&policy, "max_concurrent_ceiling = 2\n").expect("site.toml");
+    let site = crate::config::site::load(&policy)
+        .expect("the policy loads")
+        .expect("the policy is present");
+
+    let (config_path, ceilinged) =
+        check::configured(dir.path(), Some(&site)).expect("the config loads");
+    let (_, unconstrained) = check::configured(dir.path(), None).expect("the config loads");
+
+    assert_eq!(config_path, dir.path().join("drep.toml"));
+    assert_eq!(ceilinged.llm[0].max_concurrent, 2);
+    assert_eq!(
+        unconstrained.llm[0].max_concurrent, 8,
+        "the fixture has to arrive above the ceiling for the clamp to mean anything"
     );
 }

@@ -13,6 +13,7 @@ use std::path::{Path, PathBuf};
 use super::super::review_budget::{Budget, Claim};
 use super::marker_refusal::{MARKER, repo};
 use super::support::{check_args, run_drep_with_site};
+use crate::cli::MachineFiles;
 use crate::cli::check;
 use crate::llm::cache::Cache;
 use crate::test_support::{git_add, request_count};
@@ -26,7 +27,16 @@ fn cache_in(dir: &Path) -> Cache {
 async fn check_in(dir: &Path, site: &Path, cache_only: bool) -> anyhow::Result<check::Exit> {
     let mut args = check_args(vec![dir.join("lib.py")], None);
     args.cache_only = cache_only;
-    check::run_against(&args, dir, cache_in(dir), &dir.join("auth.toml"), site).await
+    check::run_against(
+        &args,
+        dir,
+        cache_in(dir),
+        &MachineFiles {
+            auth: &dir.join("auth.toml"),
+            policy: site,
+        },
+    )
+    .await
 }
 
 /// A cached verdict is a model's verdict, so it is not served either.
@@ -127,6 +137,49 @@ async fn json_output_reports_the_refusal_as_unanalyzed() {
     assert_eq!(request_count(&server).await, 0, "stdout: {stdout}");
 }
 
+/// One entry per file drep was asked about, not one per run.
+///
+/// Every other refusal test uses a single-file work set, so "report the refusal"
+/// and "report it for each file" were indistinguishable. A refusal that recorded
+/// only the first file still exits 2, so no exit assertion notices - while a
+/// consumer reconciling the files it asked about against `unanalyzed` reads the
+/// rest as reviewed and clean.
+#[tokio::test]
+async fn every_file_in_a_refused_work_set_is_reported_unanalyzed() {
+    let (dir, server, site) = repo(&[MARKER]).await;
+    std::fs::write(dir.path().join(MARKER), "").expect("marker");
+    for name in ["second.py", "third.py"] {
+        std::fs::write(dir.path().join(name), "x = 1\n").expect("source");
+    }
+
+    let output = run_drep_with_site(
+        dir.path(),
+        &site,
+        &[
+            "check",
+            "lib.py",
+            "second.py",
+            "third.py",
+            "--format",
+            "json",
+        ],
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let parsed: serde_json::Value = serde_json::from_str(&stdout).expect("valid JSON");
+
+    let unanalyzed = parsed["unanalyzed"]
+        .as_array()
+        .expect("unanalyzed is an array");
+    assert_eq!(unanalyzed.len(), 3, "stdout: {stdout}");
+    assert!(
+        unanalyzed
+            .iter()
+            .all(|entry| entry["kind"] == "site_policy_refused"),
+        "each one for the same reason, and the reason is the policy; stdout: {stdout}"
+    );
+    assert_eq!(request_count(&server).await, 0, "stdout: {stdout}");
+}
+
 /// A refused run neither reserves a review round nor resets the cycle.
 ///
 /// Two committed rounds, then an authoritative `--staged` check. A stray `claim()`
@@ -154,8 +207,10 @@ async fn a_refused_run_claims_no_review_round_and_resets_no_cycle() {
         &args,
         dir.path(),
         cache_in(dir.path()),
-        &dir.path().join("auth.toml"),
-        &site,
+        &MachineFiles {
+            auth: &dir.path().join("auth.toml"),
+            policy: &site,
+        },
     )
     .await
     .expect("a refusal is a verdict, not a crash");

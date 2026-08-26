@@ -10,7 +10,7 @@
 //!   most useful.
 //! - **The probes describe what will actually run.** A credential helper is
 //!   invoked with the *expanded* argv, because reporting on a command that still
-//!   contains a literal `${VAULT_REF}` would report on a command `check` never
+//!   contains a literal `${TOKEN_REF}` would report on a command `check` never
 //!   runs.
 //!
 //! Nothing here ever gates. A broken provider, a missing key or a failing helper
@@ -39,12 +39,19 @@ use super::DoctorArgs;
 /// entries here for the same reason everything else in this block is read from
 /// them, and the clamp is printed against the provider it changes rather than
 /// forward-referenced from the policy block above.
+///
+/// `refused` says the policy refuses semantic review in this repository, and its
+/// one effect is that no credential helper runs: `check` establishes that a
+/// refused repository never mints a credential, and a `doctor` that minted one
+/// anyway would spend a real credential call - and trigger whatever approval sits
+/// behind it - for a repository whose review will not happen.
 pub(super) async fn write_llm_section<W: Write>(
     out: &mut W,
     args: &DoctorArgs,
     root: &Path,
     auth_path: &Path,
     site: Option<&config::site::SiteConfig>,
+    refused: bool,
     codex_probe: &dyn Fn() -> Result<crate::llm::codex::CodexStatus, String>,
 ) -> Result<()> {
     writeln!(out)?;
@@ -206,8 +213,13 @@ pub(super) async fn write_llm_section<W: Write>(
                     Err(err) => writeln!(out, "     unavailable: {err}")?,
                 }
             } else {
-                let line =
-                    key_source_line(entry, expanded_command(&loaded, file_index), &store).await;
+                let line = key_source_line(
+                    entry,
+                    expanded_command(&loaded, file_index),
+                    &store,
+                    refused,
+                )
+                .await;
                 writeln!(out, "     key: {line}")?;
             }
         } else {
@@ -245,7 +257,7 @@ pub(super) async fn write_llm_section<W: Write>(
 ///
 /// `None` when the config does not load, because the expanded argv is then
 /// unknown - and the raw one is not a substitute: it can still hold a literal
-/// `${VAULT_REF}`, so probing it would report on a command that is not the one
+/// `${TOKEN_REF}`, so probing it would report on a command that is not the one
 /// `check` runs. Positional over `config.llm`, which keeps every entry including
 /// the disabled ones, so the file index indexes it directly.
 fn expanded_command(
@@ -274,6 +286,7 @@ async fn key_source_line(
     entry: &Value,
     resolved_argv: Option<&[String]>,
     store: &AuthStore,
+    refused: bool,
 ) -> String {
     let api_key = entry.get("api_key").and_then(|v| v.as_str());
 
@@ -307,7 +320,7 @@ async fn key_source_line(
         (KeySource::Command, _) => format!(
             "{} - {}",
             KeySource::Command.label(),
-            key_command_status(resolved_argv).await
+            key_command_status(resolved_argv, refused).await
         ),
         (source, _) => source.label().to_string(),
     }
@@ -320,11 +333,19 @@ async fn key_source_line(
 /// thing `api_key_command` exists to make visible. A helper behind a biometric
 /// or approval prompt will therefore prompt on every `drep doctor`.
 ///
+/// Unless site policy refuses review here, in which case `check` would never run
+/// it either. Reporting that it was not attempted keeps the two commands agreeing
+/// about the same repository, and keeps `doctor` from being the way to make a
+/// refused repository mint a credential.
+///
 /// Never a byte of its output. `crate::auth::probe_key_command` returns `()`
 /// rather than the credential so that is a property of the type here, not a rule
 /// this function has to remember - and the failure it returns names only the
 /// program and the status, for the same reason.
-async fn key_command_status(argv: Option<&[String]>) -> String {
+async fn key_command_status(argv: Option<&[String]>, refused: bool) -> String {
+    if refused {
+        return "not attempted, because site policy refuses semantic review here".to_owned();
+    }
     let Some(argv) = argv else {
         return "not attempted, because the config below does not load".to_owned();
     };

@@ -13,28 +13,36 @@
 //! rather than a convention the orchestrator has to keep. There is no arm holding
 //! both, so no later code can consult a provider for a refused repository by
 //! forgetting a branch.
+//!
+//! Input resolution runs ahead of the probe, because the question is which
+//! repositories this run would send source *from* - see
+//! [`reviewed_directories`]. It reads local files and contacts nothing, so it
+//! comes before everything the ordering above is about.
 
-use std::path::Path;
+use std::collections::BTreeSet;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, anyhow};
 
 use crate::analysis::code_quality::CodeQualityAnalyzer;
 use crate::auth;
+use crate::cli::MachineFiles;
 use crate::config::site::{Refusal, SiteConfig};
 use crate::config::{self, Config};
 use crate::llm::cache::Cache;
 use crate::llm::chain::ProviderChain;
 
+use super::input::Work;
+
 /// Where the files this resolution reads live.
 ///
-/// Grouped rather than passed one by one: `root` and the three paths travel
-/// together everywhere in `check`, and three of them are parameters precisely so
-/// no test reads real machine state.
+/// Grouped rather than passed one by one: `root`, the repository's config and the
+/// two machine files travel together everywhere in `check`, and all of them are
+/// parameters precisely so no test reads real machine state.
 pub(super) struct Locations<'a> {
     pub(super) root: &'a Path,
     pub(super) config: &'a Path,
-    pub(super) auth: &'a Path,
-    pub(super) policy: &'a Path,
+    pub(super) machine: &'a MachineFiles<'a>,
 }
 
 /// The semantic layer for this run.
@@ -56,11 +64,17 @@ pub(super) async fn source(
     locations: &Locations<'_>,
     config: &mut Config,
     site: Option<&SiteConfig>,
+    work: &Work,
     cache: Cache,
     cache_only: bool,
 ) -> Result<Source> {
     if let Some(site) = site
-        && let Some(refusal) = site.refusal_for(locations.root, locations.policy).await?
+        && let Some(refusal) = site
+            .refusal_among(
+                &reviewed_directories(locations.root, work),
+                locations.machine.policy,
+            )
+            .await?
     {
         return Ok(Source::Refused(refusal));
     }
@@ -75,10 +89,10 @@ pub(super) async fn source(
     // the same reason and one more: the chain does not exist yet, so there is
     // nothing to fail over to, and routing around a broken credential path is
     // what hides it.
-    let store = auth::AuthStore::load(locations.auth).with_context(|| {
+    let store = auth::AuthStore::load(locations.machine.auth).with_context(|| {
         format!(
             "could not read the auth store at {}",
-            locations.auth.display()
+            locations.machine.auth.display()
         )
     })?;
     auth::resolve(config, &store).await?;
@@ -99,4 +113,33 @@ pub(super) async fn source(
     Ok(Source::Analyze(
         CodeQualityAnalyzer::new(chain, cache).with_cache_only(cache_only),
     ))
+}
+
+/// Every directory whose repository policy this run has to be evaluated against.
+///
+/// `root` and the directory of each file drep would send. Not `root` alone: the
+/// files reviewed and the repository whose policy is consulted were two different
+/// things, because `files::expand_named` applies no confinement to `root`. Two
+/// invocations reached that, neither of them adversarial - `drep check <absolute
+/// path>` from an editor plugin or a CI step with a fixed working directory, and a
+/// marked repository checked out inside an unmarked one, which the walk descends
+/// into because it prunes `.git` and not the tree beside it. Either way the marked
+/// repository's source went to a provider and the run exited 0.
+///
+/// Joined onto `root` because a diff mode's paths are repository-relative while
+/// paths mode's may be absolute; `Path::join` takes the absolute one whole. A
+/// `BTreeSet` so a work set of two hundred files in one directory is one git
+/// query, and so the order the probe reports a failure in is stable.
+fn reviewed_directories(root: &Path, work: &Work) -> BTreeSet<PathBuf> {
+    let mut directories = BTreeSet::from([root.to_path_buf()]);
+    for hunks in &work.by_file {
+        if let Some(parent) = hunks
+            .first()
+            .map(|first| root.join(&first.file_path))
+            .and_then(|path| path.parent().map(Path::to_path_buf))
+        {
+            directories.insert(parent);
+        }
+    }
+    directories
 }

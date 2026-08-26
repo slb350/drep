@@ -2,6 +2,7 @@
 
 use std::path::Path;
 
+use crate::cli::MachineFiles;
 use crate::cli::doctor::{DoctorArgs, run_at_with_codex};
 use crate::llm::codex::CodexStatus;
 
@@ -14,8 +15,10 @@ async fn report_with_probe(dir: &Path, probe: &dyn Fn() -> Result<CodexStatus, S
     run_at_with_codex(
         &mut out,
         &args,
-        &dir.join("auth.toml"),
-        &dir.join("absent-site.toml"),
+        &MachineFiles {
+            auth: &dir.join("auth.toml"),
+            policy: &dir.join("absent-site.toml"),
+        },
         probe,
     )
     .await

@@ -43,6 +43,15 @@ pub(super) fn check_args(paths: Vec<PathBuf>, fail_on: Option<Severity>) -> Chec
 /// whole suite behave differently from CI - and a policy naming `refuse_markers`
 /// would refuse every one of these runs. Same isolation `HOME` and
 /// `XDG_CACHE_HOME` already provide, for the same reason.
+///
+/// The isolation holds only while no policy is *installed* at the machine path,
+/// because `site::path_from` deliberately refuses to let the environment displace
+/// one that is - a process that could would be a policy the policed developer can
+/// switch off. So on a machine with `/etc/drep/site.toml` (or its macOS sibling)
+/// in place, these subprocess tests read that file. That is the layer working as
+/// designed rather than a fixture to repair: the in-process tests, which are the
+/// ones asserting policy behaviour, pass the path as an argument and never consult
+/// the environment at all.
 pub(super) fn run_drep(dir: &Path, args: &[&str]) -> std::process::Output {
     run_drep_with_site(dir, &dir.join("absent-site.toml"), args)
 }
@@ -51,6 +60,29 @@ pub(super) fn run_drep(dir: &Path, args: &[&str]) -> std::process::Output {
 pub(super) fn run_drep_with_site(
     dir: &Path,
     site_path: &Path,
+    args: &[&str],
+) -> std::process::Output {
+    spawn_drep(dir, site_path, None, args)
+}
+
+/// [`run_drep_with_site`] with `first_on_path` ahead of the inherited `PATH`.
+///
+/// Prepended, not replaced: drep spawns `git` to resolve a repository root, so a
+/// `PATH` holding only the fixture directory would fail for a reason that has
+/// nothing to do with what the test is about.
+pub(super) fn run_drep_with_path_prefix(
+    dir: &Path,
+    site_path: &Path,
+    first_on_path: &Path,
+    args: &[&str],
+) -> std::process::Output {
+    spawn_drep(dir, site_path, Some(first_on_path), args)
+}
+
+fn spawn_drep(
+    dir: &Path,
+    site_path: &Path,
+    first_on_path: Option<&Path>,
     args: &[&str],
 ) -> std::process::Output {
     let bin = assert_cmd::cargo::cargo_bin("drep");
@@ -68,6 +100,15 @@ pub(super) fn run_drep_with_site(
         .env_remove("https_proxy")
         .env_remove("all_proxy")
         .timeout(Duration::from_secs(15));
+    if let Some(first) = first_on_path {
+        let inherited = std::env::var_os("PATH").unwrap_or_default();
+        let mut entries = vec![first.to_path_buf()];
+        entries.extend(std::env::split_paths(&inherited));
+        command.env(
+            "PATH",
+            std::env::join_paths(entries).expect("a joinable PATH"),
+        );
+    }
     command.output().expect("drep spawns and finishes")
 }
 

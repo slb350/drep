@@ -178,16 +178,21 @@ pub(crate) async fn run(argv: &[String], timeout: Duration) -> Result<String, Ke
         });
     }
 
-    // Taken whole, with only trailing whitespace removed: every helper that
-    // prints a token prints a newline after it. Deliberately no scan for a
-    // line, a prefix or a token-shaped pattern - a helper's output is what its
-    // author chose to emit, and picking a substring out of it would send a
-    // different credential than the one the helper produced.
+    // Taken whole, with surrounding whitespace removed: every helper that prints
+    // a token prints a newline after it, and a leading space is one `printf ' %s'`
+    // or one `cut` field away. Both ends, matching `AuthStore::set` on a pasted
+    // key - trimming only the tail accepted `" sk-live-..."`, which passes the
+    // control-character guard below and is then stripped again by the transport,
+    // so the value sent was not the value checked and the endpoint answered 401.
+    // Deliberately no scan for a line, a prefix or a token-shaped pattern: a
+    // helper's output is what its author chose to emit, and picking a substring
+    // out of it would send a different credential than the one the helper
+    // produced.
     let key = String::from_utf8(output.stdout)
         .map_err(|_| KeyCommandError::NotUtf8 {
             program: program.clone(),
         })?
-        .trim_end()
+        .trim()
         .to_owned();
 
     if key.is_empty() {

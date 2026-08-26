@@ -41,6 +41,7 @@ use crate::analysis::acknowledgements;
 use crate::analysis::findings::{self, Finding, Severity};
 use crate::analysis::result::{FailureReason, union_failures};
 use crate::auth;
+use crate::cli::MachineFiles;
 use crate::config;
 use crate::llm::cache::Cache;
 use crate::llm::chain::ProviderChain;
@@ -142,8 +143,10 @@ pub(crate) async fn run_with(args: &CheckArgs, root: &Path, cache: Cache) -> Res
         args,
         root,
         cache,
-        &auth::default_path()?,
-        &config::site::default_path(),
+        &MachineFiles {
+            auth: &auth::default_path()?,
+            policy: &config::site::default_path(),
+        },
     )
     .await
 }
@@ -156,43 +159,37 @@ pub(crate) async fn run_with(args: &CheckArgs, root: &Path, cache: Cache) -> Res
 /// differently there than in CI. `init::run_with` and `auth::run_at` already
 /// thread the store for that reason; the policy file follows the same seam
 /// rather than being read inside the call.
+///
+/// They arrive as one [`MachineFiles`] rather than two `&Path`
+/// positionals because the two are the same type and a transposition compiles;
+/// see that struct for what the swap silently disables.
 pub(crate) async fn run_against(
     args: &CheckArgs,
     root: &Path,
     cache: Cache,
-    auth_path: &Path,
-    site_path: &Path,
+    machine: &MachineFiles<'_>,
 ) -> Result<Exit> {
     // Read before the repository's own config, and before a byte of source. A
     // machine whose policy file is broken must not then run whatever the
     // repository says, so a policy failure outranks a repo-config failure. No
     // `.with_context`: unlike `ConfigError::Io`, the message already names the
     // file and states the consequence, and a context line would say it twice.
-    let site = config::site::load(site_path)?;
+    let site = config::site::load(machine.policy)?;
 
-    // Anchored on `root`, not the process cwd. `config::default_config_path()`
-    // resolves against the cwd, which would make `root` a half-truth: input
-    // resolution would read one directory and configuration another. The CLI
-    // passes ".", so production behaviour is unchanged, and a test can point
-    // the whole run at a `TempDir` without chdir-ing a shared process.
-    let default_config_path = config::default_config_path();
-    if default_config_path.is_absolute() {
-        return Err(anyhow!(
-            "default config path must be repository-relative, got {}",
-            default_config_path.display()
-        ));
-    }
-    let config_path = root.join(default_config_path);
-    let mut config = config::load(&config_path)
-        .with_context(|| format!("could not load {}", config_path.display()))?;
+    let (config_path, mut config) = configured(root, site.as_ref())?;
 
-    // Applied immediately, before anything reads a provider: a checkout may
-    // lower its own concurrency but not raise it past what the site allows.
-    // Nothing is printed here - a clamp is not an error, and `doctor` is where
-    // it is reported.
-    if let Some(site) = &site {
-        site.apply(&mut config);
-    }
+    // Resolved *after* the config, because a missing config is fatal and
+    // resolution is not free: in `--staged` mode it spawns git, and in paths
+    // mode it reads every target file into memory. Discovering "no drep.toml"
+    // afterwards means paying for all of it and throwing it away.
+    //
+    // And *before* the refusal, because the refusal is a question about the
+    // files this run would review rather than about `root` alone - see
+    // `refusal::reviewed_directories`. Resolution reads local files and contacts
+    // nothing, so the ordering the refusal owns is untouched by it.
+    let work = input::resolve(args, root)
+        .await
+        .with_context(|| format!("could not resolve input under {}", root.display()))?;
 
     // Fill in the keys the file left unset, and build the analyzer - unless site
     // policy refuses review of this repository, in which case none of that
@@ -202,23 +199,16 @@ pub(crate) async fn run_against(
         &refusal::Locations {
             root,
             config: &config_path,
-            auth: auth_path,
-            policy: site_path,
+            machine,
         },
         &mut config,
         site.as_ref(),
+        &work,
         cache.clone(),
         args.cache_only || args.push_gate || authoritative,
     )
     .await?;
 
-    // Resolved *after* the config, because a missing config is fatal and
-    // resolution is not free: in `--staged` mode it spawns git, and in paths
-    // mode it reads every target file into memory. Discovering "no drep.toml"
-    // afterwards means paying for all of it and throwing it away.
-    let work = input::resolve(args, root)
-        .await
-        .with_context(|| format!("could not resolve input under {}", root.display()))?;
     let acknowledgements = acknowledgements::Store::load(root)?;
 
     let effective_limit = args.max_review_rounds.unwrap_or(config.max_review_rounds);
@@ -365,6 +355,47 @@ type Deterministic = (
     BTreeMap<PathBuf, FailureReason>,
     BTreeSet<PathBuf>,
 );
+
+/// `drep.toml` as this run will use it: loaded from under `root`, then lowered to
+/// what the site allows.
+///
+/// One named function rather than three steps inside `run_against`, so a test can
+/// observe the clamp reaching a config a real run would use. Every ceiling test
+/// called [`config::site::SiteConfig::apply`] directly, so deleting the call from
+/// the orchestrator left the whole suite green while `max_concurrent_ceiling`
+/// constrained nothing - and `doctor`, which computes its note from the raw TOML
+/// tree, went on reporting the clamp as enforced.
+///
+/// The path is returned beside the config because the caller needs it for the
+/// no-providers error, which names the file the user has to edit.
+fn configured(
+    root: &Path,
+    site: Option<&config::site::SiteConfig>,
+) -> Result<(PathBuf, config::Config)> {
+    // Anchored on `root`, not the process cwd. `config::default_config_path()`
+    // resolves against the cwd, which would make `root` a half-truth: input
+    // resolution would read one directory and configuration another. The CLI
+    // passes ".", so production behaviour is unchanged, and a test can point
+    // the whole run at a `TempDir` without chdir-ing a shared process.
+    let default_config_path = config::default_config_path();
+    if default_config_path.is_absolute() {
+        return Err(anyhow!(
+            "default config path must be repository-relative, got {}",
+            default_config_path.display()
+        ));
+    }
+    let config_path = root.join(default_config_path);
+    let mut config = config::load(&config_path)
+        .with_context(|| format!("could not load {}", config_path.display()))?;
+
+    // Applied before anything reads a provider: a checkout may lower its own
+    // concurrency but not raise it past what the site allows. Nothing is printed
+    // here - a clamp is not an error, and `doctor` is where it is reported.
+    if let Some(site) = site {
+        site.apply(&mut config);
+    }
+    Ok((config_path, config))
+}
 
 /// Both legs, for a repository site policy permits review of.
 ///

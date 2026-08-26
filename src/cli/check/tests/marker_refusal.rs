@@ -16,7 +16,10 @@ use std::path::{Path, PathBuf};
 
 use wiremock::MockServer;
 
-use super::support::{check_args, run_drep_with_site, write_site_policy};
+use super::support::{
+    check_args, run_drep_with_path_prefix, run_drep_with_site, write_site_policy,
+};
+use crate::cli::MachineFiles;
 use crate::cli::check;
 use crate::llm::cache::Cache;
 use crate::test_support::{
@@ -51,12 +54,27 @@ pub(super) async fn repo(markers: &[&str]) -> (tempfile::TempDir, MockServer, Pa
 /// to read the output uses [`run_drep_with_site`] instead, and one that needs only
 /// the verdict and the request count is cheaper this way.
 pub(super) async fn check_in(dir: &Path, root: &Path, site: &Path) -> anyhow::Result<check::Exit> {
+    check_paths(dir, root, site, vec![root.join("lib.py")]).await
+}
+
+/// [`check_in`] over an explicit path list.
+///
+/// Separate because the path list is the whole point of the scope tests next
+/// door: the files a run reviews are not always the ones under `root`.
+pub(super) async fn check_paths(
+    dir: &Path,
+    root: &Path,
+    site: &Path,
+    paths: Vec<PathBuf>,
+) -> anyhow::Result<check::Exit> {
     check::run_against(
-        &check_args(vec![root.join("lib.py")], None),
+        &check_args(paths, None),
         root,
         Cache::new(dir.join("test-cache"), 30, 8 * 1024 * 1024),
-        &dir.join("auth.toml"),
-        site,
+        &MachineFiles {
+            auth: &dir.join("auth.toml"),
+            policy: site,
+        },
     )
     .await
 }
@@ -281,6 +299,11 @@ async fn a_refused_repository_never_runs_its_key_command() {
 /// source must never reach a model. On a machine without the CLI installed the
 /// probe also fails, and a refused run reporting *that* would be reporting the
 /// wrong thing entirely.
+///
+/// A fake `codex` at the front of `PATH` is what makes the property checkable
+/// either way: the exit code alone is 2 on a machine with the real CLI installed
+/// whether the refusal came first or the codex run simply failed, and 2 on a
+/// machine without it because the probe errored. The sentinel says which.
 #[tokio::test]
 async fn a_codex_backend_is_refused_without_building_the_chain() {
     let (dir, _server, site) = repo(&[MARKER]).await;
@@ -290,10 +313,24 @@ async fn a_codex_backend_is_refused_without_building_the_chain() {
         "[[llm]]\nbackend = \"codex\"\nmodel = \"m\"\n",
     )
     .expect("drep.toml");
+    let fake_bin = dir.path().join("fake-bin");
+    std::fs::create_dir(&fake_bin).expect("fixture PATH entry");
+    let sentinel = dir.path().join("codex-ran");
+    write_executable(
+        &fake_bin.join("codex"),
+        format!(
+            "#!/bin/sh\nprintf '%s' ran > {}\nexit 0\n",
+            sentinel.to_string_lossy()
+        ),
+    );
 
-    let exit = check_in(dir.path(), dir.path(), &site)
-        .await
-        .expect("the refusal answers before the backend is built");
+    let output = run_drep_with_path_prefix(dir.path(), &site, &fake_bin, &["check", "lib.py"]);
+    let stdout = String::from_utf8_lossy(&output.stdout);
 
-    assert_eq!(exit, check::Exit::Unanalyzed);
+    assert_eq!(output.status.code(), Some(2), "stdout: {stdout}");
+    assert!(
+        !sentinel.exists(),
+        "the refusal has to answer before the backend is built, not after; \
+         stdout: {stdout}"
+    );
 }

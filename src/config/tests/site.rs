@@ -178,12 +178,19 @@ fn a_site_file_that_names_no_markers_carries_an_empty_list() {
 /// A marker that is not a filename matches no file, so the policy it declares
 /// refuses nothing - the silent no-op requirement 3 exists to refuse, one field
 /// down.
+///
+/// The last two are the reason `names_one_file` compares back against the string
+/// it was given rather than counting components: `"marker/"` and `"./marker"` both
+/// parse to one component named `marker`, so a policy naming either would look for
+/// a file whose name is not the one the administrator wrote.
 #[test]
 fn a_refuse_marker_that_is_not_a_filename_is_rejected() {
     for body in [
         "refuse_markers = [\"\"]\n",
         "refuse_markers = [\"policy/.drep-no-llm\"]\n",
         "refuse_markers = [\"..\"]\n",
+        "refuse_markers = [\"marker/\"]\n",
+        "refuse_markers = [\"./marker\"]\n",
     ] {
         let temp = tempfile::tempdir().expect("tempdir");
         let path = write_site(&temp, body);
@@ -203,7 +210,7 @@ fn a_refuse_marker_that_is_not_a_filename_is_rejected() {
 /// privilege is not a policy file.
 #[test]
 fn the_default_site_path_is_machine_wide_rather_than_per_user() {
-    let path = site::path_from(None);
+    let path = site::path_from(None, site::machine_path());
 
     #[cfg(target_os = "macos")]
     assert_eq!(
@@ -223,11 +230,67 @@ fn the_default_site_path_is_machine_wide_rather_than_per_user() {
     }
 }
 
+/// The override names the policy on a machine that installed none.
+///
+/// Which is what an installation that puts the file somewhere else needs, and
+/// what every test in the suite needs: reading the real machine path would make
+/// this repository behave differently on a machine carrying a fleet policy than
+/// it does in CI.
 #[test]
-fn the_site_path_comes_from_the_environment_when_set() {
-    let path = site::path_from(Some(OsString::from("/tmp/drep-policy/site.toml")));
+fn the_site_path_comes_from_the_environment_when_the_machine_has_no_policy() {
+    let temp = tempfile::tempdir().expect("tempdir");
+
+    let path = site::path_from(
+        Some(OsString::from("/tmp/drep-policy/site.toml")),
+        &temp.path().join("no-policy-installed.toml"),
+    );
 
     assert_eq!(path, std::path::Path::new("/tmp/drep-policy/site.toml"));
+}
+
+/// An installed policy cannot be displaced by the environment of the process it
+/// constrains.
+///
+/// Otherwise the whole layer is one `export` away from off: the developer
+/// `refuse_markers` constrains points the variable at an empty file, the marker
+/// list is empty, the probe short-circuits before git is spawned, and the run
+/// sends the repository's source and exits 0. `ConfigError::SiteOnlyField`
+/// refuses that field in `drep.toml` on the grounds that a refusal a developer
+/// can delete is not one, and a per-process override is a way to delete it.
+#[test]
+fn an_override_cannot_displace_an_installed_machine_policy() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let installed = write_site(&temp, "refuse_markers = [\".drep-no-llm\"]\n");
+    let scratch = temp.path().join("scratch.toml");
+    std::fs::write(&scratch, "").expect("an empty policy is the bypass");
+
+    let path = site::path_from(Some(scratch.clone().into_os_string()), &installed);
+
+    assert_eq!(
+        path, installed,
+        "the machine's own policy is the policy; an override that could replace \
+         it is a policy the policed developer can switch off"
+    );
+}
+
+/// The name is what claims to be the policy, not what it resolves to.
+///
+/// `symlink_metadata`, matching the marker probe: following the link would let a
+/// dangling symlink at the machine path hand the decision back to the
+/// environment, which is a way to disable the policy while appearing to install
+/// one.
+#[cfg(unix)]
+#[test]
+fn a_dangling_symlink_at_the_machine_path_still_holds_the_decision() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let installed = temp.path().join("site.toml");
+    std::os::unix::fs::symlink(temp.path().join("gone.toml"), &installed).expect("symlink");
+    let scratch = temp.path().join("scratch.toml");
+    std::fs::write(&scratch, "").expect("scratch policy");
+
+    let path = site::path_from(Some(scratch.into_os_string()), &installed);
+
+    assert_eq!(path, installed);
 }
 
 /// `DREP_SITE_CONFIG=` naming nothing must not switch policy off: a set-but-empty
@@ -235,9 +298,12 @@ fn the_site_path_comes_from_the_environment_when_set() {
 /// that fails to load.
 #[test]
 fn an_empty_override_falls_back_to_the_machine_path_rather_than_disabling_policy() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let machine = temp.path().join("no-policy-installed.toml");
+
     assert_eq!(
-        site::path_from(Some(OsString::new())),
-        site::path_from(None)
+        site::path_from(Some(OsString::new()), &machine),
+        site::path_from(None, &machine)
     );
 }
 

@@ -223,8 +223,9 @@ pub enum ConfigError {
     /// developer can delete is not one.
     #[error(
         "{path} sets `{field}`, which is machine site policy and is read only from the site \
-         policy file; this file is gitignored by `drep init`, so a copy here would be \
-         per-developer and could be deleted by the developer it constrains"
+         policy file at {machine}; `drep init` gitignores {path}, so a copy of the field there \
+         would be per-developer and could be deleted by the developer it constrains",
+        machine = site::machine_path().display()
     )]
     SiteOnlyField { path: PathBuf, field: &'static str },
 }

@@ -22,6 +22,7 @@ use anyhow::Result;
 use clap::Args;
 
 use crate::Exit;
+use crate::cli::MachineFiles;
 use crate::files;
 use crate::languages;
 
@@ -69,8 +70,10 @@ pub async fn run_to<W: Write>(out: &mut W, args: &DoctorArgs) -> Result<Exit> {
     run_at(
         out,
         args,
-        &crate::auth::default_path()?,
-        &crate::config::site::default_path(),
+        &MachineFiles {
+            auth: &crate::auth::default_path()?,
+            policy: &crate::config::site::default_path(),
+        },
     )
     .await
 }
@@ -79,29 +82,22 @@ pub async fn run_to<W: Write>(out: &mut W, args: &DoctorArgs) -> Result<Exit> {
 ///
 /// Both are parameters for the same reason `check`, `init` and `auth` take the
 /// store: they are machine-level state, and a test reading the real ones reports
-/// whatever the developer happens to have installed.
+/// whatever the developer happens to have installed. They arrive as one
+/// [`MachineFiles`] because two adjacent `&Path` positionals are a
+/// transposition the compiler cannot catch.
 pub async fn run_at<W: Write>(
     out: &mut W,
     args: &DoctorArgs,
-    auth_path: &Path,
-    site_path: &Path,
+    machine: &MachineFiles<'_>,
 ) -> Result<Exit> {
-    run_at_with_codex(
-        out,
-        args,
-        auth_path,
-        site_path,
-        &crate::llm::codex::current_status,
-    )
-    .await
+    run_at_with_codex(out, args, machine, &crate::llm::codex::current_status).await
 }
 
 /// [`run_at`] with the Codex readiness diagnostic injected for tests.
 pub(crate) async fn run_at_with_codex<W: Write>(
     out: &mut W,
     args: &DoctorArgs,
-    auth_path: &Path,
-    site_path: &Path,
+    machine: &MachineFiles<'_>,
     codex_probe: &dyn Fn() -> Result<crate::llm::codex::CodexStatus, String>,
 ) -> Result<Exit> {
     // `canonicalize` can fail (the path does not exist, or a parent is
@@ -128,7 +124,7 @@ pub(crate) async fn run_at_with_codex<W: Write>(
         // one whose languages drep does not register - is exactly where they
         // are most likely to be asking it. Returning here answered it with
         // silence.
-        write_configuration(out, args, &root, auth_path, site_path, codex_probe).await?;
+        write_configuration(out, args, &root, machine, codex_probe).await?;
         return Ok(Exit::Clean);
     }
 
@@ -138,7 +134,7 @@ pub(crate) async fn run_at_with_codex<W: Write>(
     // tool - each call stats the config files and walks PATH - and, worse,
     // left room for the summary to disagree with the lines above it.
     let missing = write_tools_section(out, &buckets, &root)?;
-    write_configuration(out, args, &root, auth_path, site_path, codex_probe).await?;
+    write_configuration(out, args, &root, machine, codex_probe).await?;
 
     // Deliberately last, after the LLM block: the user reads their coverage
     // report before being told what is wrong with it.
@@ -162,22 +158,36 @@ pub(crate) async fn run_at_with_codex<W: Write>(
 /// policy that would behave differently at the gate. Its error is carried rather
 /// than propagated: `drep check` fails closed on a policy it cannot evaluate, and
 /// this is the command someone runs to find out why.
+///
+/// The answer is then handed to the LLM block, because a refusal governs it too:
+/// `check` never mints a credential for a refused repository, and a `doctor` that
+/// ran the helper anyway would prompt for an approval - and spend a real
+/// credential call - on behalf of a repository whose review is refused.
 async fn write_configuration<W: Write>(
     out: &mut W,
     args: &DoctorArgs,
     root: &Path,
-    auth_path: &Path,
-    site_path: &Path,
+    machine: &MachineFiles<'_>,
     codex_probe: &dyn Fn() -> Result<crate::llm::codex::CodexStatus, String>,
 ) -> Result<()> {
-    let site = crate::config::site::load(site_path);
+    let site = crate::config::site::load(machine.policy);
     let in_effect = site.as_ref().ok().and_then(Option::as_ref);
     let refusal = match in_effect {
-        Some(site) => site.refusal_for(root, site_path).await,
+        Some(site) => site.refusal_for(root, machine.policy).await,
         None => Ok(None),
     };
-    site_section::write_site_section(out, site_path, &site, &refusal)?;
-    llm::write_llm_section(out, args, root, auth_path, in_effect, codex_probe).await
+    site_section::write_site_section(out, machine.policy, &site, &refusal)?;
+    let refused = matches!(refusal, Ok(Some(_)));
+    llm::write_llm_section(
+        out,
+        args,
+        root,
+        machine.auth,
+        in_effect,
+        refused,
+        codex_probe,
+    )
+    .await
 }
 
 /// Build the trailing "configured tool(s) are missing" line, or `None` when

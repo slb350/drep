@@ -8,6 +8,7 @@
 
 use std::path::Path;
 
+use crate::cli::MachineFiles;
 use crate::cli::doctor::{DoctorArgs, run_at};
 use crate::test_support::write_executable;
 
@@ -18,14 +19,16 @@ fn args(dir: &Path) -> DoctorArgs {
     }
 }
 
-/// Run `doctor` against `dir` with an auth store scoped to it.
-async fn report_for(dir: &Path) -> String {
+/// Run `doctor` against `dir` with an auth store and a policy file scoped to it.
+async fn report_with_policy(dir: &Path, policy: &Path) -> String {
     let mut out = Vec::new();
     let exit = run_at(
         &mut out,
         &args(dir),
-        &dir.join("auth.toml"),
-        &dir.join("absent-site.toml"),
+        &MachineFiles {
+            auth: &dir.join("auth.toml"),
+            policy,
+        },
     )
     .await
     .expect("run_at");
@@ -35,6 +38,11 @@ async fn report_for(dir: &Path) -> String {
         "a credential diagnosis is never a gate failure"
     );
     String::from_utf8(out).expect("utf8")
+}
+
+/// Run `doctor` against `dir` with an auth store scoped to it.
+async fn report_for(dir: &Path) -> String {
+    report_with_policy(dir, &dir.join("absent-site.toml")).await
 }
 
 /// Write a `drep.toml` whose only provider mints its key by running `argv`.
@@ -116,5 +124,72 @@ async fn a_command_naming_an_unset_variable_is_reported_as_not_attempted() {
     assert!(
         report.contains("DREP_DOCTOR_KEY_CMD_UNSET is NOT set"),
         "and the reader is told which variable to export: {report}"
+    );
+}
+
+/// A repository site policy refuses is a repository `doctor` mints nothing for.
+///
+/// `check` establishes that a refused repository never runs its `api_key_command`,
+/// and the two commands have to agree about the same checkout: a `doctor` that ran
+/// the helper anyway would spend a real credential call - and trigger whatever
+/// biometric or approval prompt sits behind it - on behalf of a review that will
+/// not happen. The sentinel is what makes "did not run" checkable; asserting on the
+/// wording alone would also pass if the helper ran and its result was discarded.
+#[tokio::test]
+async fn a_refused_repository_is_not_probed_for_a_credential() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    crate::test_support::git_init(dir.path());
+    let sentinel = dir.path().join("command-ran");
+    let stub = dir.path().join("print-token");
+    write_executable(
+        &stub,
+        format!(
+            "#!/bin/sh\nprintf '%s' ran > {}\nprintf '%s' tok\n",
+            sentinel.to_string_lossy()
+        ),
+    );
+    write_config_running(dir.path(), &format!("{:?}", stub.to_string_lossy()));
+    let policy = dir.path().join("site.toml");
+    std::fs::write(&policy, "refuse_markers = [\".drep-no-llm\"]\n").expect("site.toml");
+    std::fs::write(dir.path().join(".drep-no-llm"), "").expect("marker");
+
+    let report = report_with_policy(dir.path(), &policy).await;
+
+    assert!(
+        !sentinel.exists(),
+        "the helper ran for a repository whose review is refused: {report}"
+    );
+    assert!(
+        report.contains("not attempted, because site policy refuses semantic review here"),
+        "and the reader has to be told why the line says nothing about the helper: {report}"
+    );
+}
+
+/// The discriminating half: the same fixture without the marker really does probe.
+///
+/// Without it, "never probe when a policy names markers" passes the test above.
+#[tokio::test]
+async fn an_unmarked_repository_under_a_marker_policy_is_still_probed() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    crate::test_support::git_init(dir.path());
+    let sentinel = dir.path().join("command-ran");
+    let stub = dir.path().join("print-token");
+    write_executable(
+        &stub,
+        format!(
+            "#!/bin/sh\nprintf '%s' ran > {}\nprintf '%s' tok\n",
+            sentinel.to_string_lossy()
+        ),
+    );
+    write_config_running(dir.path(), &format!("{:?}", stub.to_string_lossy()));
+    let policy = dir.path().join("site.toml");
+    std::fs::write(&policy, "refuse_markers = [\".drep-no-llm\"]\n").expect("site.toml");
+
+    let report = report_with_policy(dir.path(), &policy).await;
+
+    assert!(sentinel.exists(), "got {report}");
+    assert!(
+        report.contains("the command ran and printed a credential"),
+        "got {report}"
     );
 }

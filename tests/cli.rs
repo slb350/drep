@@ -21,13 +21,23 @@ fn drep() -> Command {
     command
 }
 
-/// A path in the temporary directory that no test writes.
+/// A path no test writes, in a directory only this user can write.
 ///
-/// Not the empty string: `DREP_SITE_CONFIG=` deliberately falls back to the
+/// Not `std::env::temp_dir()`: on Linux that is world-writable `/tmp`, so a
+/// leftover file or another user creating one predictable name would supply a real
+/// policy to this whole suite - garbage content exits 2 through
+/// `SiteConfigError::Parse`, and `refuse_markers` exits 2 through
+/// `MarkerRootUnresolved`, since none of these fixtures is a repository.
+/// `CARGO_TARGET_TMPDIR` is cargo's own per-crate scratch directory for
+/// integration tests, and lives under `target/`.
+///
+/// Not the empty string either: `DREP_SITE_CONFIG=` deliberately falls back to the
 /// machine path rather than switching enforcement off, so an empty override would
-/// isolate nothing.
+/// isolate nothing. Nor does any override displace a policy actually installed at
+/// the machine path - on a machine carrying one, these tests read it, which is the
+/// layer working as designed.
 fn absent_site_policy() -> std::path::PathBuf {
-    std::env::temp_dir().join("drep-tests-absent-site-policy.toml")
+    std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("absent-site-policy.toml")
 }
 
 /// A directory holding one file, for the `lint-docs` and `check` cases.

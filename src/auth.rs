@@ -359,6 +359,14 @@ fn lower_authority(rest: &str) -> String {
 /// chain's demotion logic reads as an endpoint problem. There is deliberately no
 /// disk cache and no TTL behind that: drep is a short-lived process, so a
 /// credential written to disk buys nothing and adds a file worth stealing.
+///
+/// Once per process for every *enabled* entry, whether or not the chain reaches
+/// it. Deferring to first use would put credential resolution inside the request
+/// path, and "a broken credential is fatal rather than a provider drep quietly
+/// asks instead" holds precisely because resolution happens before the chain
+/// exists. An unset `${VAR}` in the same position is equally fatal, one layer up,
+/// in `ConfigError::EnvVarUnset`. `enabled = false` is the control for a fallback
+/// whose helper should not be spent.
 pub async fn resolve(config: &mut Config, store: &AuthStore) -> Result<Vec<KeySource>, AuthError> {
     let mut sources = Vec::with_capacity(config.llm.len());
     for (index, llm) in config.llm.iter_mut().enumerate() {
