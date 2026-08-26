@@ -26,6 +26,7 @@ use crate::files;
 use crate::languages;
 
 mod llm;
+mod site_section;
 
 /// The header underline, exactly 60 characters wide. `write!` cannot express
 /// the count cleanly, and the spec pins the exact width: a `=`-string of any
@@ -65,16 +66,34 @@ pub(crate) fn is_broken_pipe(err: &anyhow::Error) -> bool {
 
 /// `run`, writing to an arbitrary sink so tests can capture the report.
 pub async fn run_to<W: Write>(out: &mut W, args: &DoctorArgs) -> Result<Exit> {
-    run_at(out, args, &crate::auth::default_path()?).await
+    run_at(
+        out,
+        args,
+        &crate::auth::default_path()?,
+        &crate::config::site::default_path(),
+    )
+    .await
 }
 
-/// `run_to`, against a named auth store.
+/// `run_to`, against a named auth store and a named site policy file.
 ///
-/// A parameter for the same reason `check`, `init` and `auth` take one: the
-/// store is user-level state, and a test reading the real one reports whatever
-/// the developer happens to have stored.
-pub async fn run_at<W: Write>(out: &mut W, args: &DoctorArgs, auth_path: &Path) -> Result<Exit> {
-    run_at_with_codex(out, args, auth_path, &crate::llm::codex::current_status).await
+/// Both are parameters for the same reason `check`, `init` and `auth` take the
+/// store: they are machine-level state, and a test reading the real ones reports
+/// whatever the developer happens to have installed.
+pub async fn run_at<W: Write>(
+    out: &mut W,
+    args: &DoctorArgs,
+    auth_path: &Path,
+    site_path: &Path,
+) -> Result<Exit> {
+    run_at_with_codex(
+        out,
+        args,
+        auth_path,
+        site_path,
+        &crate::llm::codex::current_status,
+    )
+    .await
 }
 
 /// [`run_at`] with the Codex readiness diagnostic injected for tests.
@@ -82,6 +101,7 @@ pub(crate) async fn run_at_with_codex<W: Write>(
     out: &mut W,
     args: &DoctorArgs,
     auth_path: &Path,
+    site_path: &Path,
     codex_probe: &dyn Fn() -> Result<crate::llm::codex::CodexStatus, String>,
 ) -> Result<Exit> {
     // `canonicalize` can fail (the path does not exist, or a parent is
@@ -103,12 +123,12 @@ pub(crate) async fn run_at_with_codex<W: Write>(
     if buckets.is_empty() {
         writeln!(out)?;
         writeln!(out, "No source files drep recognises were found here.")?;
-        // The LLM section still prints. "Is my model configured?" is the
-        // question a new user most needs answered, and a docs-only repo - or
+        // The configuration sections still print. "Is my model configured?" is
+        // the question a new user most needs answered, and a docs-only repo - or
         // one whose languages drep does not register - is exactly where they
         // are most likely to be asking it. Returning here answered it with
         // silence.
-        llm::write_llm_section(out, args, &root, auth_path, codex_probe).await?;
+        write_configuration(out, args, &root, auth_path, site_path, codex_probe).await?;
         return Ok(Exit::Clean);
     }
 
@@ -118,7 +138,7 @@ pub(crate) async fn run_at_with_codex<W: Write>(
     // tool - each call stats the config files and walks PATH - and, worse,
     // left room for the summary to disagree with the lines above it.
     let missing = write_tools_section(out, &buckets, &root)?;
-    llm::write_llm_section(out, args, &root, auth_path, codex_probe).await?;
+    write_configuration(out, args, &root, auth_path, site_path, codex_probe).await?;
 
     // Deliberately last, after the LLM block: the user reads their coverage
     // report before being told what is wrong with it.
@@ -128,6 +148,26 @@ pub(crate) async fn run_at_with_codex<W: Write>(
     }
 
     Ok(Exit::Clean)
+}
+
+/// The two configuration blocks, in the one order they are ever printed in.
+///
+/// Called from both report shapes so that order is stated once. The policy block
+/// comes first because it governs the chain the block below it describes, and the
+/// policy file is loaded once here rather than in each block: two loads of the
+/// same file could disagree about it within one report.
+async fn write_configuration<W: Write>(
+    out: &mut W,
+    args: &DoctorArgs,
+    root: &Path,
+    auth_path: &Path,
+    site_path: &Path,
+    codex_probe: &dyn Fn() -> Result<crate::llm::codex::CodexStatus, String>,
+) -> Result<()> {
+    let site = crate::config::site::load(site_path);
+    site_section::write_site_section(out, site_path, &site)?;
+    let in_effect = site.as_ref().ok().and_then(Option::as_ref);
+    llm::write_llm_section(out, args, root, auth_path, in_effect, codex_probe).await
 }
 
 /// Build the trailing "configured tool(s) are missing" line, or `None` when

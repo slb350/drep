@@ -225,23 +225,38 @@ pub const CACHE_MAX_BYTES: u64 = 256 * 1024 * 1024;
 /// from one test satisfied another: an unreachable-endpoint test once exited 0
 /// because a previous test had cached a clean response for the same payload.
 pub(crate) async fn run_with(args: &CheckArgs, root: &Path, cache: Cache) -> Result<Exit> {
-    run_against(args, root, cache, &auth::default_path()?).await
+    run_against(
+        args,
+        root,
+        cache,
+        &auth::default_path()?,
+        &config::site::default_path(),
+    )
+    .await
 }
 
-/// `run_with`, against a named auth store.
+/// `run_with`, against a named auth store and a named site policy file.
 ///
-/// The store is user-level state outside the repository, so it is a parameter
-/// for the same reason `root` is one: a test using the real one reads whatever
-/// the developer has stored, and a config that omits `api_key` would then
-/// behave differently on their machine than in CI. `init::run_with` and
-/// `auth::run_at` already thread it for that reason; this was the one command
-/// that did not.
+/// Both are machine-level state outside the repository, so both are parameters
+/// for the same reason `root` is one: a test using the real ones reads whatever
+/// the developer's machine happens to hold, and a repository would then behave
+/// differently there than in CI. `init::run_with` and `auth::run_at` already
+/// thread the store for that reason; the policy file follows the same seam
+/// rather than being read inside the call.
 pub(crate) async fn run_against(
     args: &CheckArgs,
     root: &Path,
     cache: Cache,
     auth_path: &Path,
+    site_path: &Path,
 ) -> Result<Exit> {
+    // Read before the repository's own config, and before a byte of source. A
+    // machine whose policy file is broken must not then run whatever the
+    // repository says, so a policy failure outranks a repo-config failure. No
+    // `.with_context`: unlike `ConfigError::Io`, the message already names the
+    // file and states the consequence, and a context line would say it twice.
+    let site = config::site::load(site_path)?;
+
     // Anchored on `root`, not the process cwd. `config::default_config_path()`
     // resolves against the cwd, which would make `root` a half-truth: input
     // resolution would read one directory and configuration another. The CLI
@@ -257,6 +272,14 @@ pub(crate) async fn run_against(
     let config_path = root.join(default_config_path);
     let mut config = config::load(&config_path)
         .with_context(|| format!("could not load {}", config_path.display()))?;
+
+    // Applied immediately, before anything reads a provider: a checkout may
+    // lower its own concurrency but not raise it past what the site allows.
+    // Nothing is printed here - a clamp is not an error, and `doctor` is where
+    // it is reported.
+    if let Some(site) = &site {
+        site.apply(&mut config);
+    }
 
     // Fill in the keys the file left unset from the user-level store, and run any
     // `api_key_command` an entry declares. An explicit `api_key` in `drep.toml`

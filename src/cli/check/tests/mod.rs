@@ -16,5 +16,6 @@ mod output;
 mod resolution;
 mod review_budget;
 mod review_rounds;
+mod site_policy;
 pub(super) mod support;
 mod unanalyzed_json;

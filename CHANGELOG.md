@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- A machine-level policy file above `drep.toml`: `DREP_SITE_CONFIG` if set,
+  else `/Library/Application Support/drep/site.toml` on macOS and
+  `/etc/drep/site.toml` elsewhere. A repository checkout can tighten what the
+  site allows but never loosen it. `max_concurrent_ceiling` lowers every enabled
+  provider's `max_concurrent`, applied to the effective value so a repository
+  cannot raise itself by deleting the line. A missing file is no policy and is
+  not an error; a file that exists and cannot be read or parsed exits 2 rather
+  than running unenforced, because a policy that silently fails to load reports
+  as compliance. Unknown keys are rejected, so a typo is loud, and the file
+  carries no provider and no credential. `drep doctor` reports whether a policy
+  is in effect, the path it came from, and which providers it lowered.
+
 ### Changed
 
 - Dependabot now excludes cargo-dist's generated release workflow so Action

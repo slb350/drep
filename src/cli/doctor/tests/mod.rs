@@ -9,5 +9,6 @@ mod a_key_command;
 mod a_languages;
 mod a_llm_section;
 mod a_no_files;
+mod a_site_policy;
 mod a_skipped_vs_missing;
 mod a_special_cases;

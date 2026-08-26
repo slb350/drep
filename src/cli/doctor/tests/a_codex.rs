@@ -11,9 +11,15 @@ async fn report_with_probe(dir: &Path, probe: &dyn Fn() -> Result<CodexStatus, S
         config: None,
     };
     let mut out = Vec::new();
-    run_at_with_codex(&mut out, &args, &dir.join("auth.toml"), probe)
-        .await
-        .expect("doctor remains diagnostic");
+    run_at_with_codex(
+        &mut out,
+        &args,
+        &dir.join("auth.toml"),
+        &dir.join("absent-site.toml"),
+        probe,
+    )
+    .await
+    .expect("doctor remains diagnostic");
     String::from_utf8(out).expect("utf8")
 }
 

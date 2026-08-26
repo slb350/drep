@@ -18,6 +18,18 @@
 //!   Modern reasoning models ship 256k-1M context, and inventing a ceiling
 //!   truncates them mid-thought. The option stays available for capping
 //!   spend.
+//!
+//! ## The second layer
+//!
+//! This file is per-repository and `drep init` gitignores it, so a control
+//! written here is per-developer and opt-in. [`site`] is the layer above it: a
+//! machine-level policy file a checkout can tighten but never loosen.
+//!
+//! [`load`] and [`validate`] know nothing about it and take no site argument.
+//! The clamp is applied by the caller, after `load` returns, which is what keeps
+//! [`ConfigError`] a statement about this file alone - every one of its messages
+//! numbers `[[llm]]` entries in *this* file's order, and a bare `#2` that could
+//! mean either file is exactly the ambiguity those messages exist to avoid.
 
 use std::path::{Path, PathBuf};
 
@@ -28,6 +40,11 @@ use toml::Value;
 
 mod backend;
 mod env;
+// A submodule at its own path rather than a re-export: `site::load`,
+// `site::default_path` and `site::PATH_VAR` would each collide with a name
+// already here, and `config::load` against `config::site::load` is exactly the
+// distinction a caller must not blur.
+pub mod site;
 pub use backend::{BackendKind, LlmConfig, ReasoningEffort};
 // Re-exported at the parent's path rather than behind `config::env::`: `doctor`
 // and `auth` both call these, and moving them was a file-size split, not a

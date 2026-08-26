@@ -50,6 +50,7 @@ async fn a_failing_api_key_command_exits_two_without_contacting_the_endpoint() {
         dir.path(),
         Cache::new(dir.path().join("test-cache"), 30, 8 * 1024 * 1024),
         &dir.path().join("auth.toml"),
+        &dir.path().join("absent-site.toml"),
     )
     .await;
 
@@ -88,6 +89,7 @@ async fn a_working_api_key_command_lets_the_run_complete() {
         dir.path(),
         Cache::new(dir.path().join("test-cache"), 30, 8 * 1024 * 1024),
         &dir.path().join("auth.toml"),
+        &dir.path().join("absent-site.toml"),
     )
     .await
     .expect("a minted credential is a working one");

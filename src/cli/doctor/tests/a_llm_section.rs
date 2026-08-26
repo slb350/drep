@@ -472,9 +472,16 @@ model = "parked"
 /// has stored, and never writes to the real one.
 async fn report_with_empty_store(dir: &Path) -> String {
     let mut out = Vec::new();
-    run_at(&mut out, &args(dir), &dir.join("auth.toml"))
-        .await
-        .expect("run_at");
+    // A path that does not exist, deliberately: this fixture describes a machine
+    // with no site policy.
+    run_at(
+        &mut out,
+        &args(dir),
+        &dir.join("auth.toml"),
+        &dir.join("absent-site.toml"),
+    )
+    .await
+    .expect("run_at");
     String::from_utf8(out).expect("utf8")
 }
 

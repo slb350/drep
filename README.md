@@ -306,6 +306,20 @@ drep auth logout --endpoint https://api.kimi.com/coding/v1
 is what CI wants — there is nobody to paste anything there. `DREP_AUTH_PATH`
 points drep at a different store.
 
+### Fleet-managed policy
+
+`drep.toml` is per-repository, and `drep init` gitignores it, so anything you put there is a per-developer choice. A machine-level policy file sits above it:
+
+```toml
+# /Library/Application Support/drep/site.toml   (macOS)
+# /etc/drep/site.toml                           (everywhere else)
+max_concurrent_ceiling = 4
+```
+
+A repository can lower its own `max_concurrent`, but not raise it past the ceiling. `DREP_SITE_CONFIG` points drep at a different file. The location is deliberately a system path rather than your config directory: a policy file the developer can edit without privilege is not a policy file, which is also why nothing in it is `${VAR}`-expanded.
+
+No file means no policy, which is the normal state. A file that exists and drep cannot read or parse exits 2 rather than running without it — a policy that silently fails to load is worse than none, because the unconstrained run reports as compliance. Unknown keys are rejected, so a typo is loud, and there is no `[[llm]]`, no endpoint and no credential in this file. `drep doctor` says whether a policy is in effect, which file it came from, and which providers it lowered.
+
 ### Credentials that expire in minutes
 
 Some gateways hand out short-lived tokens: a stored key is stale before the second commit, and a `${VAR}` is stale before the shell that exported it is closed. `api_key_command` is an argv drep runs to mint one, and its whole trimmed stdout is the credential:

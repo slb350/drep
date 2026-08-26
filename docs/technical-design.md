@@ -58,6 +58,7 @@ source, `files::is_markdown` is markdown, and nothing satisfies both.
 | `docs/` | the markdown checks: `fence`, `lines`, `links`, `blocks` |
 | `config.rs` | `drep.toml`: parse, `${VAR}` expansion, validation |
 | `config/env.rs` | `${VAR}` substitution and the one definition of a reference |
+| `config/site.rs` | the machine-level policy file, and the concurrency ceiling |
 | `auth.rs` | the per-machine credential store, keyed by endpoint |
 | `auth/command.rs` | resolving a provider credential by running a configured argv |
 | `text.rs` | `excerpt`, the only bounding of text drep did not write |
@@ -340,6 +341,16 @@ field validation both skip them, and so does credential resolution, which for an
 require its key to be set. `LlmConfig` hand-writes `Debug` to redact `api_key`,
 and prints an `api_key_command` as its program name plus an argument count,
 because an argv can carry the credential too.
+
+### The site policy layer
+
+`drep.toml` is per-repository and `drep init` gitignores it, so a control written there is per-developer and opt-in — which means off for the person who most needs it. A second layer sits above it, at `DREP_SITE_CONFIG` if set, else `/Library/Application Support/drep/site.toml` on macOS and `/etc/drep/site.toml` elsewhere. Deliberately not the `ProjectDirs` directory holding `auth.toml` and the cache: a policy file the policed developer can edit without privilege is not a policy file, and the same reasoning is why nothing in it is `${VAR}`-expanded.
+
+A missing file is no policy and is not an error, because most machines have none; `site::load` returns an `Option` so a caller cannot confuse that with a policy permitting everything. A file that exists and cannot be read or parsed is **fatal, exit 2**. A policy that silently fails to load is worse than no policy, because the unconstrained run that follows reports as compliance. Unknown keys are rejected, which is also the whole of the "no providers, no credentials in this file" rule — an `[[llm]]` or an `api_key` there is an unknown key, so there is no separate rejection list to drift from the field list. `SiteConfigError` is its own enum rather than variants on `ConfigError`, so the error's type names which of the two files is at fault.
+
+`max_concurrent_ceiling` lowers every enabled entry's `max_concurrent`: a checkout may lower its concurrency but not raise it past what the site allows. It applies to the effective value whether the repository wrote the field or inherited the default, since skipping the defaulted ones would let a repository raise itself by deleting a line. A ceiling of zero is rejected at site load, because the clamp runs after `config::validate` and would otherwise rebuild the no-permit hang that validation exists to prevent. A clamp is not an error; `doctor` reports it, on the provider it changes. `refuse_markers` is parsed and validated here — each entry must name one file — and is consumed by the marker refusal.
+
+The clamp is applied by the caller, after `config::load` returns, which is what keeps `ConfigError` a statement about `drep.toml` alone: every one of its messages numbers `[[llm]]` entries in that file's order, and a bare `#2` that could mean either file is the ambiguity those messages exist to avoid. The policy is read before the repository config, so a broken policy cannot hide behind a broken `drep.toml`. Both paths are parameters threaded from the entry point, exactly as the auth store already is, so no test reads real machine state.
 
 ## Distribution
 

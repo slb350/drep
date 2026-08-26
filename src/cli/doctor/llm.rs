@@ -34,11 +34,17 @@ use super::DoctorArgs;
 /// referenced variable. `load` is consulted only to surface problems that are
 /// not the unset variable, and to supply the expanded argv the credential probe
 /// needs.
+///
+/// `site` is the machine policy in effect, if any. It is applied to the raw
+/// entries here for the same reason everything else in this block is read from
+/// them, and the clamp is printed against the provider it changes rather than
+/// forward-referenced from the policy block above.
 pub(super) async fn write_llm_section<W: Write>(
     out: &mut W,
     args: &DoctorArgs,
     root: &Path,
     auth_path: &Path,
+    site: Option<&config::site::SiteConfig>,
     codex_probe: &dyn Fn() -> Result<crate::llm::codex::CodexStatus, String>,
 ) -> Result<()> {
     writeln!(out)?;
@@ -183,6 +189,12 @@ pub(super) async fn write_llm_section<W: Write>(
         if entry_is_enabled(entry) {
             enabled_count += 1;
             writeln!(out, "  {enabled_count}. {description}")?;
+            // Shown against the provider the ceiling changes, rather than
+            // forward-referenced from the policy block above: the reader is
+            // looking at the entry whose concurrency is not what the file says.
+            if let Some(note) = super::site_section::clamp_note(entry, site) {
+                writeln!(out, "     {note}")?;
+            }
             if is_codex {
                 let status = codex_status.get_or_insert_with(codex_probe);
                 match status {

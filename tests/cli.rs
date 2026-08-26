@@ -94,6 +94,32 @@ fn a_named_file_no_command_can_analyze_never_exits_clean() {
 }
 
 #[test]
+fn an_unparseable_site_policy_exits_two_through_the_real_binary() {
+    // The only test that exercises the environment read in
+    // `config::site::default_path` together with `main.rs`'s error-to-exit-2
+    // mapping. `assert_cmd` sets the variable on the child alone, which is how
+    // this reaches code no in-process test can safely touch: `std::env::set_var`
+    // is unsafe in edition 2024 and the test process is multi-threaded.
+    let dir = repo_with("lib.py", "x = 1\n");
+    with_config(&dir);
+    let site = dir.path().join("site.toml");
+    std::fs::write(&site, "not toml at all\n").expect("write site policy");
+
+    let assert = drep()
+        .args(["check", "lib.py"])
+        .current_dir(dir.path())
+        .env("DREP_SITE_CONFIG", &site)
+        .assert()
+        .code(2);
+    let stderr = String::from_utf8(assert.get_output().stderr.clone()).expect("utf8");
+    assert!(
+        stderr.contains(&site.display().to_string()),
+        "a policy drep could not load is never a clean or a merely-blocked run, \
+         and the message has to name the file; got {stderr}"
+    );
+}
+
+#[test]
 fn usage_error_also_blocks() {
     // clap exits 2 on a usage error, colliding with "could not analyze". Both
     // mean "do not let this commit through", so the collision is safe - this

@@ -21,9 +21,14 @@ fn args(dir: &Path) -> DoctorArgs {
 /// Run `doctor` against `dir` with an auth store scoped to it.
 async fn report_for(dir: &Path) -> String {
     let mut out = Vec::new();
-    let exit = run_at(&mut out, &args(dir), &dir.join("auth.toml"))
-        .await
-        .expect("run_at");
+    let exit = run_at(
+        &mut out,
+        &args(dir),
+        &dir.join("auth.toml"),
+        &dir.join("absent-site.toml"),
+    )
+    .await
+    .expect("run_at");
     assert_eq!(
         exit,
         crate::Exit::Clean,
