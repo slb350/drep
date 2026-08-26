@@ -86,7 +86,7 @@ async fn pre_commit_push_refs_resolve_to_diff_hunks() {
         to: tip,
     };
 
-    let work = resolve_pre_commit(dir.path(), &context)
+    let work = resolve_pre_commit(dir.path(), &context, true)
         .await
         .expect("pre-commit push range resolves");
 
@@ -109,7 +109,7 @@ async fn pre_commit_new_root_branch_resolves_all_files() {
     let dir = tempfile::tempdir().expect("tempdir");
     std::fs::write(dir.path().join("app.py"), "value = 1\n").expect("source");
 
-    let work = resolve_pre_commit(dir.path(), &PreCommitPush::AllFiles)
+    let work = resolve_pre_commit(dir.path(), &PreCommitPush::AllFiles, true)
         .await
         .expect("all-files push resolves");
 
@@ -204,7 +204,9 @@ async fn paths_mode_yields_one_whole_file_hunk_covering_every_line() {
     std::fs::write(dir.path().join("lib.py"), body).expect("write lib.py");
 
     let args = paths_args(vec![dir.path().join("lib.py")]);
-    let work = resolve(&args, dir.path()).await.expect("paths resolve");
+    let work = resolve(&args, dir.path(), false)
+        .await
+        .expect("paths resolve");
 
     assert!(
         work.read_failures.is_empty(),
@@ -255,7 +257,9 @@ async fn oversized_file_fails_is_not_in_by_file_and_is_still_linted() {
     std::fs::write(dir.path().join("big.py"), vec![b'x'; size]).expect("write big.py");
 
     let args = paths_args(vec![dir.path().join("big.py")]);
-    let work = resolve(&args, dir.path()).await.expect("paths resolve");
+    let work = resolve(&args, dir.path(), false)
+        .await
+        .expect("paths resolve");
 
     assert!(
         work.by_file.is_empty(),
@@ -295,7 +299,9 @@ async fn non_utf8_file_lands_in_failures_as_unreadable() {
     std::fs::write(dir.path().join("bad.py"), bytes).expect("write bad.py");
 
     let args = paths_args(vec![dir.path().join("bad.py")]);
-    let work = resolve(&args, dir.path()).await.expect("paths resolve");
+    let work = resolve(&args, dir.path(), false)
+        .await
+        .expect("paths resolve");
 
     assert!(
         work.by_file.is_empty(),
@@ -324,7 +330,7 @@ async fn diff_against_nonexistent_ref_returns_err() {
     init_repo_with_commit(dir.path());
 
     let args = diff_args("definitely-not-a-real-ref-xyz");
-    let result = resolve(&args, dir.path()).await;
+    let result = resolve(&args, dir.path(), false).await;
     assert!(
         result.is_err(),
         "an unknown ref must return Err, got Ok({:?})",
@@ -344,7 +350,7 @@ async fn diff_ref_starting_with_dash_is_rejected_before_git() {
     // the message assertion below is what detects that regression.
 
     let args = diff_args("--output=/tmp/whatever");
-    let result = resolve(&args, dir.path()).await;
+    let result = resolve(&args, dir.path(), false).await;
     let err = match result {
         Ok(_) => panic!("a dash-prefixed ref must be rejected, got Ok(_)"),
         Err(e) => e,
@@ -391,7 +397,7 @@ async fn a_file_exactly_at_the_size_limit_is_accepted_and_one_byte_over_is_not()
     std::fs::write(&over, "a".repeat(limit + 1)).expect("write over");
 
     let args = paths_args(vec![exact.clone(), over.clone()]);
-    let work = crate::cli::check::input::resolve(&args, dir.path())
+    let work = crate::cli::check::input::resolve(&args, dir.path(), false)
         .await
         .expect("resolve");
 
@@ -424,7 +430,9 @@ async fn bare_check_with_no_paths_expands_the_root_instead_of_reading_a_director
     std::fs::write(dir.path().join("pkg/two.py"), "b = 2\n").expect("two.py");
 
     let args = paths_args(Vec::new());
-    let work = resolve(&args, dir.path()).await.expect("bare resolve");
+    let work = resolve(&args, dir.path(), false)
+        .await
+        .expect("bare resolve");
 
     assert!(
         work.read_failures.is_empty(),
@@ -455,7 +463,7 @@ async fn an_explicitly_named_missing_path_is_a_failure_not_a_clean_run() {
     let missing = dir.path().join("typo.py");
 
     let args = paths_args(vec![missing.clone()]);
-    let work = resolve(&args, dir.path()).await.expect("resolve");
+    let work = resolve(&args, dir.path(), false).await.expect("resolve");
 
     assert!(
         work.by_file.is_empty(),
@@ -482,7 +490,7 @@ async fn an_unreadable_file_reports_one_prefix_not_two() {
     std::fs::write(&bad, [0xFFu8, 0xFE, 0xFD]).expect("write bad bytes");
 
     let args = paths_args(vec![bad.clone()]);
-    let work = resolve(&args, dir.path()).await.expect("resolve");
+    let work = resolve(&args, dir.path(), false).await.expect("resolve");
 
     let reason = work.read_failures.get(&bad).expect("bad.py must fail");
     let line = reason.to_string();

@@ -22,10 +22,12 @@ use anyhow::Result;
 use clap::Args;
 
 use crate::Exit;
-use crate::config;
+use crate::cli::MachineFiles;
 use crate::files;
 use crate::languages;
-use toml::Value;
+
+mod llm;
+mod site_section;
 
 /// The header underline, exactly 60 characters wide. `write!` cannot express
 /// the count cleanly, and the spec pins the exact width: a `=`-string of any
@@ -45,9 +47,9 @@ pub struct DoctorArgs {
 
 /// Run the command, writing to stdout. Diagnostic findings return
 /// `Ok(Exit::Clean)`; failures to produce the report remain ordinary errors.
-pub fn run(args: &DoctorArgs) -> Result<Exit> {
+pub async fn run(args: &DoctorArgs) -> Result<Exit> {
     let mut out = std::io::stdout().lock();
-    match run_to(&mut out, args) {
+    match run_to(&mut out, args).await {
         Ok(exit) => Ok(exit),
         // `drep doctor | head -5` closes the pipe under us. That is the
         // reader's choice, not a diagnostic failure, and turning it into exit 2
@@ -64,24 +66,38 @@ pub(crate) fn is_broken_pipe(err: &anyhow::Error) -> bool {
 }
 
 /// `run`, writing to an arbitrary sink so tests can capture the report.
-pub fn run_to<W: Write>(out: &mut W, args: &DoctorArgs) -> Result<Exit> {
-    run_at(out, args, &crate::auth::default_path()?)
+pub async fn run_to<W: Write>(out: &mut W, args: &DoctorArgs) -> Result<Exit> {
+    run_at(
+        out,
+        args,
+        &MachineFiles {
+            auth: &crate::auth::default_path()?,
+            policy: &crate::config::site::default_path(),
+        },
+    )
+    .await
 }
 
-/// `run_to`, against a named auth store.
+/// `run_to`, against a named auth store and a named site policy file.
 ///
-/// A parameter for the same reason `check`, `init` and `auth` take one: the
-/// store is user-level state, and a test reading the real one reports whatever
-/// the developer happens to have stored.
-pub fn run_at<W: Write>(out: &mut W, args: &DoctorArgs, auth_path: &Path) -> Result<Exit> {
-    run_at_with_codex(out, args, auth_path, &crate::llm::codex::current_status)
+/// Both are parameters for the same reason `check`, `init` and `auth` take the
+/// store: they are machine-level state, and a test reading the real ones reports
+/// whatever the developer happens to have installed. They arrive as one
+/// [`MachineFiles`] because two adjacent `&Path` positionals are a
+/// transposition the compiler cannot catch.
+pub async fn run_at<W: Write>(
+    out: &mut W,
+    args: &DoctorArgs,
+    machine: &MachineFiles<'_>,
+) -> Result<Exit> {
+    run_at_with_codex(out, args, machine, &crate::llm::codex::current_status).await
 }
 
 /// [`run_at`] with the Codex readiness diagnostic injected for tests.
-pub(crate) fn run_at_with_codex<W: Write>(
+pub(crate) async fn run_at_with_codex<W: Write>(
     out: &mut W,
     args: &DoctorArgs,
-    auth_path: &Path,
+    machine: &MachineFiles<'_>,
     codex_probe: &dyn Fn() -> Result<crate::llm::codex::CodexStatus, String>,
 ) -> Result<Exit> {
     // `canonicalize` can fail (the path does not exist, or a parent is
@@ -103,12 +119,12 @@ pub(crate) fn run_at_with_codex<W: Write>(
     if buckets.is_empty() {
         writeln!(out)?;
         writeln!(out, "No source files drep recognises were found here.")?;
-        // The LLM section still prints. "Is my model configured?" is the
-        // question a new user most needs answered, and a docs-only repo - or
+        // The configuration sections still print. "Is my model configured?" is
+        // the question a new user most needs answered, and a docs-only repo - or
         // one whose languages drep does not register - is exactly where they
         // are most likely to be asking it. Returning here answered it with
         // silence.
-        write_llm_section(out, args, &root, auth_path, codex_probe)?;
+        write_configuration(out, args, &root, &files, machine, codex_probe).await?;
         return Ok(Exit::Clean);
     }
 
@@ -118,7 +134,7 @@ pub(crate) fn run_at_with_codex<W: Write>(
     // tool - each call stats the config files and walks PATH - and, worse,
     // left room for the summary to disagree with the lines above it.
     let missing = write_tools_section(out, &buckets, &root)?;
-    write_llm_section(out, args, &root, auth_path, codex_probe)?;
+    write_configuration(out, args, &root, &files, machine, codex_probe).await?;
 
     // Deliberately last, after the LLM block: the user reads their coverage
     // report before being told what is wrong with it.
@@ -128,6 +144,139 @@ pub(crate) fn run_at_with_codex<W: Write>(
     }
 
     Ok(Exit::Clean)
+}
+
+/// The two configuration blocks, in the one order they are ever printed in.
+///
+/// Called from both report shapes so that order is stated once. The policy block
+/// comes first because it governs the chain the block below it describes, and the
+/// policy file is loaded once here rather than in each block: two loads of the
+/// same file could disagree about it within one report.
+///
+/// The marker refusal is evaluated here too, through the same
+/// `SiteConfig::refusal_among` the gate consults and against the directories of
+/// the source files doctor found, so the report cannot describe a policy that
+/// would behave differently at the gate. Its error is carried rather than
+/// propagated: `drep check` fails closed on a policy it cannot evaluate, and this
+/// is the command someone runs to find out why.
+///
+/// The answer is then handed to the LLM block, because a refusal governs it too:
+/// `check` never mints a credential for a refused repository, and a `doctor` that
+/// ran the helper anyway would prompt for an approval - and spend a real
+/// credential call - on behalf of a repository whose review is refused.
+async fn write_configuration<W: Write>(
+    out: &mut W,
+    args: &DoctorArgs,
+    root: &Path,
+    source_files: &[PathBuf],
+    machine: &MachineFiles<'_>,
+    codex_probe: &dyn Fn() -> Result<crate::llm::codex::CodexStatus, String>,
+) -> Result<()> {
+    let site = crate::config::site::load(machine.policy);
+    let in_effect = site.as_ref().ok().and_then(Option::as_ref);
+    let refusal = match in_effect {
+        Some(site) => {
+            let directories = doctor_policy_directories(root, source_files);
+            site.refusal_among(&directories, machine.policy).await
+        }
+        None => Ok(None),
+    };
+    site_section::write_site_section(out, machine.policy, &site, &refusal)?;
+    llm::write_llm_section(
+        out,
+        args,
+        root,
+        machine.auth,
+        in_effect,
+        Semantic::of(&site, &refusal),
+        codex_probe,
+    )
+    .await
+}
+
+/// Repository-discovery starting points for the source doctor found.
+///
+/// `files::expand_paths` walks nested repositories, so asking only `root`
+/// reports permission for a run that `check` refuses on an inner file. When no
+/// recognized source exists, keep the root-level diagnostic: an operator still
+/// needs to see that this checkout is marked even though there is currently no
+/// semantic payload.
+fn doctor_policy_directories(root: &Path, source_files: &[PathBuf]) -> BTreeSet<PathBuf> {
+    if source_files.is_empty() {
+        return BTreeSet::from([root.to_path_buf()]);
+    }
+    source_files
+        .iter()
+        .filter_map(|file| file.parent().map(Path::to_path_buf))
+        .collect()
+}
+
+/// What the policy said about semantic review in this repository.
+///
+/// Three states, because the LLM block used to be told two. It received a
+/// `bool` computed as `matches!(refusal, Ok(Some(_)))`, next to an
+/// `Option<&SiteConfig>` computed as `site.as_ref().ok().flatten()`, and both
+/// flattens sent the same answer for "permitted" and for "could not be
+/// evaluated": a policy file that would not load, and a marker probe whose
+/// repository root would not resolve. `check` exits 2 on either
+/// (`config::site::load`'s `?` in `check::run_against`, and
+/// `SiteConfigError::MarkerRootUnresolved`), so answering "not refused" is how
+/// `doctor` came to run `api_key_command` - spending a real credential call and
+/// triggering whatever approval sits behind it - for a repository whose review
+/// never happens, and then print that the credential works. A check that did not
+/// run, reported as a pass, in the command whose whole contract is what will
+/// actually run here.
+///
+/// The policy itself still travels separately, because the concurrency clamp is
+/// reported from it in every one of these states: a ceiling still applies to a
+/// repository whose semantic review is refused.
+#[derive(Clone, Copy)]
+pub(super) enum Semantic {
+    /// No policy, or a policy that permits this repository. The only state in
+    /// which anything here may spend a credential.
+    Permitted,
+    /// A marker refuses semantic review at this repository's root.
+    Refused,
+    /// The policy could not be evaluated. `check` fails closed; this command
+    /// exists to say why, not to proceed as though it had.
+    Unevaluable,
+}
+
+impl Semantic {
+    /// Why semantic setup is not attempted, when policy did not permit it.
+    pub(super) fn skip_reason(self) -> Option<&'static str> {
+        match self {
+            Self::Permitted => None,
+            Self::Refused => {
+                Some("not attempted, because site policy refuses semantic review here")
+            }
+            Self::Unevaluable => {
+                Some("not attempted, because the site policy above could not be evaluated")
+            }
+        }
+    }
+
+    /// Collapse the two results the report already holds into the one verdict
+    /// that governs whether a credential may be spent.
+    ///
+    /// A load failure is checked before a probe failure only because the probe
+    /// cannot have run without a loaded policy; either one is the same answer.
+    fn of(
+        site: &Result<
+            Option<crate::config::site::SiteConfig>,
+            crate::config::site::SiteConfigError,
+        >,
+        refusal: &Result<
+            Option<crate::config::site::Refusal>,
+            crate::config::site::SiteConfigError,
+        >,
+    ) -> Self {
+        match (site, refusal) {
+            (Err(_), _) | (_, Err(_)) => Self::Unevaluable,
+            (Ok(_), Ok(Some(_))) => Self::Refused,
+            (Ok(_), Ok(None)) => Self::Permitted,
+        }
+    }
 }
 
 /// Build the trailing "configured tool(s) are missing" line, or `None` when
@@ -234,301 +383,6 @@ fn workspace_tool_status(
         detail,
         compilation_succeeded: false,
     }
-}
-
-/// `LLM analysis (required):` block.
-///
-/// Display path is the *raw* file, not `config::load`: a fresh clone is
-/// exactly when the report is most useful, and `load` fails on an unset
-/// referenced variable. `load` is consulted only to surface problems that are
-/// not the unset variable.
-fn write_llm_section<W: Write>(
-    out: &mut W,
-    args: &DoctorArgs,
-    root: &Path,
-    auth_path: &Path,
-    codex_probe: &dyn Fn() -> Result<crate::llm::codex::CodexStatus, String>,
-) -> Result<()> {
-    writeln!(out)?;
-    writeln!(out, "LLM analysis (required):")?;
-
-    let config_path: PathBuf = match &args.config {
-        Some(p) => p.clone(),
-        None => root.join(config::default_config_path()),
-    };
-
-    let raw = match std::fs::read_to_string(&config_path) {
-        Ok(raw) => raw,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-            writeln!(
-                out,
-                "  No config file at {} - `drep check` cannot run. Run `drep init`.",
-                config_path.display()
-            )?;
-            return Ok(());
-        }
-        Err(err) => {
-            writeln!(out, "  {} could not be read: {err}", config_path.display())?;
-            return Ok(());
-        }
-    };
-
-    let value: toml::Value = match toml::from_str(&raw) {
-        Ok(v) => v,
-        Err(err) => {
-            writeln!(
-                out,
-                "  {} could not be parsed: {}",
-                config_path.display(),
-                err.message()
-            )?;
-            return Ok(());
-        }
-    };
-
-    // The three cases are distinguished, not collapsed. Folding "not an array"
-    // into "absent" reports a type mismatch as "declares no `[[llm]]`
-    // provider" and returns early, skipping the `config::load` check that names
-    // the real problem and pointing at a command that will not overwrite it.
-    let providers = match value.get("llm") {
-        None => {
-            writeln!(
-                out,
-                "  {} declares no `[[llm]]` provider. Run `drep init`.",
-                config_path.display()
-            )?;
-            return Ok(());
-        }
-        Some(Value::Array(entries)) if entries.is_empty() => {
-            writeln!(
-                out,
-                "  {} declares no `[[llm]]` provider. Run `drep init`.",
-                config_path.display()
-            )?;
-            return Ok(());
-        }
-        Some(Value::Array(entries)) => entries,
-        Some(_) => {
-            writeln!(
-                out,
-                "  {} has an `llm` key that is not a `[[llm]]` array of tables. \
-                 Providers are declared as `[[llm]]`, one block per provider.",
-                config_path.display()
-            )?;
-            // Fall through to `config::load` below, which names the parse
-            // error precisely.
-            report_load_failure(out, &config_path)?;
-            return Ok(());
-        }
-    };
-
-    // Print providers verbatim from the raw file: model and endpoint come out
-    // unexpanded, so `${VAR}` shows as `${VAR}` rather than being swallowed by
-    // the variable-not-set error.
-    //
-    // A disabled entry is called out rather than listed as if it were in play.
-    // Before failover existed this section listed every `[[llm]]` block without
-    // noting that only one was ever consulted; now that the list is a real
-    // failover chain, an inert entry is the one thing the listing can still get
-    // wrong - a user who parks their local model wants to see that the cloud
-    // entry below it is what will run, and a user who copied a block without
-    // its `enabled` line wants to see that it is not.
-    //
-    // The numbering is the **chain position**, not the position in the file, so
-    // a disabled entry gets a bullet rather than a number and the entries after
-    // it shift up. That is what makes it agree with `drep check`: a failure
-    // line reading "[1] cloud-model" has to name the same provider this listing
-    // calls 1, and numbering the file would make the two disagree the moment
-    // anything above was parked.
-    // Read once for the whole listing. A store that cannot be read is reported
-    // rather than fatal: `doctor` exists to describe a broken setup, so failing
-    // out here would suppress everything else it had to say.
-    let needs_auth_store = providers.iter().any(|entry| {
-        entry_is_enabled(entry) && entry.get("backend").and_then(Value::as_str) != Some("codex")
-    });
-    let store = match needs_auth_store
-        .then(|| crate::auth::AuthStore::load(auth_path))
-        .transpose()
-    {
-        Ok(Some(store)) => store,
-        Ok(None) => crate::auth::AuthStore::new(),
-        Err(err) => {
-            writeln!(out, "  The auth store could not be read: {err}")?;
-            crate::auth::AuthStore::new()
-        }
-    };
-
-    let mut enabled_count = 0usize;
-    let mut codex_status: Option<Result<crate::llm::codex::CodexStatus, String>> = None;
-    for entry in providers {
-        let model = entry
-            .get("model")
-            .and_then(|v| v.as_str())
-            .unwrap_or("(no model set)");
-        let endpoint = entry
-            .get("endpoint")
-            .and_then(|v| v.as_str())
-            .unwrap_or("(no endpoint set)");
-        // Shown only when it is not the default, so an OpenAI-compatible listing
-        // keeps the line it has always had. It is worth showing at all because
-        // the protocol decides the path a request is posted to, and a wrong one
-        // reports as the endpoint being down.
-        let protocol = match entry.get("protocol").and_then(|v| v.as_str()) {
-            None | Some("openai") => String::new(),
-            Some(other) => format!(" [{other}]"),
-        };
-        let is_codex = entry.get("backend").and_then(Value::as_str) == Some("codex");
-        let description = if is_codex {
-            format!("{model} via ChatGPT/Codex subscription")
-        } else {
-            format!("{model} at {endpoint}{protocol}")
-        };
-        if entry_is_enabled(entry) {
-            enabled_count += 1;
-            writeln!(out, "  {enabled_count}. {description}")?;
-            if is_codex {
-                let status = codex_status.get_or_insert_with(codex_probe);
-                match status {
-                    Ok(status) => {
-                        writeln!(out, "     Codex CLI: {}", status.cli_version())?;
-                        writeln!(out, "     authentication: ChatGPT-managed")?;
-                        writeln!(out, "     isolation: ephemeral, read-only, tools disabled")?;
-                    }
-                    Err(err) => writeln!(out, "     unavailable: {err}")?,
-                }
-            } else {
-                writeln!(out, "     key: {}", key_source_line(entry, &store))?;
-            }
-        } else {
-            writeln!(out, "  -  {description} (disabled - skipped)")?;
-        }
-    }
-    writeln!(out, "  {}", failover_line(enabled_count))?;
-
-    // Unset environment variables, deduped in first-seen order.
-    //
-    // Over the *parsed* tree, using `config`'s own scanner. Doctor had its own
-    // regex - `\$\{([A-Z_][A-Z0-9_]*)\}` - which is narrower than what
-    // `config::load` actually substitutes, so `${openrouter_key}` produced no
-    // warning here while `load` still failed on it. And since the branch below
-    // suppresses `EnvVarUnset` on the grounds it was "already reported", the
-    // user got a clean-looking report for a config `drep check` refuses to
-    // load. Scanning the parsed tree rather than the file text also stops a
-    // `${VAR}` inside a comment raising a false alarm.
-    for name in unset_env_vars(&value) {
-        writeln!(
-            out,
-            "  {name} is NOT set - LLM analysis will fail until you export it."
-        )?;
-    }
-
-    // Surface other load failures. `EnvVarUnset` is already reported above;
-    // repeating it reads as two separate problems.
-    match config::load(&config_path) {
-        Err(config::ConfigError::EnvVarUnset(_, _)) => Ok(()),
-        other => report_load_result(out, &config_path, other),
-    }
-}
-
-/// Where this provider's key will come from, as `doctor` phrases it.
-///
-/// Read from the *raw* tree for the same reason the model and endpoint are: a
-/// `${VAR}` shows as itself rather than being swallowed by the
-/// variable-not-set error, so the report describes the file the user wrote.
-///
-/// The distinction is worth a line because "works on my machine" and "works in
-/// CI" are different configurations, and once a stored key exists the
-/// difference is invisible in `drep.toml`.
-fn key_source_line(entry: &Value, store: &crate::auth::AuthStore) -> String {
-    let api_key = entry.get("api_key").and_then(|v| v.as_str());
-    let endpoint = entry.get("endpoint").and_then(|v| v.as_str());
-
-    // `enabled` is passed as true because this line is only printed for entries
-    // the listing has already established are in the chain.
-    let source = crate::auth::source_of(api_key, endpoint, true, store);
-
-    match (source, api_key) {
-        // The reference is shown verbatim - that is the whole reason doctor
-        // reads the raw tree rather than the loaded config.
-        // Only a `${VAR}` reference is echoed. `api_key` may hold a literal
-        // secret - `config::load` accepts one - and doctor's output is what
-        // people paste into bug reports and CI logs.
-        (crate::auth::KeySource::Config, Some(reference))
-            if !crate::config::env_var_refs_in(&Value::String(reference.to_string()))
-                .is_empty() =>
-        {
-            format!("{reference} ({})", crate::auth::KeySource::Config.label())
-        }
-        (crate::auth::KeySource::Config, _) => format!(
-            "a literal value ({}) - prefer `${{VAR}}` so the file can be committed",
-            crate::auth::KeySource::Config.label()
-        ),
-        (source, _) => source.label().to_string(),
-    }
-}
-
-/// Report why the config will not load, if it will not.
-fn report_load_failure<W: Write>(out: &mut W, config_path: &Path) -> Result<()> {
-    let loaded = config::load(config_path);
-    report_load_result(out, config_path, loaded)
-}
-
-/// Shared tail of the two load-reporting paths.
-fn report_load_result<W: Write>(
-    out: &mut W,
-    config_path: &Path,
-    loaded: Result<config::Config, config::ConfigError>,
-) -> Result<()> {
-    if let Err(err) = loaded {
-        writeln!(out, "  {} will not load: {err}", config_path.display())?;
-    }
-    Ok(())
-}
-
-/// Whether a raw `[[llm]]` table is in the failover chain.
-///
-/// The default comes from `LlmConfig::default()` rather than a literal `true`,
-/// so this cannot disagree with what `config::load` will actually decide. The
-/// raw table is read instead of the loaded config because `load` fails on an
-/// unset `${VAR}` - and a fresh clone with no key exported is exactly when this
-/// report is most useful.
-fn entry_is_enabled(entry: &toml::Value) -> bool {
-    entry
-        .get("enabled")
-        .and_then(toml::Value::as_bool)
-        .unwrap_or_else(|| config::LlmConfig::default().enabled)
-}
-
-/// What the chain will actually do, given how many providers are in it.
-///
-/// Three genuinely different situations, and saying "providers are tried in
-/// order" for a one-provider config would be true but useless - the thing that
-/// user needs to know is that there is no fallback at all.
-fn failover_line(enabled: usize) -> String {
-    match enabled {
-        0 => "Every provider is disabled - `drep check` cannot run. Re-enable one.".to_owned(),
-        1 => "One provider, so there is no fallback: if it is unreachable, `drep check` exits 2."
-            .to_owned(),
-        n => format!(
-            "{n} providers, tried in order: a transport failure falls through to the \
-             next. A 401 or 403 does not - that is misconfiguration, and failing \
-             over would hide it."
-        ),
-    }
-}
-
-/// Every variable the config references that is not set, in first-seen order.
-///
-/// The *reference* grammar is `config::required_env_var_refs`, shared with the
-/// substituter so the two cannot disagree; all this adds is the "and it is not
-/// set" filter. It excludes disabled providers for the same reason `load` does
-/// not expand them: a variable only a parked provider names is not required,
-/// and warning about it reports a problem `drep check` does not have.
-fn unset_env_vars(value: &toml::Value) -> Vec<String> {
-    config::required_env_var_refs(value)
-        .into_iter()
-        .filter(|name| std::env::var_os(name).is_none())
-        .collect()
 }
 
 #[cfg(test)]

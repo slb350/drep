@@ -234,6 +234,7 @@ fn failure_kind(reason: &FailureReason) -> &'static str {
         FailureReason::Truncated => "truncated",
         FailureReason::MalformedFinding(_) => "malformed_finding",
         FailureReason::ToolUnavailable { .. } => "tool_unavailable",
+        FailureReason::SitePolicyRefused { .. } => "site_policy_refused",
         FailureReason::FileTooLarge { .. } => "file_too_large",
         FailureReason::PayloadTooLarge { .. } => "payload_too_large",
         FailureReason::Unreadable(_) => "unreadable",
@@ -306,6 +307,13 @@ fn insert_reason(obj: &mut serde_json::Map<String, serde_json::Value>, reason: &
     if let FailureReason::ReviewLimit { completed, limit } = reason {
         obj.insert("completed".to_owned(), json!(completed));
         obj.insert("limit".to_owned(), json!(limit));
+    }
+    if let FailureReason::SitePolicyRefused { marker, policy } = reason {
+        // As structure, not only inside the prose. A pipeline deciding whether
+        // it was refused, and by which policy, must not have to pattern-match
+        // English - the same rule `kind` itself exists for.
+        obj.insert("marker".to_owned(), json!(marker.to_string_lossy()));
+        obj.insert("policy".to_owned(), json!(policy.to_string_lossy()));
     }
     if let Some(status) = reason.status() {
         obj.insert("status".to_owned(), json!(status));

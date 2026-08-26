@@ -8,6 +8,7 @@
 //! process `backend_kind` where one exists.
 
 use serde_json::Value;
+use std::path::PathBuf;
 
 use super::support::{outcome, outcome_failing, rendered_json};
 use crate::analysis::result::{FailureReason, ProviderFailure};
@@ -42,6 +43,7 @@ fn expected_kind(reason: &FailureReason) -> &'static str {
         FailureReason::Truncated => "truncated",
         FailureReason::MalformedFinding(_) => "malformed_finding",
         FailureReason::ToolUnavailable { .. } => "tool_unavailable",
+        FailureReason::SitePolicyRefused { .. } => "site_policy_refused",
         FailureReason::FileTooLarge { .. } => "file_too_large",
         FailureReason::PayloadTooLarge { .. } => "payload_too_large",
         FailureReason::Unreadable(_) => "unreadable",
@@ -81,6 +83,10 @@ fn each_failure_variant_renders_its_own_kind_tag() {
         FailureReason::ToolUnavailable {
             tool: "ruff".to_owned(),
             detail: "not found".to_owned(),
+        },
+        FailureReason::SitePolicyRefused {
+            marker: PathBuf::from("/repo/.drep-no-llm"),
+            policy: PathBuf::from("/etc/drep/site.toml"),
         },
         FailureReason::FileTooLarge { bytes: 1, limit: 0 },
         FailureReason::PayloadTooLarge { bytes: 1, limit: 0 },

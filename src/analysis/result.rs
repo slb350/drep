@@ -68,6 +68,21 @@ pub enum FailureReason {
     MalformedFinding(String),
     /// A deterministic tool that should have run could not.
     ToolUnavailable { tool: String, detail: String },
+    /// Machine site policy refuses to have this repository's source reviewed by
+    /// a model, because a marker file is present at its root.
+    ///
+    /// A `FailureReason` rather than a run-level field because this is the type
+    /// the whole exit-2 contract already rests on: putting the refusal in
+    /// `failed_files` makes `gate`, the text failure block, the JSON `unanalyzed`
+    /// array and the clean-cycle reset guard treat it correctly with no second
+    /// mechanism to keep in agreement. A consumer asking "did semantic review
+    /// happen" is then told no, rather than handed an empty `unanalyzed` beside
+    /// exit 2.
+    ///
+    /// Both paths are carried because a developer meeting this for the first time
+    /// reads it as a broken install unless it names the file that caused it and
+    /// the policy that asked for it.
+    SitePolicyRefused { marker: PathBuf, policy: PathBuf },
     /// The file on disk exceeded the read guard, so drep never read it.
     ///
     /// Distinct from [`Self::PayloadTooLarge`] because the two measure
@@ -218,6 +233,11 @@ impl FailureReason {
             FailureReason::ToolUnavailable { tool, detail } => {
                 format!("{tool} could not run: {detail}")
             }
+            FailureReason::SitePolicyRefused { marker, policy } => format!(
+                "semantic review is refused by site policy: {} is present (policy: {})",
+                marker.display(),
+                policy.display()
+            ),
             FailureReason::FileTooLarge { bytes, limit } => {
                 format!("file is too large to read ({bytes} bytes; limit is {limit})")
             }
@@ -420,6 +440,30 @@ mod tests {
         assert!(
             rendered.contains("429"),
             "rendered line must contain 429, got {rendered:?}"
+        );
+    }
+
+    /// A refusal names both the marker and the policy that asked for it.
+    ///
+    /// Pinned at the type that owns the wording, beside the `Transport`-status
+    /// test, and for the same reason: the paths are carried as fields precisely so
+    /// they reach the user. A developer meeting this line for the first time reads
+    /// it as a broken install unless it says which file caused it and where the
+    /// decision came from.
+    #[test]
+    fn site_policy_refusal_names_the_marker_and_the_policy_file() {
+        let reason = FailureReason::SitePolicyRefused {
+            marker: PathBuf::from("/work/repo/.drep-no-llm"),
+            policy: PathBuf::from("/etc/drep/site.toml"),
+        };
+        let rendered = reason.one_line();
+        assert!(
+            rendered.contains("/work/repo/.drep-no-llm"),
+            "must name the marker, got {rendered:?}"
+        );
+        assert!(
+            rendered.contains("/etc/drep/site.toml"),
+            "must name the policy, got {rendered:?}"
         );
     }
 

@@ -196,6 +196,22 @@ pub(crate) async fn git_path(root: &Path, args: &[&str]) -> Result<PathBuf, GitE
     })
 }
 
+/// The working tree's top-level directory.
+///
+/// Here rather than beside its caller for the reason this module's header
+/// states: `run_git` is the only place drep spawns git, and its
+/// `GIT_DIR`/`GIT_WORK_TREE` scrubbing is what stops a hook's inherited
+/// environment answering about a different repository. Site policy is evaluated
+/// against this answer, and a marker checked against the wrong tree is a policy
+/// bypass rather than a cosmetic mistake.
+///
+/// Through `git_path` because `--show-toplevel` prints an absolute path for some
+/// worktree layouts and a relative one for others - the guess that helper exists
+/// to remove.
+pub(crate) async fn repository_root(root: &Path) -> Result<PathBuf, GitError> {
+    git_path(root, &["rev-parse", "--show-toplevel"]).await
+}
+
 /// Parse the newline-delimited output of `git diff --name-only` into paths,
 /// then keep only those the caller analyzes.
 ///

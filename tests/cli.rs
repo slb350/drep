@@ -10,7 +10,34 @@ use assert_cmd::Command;
 use tempfile::TempDir;
 
 fn drep() -> Command {
-    Command::cargo_bin("drep").expect("binary builds")
+    let mut command = Command::cargo_bin("drep").expect("binary builds");
+    // Machine-level policy, pointed at a file nothing creates. A developer or a
+    // runner carrying a real fleet policy would otherwise see this suite behave
+    // differently from CI - and a policy naming `refuse_markers` would make every
+    // `check` here fail closed, since none of these fixtures is a repository. The
+    // one test that wants a policy sets the variable again, and the later value
+    // wins.
+    command.env("DREP_SITE_CONFIG", absent_site_policy());
+    command
+}
+
+/// A path no test writes, in a directory only this user can write.
+///
+/// Not `std::env::temp_dir()`: on Linux that is world-writable `/tmp`, so a
+/// leftover file or another user creating one predictable name would supply a real
+/// policy to this whole suite - garbage content exits 2 through
+/// `SiteConfigError::Parse`, and `refuse_markers` exits 2 through
+/// `MarkerRootUnresolved`, since none of these fixtures is a repository.
+/// `CARGO_TARGET_TMPDIR` is cargo's own per-crate scratch directory for
+/// integration tests, and lives under `target/`.
+///
+/// Not the empty string either: `DREP_SITE_CONFIG=` deliberately falls back to the
+/// machine path rather than switching enforcement off, so an empty override would
+/// isolate nothing. Nor does any override displace a policy actually installed at
+/// the machine path - on a machine carrying one, these tests read it, which is the
+/// layer working as designed.
+fn absent_site_policy() -> std::path::PathBuf {
+    std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("absent-site-policy.toml")
 }
 
 /// A directory holding one file, for the `lint-docs` and `check` cases.
@@ -91,6 +118,32 @@ fn a_named_file_no_command_can_analyze_never_exits_clean() {
         .code(2);
     let stdout = String::from_utf8(assert.get_output().stdout.clone()).expect("utf8");
     assert!(stdout.contains("drep check"), "{stdout}");
+}
+
+#[test]
+fn an_unparseable_site_policy_exits_two_through_the_real_binary() {
+    // The only test that exercises the environment read in
+    // `config::site::default_path` together with `main.rs`'s error-to-exit-2
+    // mapping. `assert_cmd` sets the variable on the child alone, which is how
+    // this reaches code no in-process test can safely touch: `std::env::set_var`
+    // is unsafe in edition 2024 and the test process is multi-threaded.
+    let dir = repo_with("lib.py", "x = 1\n");
+    with_config(&dir);
+    let site = dir.path().join("site.toml");
+    std::fs::write(&site, "not toml at all\n").expect("write site policy");
+
+    let assert = drep()
+        .args(["check", "lib.py"])
+        .current_dir(dir.path())
+        .env("DREP_SITE_CONFIG", &site)
+        .assert()
+        .code(2);
+    let stderr = String::from_utf8(assert.get_output().stderr.clone()).expect("utf8");
+    assert!(
+        stderr.contains(&site.display().to_string()),
+        "a policy drep could not load is never a clean or a merely-blocked run, \
+         and the message has to name the file; got {stderr}"
+    );
 }
 
 #[test]

@@ -10,6 +10,23 @@ use serde_json::json;
 
 use crate::llm::cache::Cache;
 
+/// A side-effect-free cache constructor leaves eviction with no tree to walk.
+///
+/// Missing is the ordinary empty-cache state, not a walk failure, and eviction
+/// must not create the root merely to report that it freed nothing.
+#[test]
+fn eviction_on_an_absent_cache_is_a_side_effect_free_no_op() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let root = temp.path().join("absent-cache");
+    let cache = Cache::new(root.clone(), 30, 60);
+
+    assert_eq!(cache.evict_if_needed().expect("missing means empty"), 0);
+    assert!(
+        !root.exists(),
+        "eviction must not create an empty cache root"
+    );
+}
+
 /// Backdate `path`'s mtime so we can write two entries with distinct ages
 /// for the "oldest first" test.
 fn set_mtime(path: &std::path::Path, mtime: SystemTime) {

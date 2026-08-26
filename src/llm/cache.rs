@@ -104,10 +104,12 @@ pub struct Cache {
 }
 
 impl Cache {
-    /// Build a cache rooted at `root`. Creates `root` if absent; a creation
-    /// failure is swallowed (the next `put` will surface it).
+    /// Build a cache rooted at `root` without touching the filesystem.
+    ///
+    /// `put` creates its shard on demand. Keeping construction lazy lets site
+    /// policy decide whether a semantic layer exists before that layer acquires
+    /// any on-disk state.
     pub fn new(root: PathBuf, ttl_days: u64, max_bytes: u64) -> Self {
-        let _ = std::fs::create_dir_all(&root);
         Self {
             root,
             ttl: Duration::from_secs(ttl_days.saturating_mul(86_400)),
@@ -281,7 +283,11 @@ impl Cache {
     /// deletable members.
     fn collect_entries(&self) -> Result<Vec<CacheEntry>, CacheError> {
         let mut out = Vec::new();
-        let shards = std::fs::read_dir(&self.root).map_err(CacheError::Walk)?;
+        let shards = match std::fs::read_dir(&self.root) {
+            Ok(shards) => shards,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(out),
+            Err(err) => return Err(CacheError::Walk(err)),
+        };
         for shard in shards {
             let Ok(shard) = shard else { continue };
             // Only descend into the two-hex-char directories. Anything else -

@@ -10,7 +10,7 @@
 //! deterministic on machines where ruff happens to be on PATH, the criterion
 //! pins the rendering directly via `missing_tools_line`.
 
-use crate::cli::doctor::{DoctorArgs, missing_tools_line, run_to};
+use crate::cli::doctor::{DoctorArgs, missing_tools_line};
 use crate::languages::spec::{LanguageSupport, ToolSpec};
 use crate::test_support::write_executable;
 
@@ -21,14 +21,16 @@ fn args(path: &std::path::Path) -> DoctorArgs {
     }
 }
 
-#[test]
-fn skipped_tool_is_not_a_problem() {
+#[tokio::test]
+async fn skipped_tool_is_not_a_problem() {
     let dir = tempfile::tempdir().expect("tempdir");
     std::fs::write(dir.path().join("a.py"), "x = 1\n").expect("a.py");
     // No pyproject.toml → ruff is Skipped.
 
     let mut out = Vec::new();
-    let exit = run_to(&mut out, &args(dir.path())).expect("run_to");
+    let exit = super::run_scoped(&mut out, &args(dir.path()), dir.path())
+        .await
+        .expect("run_to");
     assert_eq!(exit, crate::Exit::Clean);
     let rendered = String::from_utf8(out).expect("utf8");
 
@@ -46,8 +48,8 @@ fn skipped_tool_is_not_a_problem() {
     );
 }
 
-#[test]
-fn nested_workspace_configuration_is_reported_ready() {
+#[tokio::test]
+async fn nested_workspace_configuration_is_reported_ready() {
     let dir = tempfile::tempdir().expect("tempdir");
     let bin = dir.path().join("venv/bin/ruff");
     std::fs::create_dir_all(bin.parent().unwrap()).expect("bin dir");
@@ -58,7 +60,9 @@ fn nested_workspace_configuration_is_reported_ready() {
     std::fs::write(member.join("a.py"), "x = 1\n").expect("source");
 
     let mut out = Vec::new();
-    run_to(&mut out, &args(dir.path())).expect("run_to");
+    super::run_scoped(&mut out, &args(dir.path()), dir.path())
+        .await
+        .expect("run_to");
     let rendered = String::from_utf8(out).expect("utf8");
 
     assert!(
@@ -67,8 +71,8 @@ fn nested_workspace_configuration_is_reported_ready() {
     );
 }
 
-#[test]
-fn root_configuration_keeps_the_plain_ready_status() {
+#[tokio::test]
+async fn root_configuration_keeps_the_plain_ready_status() {
     let dir = tempfile::tempdir().expect("tempdir");
     let bin = dir.path().join("venv/bin/ruff");
     std::fs::create_dir_all(bin.parent().unwrap()).expect("bin dir");
@@ -77,7 +81,9 @@ fn root_configuration_keeps_the_plain_ready_status() {
     std::fs::write(dir.path().join("a.py"), "x = 1\n").expect("source");
 
     let mut out = Vec::new();
-    run_to(&mut out, &args(dir.path())).expect("run_to");
+    super::run_scoped(&mut out, &args(dir.path()), dir.path())
+        .await
+        .expect("run_to");
     let rendered = String::from_utf8(out).expect("utf8");
     let ruff_line = rendered
         .lines()
@@ -91,8 +97,8 @@ fn root_configuration_keeps_the_plain_ready_status() {
     );
 }
 
-#[test]
-fn missing_tools_line_renders_the_expected_sentence() {
+#[tokio::test]
+async fn missing_tools_line_renders_the_expected_sentence() {
     // Pinned directly: a test that exercised the live `tool_status` would be
     // non-deterministic on a developer machine that happens to have `ruff`
     // on PATH. The rendering is the contract; it must not depend on what is
@@ -105,8 +111,8 @@ fn missing_tools_line_renders_the_expected_sentence() {
     assert!(line.contains("drep exits 2"), "got: {line:?}");
 }
 
-#[test]
-fn empty_missing_tools_line_is_none() {
+#[tokio::test]
+async fn empty_missing_tools_line_is_none() {
     assert!(missing_tools_line(&[]).is_none());
 }
 
@@ -155,8 +161,8 @@ static SPECTRE_LANG: LanguageSupport = LanguageSupport {
     vendored_dirs: &[],
 };
 
-#[test]
-fn a_configured_tool_that_cannot_resolve_is_returned_as_missing() {
+#[tokio::test]
+async fn a_configured_tool_that_cannot_resolve_is_returned_as_missing() {
     let dir = tempfile::tempdir().expect("tempdir");
     std::fs::write(dir.path().join("ghost.config"), "").expect("config");
 
@@ -178,8 +184,8 @@ fn a_configured_tool_that_cannot_resolve_is_returned_as_missing() {
 /// and no eslint binary once reported "2 configured tool(s) are missing:
 /// eslint, eslint". The test that covers this for the real eslint returns
 /// early when eslint is installed, so it cannot be relied on either.
-#[test]
-fn a_tool_shared_by_two_languages_is_returned_once() {
+#[tokio::test]
+async fn a_tool_shared_by_two_languages_is_returned_once() {
     let dir = tempfile::tempdir().expect("tempdir");
     std::fs::write(dir.path().join("ghost.config"), "").expect("config");
 

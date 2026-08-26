@@ -18,8 +18,19 @@
 //!   Modern reasoning models ship 256k-1M context, and inventing a ceiling
 //!   truncates them mid-thought. The option stays available for capping
 //!   spend.
+//!
+//! ## The second layer
+//!
+//! This file is per-repository and `drep init` gitignores it, so a control
+//! written here is per-developer and opt-in. [`site`] is the layer above it: a
+//! machine-level policy file a checkout can tighten but never loosen.
+//!
+//! [`load`] and [`validate`] know nothing about it and take no site argument.
+//! The clamp is applied by the caller, after `load` returns, which is what keeps
+//! [`ConfigError`] a statement about this file alone - every one of its messages
+//! numbers `[[llm]]` entries in *this* file's order, and a bare `#2` that could
+//! mean either file is exactly the ambiguity those messages exist to avoid.
 
-use std::env;
 use std::path::{Path, PathBuf};
 
 use open_agent::ApiProtocol;
@@ -28,7 +39,18 @@ use thiserror::Error;
 use toml::Value;
 
 mod backend;
+mod env;
+// A submodule at its own path rather than a re-export: `site::load`,
+// `site::default_path` and `site::PATH_VAR` would each collide with a name
+// already here, and `config::load` against `config::site::load` is exactly the
+// distinction a caller must not blur.
+pub mod site;
 pub use backend::{BackendKind, LlmConfig, ReasoningEffort};
+// Re-exported at the parent's path rather than behind `config::env::`: `doctor`
+// and `auth` both call these, and moving them was a file-size split, not a
+// change of contract.
+use env::{disabled_provider_indices, expand_env_except};
+pub use env::{env_var_refs, env_var_refs_in, required_env_var_refs};
 
 pub const DEFAULT_MAX_REVIEW_ROUNDS: u32 = 3;
 
@@ -138,6 +160,28 @@ pub enum ConfigError {
     )]
     UnknownReasoningEffort { index: usize, value: String },
 
+    /// Both credential fields answer the same question, so a file setting both
+    /// has said two things. Rejected rather than resolved by precedence: the
+    /// user who wrote the command wrote it to be run, and a silent "the literal
+    /// wins" leaves them debugging a stale credential the file says nothing
+    /// about.
+    #[error(
+        "[[llm]] #{} in file order: `api_key` and `api_key_command` are both set; remove one, \
+         because a key that is already there is never re-minted by a command",
+        index + 1
+    )]
+    AmbiguousApiKey { index: usize },
+
+    /// An argv with no first element names no program. Rejected at load because
+    /// the alternative is discovering it inside the gate, at the point where
+    /// there is nothing to run and nothing useful to say about why.
+    #[error(
+        "[[llm]] #{} in file order: api_key_command is empty; it must name a program to run, \
+         as an argv array such as [\"print-token\", \"--audience\", \"gateway\"]",
+        index + 1
+    )]
+    EmptyApiKeyCommand { index: usize },
+
     #[error(
         "[[llm]] #{} in file order: backend `{backend}` does not support `{field}`",
         index + 1
@@ -169,6 +213,22 @@ pub enum ConfigError {
          deterministic-only mode. Re-enable one, or run `drep init` to write another."
     )]
     NoEnabledProviders(PathBuf),
+
+    /// Rejected rather than ignored, which is the one behaviour that would be
+    /// worse than either: serde drops an unknown key without a word, so a
+    /// developer reads `refuse_markers` in their own config, believes the
+    /// repository is protected, and every review still ships its source. It is
+    /// refused here rather than honoured because `drep init` gitignores this
+    /// file - a copy of the control would be per-developer, and a refusal a
+    /// developer can delete is not one.
+    #[error(
+        "{path} sets `{field}`, which is machine site policy and is read only from the site \
+         policy file - {machine} on this platform, or the file `drep doctor` names if this \
+         machine keeps it elsewhere; `drep init` gitignores {path}, so a copy of the field there \
+         would be per-developer and could be deleted by the developer it constrains",
+        machine = site::machine_path().display()
+    )]
+    SiteOnlyField { path: PathBuf, field: &'static str },
 }
 
 /// The conventional config file location: `drep.toml` in the current directory.
@@ -216,6 +276,17 @@ pub fn load(path: &Path) -> Result<Config, ConfigError> {
         ConfigError::Parse(path.to_path_buf(), err.message().to_owned())
     })?;
 
+    // Read off the raw tree, the way `disabled_provider_indices` and
+    // `backend::explicit_fields` are: `Config` has no `refuse_markers` field and
+    // no `deny_unknown_fields`, so serde would deserialize this file happily and
+    // say nothing.
+    if let Some(field) = site_only_field(&tree) {
+        return Err(ConfigError::SiteOnlyField {
+            path: path.to_path_buf(),
+            field,
+        });
+    }
+
     // Disabled providers are pruned from expansion, not from the tree: a
     // parked entry is inert, so an unset `${OPENROUTER_API_KEY}` in the cloud
     // block a user just switched off must not refuse to load the file. It stays
@@ -231,6 +302,21 @@ pub fn load(path: &Path) -> Result<Config, ConfigError> {
 
     validate(&config, path, &explicit_fields)?;
     Ok(config)
+}
+
+/// The site-policy key this file declared, if it declared one.
+///
+/// The list itself lives beside `SiteConfig` in [`site::SITE_ONLY_FIELDS`],
+/// because it is a statement about that type's fields and the decision about a
+/// new one belongs where the field is added. This function used to spell
+/// `tree.get("refuse_markers")` here, which meant a policy field added in the
+/// other module was refused nowhere, dropped silently from a `drep.toml` that
+/// named it, and believed by the developer who wrote it.
+fn site_only_field(tree: &Value) -> Option<&'static str> {
+    site::SITE_ONLY_FIELDS
+        .iter()
+        .copied()
+        .find(|field| tree.get(field).is_some())
 }
 
 /// Validate what serde cannot enforce from the type alone.
@@ -279,6 +365,16 @@ fn validate(
         if llm.max_tokens == Some(0) {
             return Err(ConfigError::ZeroMaxTokens { index });
         }
+        // Checked for every backend rather than only for HTTP, so the rule holds
+        // above the `continue` below. `backend::validate` has already rejected
+        // `api_key_command` on a Codex entry by name, so reaching here with one
+        // means the backend can use it.
+        if llm.api_key.is_some() && llm.api_key_command.is_some() {
+            return Err(ConfigError::AmbiguousApiKey { index });
+        }
+        if llm.api_key_command.as_ref().is_some_and(Vec::is_empty) {
+            return Err(ConfigError::EmptyApiKeyCommand { index });
+        }
 
         if llm.backend != BackendKind::Http {
             continue;
@@ -304,259 +400,6 @@ fn validate(
         }
     }
     Ok(())
-}
-
-/// The positions of the `[[llm]]` tables that carry `enabled = false`.
-///
-/// Read from the raw tree because expansion runs before deserialization - and
-/// it has to, since an unset variable must be reported with the variable's name
-/// rather than as a downstream parse failure inside the substituted text. The
-/// default comes from `LlmConfig::default()` so this cannot disagree with serde
-/// about what an absent `enabled` key means.
-fn disabled_provider_indices(tree: &Value) -> std::collections::BTreeSet<usize> {
-    let default_enabled = LlmConfig::default().enabled;
-    tree.get("llm")
-        .and_then(Value::as_array)
-        .map(|entries| {
-            entries
-                .iter()
-                .enumerate()
-                .filter(|(_, entry)| {
-                    !entry
-                        .get("enabled")
-                        .and_then(Value::as_bool)
-                        .unwrap_or(default_enabled)
-                })
-                .map(|(index, _)| index)
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
-/// [`expand_env_in`] over the whole tree except the named `[[llm]]` entries.
-fn expand_env_except(
-    tree: &mut Value,
-    source: &Path,
-    skip: &std::collections::BTreeSet<usize>,
-) -> Result<(), ConfigError> {
-    if skip.is_empty() {
-        return expand_env_in(tree, source);
-    }
-    let Some(table) = tree.as_table_mut() else {
-        return expand_env_in(tree, source);
-    };
-    for (key, value) in table.iter_mut() {
-        if key != "llm" {
-            expand_env_in(value, source)?;
-            continue;
-        }
-        let Some(entries) = value.as_array_mut() else {
-            expand_env_in(value, source)?;
-            continue;
-        };
-        for (index, entry) in entries.iter_mut().enumerate() {
-            if !skip.contains(&index) {
-                expand_env_in(entry, source)?;
-            }
-        }
-    }
-    Ok(())
-}
-
-/// Walk every string in the parsed TOML tree and expand `${VAR}` references.
-///
-/// Applied to the whole tree rather than per-field so a future field added
-/// to `LlmConfig` inherits the behaviour without remembering to opt in. The
-/// reference is the path that contained it, so an unset variable's error
-/// message points at the file rather than the variable alone.
-fn expand_env_in(value: &mut Value, source: &Path) -> Result<(), ConfigError> {
-    match value {
-        Value::String(s) => {
-            *s = expand_string(s, source)?;
-        }
-        Value::Table(table) => {
-            for (_, inner) in table.iter_mut() {
-                expand_env_in(inner, source)?;
-            }
-        }
-        Value::Array(items) => {
-            for inner in items.iter_mut() {
-                expand_env_in(inner, source)?;
-            }
-        }
-        _ => {}
-    }
-    Ok(())
-}
-
-/// Every `${NAME}` reference in `s`, in the order they appear.
-///
-/// The single statement of what counts as a variable reference, so a consumer
-/// cannot disagree with the substituter about it. `drep doctor` had its own
-/// regex, `\$\{([A-Z_][A-Z0-9_]*)\}`, which is *narrower* than this: a config
-/// naming `${openrouter_key}` produced no warning from doctor, while
-/// `expand_string` below still failed on it — and doctor suppressed that error
-/// believing it had already reported it. The user was told the config was fine
-/// and `drep check` then refused to load it.
-///
-/// An unterminated `${` yields nothing here; `expand_string` is what reports
-/// it, because only the substituter knows it is an error rather than literal
-/// text.
-pub fn env_var_refs(s: &str) -> Vec<String> {
-    let mut refs = Vec::new();
-    let mut rest = s;
-    // Written with `split_once`/`strip_prefix` rather than `find` plus index
-    // arithmetic. The arithmetic version was correct, but `start + 2` and
-    // `end + 1` are two magic offsets whose only justification is the length
-    // of the delimiters they skip - and the delimiters are right there in the
-    // pattern, so letting the standard library consume them says the same
-    // thing without the chance of an off-by-one.
-    while let Some((_, after_open)) = rest.split_once("${") {
-        let Some((name, after_close)) = after_open.split_once('}') else {
-            // An unterminated `${`. Not this function's error to report:
-            // `expand_string` is what knows whether the text is a reference or
-            // a literal, and it rejects the file.
-            break;
-        };
-        refs.push(name.to_owned());
-        rest = after_close;
-    }
-    refs
-}
-
-/// Every `${NAME}` reference that [`load`] will actually try to substitute.
-///
-/// The same tree as [`env_var_refs_in`], minus the `[[llm]]` entries that
-/// carry `enabled = false` — because `load` skips expanding those, so a
-/// variable named only by a parked provider is not required and reporting it
-/// as missing is a false alarm. This is the shared definition, so `doctor`
-/// cannot warn about a variable `check` does not need; a narrower scanner in
-/// `doctor` is what once made it call a config fine that `check` refused to
-/// load.
-pub fn required_env_var_refs(value: &Value) -> Vec<String> {
-    let disabled = disabled_provider_indices(value);
-    if disabled.is_empty() {
-        return env_var_refs_in(value);
-    }
-    let mut seen = std::collections::BTreeSet::new();
-    let mut out = Vec::new();
-    let Some(table) = value.as_table() else {
-        return env_var_refs_in(value);
-    };
-    for (key, inner) in table {
-        if key != "llm" {
-            collect_env_refs(inner, &mut seen, &mut out);
-            continue;
-        }
-        let Some(entries) = inner.as_array() else {
-            collect_env_refs(inner, &mut seen, &mut out);
-            continue;
-        };
-        for (index, entry) in entries.iter().enumerate() {
-            if !disabled.contains(&index) {
-                collect_env_refs(entry, &mut seen, &mut out);
-            }
-        }
-    }
-    out
-}
-
-/// Every `${NAME}` reference in any string value of a parsed TOML tree.
-///
-/// Deliberately over the *parsed* tree rather than the file text: a `${VAR}`
-/// inside a comment is documentation, not a reference, and reporting it as an
-/// unset variable is a false alarm in the one command whose job is to be
-/// believed. Deduplicated, first-seen order preserved.
-pub fn env_var_refs_in(value: &Value) -> Vec<String> {
-    let mut seen = std::collections::BTreeSet::new();
-    let mut out = Vec::new();
-    collect_env_refs(value, &mut seen, &mut out);
-    out
-}
-
-fn collect_env_refs(
-    value: &Value,
-    seen: &mut std::collections::BTreeSet<String>,
-    out: &mut Vec<String>,
-) {
-    match value {
-        Value::String(s) => {
-            for name in env_var_refs(s) {
-                if seen.insert(name.clone()) {
-                    out.push(name);
-                }
-            }
-        }
-        Value::Table(table) => {
-            for (_, inner) in table {
-                collect_env_refs(inner, seen, out);
-            }
-        }
-        Value::Array(items) => {
-            for inner in items {
-                collect_env_refs(inner, seen, out);
-            }
-        }
-        _ => {}
-    }
-}
-
-/// Substitute every `${NAME}` in `s` with that environment variable's value.
-///
-/// A literal `$` that is not followed by `{` is preserved. An unterminated
-/// `${` (no closing `}`) is also an error, because the alternative - silently
-/// dropping it - leaves the file's contract unstated.
-fn expand_string(s: &str, source: &Path) -> Result<String, ConfigError> {
-    let mut out = String::with_capacity(s.len());
-    let mut chars = s.chars().peekable();
-    while let Some(c) = chars.next() {
-        if c != '$' {
-            out.push(c);
-            continue;
-        }
-        if chars.peek() != Some(&'{') {
-            // Literal `$` not followed by `{`. Preserved verbatim so a path
-            // like `$HOME/x` survives rather than vanishing the `$`.
-            out.push(c);
-            continue;
-        }
-        chars.next();
-        let mut name = String::new();
-        let mut closed = false;
-        for next in chars.by_ref() {
-            if next == '}' {
-                closed = true;
-                break;
-            }
-            name.push(next);
-        }
-        if !closed {
-            return Err(ConfigError::Parse(
-                source.to_path_buf(),
-                format!("unterminated `${{` in `{s}`"),
-            ));
-        }
-        if name.is_empty() {
-            return Err(ConfigError::Parse(
-                source.to_path_buf(),
-                format!("empty environment variable reference in `{s}`"),
-            ));
-        }
-        let value = match env::var(&name) {
-            Ok(value) => value,
-            Err(env::VarError::NotPresent) => {
-                return Err(ConfigError::EnvVarUnset(name, source.display().to_string()));
-            }
-            Err(env::VarError::NotUnicode(_)) => {
-                return Err(ConfigError::EnvVarNotUnicode(
-                    name,
-                    source.display().to_string(),
-                ));
-            }
-        };
-        out.push_str(&value);
-    }
-    Ok(out)
 }
 
 #[cfg(test)]

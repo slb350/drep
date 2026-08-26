@@ -33,9 +33,12 @@ source, `files::is_markdown` is markdown, and nothing satisfies both.
 | Module | Responsibility |
 |---|---|
 | `main.rs` | clap entry point; turns every error into an `ExitCode` |
-| `cli/check/` | `input`, deterministic tools, `review_budget`, rendering and exit codes |
+| `cli/check/` | `input`, deterministic tools, `refusal`, `review_budget`, rendering and exit codes |
+| `cli/mod.rs` | the command surface, the shared `--fail-on` parser, and `MachineFiles` |
 | `cli/lint_docs/` | markdown command, `--staged`, `--fail-on` |
-| `cli/doctor.rs` | what languages and tools are visible here, and which providers |
+| `cli/doctor.rs` | what languages and tools are visible here, which providers, and what site policy does to them |
+| `cli/doctor/llm.rs` | the `LLM analysis` block: the raw-file listing and the credential probe |
+| `cli/doctor/site_section.rs` | the `Site policy` block and the per-provider clamp note |
 | `cli/init/` | `drep.toml` and native git hooks; `presets`, `config_file`, `hooks` |
 | `cli/render.rs` | the finding line and the "could not be analyzed" block, shared |
 | `languages/spec.rs` | `ToolSpec`, `LanguageSupport`, the registry |
@@ -57,7 +60,10 @@ source, `files::is_markdown` is markdown, and nothing satisfies both.
 | `analysis/findings.rs` | `Severity` and its ordering |
 | `docs/` | the markdown checks: `fence`, `lines`, `links`, `blocks` |
 | `config.rs` | `drep.toml`: parse, `${VAR}` expansion, validation |
+| `config/env.rs` | `${VAR}` substitution and the one definition of a reference |
+| `config/site.rs` | the machine-level policy file, the concurrency ceiling, and the marker refusal |
 | `auth.rs` | the per-machine credential store, keyed by endpoint |
+| `auth/command.rs` | resolving a provider credential by running a configured argv |
 | `text.rs` | `excerpt`, the only bounding of text drep did not write |
 
 ## Two layers, split by source
@@ -314,8 +320,15 @@ environment variable rather than holding a secret, and `config::env_var_refs_in`
 is the single definition of a `${VAR}` reference, shared by the substituter and
 by `doctor`. The top-level `max_review_rounds` defaults to 3 and rejects zero.
 
+A provider's credential is resolved in one pass, in `auth::resolve`, in this order: an explicit `api_key`, then `api_key_command`, then the endpoint-keyed store, then nothing — which `LlmClient::new` turns into `not-needed`. `auth::source_of` is the only statement of that order, and `doctor` calls it rather than restating it. `api_key_command` is an argv run with no shell, whose stdout trimmed at both ends is the credential — the trailing newline every helper prints, and a leading space that a header value cannot carry anyway, which `AuthStore::set` already trims off a pasted key; setting it alongside `api_key` is rejected at load, beside the unknown backend and the misspelled protocol, because two answers to one question is not a precedence puzzle. A malformed `${...}` reference reports only the shape of the defect, never the argument that may contain a secret. A Codex entry rejects the command with the other HTTP-only fields.
+
+It resolves in that one pass, so each entry's command runs exactly once per process: a short-lived credential re-minted per file fails per file, which the chain's demotion logic reads as an endpoint problem. There is no disk cache and no TTL behind it — drep is a short-lived process, so a credential on disk buys nothing and adds a file worth stealing.
+
+A failing command is fatal there, before the chain exists, which is what makes it structurally unable to fail over. That is the same rule a 401 follows: routing around a broken credential path is what hides it. The diagnostic names the program and the exit status and nothing else, because a misconfigured helper can print the token to either stream and an error message is the one place it would escape. `KeyCommandError` carries no captured output, which is what keeps that true of `{:?}` as well as of `Display`. Stdout is read with a 64 KiB ceiling while the direct child is polled for exit. That exit is decisive even if a background grandchild inherited the pipe, so an unrelated descendant cannot turn a successful helper into a timeout; the biased select and bounded final drain retain bytes the helper wrote before exiting without waiting for the descendant to close the pipe.
+
 `backend` defaults to `http`. HTTP entries
-accept `endpoint`, `api_key`, `protocol`, `temperature`, `max_tokens` and
+accept `endpoint`, `api_key`, `api_key_command`, `protocol`, `temperature`,
+`max_tokens` and
 `max_retries`; they reject the Codex-only `reasoning_effort`. A `codex` entry
 requires `model`, accepts an optional `reasoning_effort`, and rejects every
 HTTP-only field, so a subscription selection cannot silently become API
@@ -326,8 +339,39 @@ Validation is deliberately strict at load, because each of these can only fail
 later and less legibly: a file declaring no providers, or none enabled, is
 rejected; `max_concurrent = 0` is rejected, since a semaphore with no permits
 would hang with no message. Disabled entries are inert - `${VAR}` expansion and
-field validation both skip them - so parking a cloud provider does not require
-its key to be set. `LlmConfig` hand-writes `Debug` to redact `api_key`.
+field validation both skip them, and so does credential resolution, which for an
+`api_key_command` also means no subprocess - so parking a cloud provider does not
+require its key to be set. `LlmConfig` hand-writes `Debug` to redact `api_key`,
+and prints an `api_key_command` as its program name plus an argument count,
+because an argv can carry the credential too.
+
+### The site policy layer
+
+`drep.toml` is per-repository and `drep init` gitignores it, so a control written there is per-developer and opt-in — which means off for the person who most needs it. A second layer sits above it, at `/Library/Application Support/drep/site.toml` on macOS and `/etc/drep/site.toml` elsewhere. Deliberately not the `ProjectDirs` directory holding `auth.toml` and the cache: a policy file the policed developer can edit without privilege is not a policy file, and the same reasoning is why nothing in it is `${VAR}`-expanded.
+
+`DREP_SITE_CONFIG` names the file only when none is installed at that path, which is what an installation keeping it elsewhere needs and what every test needs. It cannot displace an installed one: an override that could would leave the layer one `export` away from off, and `refuse_markers` — rejected in `drep.toml` on the grounds that a refusal a developer can delete is not one — would be deletable by exporting a path to an empty file. Presence is `symlink_metadata`, matching the marker probe. Only `NotFound` means the machine path is absent; every other metadata result keeps it authoritative. A dangling symlink therefore does not hand the decision back to the environment, and its later read failure is fatal rather than collapsed into no policy. The precedence is visible rather than silent: `doctor` names the file in effect.
+
+A missing file is no policy and is not an error, because most machines have none; `site::load` returns an `Option` so a caller cannot confuse that with a policy permitting everything. A file that exists and cannot be read or parsed is **fatal, exit 2**. A policy that silently fails to load is worse than no policy, because the unconstrained run that follows reports as compliance. Unknown keys are rejected, which is also the whole of the "no providers, no credentials in this file" rule — an `[[llm]]` or an `api_key` there is an unknown key, so there is no separate rejection list to drift from the field list. `SiteConfigError` is its own enum rather than variants on `ConfigError`, so the error's type names which of the two files is at fault.
+
+`max_concurrent_ceiling` lowers every enabled entry's `max_concurrent`: a checkout may lower its concurrency but not raise it past what the site allows. It applies to the effective value whether the repository wrote the field or inherited the default, since skipping the defaulted ones would let a repository raise itself by deleting a line. A ceiling of zero is rejected at site load, because the clamp runs after `config::validate` and would otherwise rebuild the no-permit hang that validation exists to prevent. A clamp is not an error; `doctor` reports it, on the provider it changes. `refuse_markers` is parsed and validated here — each entry must name one file — and is consumed by the marker refusal.
+
+The clamp is applied by the caller, after `config::load` returns, which is what keeps `ConfigError` a statement about `drep.toml` alone: every one of its messages numbers `[[llm]]` entries in that file's order, and a bare `#2` that could mean either file is the ambiguity those messages exist to avoid. `check::configured` is that caller — one named function rather than three steps in the orchestrator, so a test can observe the ceiling reaching a config a real run would use. The policy is read before the repository config, so a broken policy cannot hide behind a broken `drep.toml`. Both paths are parameters threaded from the entry point as one `cli::MachineFiles`, exactly as the auth store already was, so no test reads real machine state and no caller can transpose two same-typed positionals — a swap that silently leaves the fleet policy unapplied while the run reports as compliance.
+
+Every field declared by `SiteConfig` is site-only. `config::load` reads `refuse_markers` and `max_concurrent_ceiling` off the raw tree and rejects either in `drep.toml` with `ConfigError::SiteOnlyField`. Rejected rather than ignored is the invariant: `Config` has no such fields and no `deny_unknown_fields`, so serde would otherwise drop a key silently and a developer would read their own config and believe a policy was active. A repository can already lower an individual provider's `max_concurrent`, but a silently ignored fleet ceiling is still a false claim of enforcement. An exhaustive destructure beside `SITE_ONLY_FIELDS` makes a new site field fail to compile until its repository-file treatment is decided.
+
+### The marker refusal
+
+`SiteConfig::refusal_among` returns the first configured marker present at any repository containing bytes this run would send, and `cli/check/refusal.rs` is the caller in the gate. Its ordering is the feature: the probe runs before the credential store is opened, before any `api_key_command` subprocess, and before `ProviderChain::new`, which for a `codex` entry spawns the CLI to read login state. It also precedes every cache read, and cache construction itself is side-effect-free, so `--cache-only` and `--push-gate` cannot serve a model's verdict, create a cache directory or evict an entry for a repository whose source was never allowed to reach one. `Source` has two arms and no arm holding both a refusal and an analyzer, which makes "refused implies no chain" structural rather than a convention two call sites keep.
+
+An empty `refuse_markers` short-circuits before git is spawned, so a machine that installed no marker policy gains neither the latency nor a new failure mode. A machine that did installs a fail-closed one: a policy naming markers outside a repository is `SiteConfigError::MarkerRootUnresolved`, because "cannot be evaluated" must not become "evaluates to allowed". The marker probe likewise treats only `NotFound` as absence; another metadata error is `MarkerUnreadable`, not permission.
+
+The repositories probed are those containing source the run would send, not the process root alone: `files::expand_named` applies no confinement to `root`, so `drep check <absolute path>` and a marked checkout nested inside an unmarked one can otherwise review one repository's source while consulting another's policy. Input resolution therefore runs before the probe — it reads local files and contacts nothing, so the ordering above is untouched. Paths mode canonicalizes each explicit target, reads from that same canonical path and records its target directory; this makes the target repository decide when a source symlink crosses the boundary in either direction. Diff modes record hunk parents because a deleted path cannot be canonicalized. Each directory is resolved through git and the marker checked once per distinct root; deciding from lexical paths alone would reimplement git's discovery rules and reopen the symlink bypass. Any marked repository in the set refuses the whole run, which is what keeps `Source` two-armed.
+
+The repository root comes from `diff::repository_root`, so the query goes through the one place drep spawns git and inherits its `GIT_DIR`/`GIT_WORK_TREE` scrubbing - a marker checked against the tree a hook's environment named instead of the tree being checked is a policy bypass. The marker has to be committed to be present in every checkout: git materialises tracked content, so an untracked one is absent from a fresh clone and from a linked worktree. Presence is `symlink_metadata`, not `metadata` and not `is_file`: a directory, or a symlink whose target is gone, is still a name someone deliberately placed, and either narrower reading is a way to disable the policy while appearing to invoke it. Nothing opens the file.
+
+`doctor` uses the parent directories of the source files it discovers, with the process root only as the fallback diagnostic when there is no semantic payload. It carries permitted, refused and unevaluable as three states. Only the first may open the auth store, run `api_key_command` or probe Codex; the other two report why setup was not attempted, matching the gate instead of spending a credential to describe a run that cannot occur.
+
+The refusal arrives as `FailureReason::SitePolicyRefused`, one entry per file drep was asked about, which is what makes `gate`, the text failure block, the JSON `unanalyzed` array and the clean-cycle reset guard all treat it correctly with no second mechanism. `semantic::refused` claims no review round and leaves `should_review_live` false, so a refused run is structurally unable to reach the exit-3 push handshake. Deterministic tools still run and still gate; `lint-docs` reads no config and is untouched.
 
 ## Distribution
 

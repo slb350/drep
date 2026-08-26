@@ -340,6 +340,19 @@ max_retries = 1
     std::fs::write(dir.join("drep.toml"), body).expect("drep.toml");
 }
 
+/// Write an arbitrary machine-policy fixture beside a test repository.
+pub(crate) fn write_site_policy_body(dir: &std::path::Path, body: &str) -> std::path::PathBuf {
+    let path = dir.join("site.toml");
+    std::fs::write(&path, body).expect("write site policy");
+    path
+}
+
+/// Write a machine-policy fixture naming `markers`.
+pub(crate) fn write_site_policy(dir: &std::path::Path, markers: &[&str]) -> std::path::PathBuf {
+    let quoted: Vec<String> = markers.iter().map(|marker| format!("{marker:?}")).collect();
+    write_site_policy_body(dir, &format!("refuse_markers = [{}]\n", quoted.join(", ")))
+}
+
 /// A `git` command scoped to `dir` and nothing else.
 ///
 /// The environment scrubbing matters more than it looks. These tests run under
@@ -393,6 +406,20 @@ pub(crate) fn git_init(dir: &std::path::Path) {
     ] {
         git_must(dir, &["config", "--local", key, value]);
     }
+}
+
+/// Make `dir` a directory git refuses to resolve a repository root for.
+///
+/// A plain `tempfile::tempdir()` is *usually* outside any repository, and a test
+/// that needs "no repository here" has been relying on that. It is a property of
+/// the developer's machine, not of the fixture: `TMPDIR` inside a checkout makes
+/// `git rev-parse --show-toplevel` answer, and a fail-closed test then passes for
+/// the wrong reason. A `.git` file holding something that is not a gitfile stops
+/// discovery at this directory with `fatal: invalid gitfile format`, whatever sits
+/// above it - and it denies the root through git's own discovery rather than by
+/// arranging the filesystem and hoping.
+pub(crate) fn git_unresolvable(dir: &std::path::Path) {
+    std::fs::write(dir.join(".git"), "not a gitfile\n").expect("unresolvable .git");
 }
 
 /// Stage `path` in the repository at `dir`.

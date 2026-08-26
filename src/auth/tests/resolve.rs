@@ -18,22 +18,24 @@ fn config_with(endpoints: &[&str]) -> Config {
     }
 }
 
-#[test]
-fn a_stored_key_fills_in_an_entry_that_named_none() {
+#[tokio::test]
+async fn a_stored_key_fills_in_an_entry_that_named_none() {
     let mut config = config_with(&["https://api.kimi.com/coding/v1"]);
     let mut store = AuthStore::new();
     store
         .set("https://api.kimi.com/coding/v1", "k-1")
         .expect("set");
 
-    let sources = resolve(&mut config, &store);
+    let sources = resolve(&mut config, &store)
+        .await
+        .expect("no command to run");
 
     assert_eq!(config.llm[0].api_key.as_deref(), Some("k-1"));
     assert_eq!(sources, vec![KeySource::Store]);
 }
 
-#[test]
-fn an_explicit_key_in_the_config_wins_over_a_stored_one() {
+#[tokio::test]
+async fn an_explicit_key_in_the_config_wins_over_a_stored_one() {
     // The user said where the key comes from. Silently preferring a stored one
     // would make the file lie about what the run used.
     let mut config = config_with(&["https://e/v1"]);
@@ -41,26 +43,30 @@ fn an_explicit_key_in_the_config_wins_over_a_stored_one() {
     let mut store = AuthStore::new();
     store.set("https://e/v1", "from-store").expect("set");
 
-    let sources = resolve(&mut config, &store);
+    let sources = resolve(&mut config, &store)
+        .await
+        .expect("no command to run");
 
     assert_eq!(config.llm[0].api_key.as_deref(), Some("from-config"));
     assert_eq!(sources, vec![KeySource::Config]);
 }
 
-#[test]
-fn an_entry_with_no_stored_key_is_left_unset_and_reported_missing() {
+#[tokio::test]
+async fn an_entry_with_no_stored_key_is_left_unset_and_reported_missing() {
     // Not defaulted to anything: `LlmClient::new` applies `not-needed`, which a
     // local server accepts. Inventing a value here would hide that decision.
     let mut config = config_with(&["https://e/v1"]);
 
-    let sources = resolve(&mut config, &AuthStore::new());
+    let sources = resolve(&mut config, &AuthStore::new())
+        .await
+        .expect("no command to run");
 
     assert_eq!(config.llm[0].api_key, None);
     assert_eq!(sources, vec![KeySource::Missing]);
 }
 
-#[test]
-fn a_disabled_entry_is_skipped_rather_than_resolved() {
+#[tokio::test]
+async fn a_disabled_entry_is_skipped_rather_than_resolved() {
     // Every other pass over the provider list leaves a parked entry alone -
     // `${VAR}` expansion and field validation both do. Looking a key up for one
     // would report a missing credential for a provider never contacted.
@@ -69,7 +75,9 @@ fn a_disabled_entry_is_skipped_rather_than_resolved() {
     let mut store = AuthStore::new();
     store.set("https://e/v1", "k").expect("set");
 
-    let sources = resolve(&mut config, &store);
+    let sources = resolve(&mut config, &store)
+        .await
+        .expect("no command to run");
 
     assert_eq!(
         config.llm[0].api_key, None,
@@ -78,8 +86,8 @@ fn a_disabled_entry_is_skipped_rather_than_resolved() {
     assert_eq!(sources, vec![KeySource::Missing]);
 }
 
-#[test]
-fn sources_are_positional_including_the_disabled_entries() {
+#[tokio::test]
+async fn sources_are_positional_including_the_disabled_entries() {
     // A caller numbering providers by file position and a caller numbering by
     // chain position both index this, so a skipped entry must occupy its slot
     // rather than being dropped from the list.
@@ -89,7 +97,9 @@ fn sources_are_positional_including_the_disabled_entries() {
     let mut store = AuthStore::new();
     store.set("https://a/v1", "k").expect("set");
 
-    let sources = resolve(&mut config, &store);
+    let sources = resolve(&mut config, &store)
+        .await
+        .expect("no command to run");
 
     assert_eq!(
         sources,
@@ -98,8 +108,8 @@ fn sources_are_positional_including_the_disabled_entries() {
     assert_eq!(sources.len(), config.llm.len());
 }
 
-#[test]
-fn an_entry_with_no_endpoint_resolves_to_missing_rather_than_panicking() {
+#[tokio::test]
+async fn an_entry_with_no_endpoint_resolves_to_missing_rather_than_panicking() {
     // `LlmClient::new` is what rejects a config naming no endpoint, with a
     // message about the endpoint. This pass must not get there first.
     let mut config = Config {
@@ -111,20 +121,24 @@ fn an_entry_with_no_endpoint_resolves_to_missing_rather_than_panicking() {
     };
 
     assert_eq!(
-        resolve(&mut config, &AuthStore::new()),
+        resolve(&mut config, &AuthStore::new())
+            .await
+            .expect("no command to run"),
         vec![KeySource::Missing]
     );
 }
 
-#[test]
-fn resolution_matches_the_endpoint_regardless_of_spelling() {
+#[tokio::test]
+async fn resolution_matches_the_endpoint_regardless_of_spelling() {
     let mut config = config_with(&["https://API.Z.AI/api/coding/paas/v4/"]);
     let mut store = AuthStore::new();
     store
         .set("https://api.z.ai/api/coding/paas/v4", "k")
         .expect("set");
 
-    let sources = resolve(&mut config, &store);
+    let sources = resolve(&mut config, &store)
+        .await
+        .expect("no command to run");
 
     assert_eq!(config.llm[0].api_key.as_deref(), Some("k"));
     assert_eq!(sources, vec![KeySource::Store]);
@@ -134,14 +148,17 @@ fn resolution_matches_the_endpoint_regardless_of_spelling() {
 fn each_source_has_its_own_label() {
     // `doctor` prints these, and two sources sharing a word would make the line
     // useless for the thing it exists to answer.
-    let labels = [
-        KeySource::Config.label(),
-        KeySource::Store.label(),
-        KeySource::Missing.label(),
-    ];
+    // Driven off `KeySource::ALL` rather than a literal list, so a variant added
+    // without wording of its own is a failure here rather than a subset this
+    // test quietly stopped covering.
+    let labels: Vec<&str> = KeySource::ALL.iter().map(KeySource::label).collect();
 
-    let mut unique = labels.to_vec();
+    let mut unique = labels.clone();
     unique.sort_unstable();
     unique.dedup();
-    assert_eq!(unique.len(), 3, "labels collide: {labels:?}");
+    assert_eq!(
+        unique.len(),
+        KeySource::ALL.len(),
+        "labels collide: {labels:?}"
+    );
 }

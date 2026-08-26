@@ -1,7 +1,7 @@
 //! A2: a directory with no source files drep recognises says so, skips the
 //! language and tool sections - and still reports the LLM configuration.
 
-use crate::cli::doctor::{DoctorArgs, run_to};
+use crate::cli::doctor::DoctorArgs;
 
 fn args(path: &std::path::Path) -> DoctorArgs {
     DoctorArgs {
@@ -18,15 +18,17 @@ fn args(path: &std::path::Path) -> DoctorArgs {
 /// be asking - a docs-only tree, or one whose languages drep does not
 /// register. The two halves are asserted together because dropping either
 /// makes the other trivially satisfiable.
-#[test]
-fn no_recognised_files_skips_the_code_sections_but_still_reports_the_llm() {
+#[tokio::test]
+async fn no_recognised_files_skips_the_code_sections_but_still_reports_the_llm() {
     let dir = tempfile::tempdir().expect("tempdir");
     std::fs::write(dir.path().join("README.md"), "# readme\n").expect("README");
     std::fs::write(dir.path().join("notes.txt"), "notes\n").expect("notes");
 
     let root = dir.path().canonicalize().expect("canonical");
     let mut out = Vec::new();
-    let exit = run_to(&mut out, &args(dir.path())).expect("run_to");
+    let exit = super::run_scoped(&mut out, &args(dir.path()), dir.path())
+        .await
+        .expect("run_to");
     let rendered = String::from_utf8(out).expect("utf8");
 
     assert_eq!(exit, crate::Exit::Clean);

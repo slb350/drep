@@ -34,10 +34,19 @@
 //!
 //! ## Resolution order
 //!
-//! [`resolve`] fills in what `drep.toml` left unset, and an explicit value in
-//! the file always wins. A user who writes `api_key = "${OPENROUTER_API_KEY}"`
-//! has said where the key comes from, and silently preferring a stored one
-//! would make the file lie about what the run used.
+//! [`resolve`] fills in what `drep.toml` left unset, in this order:
+//!
+//! 1. an explicit `api_key` - a literal, or a `${VAR}` the loader has already
+//!    substituted;
+//! 2. `api_key_command`, an argv drep runs to mint one;
+//! 3. a key held here for the same endpoint;
+//! 4. nothing, which `LlmClient::new` turns into `not-needed`.
+//!
+//! An explicit value in the file always wins. A user who writes
+//! `api_key = "${OPENROUTER_API_KEY}"` has said where the key comes from, and
+//! silently preferring a stored one would make the file lie about what the run
+//! used. The command sits above the store for the same reason: a file naming a
+//! command has not left the question unanswered.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -47,15 +56,22 @@ use thiserror::Error;
 
 use crate::config::Config;
 
+mod command;
+pub use command::KeyCommandError;
+
 /// Where a provider's key came from, for [`doctor`](crate::cli::doctor) to report.
 ///
 /// The point of naming the source is that "it works on my machine" and "it works
 /// in CI" are different configurations, and the difference is invisible in
 /// `drep.toml` once a stored key exists.
+///
+/// The variant order is the resolution order.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum KeySource {
     /// The config named an environment variable or a literal, and it resolved.
     Config,
+    /// The config named an `api_key_command`, which drep runs to mint a key.
+    Command,
     /// The config named nothing and the store had one for this endpoint.
     Store,
     /// Neither. The provider will authenticate as `not-needed`, which a local
@@ -64,6 +80,13 @@ pub enum KeySource {
 }
 
 impl KeySource {
+    /// Every source, in resolution order.
+    ///
+    /// Exists so the label-collision test cannot pass on a stale subset, the way
+    /// `Severity::ALL` drives its parser test: a variant added without wording of
+    /// its own has to fail something.
+    pub const ALL: [Self; 4] = [Self::Config, Self::Command, Self::Store, Self::Missing];
+
     /// What `doctor` prints for this source.
     ///
     /// The single definition of the wording. `doctor` hand-wrote its own copy
@@ -72,6 +95,7 @@ impl KeySource {
     pub fn label(&self) -> &'static str {
         match self {
             Self::Config => "from drep.toml",
+            Self::Command => "from api_key_command",
             Self::Store => "from the drep auth store",
             Self::Missing => "not set - run `drep auth login` or add `api_key` to drep.toml",
         }
@@ -132,6 +156,21 @@ pub enum AuthError {
     /// storing it would defer a guaranteed failure to the first request.
     #[error("the key for {0} contains a character that cannot be sent in a header")]
     UnusableKey(String),
+
+    /// A configured `api_key_command` did not produce a credential.
+    ///
+    /// Fatal, and fatal *here*: the provider chain does not exist yet, so there
+    /// is nothing to fail over to - and failing over would be the wrong answer
+    /// anyway, for the reason a 401 does not fail over. Routing around a broken
+    /// credential path is what hides it.
+    ///
+    /// The entry is numbered in file order, matching `ConfigError`, because that
+    /// is the numbering a user can count blocks in `drep.toml` to check.
+    #[error("[[llm]] #{} in file order: {cause}", index + 1)]
+    KeyCommand {
+        index: usize,
+        cause: KeyCommandError,
+    },
 }
 
 /// The environment variable that relocates the store.
@@ -222,24 +261,15 @@ impl AuthStore {
 
     /// Store `key` for `endpoint`, replacing any previous one.
     ///
-    /// An empty key is rejected rather than stored: it would satisfy every
-    /// "is a key present" check and then fail at the endpoint with a 401, which
-    /// is the confusing-empty-credential failure `${VAR}` expansion already
-    /// refuses for the same reason. Surrounding whitespace is trimmed, because a
-    /// pasted key routinely carries a trailing newline.
+    /// The rule about what a credential may be is [`vet`]'s, not this method's;
+    /// only the wording is here, because a paste at the prompt and a helper's
+    /// stdout send the reader to different fixes.
     pub fn set(&mut self, endpoint: &str, key: &str) -> Result<(), AuthError> {
-        let key = key.trim();
-        if key.is_empty() {
-            return Err(AuthError::EmptyKey(endpoint.to_string()));
-        }
-        // Every use of a stored key is an HTTP header value, which cannot carry
-        // a control character. Rejecting here turns a paste that picked up a
-        // stray newline or an escape sequence into a message at the prompt,
-        // rather than a transport failure on the first file of the first push.
-        if key.chars().any(|c| c.is_control()) {
-            return Err(AuthError::UnusableKey(endpoint.to_string()));
-        }
-        self.keys.insert(normalise(endpoint), key.to_string());
+        let key = vet(key).map_err(|defect| match defect {
+            CredentialDefect::Empty => AuthError::EmptyKey(endpoint.to_string()),
+            CredentialDefect::Unusable => AuthError::UnusableKey(endpoint.to_string()),
+        })?;
+        self.keys.insert(normalise(endpoint), key);
         Ok(())
     }
 
@@ -257,6 +287,52 @@ impl AuthStore {
     pub fn is_empty(&self) -> bool {
         self.keys.is_empty()
     }
+}
+
+/// Why a credential cannot be used, whatever produced it.
+///
+/// Two variants because they send the reader to different fixes: nothing arrived
+/// at all, or something arrived that cannot be sent.
+pub(crate) enum CredentialDefect {
+    Empty,
+    Unusable,
+}
+
+/// Trim a candidate credential and refuse one that cannot become a header value.
+///
+/// One definition, because this is a safety property, and `crate::http`'s module
+/// doc already records what happens to a safety property written twice: "written
+/// once and forgotten once". It was written twice - here for a key pasted at the
+/// prompt, and in `auth::command::run` for one a helper printed - and the two
+/// copies had already drifted cosmetically. The minted path is the one that never
+/// passes through [`AuthStore::set`], so a defect class added at the prompt would
+/// silently not have applied to the credential a gateway helper produces, which is
+/// the only path whose value nobody ever sees.
+///
+/// The wording stays with each caller: this returns [`CredentialDefect`] rather
+/// than an `AuthError`, so the store can name the endpoint and the helper can name
+/// the program. That is the mechanism-shared, classification-private split
+/// `crate::http` documents for the same pair of callers.
+///
+/// **Both ends** are trimmed. Every helper that prints a token prints a newline
+/// after it, and a leading space is one `printf ' %s'` or one `cut` field away;
+/// trimming only the tail accepted `" sk-live-..."`, which passes the
+/// control-character guard and is then stripped again by the transport, so the
+/// value sent was not the value checked and the endpoint answered 401.
+///
+/// A control character is refused because every use of a credential is an HTTP
+/// header value, which cannot carry one. Rejecting it here turns a paste or a
+/// helper that picked up a stray escape sequence into a message the user can act
+/// on, rather than a transport failure on the first file of the first push.
+pub(crate) fn vet(candidate: &str) -> Result<String, CredentialDefect> {
+    let candidate = candidate.trim();
+    if candidate.is_empty() {
+        return Err(CredentialDefect::Empty);
+    }
+    if candidate.chars().any(char::is_control) {
+        return Err(CredentialDefect::Unusable);
+    }
+    Ok(candidate.to_owned())
 }
 
 /// Canonical form of an endpoint for use as a store key.
@@ -303,33 +379,95 @@ fn lower_authority(rest: &str) -> String {
 /// Fill in keys the config left unset, and report where each one came from.
 ///
 /// Returns one [`KeySource`] per entry in `config.llm`, positionally - including
-/// the disabled ones, so a caller numbering providers by file position and a
-/// caller numbering by chain position both index correctly.
+/// the disabled ones, so the position in the returned slice is the position in the
+/// file. No production caller reads it: `check` discards it, and `doctor` calls
+/// [`source_of`] against the raw TOML tree instead, because `config::load` fails
+/// on an unset `${VAR}` and that is exactly the config `doctor` is most useful on.
+/// It is retained for the tests, which assert the precedence rule per entry
+/// against the one function that decides it, and the positional shape is what lets
+/// them name an entry by the line the user wrote.
 ///
 /// **Disabled entries are skipped**, matching every other pass over the provider
 /// list: `${VAR}` expansion and field validation already leave a parked entry
 /// alone, and looking a key up for one would report a missing credential for a
-/// provider that is never contacted.
-pub fn resolve(config: &mut Config, store: &AuthStore) -> Vec<KeySource> {
-    config
-        .llm
-        .iter_mut()
-        .map(|llm| {
-            let source = source_of(
-                llm.api_key.as_deref(),
-                llm.endpoint.as_deref(),
-                llm.enabled,
-                store,
-            );
-            if source == KeySource::Store
-                && let Some(endpoint) = llm.endpoint.as_deref()
-                && let Some(key) = store.get(endpoint)
-            {
-                llm.api_key = Some(key.to_string());
+/// provider that is never contacted. For an `api_key_command` that also means no
+/// subprocess: some helpers are rate-limited and some prompt for a fingerprint,
+/// so spending a real credential call on a provider drep will not contact is
+/// worse than the missing-key report it avoids.
+///
+/// This is the one pass where a credential command runs, so each entry's command
+/// runs exactly once per process however many files the run reviews. A
+/// short-lived credential re-minted per file would fail per file, which the
+/// chain's demotion logic reads as an endpoint problem. There is deliberately no
+/// disk cache and no TTL behind that: drep is a short-lived process, so a
+/// credential written to disk buys nothing and adds a file worth stealing.
+///
+/// Once per process for every *enabled* entry, whether or not the chain reaches
+/// it. Deferring to first use would put credential resolution inside the request
+/// path, and "a broken credential is fatal rather than a provider drep quietly
+/// asks instead" holds precisely because resolution happens before the chain
+/// exists. An unset `${VAR}` in the same position is equally fatal, one layer up,
+/// in `ConfigError::EnvVarUnset`. `enabled = false` is the control for a fallback
+/// whose helper should not be spent.
+pub async fn resolve(config: &mut Config, store: &AuthStore) -> Result<Vec<KeySource>, AuthError> {
+    let mut sources = Vec::with_capacity(config.llm.len());
+    for (index, llm) in config.llm.iter_mut().enumerate() {
+        let source = source_of(
+            Declared {
+                api_key: llm.api_key.as_deref(),
+                has_api_key_command: llm.api_key_command.is_some(),
+                endpoint: llm.endpoint.as_deref(),
+                enabled: llm.enabled,
+            },
+            store,
+        );
+        match source {
+            // `source_of` returns `Command` only when the argv is present, so
+            // the default here is unreachable through it; `command::run` reports
+            // an empty argv rather than panicking if it ever becomes reachable.
+            KeySource::Command => {
+                let argv = llm.api_key_command.as_deref().unwrap_or_default();
+                let key = command::run_bounded(argv)
+                    .await
+                    .map_err(|cause| AuthError::KeyCommand { index, cause })?;
+                llm.api_key = Some(key);
             }
-            source
-        })
-        .collect()
+            KeySource::Store => {
+                if let Some(endpoint) = llm.endpoint.as_deref()
+                    && let Some(key) = store.get(endpoint)
+                {
+                    llm.api_key = Some(key.to_string());
+                }
+            }
+            KeySource::Config | KeySource::Missing => {}
+        }
+        sources.push(source);
+    }
+    Ok(sources)
+}
+
+/// Run one entry's `api_key_command` and discard the credential.
+///
+/// For `doctor`, whose contract is "what will actually run here": it has to
+/// really invoke the helper, because a helper that no longer authenticates is
+/// precisely what `api_key_command` exists to make visible. Returning `()`
+/// rather than the key is what makes printing it impossible at the call site,
+/// instead of a rule the reporting code has to remember.
+pub async fn probe_key_command(argv: &[String]) -> Result<(), KeyCommandError> {
+    command::run_bounded(argv).await.map(drop)
+}
+
+/// What one `[[llm]]` entry declares about its own credential.
+///
+/// Named fields rather than positional arguments, following `ExplicitFields`:
+/// `check` fills these from a loaded `Config` and `doctor` from the raw TOML
+/// tree, and two `Option<&str>` plus two `bool` in a call is a swap waiting to
+/// happen that the compiler would not catch.
+pub struct Declared<'a> {
+    pub api_key: Option<&'a str>,
+    pub has_api_key_command: bool,
+    pub endpoint: Option<&'a str>,
+    pub enabled: bool,
 }
 
 /// Where a provider's key will come from, given what its config names.
@@ -341,19 +479,17 @@ pub fn resolve(config: &mut Config, store: &AuthStore) -> Vec<KeySource> {
 /// `config::env_var_refs_in` already exists to prevent: doctor once carried a
 /// narrower copy of that scanner and reported a config as fine that `check`
 /// refused to load.
-pub fn source_of(
-    api_key: Option<&str>,
-    endpoint: Option<&str>,
-    enabled: bool,
-    store: &AuthStore,
-) -> KeySource {
-    if !enabled {
+pub fn source_of(declared: Declared<'_>, store: &AuthStore) -> KeySource {
+    if !declared.enabled {
         return KeySource::Missing;
     }
-    if api_key.is_some() {
+    if declared.api_key.is_some() {
         return KeySource::Config;
     }
-    match endpoint {
+    if declared.has_api_key_command {
+        return KeySource::Command;
+    }
+    match declared.endpoint {
         Some(endpoint) if store.get(endpoint).is_some() => KeySource::Store,
         _ => KeySource::Missing,
     }
