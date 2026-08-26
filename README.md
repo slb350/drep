@@ -306,6 +306,27 @@ drep auth logout --endpoint https://api.kimi.com/coding/v1
 is what CI wants — there is nobody to paste anything there. `DREP_AUTH_PATH`
 points drep at a different store.
 
+### Credentials that expire in minutes
+
+Some gateways hand out short-lived tokens: a stored key is stale before the second commit, and a `${VAR}` is stale before the shell that exported it is closed. `api_key_command` is an argv drep runs to mint one, and its whole trimmed stdout is the credential:
+
+```toml
+[[llm]]
+endpoint = "https://gateway.example/v1"
+model = "m"
+api_key_command = ["gcloud", "auth", "print-access-token"]
+```
+
+Anything that prints a token works — `gcloud auth print-access-token`, `az account get-access-token`, `op read`, `vault read`. It is an argv array, not a shell line: there is no `sh -c`, so no quoting, globbing or `$(...)` to get wrong. `${VAR}` inside an element is expanded like anywhere else in the file.
+
+The order is now: an explicit `api_key`, then `api_key_command`, then the stored key, then nothing. Setting both `api_key` and `api_key_command` on one entry is a config error rather than a precedence puzzle, and `backend = "codex"` rejects `api_key_command` along with the other HTTP-only fields.
+
+The output is taken whole, with only trailing whitespace removed. drep does not look for a line or a `token=` prefix in it, so a helper that prints anything other than the credential needs a wrapper that prints only the credential.
+
+A command that fails is fatal, and exits 2. It does not fall through to the next provider, for the reason a 401 does not: routing around a broken credential path is what hides it. The failure names the program and its exit status and nothing else — a misconfigured helper can print the token to stdout or stderr, and an error message is the one place it would escape into a terminal, a CI log or a bug report.
+
+It runs once per process, and the result is never written to disk. `drep doctor` really runs it, because doctor's job is to report what will actually happen here — so a helper behind a biometric or approval prompt will prompt on every `drep doctor`. That line says whether the command succeeded, never what it printed.
+
 By default `drep init` also adds `drep.toml` to `.gitignore`; pass
 `--no-gitignore` to commit it instead and share the provider choice with the
 repository.

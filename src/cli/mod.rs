@@ -81,7 +81,7 @@ pub async fn run(cli: Cli) -> Result<Exit> {
     match cli.command {
         Command::Check(args) => check::run(&args, std::path::Path::new(".")).await,
         Command::LintDocs(args) => lint_docs::run(&args, std::path::Path::new(".")).await,
-        Command::Doctor(args) => doctor::run(&args),
+        Command::Doctor(args) => doctor::run(&args).await,
         Command::Init(args) => init::run(&args).await,
         Command::Auth(args) => auth::run(&args),
         Command::Acknowledge(args) => acknowledge::run(&args, std::path::Path::new(".")),

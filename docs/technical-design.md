@@ -57,7 +57,9 @@ source, `files::is_markdown` is markdown, and nothing satisfies both.
 | `analysis/findings.rs` | `Severity` and its ordering |
 | `docs/` | the markdown checks: `fence`, `lines`, `links`, `blocks` |
 | `config.rs` | `drep.toml`: parse, `${VAR}` expansion, validation |
+| `config/env.rs` | `${VAR}` substitution and the one definition of a reference |
 | `auth.rs` | the per-machine credential store, keyed by endpoint |
+| `auth/command.rs` | resolving a provider credential by running a configured argv |
 | `text.rs` | `excerpt`, the only bounding of text drep did not write |
 
 ## Two layers, split by source
@@ -314,8 +316,15 @@ environment variable rather than holding a secret, and `config::env_var_refs_in`
 is the single definition of a `${VAR}` reference, shared by the substituter and
 by `doctor`. The top-level `max_review_rounds` defaults to 3 and rejects zero.
 
+A provider's credential is resolved in one pass, in `auth::resolve`, in this order: an explicit `api_key`, then `api_key_command`, then the endpoint-keyed store, then nothing — which `LlmClient::new` turns into `not-needed`. `auth::source_of` is the only statement of that order, and `doctor` calls it rather than restating it. `api_key_command` is an argv run with no shell, whose whole trimmed stdout is the credential; setting it alongside `api_key` is rejected at load, beside the unknown backend and the misspelled protocol, because two answers to one question is not a precedence puzzle. A Codex entry rejects it with the other HTTP-only fields.
+
+It resolves in that one pass, so each entry's command runs exactly once per process: a short-lived credential re-minted per file fails per file, which the chain's demotion logic reads as an endpoint problem. There is no disk cache and no TTL behind it — drep is a short-lived process, so a credential on disk buys nothing and adds a file worth stealing.
+
+A failing command is fatal there, before the chain exists, which is what makes it structurally unable to fail over. That is the same rule a 401 follows: routing around a broken credential path is what hides it. The diagnostic names the program and the exit status and nothing else, because a misconfigured helper can print the token to either stream and an error message is the one place it would escape. `KeyCommandError` carries no captured output, which is what keeps that true of `{:?}` as well as of `Display`.
+
 `backend` defaults to `http`. HTTP entries
-accept `endpoint`, `api_key`, `protocol`, `temperature`, `max_tokens` and
+accept `endpoint`, `api_key`, `api_key_command`, `protocol`, `temperature`,
+`max_tokens` and
 `max_retries`; they reject the Codex-only `reasoning_effort`. A `codex` entry
 requires `model`, accepts an optional `reasoning_effort`, and rejects every
 HTTP-only field, so a subscription selection cannot silently become API
@@ -326,8 +335,11 @@ Validation is deliberately strict at load, because each of these can only fail
 later and less legibly: a file declaring no providers, or none enabled, is
 rejected; `max_concurrent = 0` is rejected, since a semaphore with no permits
 would hang with no message. Disabled entries are inert - `${VAR}` expansion and
-field validation both skip them - so parking a cloud provider does not require
-its key to be set. `LlmConfig` hand-writes `Debug` to redact `api_key`.
+field validation both skip them, and so does credential resolution, which for an
+`api_key_command` also means no subprocess - so parking a cloud provider does not
+require its key to be set. `LlmConfig` hand-writes `Debug` to redact `api_key`,
+and prints an `api_key_command` as its program name plus an argument count,
+because an argv can carry the credential too.
 
 ## Distribution
 

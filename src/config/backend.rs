@@ -96,6 +96,11 @@ pub struct LlmConfig {
     pub endpoint: Option<String>,
     pub model: Option<String>,
     pub api_key: Option<String>,
+    /// An argv - never a shell line - whose trimmed stdout is the credential.
+    ///
+    /// Declared after `api_key` because the field order is the resolution order:
+    /// an explicit key wins, then this, then the per-machine store.
+    pub api_key_command: Option<Vec<String>>,
     pub protocol: Option<String>,
     pub reasoning_effort: Option<ReasoningEffort>,
     pub temperature: Option<f32>,
@@ -121,6 +126,14 @@ impl std::fmt::Debug for LlmConfig {
                     .map(|_| "<redacted>")
                     .unwrap_or("None"),
             )
+            .field(
+                "api_key_command",
+                &self
+                    .api_key_command
+                    .as_deref()
+                    .map(describe_command)
+                    .unwrap_or_else(|| "None".to_owned()),
+            )
             .field("protocol", &self.protocol)
             .field("reasoning_effort", &self.reasoning_effort)
             .field("temperature", &self.temperature)
@@ -132,6 +145,21 @@ impl std::fmt::Debug for LlmConfig {
     }
 }
 
+/// The program name plus how many arguments follow it, never the arguments.
+///
+/// The program is the useful non-secret half, the same trade `AuthStore`'s
+/// `Debug` makes by printing its endpoints. The arguments are not that half:
+/// `["vault", "read", "--token=…"]` carries a credential in argv, and so does a
+/// helper invoked as `["sh", "-c", "curl -H 'Authorization: …'"]`. Redacting
+/// them individually would mean deciding which of them looks secret, which is
+/// the judgement call this struct hand-writes `Debug` to avoid making.
+fn describe_command(argv: &[String]) -> String {
+    match argv.split_first() {
+        None => "[]".to_owned(),
+        Some((program, rest)) => format!("[{program}, {} argument(s) redacted]", rest.len()),
+    }
+}
+
 impl Default for LlmConfig {
     fn default() -> Self {
         Self {
@@ -140,6 +168,7 @@ impl Default for LlmConfig {
             endpoint: None,
             model: None,
             api_key: None,
+            api_key_command: None,
             protocol: None,
             reasoning_effort: None,
             temperature: None,
@@ -159,6 +188,7 @@ impl Default for LlmConfig {
 pub(super) struct ExplicitFields {
     endpoint: bool,
     api_key: bool,
+    api_key_command: bool,
     protocol: bool,
     reasoning_effort: bool,
     temperature: bool,
@@ -175,6 +205,7 @@ pub(super) fn explicit_fields(tree: &Value) -> Vec<ExplicitFields> {
                 .map(|entry| ExplicitFields {
                     endpoint: entry.get("endpoint").is_some(),
                     api_key: entry.get("api_key").is_some(),
+                    api_key_command: entry.get("api_key_command").is_some(),
                     protocol: entry.get("protocol").is_some(),
                     reasoning_effort: entry.get("reasoning_effort").is_some(),
                     temperature: entry.get("temperature").is_some(),
@@ -227,6 +258,7 @@ pub(super) fn validate(
             for (present, field) in [
                 (fields.endpoint, "endpoint"),
                 (fields.api_key, "api_key"),
+                (fields.api_key_command, "api_key_command"),
                 (fields.protocol, "protocol"),
                 (fields.temperature, "temperature"),
                 (fields.max_tokens, "max_tokens"),

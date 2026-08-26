@@ -5,7 +5,7 @@
 //! a disagreement there makes `doctor` report a broken config as fine, which
 //! is the one thing this command must never do.
 
-use crate::cli::doctor::unset_env_vars;
+use crate::cli::doctor::llm::unset_env_vars;
 
 /// Parse `body` as TOML for the scanner tests.
 fn tree(body: &str) -> toml::Value {

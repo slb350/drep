@@ -258,15 +258,19 @@ pub(crate) async fn run_against(
     let mut config = config::load(&config_path)
         .with_context(|| format!("could not load {}", config_path.display()))?;
 
-    // Fill in the keys the file left unset from the user-level store. An
-    // explicit `api_key` in `drep.toml` always wins, so this cannot change what
-    // an existing config does; it only supplies what `drep init` stopped writing
-    // into the repository. A store that cannot be read is fatal rather than
-    // treated as empty - running the gate unauthenticated would surface as a 401
-    // per file, which reads as a broken key rather than a broken store.
+    // Fill in the keys the file left unset from the user-level store, and run any
+    // `api_key_command` an entry declares. An explicit `api_key` in `drep.toml`
+    // always wins, so this cannot change what an existing config does; it only
+    // supplies what `drep init` stopped writing into the repository. A store that
+    // cannot be read is fatal rather than treated as empty - running the gate
+    // unauthenticated would surface as a 401 per file, which reads as a broken key
+    // rather than a broken store. A failing `api_key_command` is fatal here for
+    // the same reason and one more: the chain does not exist yet, so there is
+    // nothing to fail over to, and routing around a broken credential path is
+    // what hides it.
     let store = auth::AuthStore::load(auth_path)
         .with_context(|| format!("could not read the auth store at {}", auth_path.display()))?;
-    auth::resolve(&mut config, &store);
+    auth::resolve(&mut config, &store).await?;
     // The whole enabled chain, not just its head: `providers()` is the
     // failover order, and `load` has already rejected a config with none.
     // The `is_empty` guard stays because `Config` is constructible without

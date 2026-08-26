@@ -6,18 +6,18 @@
 //! so paths and shell syntax are not mangled.
 
 use super::support::write_config;
+use crate::config::env::expand_env_in;
 use crate::config::*;
 use std::env;
 use std::path::Path;
 
 /// `expand_env_in` walks arrays as well as tables.
 ///
-/// No field in `LlmConfig` is an array today, so this cannot be reached
-/// through `load()` — which is exactly why the array arm survived
-/// mutation testing. It is still load-bearing: the walk exists so a future
-/// array-valued field inherits `${VAR}` expansion without anyone
-/// remembering to opt in, and a silently-skipped arm would break that
-/// promise the moment such a field is added.
+/// `api_key_command` is the field that reaches this arm through `load()`; the
+/// walk predates it, which is why the arm survived mutation testing for a
+/// while. It exists so an array-valued field inherits `${VAR}` expansion
+/// without anyone remembering to opt in, and this pins the arm directly rather
+/// than only through the one field that happens to use it.
 #[test]
 fn env_expansion_descends_into_arrays() {
     // SAFETY: single-threaded test process; no other thread reads env here.
@@ -190,5 +190,46 @@ endpoint = "http://host/$1/path"
     assert_eq!(
         config.llm[0].endpoint.as_deref(),
         Some("http://host/$1/path")
+    );
+}
+
+#[test]
+fn a_var_reference_inside_an_api_key_command_expands_and_is_required() {
+    // An argv element is a string like any other, so the walk already reaches
+    // it. What has to hold is that `doctor` and `load` agree about it: a
+    // reference only `load` knew about is the drift `required_env_var_refs`
+    // exists to prevent.
+    let temp = tempfile::tempdir().expect("tempdir");
+    let var = "DREP_TEST_KEY_COMMAND_REF_XYZ";
+    let path = write_config(
+        &temp,
+        &format!(
+            "[[llm]]\nendpoint = \"https://gateway.example/v1\"\nmodel = \"m\"\n\
+             api_key_command = [\"read-secret\", \"${{{var}}}\"]\n"
+        ),
+    );
+
+    let tree: Value =
+        toml::from_str(&std::fs::read_to_string(&path).expect("read")).expect("parse");
+    assert_eq!(
+        required_env_var_refs(&tree),
+        vec![var.to_owned()],
+        "doctor must see the reference the substituter will act on"
+    );
+
+    let previous = env::var_os(var);
+    // SAFETY: this module is the isolated environment-expansion suite and the
+    // variable name is unique to this test; it is restored before asserting.
+    unsafe { env::set_var(var, "vault://secret") };
+    let result = load(&path);
+    match previous {
+        Some(value) => unsafe { env::set_var(var, value) },
+        None => unsafe { env::remove_var(var) },
+    }
+
+    let config = result.expect("load");
+    assert_eq!(
+        config.llm[0].api_key_command.as_deref(),
+        Some(["read-secret".to_owned(), "vault://secret".to_owned()].as_slice())
     );
 }

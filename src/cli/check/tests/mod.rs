@@ -6,6 +6,7 @@
 //! file, declare it. A file no `mod` declaration reaches is never compiled,
 //! and cargo will not warn about it.
 
+mod credentials;
 mod deterministic;
 mod failover_report;
 mod failures;

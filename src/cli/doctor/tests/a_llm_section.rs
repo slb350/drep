@@ -22,19 +22,19 @@ fn write_py(dir: &Path) {
 }
 
 /// Run `doctor` against `dir` and return what it printed.
-fn report_for(dir: &Path) -> String {
+async fn report_for(dir: &Path) -> String {
     let mut out = Vec::new();
-    run_to(&mut out, &args(dir)).expect("run_to");
+    run_to(&mut out, &args(dir)).await.expect("run_to");
     String::from_utf8(out).expect("utf8")
 }
 
-#[test]
-fn no_config_file_prints_the_unconfigured_message_and_still_prints_tools() {
+#[tokio::test]
+async fn no_config_file_prints_the_unconfigured_message_and_still_prints_tools() {
     let dir = tempfile::tempdir().expect("tempdir");
     write_py(dir.path());
 
     let mut out = Vec::new();
-    let exit = run_to(&mut out, &args(dir.path())).expect("run_to");
+    let exit = run_to(&mut out, &args(dir.path())).await.expect("run_to");
     assert_eq!(exit, crate::Exit::Clean);
     let rendered = String::from_utf8(out).expect("utf8");
 
@@ -58,8 +58,8 @@ fn no_config_file_prints_the_unconfigured_message_and_still_prints_tools() {
     );
 }
 
-#[test]
-fn two_providers_render_in_file_order() {
+#[tokio::test]
+async fn two_providers_render_in_file_order() {
     let dir = tempfile::tempdir().expect("tempdir");
     write_py(dir.path());
     let body = "\
@@ -74,7 +74,7 @@ fn two_providers_render_in_file_order() {
     std::fs::write(dir.path().join("drep.toml"), body).expect("drep.toml");
 
     let mut out = Vec::new();
-    let exit = run_to(&mut out, &args(dir.path())).expect("run_to");
+    let exit = run_to(&mut out, &args(dir.path())).await.expect("run_to");
     assert_eq!(exit, crate::Exit::Clean);
     let rendered = String::from_utf8(out).expect("utf8");
 
@@ -90,8 +90,8 @@ fn two_providers_render_in_file_order() {
     );
 }
 
-#[test]
-fn unset_env_var_is_named_and_provider_still_renders() {
+#[tokio::test]
+async fn unset_env_var_is_named_and_provider_still_renders() {
     // The discriminating case: routing display through `config::load` would
     // fail on the unset variable and never print the model. The raw-file
     // path is what makes both halves appear.
@@ -106,7 +106,7 @@ fn unset_env_var_is_named_and_provider_still_renders() {
     std::fs::write(dir.path().join("drep.toml"), body).expect("drep.toml");
 
     let mut out = Vec::new();
-    let exit = run_to(&mut out, &args(dir.path())).expect("run_to");
+    let exit = run_to(&mut out, &args(dir.path())).await.expect("run_to");
     assert_eq!(exit, crate::Exit::Clean);
     let rendered = String::from_utf8(out).expect("utf8");
 
@@ -120,15 +120,17 @@ fn unset_env_var_is_named_and_provider_still_renders() {
     );
 }
 
-#[test]
-fn invalid_toml_is_reported_and_run_to_returns_clean() {
+#[tokio::test]
+async fn invalid_toml_is_reported_and_run_to_returns_clean() {
     let dir = tempfile::tempdir().expect("tempdir");
     write_py(dir.path());
     let body = "[[llm]\nmodel = "; // truncated mid-key
     std::fs::write(dir.path().join("drep.toml"), body).expect("drep.toml");
 
     let mut out = Vec::new();
-    let exit = run_to(&mut out, &args(dir.path())).expect("run_to must not error");
+    let exit = run_to(&mut out, &args(dir.path()))
+        .await
+        .expect("run_to must not error");
     assert_eq!(exit, crate::Exit::Clean);
     let rendered = String::from_utf8(out).expect("utf8");
 
@@ -138,15 +140,15 @@ fn invalid_toml_is_reported_and_run_to_returns_clean() {
     );
 }
 
-#[test]
-fn provider_with_no_model_and_no_endpoint_renders_placeholder_text() {
+#[tokio::test]
+async fn provider_with_no_model_and_no_endpoint_renders_placeholder_text() {
     let dir = tempfile::tempdir().expect("tempdir");
     write_py(dir.path());
     let body = "[[llm]]\n";
     std::fs::write(dir.path().join("drep.toml"), body).expect("drep.toml");
 
     let mut out = Vec::new();
-    let exit = run_to(&mut out, &args(dir.path())).expect("run_to");
+    let exit = run_to(&mut out, &args(dir.path())).await.expect("run_to");
     assert_eq!(exit, crate::Exit::Clean);
     let rendered = String::from_utf8(out).expect("utf8");
 
@@ -156,8 +158,8 @@ fn provider_with_no_model_and_no_endpoint_renders_placeholder_text() {
     );
 }
 
-#[test]
-fn explicit_config_flag_overrides_default_path() {
+#[tokio::test]
+async fn explicit_config_flag_overrides_default_path() {
     // Sanity check for the `--config` path: pointing at a file outside the
     // root makes the report read *that* file rather than `drep.toml`.
     let dir = tempfile::tempdir().expect("tempdir");
@@ -174,6 +176,7 @@ fn explicit_config_flag_overrides_default_path() {
         &mut out,
         &args_with_config(dir.path(), other.path().join("custom.toml")),
     )
+    .await
     .expect("run_to");
     assert_eq!(exit, crate::Exit::Clean);
     let rendered = String::from_utf8(out).expect("utf8");
@@ -190,8 +193,8 @@ fn explicit_config_flag_overrides_default_path() {
 /// accident - it said nothing about which entries were live. Now that the list
 /// is a real failover chain, an entry the chain will skip is the one thing this
 /// section can still misreport.
-#[test]
-fn a_disabled_provider_is_marked_as_skipped() {
+#[tokio::test]
+async fn a_disabled_provider_is_marked_as_skipped() {
     let temp = tempfile::tempdir().expect("tempdir");
     std::fs::write(
         temp.path().join("drep.toml"),
@@ -208,7 +211,7 @@ endpoint = "https://api.example/v1"
     )
     .expect("write config");
 
-    let rendered = report_for(temp.path());
+    let rendered = report_for(temp.path()).await;
     let local = rendered
         .lines()
         .find(|line| line.contains("local-model"))
@@ -231,8 +234,8 @@ endpoint = "https://api.example/v1"
 ///
 /// "Providers are tried in order" is true here and useless. The fact this user
 /// needs is that an unreachable endpoint means exit 2 with nothing to catch it.
-#[test]
-fn a_single_provider_is_reported_as_having_no_fallback() {
+#[tokio::test]
+async fn a_single_provider_is_reported_as_having_no_fallback() {
     let temp = tempfile::tempdir().expect("tempdir");
     std::fs::write(
         temp.path().join("drep.toml"),
@@ -240,7 +243,7 @@ fn a_single_provider_is_reported_as_having_no_fallback() {
     )
     .expect("write config");
 
-    let rendered = report_for(temp.path());
+    let rendered = report_for(temp.path()).await;
     assert!(
         rendered.contains("no fallback"),
         "a lone provider must be reported as having no fallback:\n{rendered}"
@@ -250,8 +253,8 @@ fn a_single_provider_is_reported_as_having_no_fallback() {
 /// With two enabled providers, `doctor` states the failover rule - including
 /// the exception, because "it falls through" without "except on a 401" is the
 /// half that leads a user to expect their broken key to be routed around.
-#[test]
-fn two_providers_are_reported_as_a_failover_chain_with_the_401_exception() {
+#[tokio::test]
+async fn two_providers_are_reported_as_a_failover_chain_with_the_401_exception() {
     let temp = tempfile::tempdir().expect("tempdir");
     std::fs::write(
         temp.path().join("drep.toml"),
@@ -267,7 +270,7 @@ endpoint = "http://b/v1"
     )
     .expect("write config");
 
-    let rendered = report_for(temp.path());
+    let rendered = report_for(temp.path()).await;
     assert!(
         rendered.contains("2 providers, tried in order"),
         "the count and the order must be stated:\n{rendered}"
@@ -283,8 +286,8 @@ endpoint = "http://b/v1"
 /// `config::load` rejects this file, so `drep check` would fail with the same
 /// message - but `doctor` is the command a user runs to find out *why*, and it
 /// must not stop at listing two entries that look fine.
-#[test]
-fn an_all_disabled_config_is_reported_as_unable_to_run() {
+#[tokio::test]
+async fn an_all_disabled_config_is_reported_as_unable_to_run() {
     let temp = tempfile::tempdir().expect("tempdir");
     std::fs::write(
         temp.path().join("drep.toml"),
@@ -300,7 +303,7 @@ model = "b"
     )
     .expect("write config");
 
-    let rendered = report_for(temp.path());
+    let rendered = report_for(temp.path()).await;
     assert!(
         rendered.contains("Every provider is disabled"),
         "an all-disabled config must be called out:\n{rendered}"
@@ -314,8 +317,8 @@ model = "b"
 /// make the same provider "2" here and "1" there - two numbering schemes for
 /// one list, and a user counting blocks in `drep.toml` to find the offender
 /// would land on the wrong one.
-#[test]
-fn providers_are_numbered_by_chain_position_not_file_position() {
+#[tokio::test]
+async fn providers_are_numbered_by_chain_position_not_file_position() {
     let temp = tempfile::tempdir().expect("tempdir");
     std::fs::write(
         temp.path().join("drep.toml"),
@@ -332,7 +335,7 @@ endpoint = "http://live/v1"
     )
     .expect("write config");
 
-    let rendered = report_for(temp.path());
+    let rendered = report_for(temp.path()).await;
     assert!(
         rendered.contains("1. leads-the-chain at http://live/v1"),
         "the first ENABLED entry is number 1, whatever sits above it:\n{rendered}"
@@ -352,8 +355,8 @@ endpoint = "http://live/v1"
 /// Reporting this as "declares no `[[llm]]` provider" points the user at a
 /// command that will refuse to overwrite their file and skips the
 /// `config::load` check that names the real problem.
-#[test]
-fn a_non_array_llm_key_is_not_reported_as_a_missing_provider() {
+#[tokio::test]
+async fn a_non_array_llm_key_is_not_reported_as_a_missing_provider() {
     let temp = tempfile::tempdir().expect("tempdir");
     std::fs::write(
         temp.path().join("drep.toml"),
@@ -361,7 +364,7 @@ fn a_non_array_llm_key_is_not_reported_as_a_missing_provider() {
     )
     .expect("write config");
 
-    let rendered = report_for(temp.path());
+    let rendered = report_for(temp.path()).await;
     assert!(
         !rendered.contains("declares no `[[llm]]` provider"),
         "the key is present - saying it is absent sends the user to `drep init`:\n{rendered}"
@@ -382,12 +385,12 @@ fn a_non_array_llm_key_is_not_reported_as_a_missing_provider() {
 /// listing loop as an all-disabled one and reaches the same trailing summary.
 /// They are different problems — one needs a provider written, the other needs
 /// one re-enabled — and the message has to send the user to the right fix.
-#[test]
-fn an_empty_llm_array_is_reported_as_declaring_no_provider() {
+#[tokio::test]
+async fn an_empty_llm_array_is_reported_as_declaring_no_provider() {
     let temp = tempfile::tempdir().expect("tempdir");
     std::fs::write(temp.path().join("drep.toml"), "llm = []\n").expect("write config");
 
-    let rendered = report_for(temp.path());
+    let rendered = report_for(temp.path()).await;
     assert!(
         rendered.contains("declares no `[[llm]]` provider"),
         "an empty array declares no provider:\n{rendered}"
@@ -404,8 +407,8 @@ fn an_empty_llm_array_is_reported_as_declaring_no_provider() {
 /// required — and `doctor` warning "LLM analysis will fail until you export it"
 /// about a run that will succeed is the same disagreement, in the opposite
 /// direction, that its old narrower `${VAR}` scanner produced.
-#[test]
-fn a_disabled_providers_unset_env_var_is_not_warned_about() {
+#[tokio::test]
+async fn a_disabled_providers_unset_env_var_is_not_warned_about() {
     let temp = tempfile::tempdir().expect("tempdir");
     std::fs::write(
         temp.path().join("drep.toml"),
@@ -423,7 +426,7 @@ api_key = "${DREP_DOCTOR_VAR_THAT_IS_NOT_SET}"
     )
     .expect("write config");
 
-    let rendered = report_for(temp.path());
+    let rendered = report_for(temp.path()).await;
     assert!(
         !rendered.contains("DREP_DOCTOR_VAR_THAT_IS_NOT_SET"),
         "the parked provider's variable is not required:\n{rendered}"
@@ -438,8 +441,8 @@ api_key = "${DREP_DOCTOR_VAR_THAT_IS_NOT_SET}"
 ///
 /// The discriminating half: a scanner that skipped every provider would pass
 /// the test above and go silent on the one warning that matters.
-#[test]
-fn an_enabled_providers_unset_env_var_is_still_warned_about() {
+#[tokio::test]
+async fn an_enabled_providers_unset_env_var_is_still_warned_about() {
     let temp = tempfile::tempdir().expect("tempdir");
     std::fs::write(
         temp.path().join("drep.toml"),
@@ -456,7 +459,7 @@ model = "parked"
     )
     .expect("write config");
 
-    let rendered = report_for(temp.path());
+    let rendered = report_for(temp.path()).await;
     assert!(
         rendered.contains("DREP_DOCTOR_VAR_THAT_IS_NOT_SET is NOT set"),
         "the live provider's variable must still be flagged:\n{rendered}"
@@ -467,14 +470,16 @@ model = "parked"
 ///
 /// The store is a temp path so the report never depends on what the developer
 /// has stored, and never writes to the real one.
-fn report_with_empty_store(dir: &Path) -> String {
+async fn report_with_empty_store(dir: &Path) -> String {
     let mut out = Vec::new();
-    run_at(&mut out, &args(dir), &dir.join("auth.toml")).expect("run_at");
+    run_at(&mut out, &args(dir), &dir.join("auth.toml"))
+        .await
+        .expect("run_at");
     String::from_utf8(out).expect("utf8")
 }
 
-#[test]
-fn a_var_reference_is_echoed_so_the_reader_can_see_which_one() {
+#[tokio::test]
+async fn a_var_reference_is_echoed_so_the_reader_can_see_which_one() {
     // The whole reason doctor reads the raw tree rather than the loaded config:
     // `${VAR}` has to print as itself.
     let dir = tempfile::tempdir().expect("tempdir");
@@ -485,14 +490,14 @@ fn a_var_reference_is_echoed_so_the_reader_can_see_which_one() {
     )
     .expect("config");
 
-    let report = report_with_empty_store(dir.path());
+    let report = report_with_empty_store(dir.path()).await;
 
     assert!(report.contains("${SOME_TOKEN}"), "got {report}");
     assert!(report.contains("from drep.toml"), "got {report}");
 }
 
-#[test]
-fn a_literal_key_is_never_echoed() {
+#[tokio::test]
+async fn a_literal_key_is_never_echoed() {
     // `config::load` accepts a literal `api_key`, and doctor's output is what
     // people paste into bug reports and CI logs. Printing the value verbatim
     // would put a live credential in both.
@@ -504,7 +509,7 @@ fn a_literal_key_is_never_echoed() {
     )
     .expect("config");
 
-    let report = report_with_empty_store(dir.path());
+    let report = report_with_empty_store(dir.path()).await;
 
     assert!(
         !report.contains("sk-live-secret-value"),
@@ -516,8 +521,8 @@ fn a_literal_key_is_never_echoed() {
     );
 }
 
-#[test]
-fn a_provider_with_no_key_anywhere_says_where_to_get_one() {
+#[tokio::test]
+async fn a_provider_with_no_key_anywhere_says_where_to_get_one() {
     let dir = tempfile::tempdir().expect("tempdir");
     write_py(dir.path());
     std::fs::write(
@@ -526,7 +531,7 @@ fn a_provider_with_no_key_anywhere_says_where_to_get_one() {
     )
     .expect("config");
 
-    let report = report_with_empty_store(dir.path());
+    let report = report_with_empty_store(dir.path()).await;
 
     assert!(report.contains("drep auth login"), "got {report}");
 }

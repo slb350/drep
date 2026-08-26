@@ -37,8 +37,8 @@ impl std::io::Write for BadDisk {
 /// The `BadDisk` half is what makes the classification meaningful: without it,
 /// "treat every write error as success" passes, and a genuinely failed report
 /// would be indistinguishable from a delivered one.
-#[test]
-fn a_closed_pipe_is_not_a_failure_but_a_real_write_error_is() {
+#[tokio::test]
+async fn a_closed_pipe_is_not_a_failure_but_a_real_write_error_is() {
     let dir = tempfile::tempdir().expect("tempdir");
     std::fs::write(dir.path().join("a.py"), "x = 1\n").expect("a.py");
     let args = DoctorArgs {
@@ -50,22 +50,24 @@ fn a_closed_pipe_is_not_a_failure_but_a_real_write_error_is() {
     // pipe case is asserted through `run`.
     let mut sink = ClosedPipe;
     assert!(
-        run_to(&mut sink, &args).is_err(),
+        run_to(&mut sink, &args).await.is_err(),
         "run_to reports the write failure to its caller"
     );
     assert_eq!(
-        run(&args).expect("stdout is a real sink here"),
+        run(&args).await.expect("stdout is a real sink here"),
         crate::Exit::Clean
     );
 
     let mut sink = BadDisk;
-    let err = run_to(&mut sink, &args).expect_err("a real IO error must surface");
+    let err = run_to(&mut sink, &args)
+        .await
+        .expect_err("a real IO error must surface");
     assert!(
         !crate::cli::doctor::is_broken_pipe(&err),
         "a disk error is not a closed pipe"
     );
     let mut sink = ClosedPipe;
-    let err = run_to(&mut sink, &args).expect_err("closed pipe");
+    let err = run_to(&mut sink, &args).await.expect_err("closed pipe");
     assert!(
         crate::cli::doctor::is_broken_pipe(&err),
         "and a closed pipe is"

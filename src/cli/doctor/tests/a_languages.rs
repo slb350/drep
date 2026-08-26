@@ -14,15 +14,15 @@ fn args(path: &std::path::Path) -> DoctorArgs {
     }
 }
 
-#[test]
-fn languages_found_lists_each_language_in_registration_order() {
+#[tokio::test]
+async fn languages_found_lists_each_language_in_registration_order() {
     let dir = tempfile::tempdir().expect("tempdir");
     std::fs::write(dir.path().join("a.py"), "x = 1\n").expect("a.py");
     std::fs::write(dir.path().join("b.py"), "y = 2\n").expect("b.py");
     std::fs::write(dir.path().join("main.go"), "package main\n").expect("main.go");
 
     let mut out = Vec::new();
-    let exit = run_to(&mut out, &args(dir.path())).expect("run_to");
+    let exit = run_to(&mut out, &args(dir.path())).await.expect("run_to");
     assert_eq!(exit, crate::Exit::Clean);
     let rendered = String::from_utf8(out).expect("utf8");
 
