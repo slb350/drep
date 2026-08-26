@@ -261,7 +261,7 @@ impl AuthStore {
 
     /// Store `key` for `endpoint`, replacing any previous one.
     ///
-    /// The rule about what a credential may be is [`vet`]'s, not this method's;
+    /// The rule about what a credential may be is `vet`'s, not this method's;
     /// only the wording is here, because a paste at the prompt and a helper's
     /// stdout send the reader to different fixes.
     pub fn set(&mut self, endpoint: &str, key: &str) -> Result<(), AuthError> {

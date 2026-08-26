@@ -25,7 +25,7 @@
 //! written here is per-developer and opt-in. [`site`] is the layer above it: a
 //! machine-level policy file a checkout can tighten but never loosen.
 //!
-//! [`load`] and [`validate`] know nothing about it and take no site argument.
+//! [`load`] and `validate` know nothing about it and take no site argument.
 //! The clamp is applied by the caller, after `load` returns, which is what keeps
 //! [`ConfigError`] a statement about this file alone - every one of its messages
 //! numbers `[[llm]]` entries in *this* file's order, and a bare `#2` that could

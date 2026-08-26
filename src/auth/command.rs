@@ -57,7 +57,7 @@ pub enum KeyCommandError {
     NoProgram,
 
     /// Distinguished from [`Self::Spawn`] because the fix is different: this one
-    /// is a typo in argv[0] or a helper that is not installed, and reporting it
+    /// is a typo in `argv[0]` or a helper that is not installed, and reporting it
     /// as "could not be started: No such file or directory" sends the reader
     /// looking at file permissions instead.
     #[error("api_key_command `{program}` was not found on PATH")]

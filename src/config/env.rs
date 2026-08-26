@@ -137,7 +137,7 @@ pub fn env_var_refs(s: &str) -> Vec<String> {
     refs
 }
 
-/// Every `${NAME}` reference that [`load`] will actually try to substitute.
+/// Every `${NAME}` reference that [`super::load`] will actually try to substitute.
 ///
 /// The same tree as [`env_var_refs_in`], minus the `[[llm]]` entries that
 /// carry `enabled = false` — because `load` skips expanding those, so a
