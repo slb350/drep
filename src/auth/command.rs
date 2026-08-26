@@ -36,6 +36,14 @@ use thiserror::Error;
 /// helpers does.
 pub(crate) const TIMEOUT_SECS: u64 = 30;
 
+/// The most stdout a credential helper may print.
+///
+/// Generous by three orders of magnitude for the thing being read: the longest
+/// bearer tokens in circulation are a few kilobytes. It is a ceiling on a
+/// misconfiguration, not a budget for a credential, and it exists because the
+/// alternative is allocating whatever the helper printed inside the commit gate.
+const MAX_OUTPUT_BYTES: usize = 64 * 1024;
+
 /// Why a configured `api_key_command` did not produce a usable credential.
 ///
 /// `Debug` is derived, which is safe only because no variant carries captured
@@ -100,6 +108,27 @@ pub enum KeyCommandError {
          cannot be sent in a header; it must print the credential alone"
     )]
     Unusable { program: String },
+
+    /// The helper printed more than any credential can be.
+    ///
+    /// A ceiling rather than an unbounded read, for the reason `crate::http`'s
+    /// module doc gives: a bound is a safety property, and the failure it names
+    /// there is a second reader next to a bounded one that kept calling `text()`
+    /// with no ceiling at all. This is the third spawn site in the crate and the
+    /// first with a ceiling, so the doctrine is applied here rather than argued
+    /// about: an `api_key_command` pointed at the wrong program - `cat` on a large
+    /// file is one keystroke from `cat` on a token file - would otherwise allocate
+    /// whatever it printed inside the commit gate, then walk all of it twice to
+    /// trim it and scan it for control characters.
+    ///
+    /// Reported rather than truncated. Truncating would hand the endpoint a prefix
+    /// of something that was never a credential and turn a local misconfiguration
+    /// into a 401 per file.
+    #[error(
+        "api_key_command `{program}` printed more than {limit} bytes; the whole \
+         trimmed stdout is the credential, so it must print one and nothing else"
+    )]
+    TooMuchOutput { program: String, limit: usize },
 }
 
 /// [`run`] bounded by drep's own [`TIMEOUT_SECS`].
@@ -120,9 +149,13 @@ pub(crate) async fn run_bounded(argv: &[String]) -> Result<String, KeyCommandErr
 ///
 /// stdin is closed rather than inherited: a helper that decides to prompt would
 /// otherwise read the terminal drep's caller is using, and a git hook has no
-/// terminal to give it. Both output streams are piped and drained by
-/// `wait_with_output`, so a chatty helper cannot fill a pipe and deadlock, and
-/// `kill_on_drop` reaps the child on the timeout branch.
+/// terminal to give it. stderr goes to `null`, which is what makes reading stdout
+/// to EOF and *then* waiting deadlock-free: there is no second pipe for a chatty
+/// helper to fill while nobody drains it. drep never reads a byte of stderr
+/// anyway - the diagnostic names the program and the status and nothing else,
+/// because a misconfigured helper can print the token to either stream - so piping
+/// it bought only the obligation to drain it. `kill_on_drop` reaps the child on the
+/// timeout and over-limit branches.
 pub(crate) async fn run(argv: &[String], timeout: Duration) -> Result<String, KeyCommandError> {
     let Some((program, arguments)) = argv.split_first() else {
         return Err(KeyCommandError::NoProgram);
@@ -133,10 +166,10 @@ pub(crate) async fn run(argv: &[String], timeout: Duration) -> Result<String, Ke
         .args(arguments)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
+        .stderr(Stdio::null())
         .kill_on_drop(true);
 
-    let child = command.spawn().map_err(|cause| match cause.kind() {
+    let mut child = command.spawn().map_err(|cause| match cause.kind() {
         std::io::ErrorKind::NotFound => KeyCommandError::NotFound {
             program: program.clone(),
         },
@@ -146,14 +179,42 @@ pub(crate) async fn run(argv: &[String], timeout: Duration) -> Result<String, Ke
         },
     })?;
 
-    let output = match tokio::time::timeout(timeout, child.wait_with_output()).await {
-        Ok(Ok(output)) => output,
-        Ok(Err(cause)) => {
-            return Err(KeyCommandError::Spawn {
+    // stdout is read with a ceiling rather than by `wait_with_output`, which
+    // buffers whatever the helper chose to print. One byte past the ceiling is
+    // read deliberately, so "exactly at the limit" and "over it" are
+    // distinguishable without a second read, and the over-limit branch returns
+    // before waiting - a child blocked writing into a pipe nobody is draining
+    // would otherwise be reported as a timeout, which names the wrong problem.
+    let mut stdout = child
+        .stdout
+        .take()
+        .expect("stdout is piped by the builder above");
+    let read_then_wait = async {
+        use tokio::io::AsyncReadExt;
+        let mut captured = Vec::new();
+        (&mut stdout)
+            .take(MAX_OUTPUT_BYTES as u64 + 1)
+            .read_to_end(&mut captured)
+            .await
+            .map_err(|cause| KeyCommandError::Spawn {
                 program: program.clone(),
                 cause,
+            })?;
+        if captured.len() > MAX_OUTPUT_BYTES {
+            return Err(KeyCommandError::TooMuchOutput {
+                program: program.clone(),
+                limit: MAX_OUTPUT_BYTES,
             });
         }
+        let status = child.wait().await.map_err(|cause| KeyCommandError::Spawn {
+            program: program.clone(),
+            cause,
+        })?;
+        Ok((captured, status))
+    };
+
+    let (captured, status) = match tokio::time::timeout(timeout, read_then_wait).await {
+        Ok(result) => result?,
         Err(_) => {
             return Err(KeyCommandError::Timeout {
                 program: program.clone(),
@@ -166,8 +227,8 @@ pub(crate) async fn run(argv: &[String], timeout: Duration) -> Result<String, Ke
     // printed a partial value is reported as failed. `String::from_utf8` on the
     // stdout of a helper that exited 7 would otherwise decide which of the two
     // problems the user hears about.
-    if !output.status.success() {
-        return Err(match output.status.code() {
+    if !status.success() {
+        return Err(match status.code() {
             Some(code) => KeyCommandError::Failed {
                 program: program.clone(),
                 code,
@@ -178,32 +239,25 @@ pub(crate) async fn run(argv: &[String], timeout: Duration) -> Result<String, Ke
         });
     }
 
-    // Taken whole, with surrounding whitespace removed: every helper that prints
-    // a token prints a newline after it, and a leading space is one `printf ' %s'`
-    // or one `cut` field away. Both ends, matching `AuthStore::set` on a pasted
-    // key - trimming only the tail accepted `" sk-live-..."`, which passes the
-    // control-character guard below and is then stripped again by the transport,
-    // so the value sent was not the value checked and the endpoint answered 401.
+    // What a credential may be is `auth::vet`'s rule, shared with a key pasted at
+    // the prompt: the trim of both ends, the empty refusal and the
+    // control-character refusal are one definition, because a safety property
+    // written twice is written once and forgotten once, and this is the path whose
+    // value nobody ever sees. Only the wording is here.
+    //
     // Deliberately no scan for a line, a prefix or a token-shaped pattern: a
     // helper's output is what its author chose to emit, and picking a substring
     // out of it would send a different credential than the one the helper
     // produced.
-    let key = String::from_utf8(output.stdout)
-        .map_err(|_| KeyCommandError::NotUtf8 {
+    let printed = String::from_utf8(captured).map_err(|_| KeyCommandError::NotUtf8 {
+        program: program.clone(),
+    })?;
+    crate::auth::vet(&printed).map_err(|defect| match defect {
+        crate::auth::CredentialDefect::Empty => KeyCommandError::Empty {
             program: program.clone(),
-        })?
-        .trim()
-        .to_owned();
-
-    if key.is_empty() {
-        return Err(KeyCommandError::Empty {
+        },
+        crate::auth::CredentialDefect::Unusable => KeyCommandError::Unusable {
             program: program.clone(),
-        });
-    }
-    if key.chars().any(char::is_control) {
-        return Err(KeyCommandError::Unusable {
-            program: program.clone(),
-        });
-    }
-    Ok(key)
+        },
+    })
 }

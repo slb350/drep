@@ -244,3 +244,43 @@ async fn the_unresolvable_fixture_really_has_no_repository_root() {
          lives; got {resolved:?}"
     );
 }
+
+/// A working directory outside any repository does not stop a run whose reviewed
+/// files resolve.
+///
+/// The set the probe walks is the directories of the files drep would send, so
+/// this run asks about the unmarked repository holding `lib.py` and gets an
+/// answer. It used to union `root` in unconditionally, which meant the invocation
+/// the scope fix was written for - `drep check <absolute path>` from a fixed
+/// working directory - failed closed with `MarkerRootUnresolved` on any policy
+/// naming a marker, because the working directory itself resolved to no
+/// repository. Fail-closed was not a bypass, but it read as "drep is broken
+/// outside a repository" on every policy machine.
+#[tokio::test]
+async fn a_root_outside_a_repository_does_not_stop_a_run_whose_files_resolve() {
+    let outside = tempfile::tempdir().expect("tempdir");
+    git_unresolvable(outside.path());
+    let server = server_returning(&[r#"{"issues": []}"#]).await;
+    crate::test_support::write_drep_toml(outside.path(), &format!("{}/v1", server.uri()));
+    let site = write_site_policy(outside.path(), &[MARKER]);
+
+    let unmarked = tempfile::tempdir().expect("tempdir");
+    git_init(unmarked.path());
+    std::fs::write(unmarked.path().join("lib.py"), "x = 1\n").expect("lib.py");
+
+    let exit = check_paths(
+        outside.path(),
+        outside.path(),
+        &site,
+        vec![unmarked.path().join("lib.py")],
+    )
+    .await
+    .expect("the reviewed file's repository is the one the probe asks about");
+
+    assert_eq!(exit, check::Exit::Clean);
+    assert_eq!(
+        request_count(&server).await,
+        1,
+        "the file's own repository answered, so the review proceeds"
+    );
+}

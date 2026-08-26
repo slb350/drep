@@ -10,7 +10,7 @@
 //! deterministic on machines where ruff happens to be on PATH, the criterion
 //! pins the rendering directly via `missing_tools_line`.
 
-use crate::cli::doctor::{DoctorArgs, missing_tools_line, run_to};
+use crate::cli::doctor::{DoctorArgs, missing_tools_line};
 use crate::languages::spec::{LanguageSupport, ToolSpec};
 use crate::test_support::write_executable;
 
@@ -28,7 +28,9 @@ async fn skipped_tool_is_not_a_problem() {
     // No pyproject.toml → ruff is Skipped.
 
     let mut out = Vec::new();
-    let exit = run_to(&mut out, &args(dir.path())).await.expect("run_to");
+    let exit = super::run_scoped(&mut out, &args(dir.path()), dir.path())
+        .await
+        .expect("run_to");
     assert_eq!(exit, crate::Exit::Clean);
     let rendered = String::from_utf8(out).expect("utf8");
 
@@ -58,7 +60,9 @@ async fn nested_workspace_configuration_is_reported_ready() {
     std::fs::write(member.join("a.py"), "x = 1\n").expect("source");
 
     let mut out = Vec::new();
-    run_to(&mut out, &args(dir.path())).await.expect("run_to");
+    super::run_scoped(&mut out, &args(dir.path()), dir.path())
+        .await
+        .expect("run_to");
     let rendered = String::from_utf8(out).expect("utf8");
 
     assert!(
@@ -77,7 +81,9 @@ async fn root_configuration_keeps_the_plain_ready_status() {
     std::fs::write(dir.path().join("a.py"), "x = 1\n").expect("source");
 
     let mut out = Vec::new();
-    run_to(&mut out, &args(dir.path())).await.expect("run_to");
+    super::run_scoped(&mut out, &args(dir.path()), dir.path())
+        .await
+        .expect("run_to");
     let rendered = String::from_utf8(out).expect("utf8");
     let ruff_line = rendered
         .lines()

@@ -261,24 +261,15 @@ impl AuthStore {
 
     /// Store `key` for `endpoint`, replacing any previous one.
     ///
-    /// An empty key is rejected rather than stored: it would satisfy every
-    /// "is a key present" check and then fail at the endpoint with a 401, which
-    /// is the confusing-empty-credential failure `${VAR}` expansion already
-    /// refuses for the same reason. Surrounding whitespace is trimmed, because a
-    /// pasted key routinely carries a trailing newline.
+    /// The rule about what a credential may be is [`vet`]'s, not this method's;
+    /// only the wording is here, because a paste at the prompt and a helper's
+    /// stdout send the reader to different fixes.
     pub fn set(&mut self, endpoint: &str, key: &str) -> Result<(), AuthError> {
-        let key = key.trim();
-        if key.is_empty() {
-            return Err(AuthError::EmptyKey(endpoint.to_string()));
-        }
-        // Every use of a stored key is an HTTP header value, which cannot carry
-        // a control character. Rejecting here turns a paste that picked up a
-        // stray newline or an escape sequence into a message at the prompt,
-        // rather than a transport failure on the first file of the first push.
-        if key.chars().any(|c| c.is_control()) {
-            return Err(AuthError::UnusableKey(endpoint.to_string()));
-        }
-        self.keys.insert(normalise(endpoint), key.to_string());
+        let key = vet(key).map_err(|defect| match defect {
+            CredentialDefect::Empty => AuthError::EmptyKey(endpoint.to_string()),
+            CredentialDefect::Unusable => AuthError::UnusableKey(endpoint.to_string()),
+        })?;
+        self.keys.insert(normalise(endpoint), key);
         Ok(())
     }
 
@@ -296,6 +287,52 @@ impl AuthStore {
     pub fn is_empty(&self) -> bool {
         self.keys.is_empty()
     }
+}
+
+/// Why a credential cannot be used, whatever produced it.
+///
+/// Two variants because they send the reader to different fixes: nothing arrived
+/// at all, or something arrived that cannot be sent.
+pub(crate) enum CredentialDefect {
+    Empty,
+    Unusable,
+}
+
+/// Trim a candidate credential and refuse one that cannot become a header value.
+///
+/// One definition, because this is a safety property, and `crate::http`'s module
+/// doc already records what happens to a safety property written twice: "written
+/// once and forgotten once". It was written twice - here for a key pasted at the
+/// prompt, and in `auth::command::run` for one a helper printed - and the two
+/// copies had already drifted cosmetically. The minted path is the one that never
+/// passes through [`AuthStore::set`], so a defect class added at the prompt would
+/// silently not have applied to the credential a gateway helper produces, which is
+/// the only path whose value nobody ever sees.
+///
+/// The wording stays with each caller: this returns [`CredentialDefect`] rather
+/// than an `AuthError`, so the store can name the endpoint and the helper can name
+/// the program. That is the mechanism-shared, classification-private split
+/// `crate::http` documents for the same pair of callers.
+///
+/// **Both ends** are trimmed. Every helper that prints a token prints a newline
+/// after it, and a leading space is one `printf ' %s'` or one `cut` field away;
+/// trimming only the tail accepted `" sk-live-..."`, which passes the
+/// control-character guard and is then stripped again by the transport, so the
+/// value sent was not the value checked and the endpoint answered 401.
+///
+/// A control character is refused because every use of a credential is an HTTP
+/// header value, which cannot carry one. Rejecting it here turns a paste or a
+/// helper that picked up a stray escape sequence into a message the user can act
+/// on, rather than a transport failure on the first file of the first push.
+pub(crate) fn vet(candidate: &str) -> Result<String, CredentialDefect> {
+    let candidate = candidate.trim();
+    if candidate.is_empty() {
+        return Err(CredentialDefect::Empty);
+    }
+    if candidate.chars().any(char::is_control) {
+        return Err(CredentialDefect::Unusable);
+    }
+    Ok(candidate.to_owned())
 }
 
 /// Canonical form of an endpoint for use as a store key.
@@ -342,8 +379,13 @@ fn lower_authority(rest: &str) -> String {
 /// Fill in keys the config left unset, and report where each one came from.
 ///
 /// Returns one [`KeySource`] per entry in `config.llm`, positionally - including
-/// the disabled ones, so a caller numbering providers by file position and a
-/// caller numbering by chain position both index correctly.
+/// the disabled ones, so the position in the returned slice is the position in the
+/// file. No production caller reads it: `check` discards it, and `doctor` calls
+/// [`source_of`] against the raw TOML tree instead, because `config::load` fails
+/// on an unset `${VAR}` and that is exactly the config `doctor` is most useful on.
+/// It is retained for the tests, which assert the precedence rule per entry
+/// against the one function that decides it, and the positional shape is what lets
+/// them name an entry by the line the user wrote.
 ///
 /// **Disabled entries are skipped**, matching every other pass over the provider
 /// list: `${VAR}` expansion and field validation already leave a parked entry

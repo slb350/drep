@@ -31,6 +31,7 @@
 use std::collections::BTreeSet;
 use std::path::{Component, Path, PathBuf};
 
+use futures::StreamExt;
 use serde::Deserialize;
 use thiserror::Error;
 
@@ -38,6 +39,14 @@ use super::Config;
 
 /// The environment variable that relocates the policy file.
 pub const PATH_VAR: &str = "DREP_SITE_CONFIG";
+
+/// How many repository roots resolve at once.
+///
+/// Four, matching `check::deterministic`'s `TOOL_PROCESS_CONCURRENCY`, because it
+/// bounds the same resource: short-lived child processes on a developer machine
+/// that is probably also compiling. Its own constant rather than a shared one,
+/// since the two fan-outs spawn different programs and would be tuned apart.
+const ROOT_RESOLUTION_CONCURRENCY: usize = 4;
 
 /// The machine-wide policy path, per platform.
 ///
@@ -140,6 +149,41 @@ pub struct SiteConfig {
     /// An `Option` rather than a `usize` sentinel so `doctor` can tell "no
     /// ceiling" from "a ceiling that happens to equal the default".
     pub max_concurrent_ceiling: Option<usize>,
+}
+
+/// The fields of this file that `drep.toml` must not be able to state.
+///
+/// Here rather than in `config.rs` because it is a statement about the fields
+/// declared directly above it, and the decision about a new one belongs where the
+/// field is added. `config::site_only_field` used to be a hard-coded
+/// `tree.get("refuse_markers")` in the other module: a third field added here
+/// would have compiled, said nothing, and been silently dropped from a
+/// `drep.toml` that named it, because `Config` has no `deny_unknown_fields`. That
+/// is the one outcome [`super::ConfigError::SiteOnlyField`] exists to prevent, and
+/// it would have been reintroduced by the ordinary act of adding a policy field.
+///
+/// `max_concurrent_ceiling` is deliberately absent. Written in `drep.toml` it
+/// changes nothing a repository could not already do by lowering its own
+/// `max_concurrent`, so refusing it would be noise; the cost is that a developer
+/// who writes it there is not told it does nothing.
+pub const SITE_ONLY_FIELDS: &[&str] = &["refuse_markers"];
+
+/// Fails to compile when a field is added to [`SiteConfig`] without a decision
+/// about whether `drep.toml` may state it.
+///
+/// The exhaustive destructure is the whole point, and is the idiom `KeySource::ALL`
+/// and `Severity::ALL` use for the same purpose: a list that has to be kept in
+/// step with a type by hand is a list that drifts silently, and the drift here
+/// ships source. Adding a field breaks this function, and the fix is one line in
+/// [`SITE_ONLY_FIELDS`] or one name added below.
+#[cfg(test)]
+fn _every_policy_field_is_classified(site: &SiteConfig) {
+    let SiteConfig {
+        // Site-only: named in SITE_ONLY_FIELDS.
+        refuse_markers: _,
+        // Not site-only: harmless in `drep.toml`, see the note above.
+        max_concurrent_ceiling: _,
+    } = site;
 }
 
 /// What went wrong loading the site policy file.
@@ -347,16 +391,39 @@ impl SiteConfig {
         if self.refuse_markers.is_empty() {
             return Ok(None);
         }
+
+        // The roots resolve concurrently, bounded the way every other spawn fan-out
+        // in this crate is bounded: `check::deterministic` runs its tool processes
+        // through `buffer_unordered(TOOL_PROCESS_CONCURRENCY)` for the same reason.
+        // Sequentially, this was one `git rev-parse --show-toplevel` per reviewed
+        // directory at ~18ms each, added to every commit on a policy machine, and
+        // the dedup below does not reduce it: `probed` dedups on the *resolved*
+        // root, so it saves the marker stat, not the spawn. The refused case was
+        // cheap by luck and the permitted case - which is every commit - paid all
+        // of them.
+        //
+        // Collected, then walked in the directories' own order: a `BTreeSet` input
+        // means that order is stable, and the first failure and the first marker
+        // have to be the same ones a sequential walk would have found. Resolving
+        // out of order and reporting in order is what keeps that.
+        let mut resolved: Vec<Result<PathBuf, SiteConfigError>> =
+            futures::stream::iter(directories)
+                .map(|directory| async move {
+                    crate::diff::repository_root(directory)
+                        .await
+                        .map_err(|cause| SiteConfigError::MarkerRootUnresolved {
+                            path: policy.to_path_buf(),
+                            root: directory.to_path_buf(),
+                            cause,
+                        })
+                })
+                .buffered(ROOT_RESOLUTION_CONCURRENCY)
+                .collect()
+                .await;
+
         let mut probed: BTreeSet<PathBuf> = BTreeSet::new();
-        for directory in directories {
-            let repository_root =
-                crate::diff::repository_root(directory)
-                    .await
-                    .map_err(|cause| SiteConfigError::MarkerRootUnresolved {
-                        path: policy.to_path_buf(),
-                        root: directory.to_path_buf(),
-                        cause,
-                    })?;
+        for outcome in resolved.drain(..) {
+            let repository_root = outcome?;
             if !probed.insert(repository_root.clone()) {
                 continue;
             }
@@ -365,6 +432,15 @@ impl SiteConfig {
             }
         }
         Ok(None)
+    }
+
+    /// Whether this policy names any marker at all.
+    ///
+    /// So a caller can decline to build the directory set for a policy that would
+    /// return immediately. The guard inside [`Self::refusal_among`] stays: this one
+    /// saves the argument, not the answer.
+    pub fn has_refuse_markers(&self) -> bool {
+        !self.refuse_markers.is_empty()
     }
 
     /// The first configured marker present at one repository root.

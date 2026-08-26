@@ -392,3 +392,48 @@ async fn output_that_is_not_utf8_is_refused_rather_than_replaced_with_placeholde
     );
     assert!(err.to_string().contains("binary"), "got {err}");
 }
+
+/// A helper that prints more than any credential can be is refused, not read.
+///
+/// The ceiling is what stops `api_key_command` pointed at the wrong program -
+/// `cat` on a large file is one keystroke from `cat` on a token file - allocating
+/// whatever it printed inside the commit gate. Refused rather than truncated: a
+/// prefix of something that was never a credential is a 401 per file.
+#[tokio::test]
+async fn output_past_the_ceiling_is_refused_rather_than_read_whole() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let stub = dir.path().join("flood");
+    write_executable(&stub, "#!/bin/sh\nhead -c 70000 /dev/zero | tr '\\0' a\n");
+
+    let err = command::run(&[stub.to_string_lossy().into_owned()], generous())
+        .await
+        .expect_err("70000 bytes is not a credential");
+
+    assert!(
+        matches!(err, KeyCommandError::TooMuchOutput { limit, .. } if limit == 64 * 1024),
+        "got {err:?}"
+    );
+    // The diagnostic names the ceiling and never a byte of what was printed, the
+    // rule every variant here follows.
+    let message = err.to_string();
+    assert!(message.contains("65536"), "names the ceiling: {message}");
+    assert!(!message.contains("aaaa"), "and never the output: {message}");
+}
+
+/// The discriminating half: exactly at the ceiling is still a credential.
+///
+/// Without it, an off-by-one that refuses at the limit rather than past it passes
+/// the test above. A 64 KiB credential is absurd, which is the point - the ceiling
+/// is a bound on a misconfiguration, not a judgement about a plausible token.
+#[tokio::test]
+async fn output_exactly_at_the_ceiling_is_still_accepted() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let stub = dir.path().join("brim");
+    write_executable(&stub, "#!/bin/sh\nhead -c 65536 /dev/zero | tr '\\0' a\n");
+
+    let key = command::run(&[stub.to_string_lossy().into_owned()], generous())
+        .await
+        .expect("exactly at the ceiling is within it");
+
+    assert_eq!(key.len(), 64 * 1024);
+}

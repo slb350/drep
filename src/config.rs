@@ -223,7 +223,8 @@ pub enum ConfigError {
     /// developer can delete is not one.
     #[error(
         "{path} sets `{field}`, which is machine site policy and is read only from the site \
-         policy file at {machine}; `drep init` gitignores {path}, so a copy of the field there \
+         policy file - {machine} on this platform, or the file `drep doctor` names if this \
+         machine keeps it elsewhere; `drep init` gitignores {path}, so a copy of the field there \
          would be per-developer and could be deleted by the developer it constrains",
         machine = site::machine_path().display()
     )]
@@ -305,14 +306,17 @@ pub fn load(path: &Path) -> Result<Config, ConfigError> {
 
 /// The site-policy key this file declared, if it declared one.
 ///
-/// One name, not a list, because there is exactly one control the two files must
-/// not both be able to state: `refuse_markers` reads as a security decision, and a
-/// repository able to make it - or to appear to make it - is the whole thing the
-/// site layer exists to take away. `max_concurrent_ceiling` is deliberately not
-/// here: written in `drep.toml` it changes nothing a repository could not already
-/// do by lowering its own `max_concurrent`.
+/// The list itself lives beside `SiteConfig` in [`site::SITE_ONLY_FIELDS`],
+/// because it is a statement about that type's fields and the decision about a
+/// new one belongs where the field is added. This function used to spell
+/// `tree.get("refuse_markers")` here, which meant a policy field added in the
+/// other module was refused nowhere, dropped silently from a `drep.toml` that
+/// named it, and believed by the developer who wrote it.
 fn site_only_field(tree: &Value) -> Option<&'static str> {
-    tree.get("refuse_markers").map(|_| "refuse_markers")
+    site::SITE_ONLY_FIELDS
+        .iter()
+        .copied()
+        .find(|field| tree.get(field).is_some())
 }
 
 /// Validate what serde cannot enforce from the type alone.

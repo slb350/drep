@@ -1,7 +1,7 @@
 //! A5, A6, A7, A8, A9: every shape of the LLM section.
 
 use crate::cli::MachineFiles;
-use crate::cli::doctor::{DoctorArgs, run_at, run_to};
+use crate::cli::doctor::{DoctorArgs, run_at};
 use std::path::Path;
 
 fn args(dir: &Path) -> DoctorArgs {
@@ -25,7 +25,9 @@ fn write_py(dir: &Path) {
 /// Run `doctor` against `dir` and return what it printed.
 async fn report_for(dir: &Path) -> String {
     let mut out = Vec::new();
-    run_to(&mut out, &args(dir)).await.expect("run_to");
+    super::run_scoped(&mut out, &args(dir), dir)
+        .await
+        .expect("run_to");
     String::from_utf8(out).expect("utf8")
 }
 
@@ -35,7 +37,9 @@ async fn no_config_file_prints_the_unconfigured_message_and_still_prints_tools()
     write_py(dir.path());
 
     let mut out = Vec::new();
-    let exit = run_to(&mut out, &args(dir.path())).await.expect("run_to");
+    let exit = super::run_scoped(&mut out, &args(dir.path()), dir.path())
+        .await
+        .expect("run_to");
     assert_eq!(exit, crate::Exit::Clean);
     let rendered = String::from_utf8(out).expect("utf8");
 
@@ -75,7 +79,9 @@ async fn two_providers_render_in_file_order() {
     std::fs::write(dir.path().join("drep.toml"), body).expect("drep.toml");
 
     let mut out = Vec::new();
-    let exit = run_to(&mut out, &args(dir.path())).await.expect("run_to");
+    let exit = super::run_scoped(&mut out, &args(dir.path()), dir.path())
+        .await
+        .expect("run_to");
     assert_eq!(exit, crate::Exit::Clean);
     let rendered = String::from_utf8(out).expect("utf8");
 
@@ -107,7 +113,9 @@ async fn unset_env_var_is_named_and_provider_still_renders() {
     std::fs::write(dir.path().join("drep.toml"), body).expect("drep.toml");
 
     let mut out = Vec::new();
-    let exit = run_to(&mut out, &args(dir.path())).await.expect("run_to");
+    let exit = super::run_scoped(&mut out, &args(dir.path()), dir.path())
+        .await
+        .expect("run_to");
     assert_eq!(exit, crate::Exit::Clean);
     let rendered = String::from_utf8(out).expect("utf8");
 
@@ -129,7 +137,7 @@ async fn invalid_toml_is_reported_and_run_to_returns_clean() {
     std::fs::write(dir.path().join("drep.toml"), body).expect("drep.toml");
 
     let mut out = Vec::new();
-    let exit = run_to(&mut out, &args(dir.path()))
+    let exit = super::run_scoped(&mut out, &args(dir.path()), dir.path())
         .await
         .expect("run_to must not error");
     assert_eq!(exit, crate::Exit::Clean);
@@ -149,7 +157,9 @@ async fn provider_with_no_model_and_no_endpoint_renders_placeholder_text() {
     std::fs::write(dir.path().join("drep.toml"), body).expect("drep.toml");
 
     let mut out = Vec::new();
-    let exit = run_to(&mut out, &args(dir.path())).await.expect("run_to");
+    let exit = super::run_scoped(&mut out, &args(dir.path()), dir.path())
+        .await
+        .expect("run_to");
     assert_eq!(exit, crate::Exit::Clean);
     let rendered = String::from_utf8(out).expect("utf8");
 
@@ -173,9 +183,10 @@ async fn explicit_config_flag_overrides_default_path() {
     .expect("custom.toml");
 
     let mut out = Vec::new();
-    let exit = run_to(
+    let exit = super::run_scoped(
         &mut out,
         &args_with_config(dir.path(), other.path().join("custom.toml")),
+        dir.path(),
     )
     .await
     .expect("run_to");

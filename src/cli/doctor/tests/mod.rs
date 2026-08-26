@@ -1,6 +1,6 @@
 //! Acceptance tests for `drep doctor` (Part A).
 //!
-//! Each test runs `run_to` against a `TempDir` and asserts on the captured
+//! Each test runs the command against a `TempDir` and asserts on the captured
 //! string. No subprocess - the command takes a `&mut dyn Write` precisely so
 //! the tests can read what would otherwise go to stdout.
 
@@ -12,3 +12,32 @@ mod a_no_files;
 mod a_site_policy;
 mod a_skipped_vs_missing;
 mod a_special_cases;
+
+/// Run `doctor` with the auth store and the policy file scoped to `dir`.
+///
+/// Every test here goes through this rather than `run_to`, which resolves
+/// `crate::auth::default_path()` and `crate::config::site::default_path()` - the
+/// real ones. Those are parameters of `run_at` precisely so no test reads machine
+/// state, and five of these files called `run_to` anyway: on a machine with a
+/// policy installed they read it, and a `refuse_markers` entry there changes what
+/// they assert. A suite whose result depends on the developer's `/etc` is a suite
+/// that passes or fails for a reason unrelated to the code.
+///
+/// `absent-site.toml` is named rather than written, because "no policy installed"
+/// is the state these tests want and a missing file is exactly how the loader
+/// spells it.
+async fn run_scoped<W: std::io::Write>(
+    out: &mut W,
+    args: &super::DoctorArgs,
+    dir: &std::path::Path,
+) -> anyhow::Result<crate::Exit> {
+    super::run_at(
+        out,
+        args,
+        &crate::cli::MachineFiles {
+            auth: &dir.join("auth.toml"),
+            policy: &dir.join("absent-site.toml"),
+        },
+    )
+    .await
+}

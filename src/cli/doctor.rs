@@ -177,17 +177,71 @@ async fn write_configuration<W: Write>(
         None => Ok(None),
     };
     site_section::write_site_section(out, machine.policy, &site, &refusal)?;
-    let refused = matches!(refusal, Ok(Some(_)));
     llm::write_llm_section(
         out,
         args,
         root,
         machine.auth,
         in_effect,
-        refused,
+        Semantic::of(&site, &refusal),
         codex_probe,
     )
     .await
+}
+
+/// What the policy said about semantic review in this repository.
+///
+/// Three states, because the LLM block used to be told two. It received a
+/// `bool` computed as `matches!(refusal, Ok(Some(_)))`, next to an
+/// `Option<&SiteConfig>` computed as `site.as_ref().ok().flatten()`, and both
+/// flattens sent the same answer for "permitted" and for "could not be
+/// evaluated": a policy file that would not load, and a marker probe whose
+/// repository root would not resolve. `check` exits 2 on either
+/// (`config::site::load`'s `?` in `check::run_against`, and
+/// `SiteConfigError::MarkerRootUnresolved`), so answering "not refused" is how
+/// `doctor` came to run `api_key_command` - spending a real credential call and
+/// triggering whatever approval sits behind it - for a repository whose review
+/// never happens, and then print that the credential works. A check that did not
+/// run, reported as a pass, in the command whose whole contract is what will
+/// actually run here.
+///
+/// The policy itself still travels separately, because the concurrency clamp is
+/// reported from it in every one of these states: a ceiling still applies to a
+/// repository whose semantic review is refused.
+#[derive(Clone, Copy)]
+pub(super) enum Semantic {
+    /// No policy, or a policy that permits this repository. The only state in
+    /// which anything here may spend a credential.
+    Permitted,
+    /// A marker refuses semantic review at this repository's root.
+    Refused,
+    /// The policy could not be evaluated. `check` fails closed; this command
+    /// exists to say why, not to proceed as though it had.
+    Unevaluable,
+}
+
+impl Semantic {
+    /// Collapse the two results the report already holds into the one verdict
+    /// that governs whether a credential may be spent.
+    ///
+    /// A load failure is checked before a probe failure only because the probe
+    /// cannot have run without a loaded policy; either one is the same answer.
+    fn of(
+        site: &Result<
+            Option<crate::config::site::SiteConfig>,
+            crate::config::site::SiteConfigError,
+        >,
+        refusal: &Result<
+            Option<crate::config::site::Refusal>,
+            crate::config::site::SiteConfigError,
+        >,
+    ) -> Self {
+        match (site, refusal) {
+            (Err(_), _) | (_, Err(_)) => Self::Unevaluable,
+            (Ok(_), Ok(Some(_))) => Self::Refused,
+            (Ok(_), Ok(None)) => Self::Permitted,
+        }
+    }
 }
 
 /// Build the trailing "configured tool(s) are missing" line, or `None` when

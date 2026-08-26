@@ -40,18 +40,20 @@ use super::DoctorArgs;
 /// them, and the clamp is printed against the provider it changes rather than
 /// forward-referenced from the policy block above.
 ///
-/// `refused` says the policy refuses semantic review in this repository, and its
-/// one effect is that no credential helper runs: `check` establishes that a
-/// refused repository never mints a credential, and a `doctor` that minted one
-/// anyway would spend a real credential call - and trigger whatever approval sits
-/// behind it - for a repository whose review will not happen.
+/// `semantic` is what the policy said about semantic review here, and its one
+/// effect is whether a credential helper runs. Only `Permitted` lets one:
+/// `check` establishes that a refused repository never mints a credential, and a
+/// `doctor` that minted one anyway would spend a real credential call - and
+/// trigger whatever approval sits behind it - for a repository whose review will
+/// not happen. `Unevaluable` is held to the same rule for the same reason, since
+/// `check` fails closed there too.
 pub(super) async fn write_llm_section<W: Write>(
     out: &mut W,
     args: &DoctorArgs,
     root: &Path,
     auth_path: &Path,
     site: Option<&config::site::SiteConfig>,
-    refused: bool,
+    semantic: super::Semantic,
     codex_probe: &dyn Fn() -> Result<crate::llm::codex::CodexStatus, String>,
 ) -> Result<()> {
     writeln!(out)?;
@@ -153,9 +155,9 @@ pub(super) async fn write_llm_section<W: Write>(
     // Read once for the whole listing. A store that cannot be read is reported
     // rather than fatal: `doctor` exists to describe a broken setup, so failing
     // out here would suppress everything else it had to say.
-    let needs_auth_store = providers.iter().any(|entry| {
-        entry_is_enabled(entry) && entry.get("backend").and_then(Value::as_str) != Some("codex")
-    });
+    let needs_auth_store = providers
+        .iter()
+        .any(|entry| entry_is_enabled(entry) && !entry_is_codex(entry));
     let store = match needs_auth_store
         .then(|| AuthStore::load(auth_path))
         .transpose()
@@ -187,7 +189,7 @@ pub(super) async fn write_llm_section<W: Write>(
             None | Some("openai") => String::new(),
             Some(other) => format!(" [{other}]"),
         };
-        let is_codex = entry.get("backend").and_then(Value::as_str) == Some("codex");
+        let is_codex = entry_is_codex(entry);
         let description = if is_codex {
             format!("{model} via ChatGPT/Codex subscription")
         } else {
@@ -217,7 +219,7 @@ pub(super) async fn write_llm_section<W: Write>(
                     entry,
                     expanded_command(&loaded, file_index),
                     &store,
-                    refused,
+                    semantic,
                 )
                 .await;
                 writeln!(out, "     key: {line}")?;
@@ -286,7 +288,7 @@ async fn key_source_line(
     entry: &Value,
     resolved_argv: Option<&[String]>,
     store: &AuthStore,
-    refused: bool,
+    semantic: super::Semantic,
 ) -> String {
     let api_key = entry.get("api_key").and_then(|v| v.as_str());
 
@@ -320,7 +322,7 @@ async fn key_source_line(
         (KeySource::Command, _) => format!(
             "{} - {}",
             KeySource::Command.label(),
-            key_command_status(resolved_argv, refused).await
+            key_command_status(resolved_argv, semantic).await
         ),
         (source, _) => source.label().to_string(),
     }
@@ -333,18 +335,32 @@ async fn key_source_line(
 /// thing `api_key_command` exists to make visible. A helper behind a biometric
 /// or approval prompt will therefore prompt on every `drep doctor`.
 ///
-/// Unless site policy refuses review here, in which case `check` would never run
-/// it either. Reporting that it was not attempted keeps the two commands agreeing
-/// about the same repository, and keeps `doctor` from being the way to make a
-/// refused repository mint a credential.
+/// Unless the policy did not permit review here, in which case `check` would
+/// never run it either. Reporting that it was not attempted keeps the two
+/// commands agreeing about the same repository, and keeps `doctor` from being the
+/// way to make a repository drep refuses to review mint a credential.
+///
+/// A policy that could not be evaluated is held to the same rule, and this is the
+/// distinction the parameter used to lose. It arrived as a `bool` meaning
+/// "refused", so a policy file that failed to load and a marker probe that could
+/// not resolve a repository root both said `false` here, ran the helper, and
+/// printed that the credential works - for a repository where `check` exits 2
+/// without contacting anything.
 ///
 /// Never a byte of its output. `crate::auth::probe_key_command` returns `()`
 /// rather than the credential so that is a property of the type here, not a rule
 /// this function has to remember - and the failure it returns names only the
 /// program and the status, for the same reason.
-async fn key_command_status(argv: Option<&[String]>, refused: bool) -> String {
-    if refused {
-        return "not attempted, because site policy refuses semantic review here".to_owned();
+async fn key_command_status(argv: Option<&[String]>, semantic: super::Semantic) -> String {
+    match semantic {
+        super::Semantic::Refused => {
+            return "not attempted, because site policy refuses semantic review here".to_owned();
+        }
+        super::Semantic::Unevaluable => {
+            return "not attempted, because the site policy above could not be evaluated"
+                .to_owned();
+        }
+        super::Semantic::Permitted => {}
     }
     let Some(argv) = argv else {
         return "not attempted, because the config below does not load".to_owned();
@@ -380,6 +396,15 @@ fn report_load_result<W: Write>(
 /// raw table is read instead of the loaded config because `load` fails on an
 /// unset `${VAR}` - and a fresh clone with no key exported is exactly when this
 /// report is most useful.
+/// Whether this raw entry names the Codex backend.
+///
+/// Named for the same reason `entry_is_enabled` is: the two raw-tree predicates in
+/// this file were one named function and one twice-inlined comparison, and a
+/// second CLI-managed backend would have meant finding both spellings.
+fn entry_is_codex(entry: &toml::Value) -> bool {
+    entry.get("backend").and_then(toml::Value::as_str) == Some("codex")
+}
+
 fn entry_is_enabled(entry: &toml::Value) -> bool {
     entry
         .get("enabled")

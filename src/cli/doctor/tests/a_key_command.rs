@@ -193,3 +193,71 @@ async fn an_unmarked_repository_under_a_marker_policy_is_still_probed() {
         "got {report}"
     );
 }
+
+/// A policy that will not parse must not mint a credential either.
+///
+/// `check` exits 2 on an unloadable policy without contacting anything, so
+/// probing here would make `doctor` the way to spend a real credential call - and
+/// trigger whatever approval sits behind it - for a repository whose review never
+/// happens. The state used to be indistinguishable from "permitted": the LLM
+/// block was handed a `bool` meaning "refused", and an unloadable policy said
+/// `false`.
+#[tokio::test]
+async fn an_unloadable_policy_is_not_probed() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    crate::test_support::git_init(dir.path());
+    let sentinel = dir.path().join("command-ran");
+    let stub = dir.path().join("print-token");
+    write_executable(
+        &stub,
+        format!(
+            "#!/bin/sh\nprintf '%s' ran > {}\nprintf '%s' tok\n",
+            sentinel.to_string_lossy()
+        ),
+    );
+    write_config_running(dir.path(), &format!("{:?}", stub.to_string_lossy()));
+    let policy = dir.path().join("site.toml");
+    std::fs::write(&policy, "refuse_markers = \"not a list\"\n").expect("site.toml");
+
+    let report = report_with_policy(dir.path(), &policy).await;
+
+    assert!(
+        !sentinel.exists(),
+        "the helper ran for a repository whose policy could not be evaluated: {report}"
+    );
+    assert!(
+        report.contains("not attempted, because the site policy above could not be evaluated"),
+        "got {report}"
+    );
+}
+
+/// The same rule for the other unevaluable state: the marker probe could not
+/// resolve a repository root, so nobody knows whether a marker applies.
+#[tokio::test]
+async fn a_policy_whose_marker_probe_cannot_resolve_a_root_is_not_probed() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    crate::test_support::git_unresolvable(dir.path());
+    let sentinel = dir.path().join("command-ran");
+    let stub = dir.path().join("print-token");
+    write_executable(
+        &stub,
+        format!(
+            "#!/bin/sh\nprintf '%s' ran > {}\nprintf '%s' tok\n",
+            sentinel.to_string_lossy()
+        ),
+    );
+    write_config_running(dir.path(), &format!("{:?}", stub.to_string_lossy()));
+    let policy = dir.path().join("site.toml");
+    std::fs::write(&policy, "refuse_markers = [\".drep-no-llm\"]\n").expect("site.toml");
+
+    let report = report_with_policy(dir.path(), &policy).await;
+
+    assert!(
+        !sentinel.exists(),
+        "the helper ran for a repository whose marker probe could not be evaluated: {report}"
+    );
+    assert!(
+        report.contains("not attempted, because the site policy above could not be evaluated"),
+        "got {report}"
+    );
+}

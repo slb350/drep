@@ -5,7 +5,7 @@
 //! `  Python: 2 file(s)` and `  Go: 1 file(s)` under `Languages found:`, and
 //! the Python line appears **before** the Go line (registration order).
 
-use crate::cli::doctor::{DoctorArgs, run_to};
+use crate::cli::doctor::DoctorArgs;
 
 fn args(path: &std::path::Path) -> DoctorArgs {
     DoctorArgs {
@@ -22,7 +22,9 @@ async fn languages_found_lists_each_language_in_registration_order() {
     std::fs::write(dir.path().join("main.go"), "package main\n").expect("main.go");
 
     let mut out = Vec::new();
-    let exit = run_to(&mut out, &args(dir.path())).await.expect("run_to");
+    let exit = super::run_scoped(&mut out, &args(dir.path()), dir.path())
+        .await
+        .expect("run_to");
     assert_eq!(exit, crate::Exit::Clean);
     let rendered = String::from_utf8(out).expect("utf8");
 
