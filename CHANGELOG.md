@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `[llm.headers]` on an `[[llm]]` entry: extra HTTP headers sent with every request to that provider, for an endpoint that identifies its clients by `User-Agent`, bills against a header, or authenticates outside its protocol's default scheme. A name here replaces the one drep or the protocol would otherwise send, so an `Authorization` in this table is the one that goes out, and `${VAR}` expands in a value as it does anywhere else in the file. `backend = "codex"` rejects the table with the other HTTP-only fields. A header name or value that cannot be encoded is rejected at load, naming the entry and the header but never the value, because leaving it to the request meant one identical failure per reviewed file — each rendered as a transport failure, which reads as the endpoint being down. Headers are not part of the cache key, for the reason `api_key` never has been: a caller-supplied credential is not part of what makes an answer, and keying on one would discard the cache on a rotation.
+
+- drep now sends `User-Agent: drep/<version>` when nothing is configured. reqwest sends no user agent by default, and an endpoint that logs or bills per client cannot attribute a request that carries none. `drep doctor` lists the headers a provider will actually send, marking the ones drep supplied — `headers: User-Agent (default), X-Tenant-Token` — and never their values, since a project or tenant token is the ordinary thing to put in a header. The effective set is resolved once in `config::effective_headers`, so the report, `{:?}` and the request cannot disagree about it.
+
+### Changed
+
+- An unknown key in `drep.toml` is now a load error instead of being silently dropped, at the top level and in an `[[llm]]` entry alike. serde discarded it without a word, so a `[llm.headers]` table written against a drep that could not send one, or a `max_reveiw_rounds` that ran at the default, produced a config that read as configured and did nothing of what it said. `drep.toml` was laxer about this than the site policy file, which has rejected unknown keys since it arrived. One consequence worth knowing: this is the only pass that does not skip a disabled entry, because serde rejects before there is an entry to skip, so a parked provider carrying a field from a newer drep now refuses to load the file.
+
 ## [2.7.0] - 2026-08-26
 
 ### Added

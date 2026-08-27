@@ -63,8 +63,14 @@ pub const DEFAULT_MAX_REVIEW_ROUNDS: u32 = 3;
 /// `#[serde(default)]` means a file with an empty body deserializes
 /// successfully; `validate` is what then rejects it, because a config
 /// declaring no provider cannot run the mandatory LLM layer.
+///
+/// `deny_unknown_fields` for the reason [`LlmConfig`] carries it: a misspelled
+/// `max_reveiw_rounds` was accepted, dropped, and run at the default, which is a
+/// file that reads as configured and is not. `site_only_field` runs against the
+/// raw tree before this deserialization, so `SiteOnlyField` still answers for a
+/// policy key rather than being swallowed by a generic unknown-key message.
 #[derive(Debug, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct Config {
     pub max_review_rounds: u32,
     pub llm: Vec<LlmConfig>,
@@ -147,6 +153,23 @@ pub enum ConfigError {
         index + 1
     )]
     UnknownProtocol { index: usize, value: String },
+
+    #[error(
+        "[[llm]] #{} in file order: `{name}` cannot be sent as an HTTP header name",
+        index + 1
+    )]
+    UnusableHeaderName { index: usize, name: String },
+
+    /// Names the header, never its value: the value is the half that carries a
+    /// tenant or project token, and an error message is the one place it would
+    /// escape into a terminal, a CI log or a bug report. The rule
+    /// `KeyCommandError` already follows for a credential helper's output.
+    #[error(
+        "[[llm]] #{} in file order: the value configured for header `{name}` \
+         contains a character that cannot be sent in a header",
+        index + 1
+    )]
+    UnusableHeaderValue { index: usize, name: String },
 
     #[error(
         "[[llm]] #{} in file order: unknown backend `{value}`; expected `http` or `codex`",
@@ -237,6 +260,47 @@ pub enum ConfigError {
 /// path, so changing it here would break the contract with the init command.
 pub fn default_config_path() -> PathBuf {
     PathBuf::from("drep.toml")
+}
+
+/// What drep calls itself to an endpoint when the config names no `User-Agent`.
+///
+/// The crate version rather than a bare name, because the useful question a
+/// gateway operator asks of a user agent is which build sent this. reqwest sends
+/// none at all by default, and an endpoint that logs or bills per client cannot
+/// attribute a request that carries none.
+pub const DEFAULT_USER_AGENT: &str = concat!("drep/", env!("CARGO_PKG_VERSION"));
+
+/// The headers a provider will actually send: drep's defaults, then the
+/// configured table over the top.
+///
+/// The single statement of that precedence, for the reason [`crate::auth`] keeps
+/// one statement of the credential order: the request path, `LlmClient`'s
+/// `Debug` and `drep doctor` all have to answer the same question about the same
+/// entry, and when the default was applied inside the request instead, they
+/// answered differently. A config naming one header printed one and sent two,
+/// and a config naming none printed an empty set and sent a `User-Agent`. The
+/// operator debugging a gateway 403 is asking `doctor` exactly that question,
+/// and the case where it was silent was the case where they had not set one.
+///
+/// Case-insensitive, because HTTP header names are: a configured `user-agent`
+/// replaces the default rather than joining it, which is what the SDK's own
+/// `HeaderMap` would do at send time anyway.
+pub fn effective_headers(
+    configured: &std::collections::BTreeMap<String, String>,
+) -> std::collections::BTreeMap<String, String> {
+    let mut headers = std::collections::BTreeMap::new();
+    if !configured
+        .keys()
+        .any(|name| name.eq_ignore_ascii_case("user-agent"))
+    {
+        headers.insert("User-Agent".to_owned(), DEFAULT_USER_AGENT.to_owned());
+    }
+    headers.extend(
+        configured
+            .iter()
+            .map(|(name, value)| (name.clone(), value.clone())),
+    );
+    headers
 }
 
 /// Parses a `protocol =` value, or `None` when it names nothing the SDK speaks.
@@ -374,6 +438,33 @@ fn validate(
         }
         if llm.api_key_command.as_ref().is_some_and(Vec::is_empty) {
             return Err(ConfigError::EmptyApiKeyCommand { index });
+        }
+        // Rejected here rather than left to the request, for the reason the
+        // misspelled protocol below is: a header drep cannot encode fails
+        // identically on every file of the run, and `LlmError::NotConfigured`
+        // neither fails over nor sticks, so a 200-file diff reported a typo two
+        // hundred times - each one rendered as a transport failure, which reads
+        // as the endpoint being down.
+        //
+        // After `${VAR}` expansion, so what is checked is what will be sent: a
+        // token whose expansion carries a stray control character is the case a
+        // name-only check would pass and every request would then fail. The
+        // parse is `http`'s own, through the same types the SDK builds its
+        // `HeaderMap` from, so the two cannot come to disagree about what is
+        // sendable.
+        for (name, value) in &llm.headers {
+            if reqwest::header::HeaderName::from_bytes(name.as_bytes()).is_err() {
+                return Err(ConfigError::UnusableHeaderName {
+                    index,
+                    name: name.clone(),
+                });
+            }
+            if reqwest::header::HeaderValue::from_bytes(value.as_bytes()).is_err() {
+                return Err(ConfigError::UnusableHeaderValue {
+                    index,
+                    name: name.clone(),
+                });
+            }
         }
 
         if llm.backend != BackendKind::Http {

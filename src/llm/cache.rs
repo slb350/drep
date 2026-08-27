@@ -29,6 +29,15 @@
 //! representation, so equal values hash alike without collapsing neighboring
 //! `f32` values.
 //!
+//! **A caller-supplied credential is not in the key, and never has been.**
+//! `api_key` is absent from it, and `[llm.headers]` is absent for the same
+//! reason rather than a new one: a tenant token in a header is a credential
+//! wearing a different field name, and keying on it would discard the whole
+//! cache on a rotation that changes no answer. The line to draw for a seventh
+//! input is that one - transport metadata the caller supplies stays out, and
+//! anything selecting a different backing model goes in, which is why
+//! `endpoint`, `backend` and `request_shape` are here.
+//!
 //! **The backend identity is part of the key, not just the model.** A model name is
 //! not a globally unique identity: the canonical failover pair is one open
 //! model served from a local runtime and from a cloud provider, which name it

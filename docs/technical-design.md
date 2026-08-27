@@ -354,8 +354,8 @@ final drain retain bytes the helper wrote before exiting without waiting for
 the descendant to close the pipe.
 
 `backend` defaults to `http`. HTTP entries
-accept `endpoint`, `api_key`, `api_key_command`, `protocol`, `temperature`,
-`max_tokens` and
+accept `endpoint`, `api_key`, `api_key_command`, `headers`, `protocol`,
+`temperature`, `max_tokens` and
 `max_retries`; they reject the Codex-only `reasoning_effort`. A `codex` entry
 requires `model`, accepts an optional `reasoning_effort`, and rejects every
 HTTP-only field, so a subscription selection cannot silently become API
@@ -368,9 +368,20 @@ rejected; `max_concurrent = 0` is rejected, since a semaphore with no permits
 would hang with no message. Disabled entries are inert - `${VAR}` expansion and
 field validation both skip them, and so does credential resolution, which for an
 `api_key_command` also means no subprocess - so parking a cloud provider does not
-require its key to be set. `LlmConfig` hand-writes `Debug` to redact `api_key`,
-and prints an `api_key_command` as its program name plus an argument count,
-because an argv can carry the credential too.
+require its key to be set. An unknown key in an entry is a load error rather than a silent drop, which is
+what a `[llm.headers]` table written against a drep that could not send one used
+to be: accepted, discarded, and indistinguishable from working. `LlmConfig`
+hand-writes `Debug` to redact `api_key`, prints an `api_key_command` as its
+program name plus an argument count, and prints `headers` as its names alone,
+because an argv and a header value can each carry the credential too.
+
+`[llm.headers]` is applied in `LlmClient::complete_json`, after drep's own
+`User-Agent: drep/<version>` and therefore winning over it, and after the SDK's
+protocol defaults for the same reason - `AgentOptionsBuilder::header` replaces
+case-insensitively, so a configured `Authorization` is the one sent. Headers stay
+out of the cache key: the endpoint, model, protocol and temperature are in it
+because each changes the answer, while a rotated token and a bumped user agent do
+not, and keying on them would discard a warm cache whenever either moved.
 
 ### The site policy layer
 

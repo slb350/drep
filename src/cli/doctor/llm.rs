@@ -232,6 +232,9 @@ pub(super) async fn write_llm_section<W: Write>(
                 )
                 .await;
                 writeln!(out, "     key: {line}")?;
+                if let Some(names) = header_names(entry) {
+                    writeln!(out, "     headers: {names}")?;
+                }
             }
         } else {
             writeln!(out, "  -  {description} (disabled - skipped)")?;
@@ -396,13 +399,62 @@ fn report_load_result<W: Write>(
     Ok(())
 }
 
-/// Whether a raw `[[llm]]` table is in the failover chain.
+/// The headers this entry will actually send, or `None` when it sends none.
 ///
-/// The default comes from `LlmConfig::default()` rather than a literal `true`,
-/// so this cannot disagree with what `config::load` will actually decide. The
-/// raw table is read instead of the loaded config because `load` fails on an
-/// unset `${VAR}` - and a fresh clone with no key exported is exactly when this
-/// report is most useful.
+/// Goes through `config::effective_headers`, the same function that fills
+/// `LlmClient::headers`, so the report cannot describe a set the request will
+/// not carry. It listed the raw table alone once, which meant a config naming
+/// one header printed one and sent two, and a config naming none printed
+/// nothing while the request carried drep's own `User-Agent` - and the operator
+/// asking `doctor` what user agent is going out is precisely the one who did
+/// not configure it.
+///
+/// Names only, never values: a project or tenant token is the ordinary thing to
+/// put in a header, and this output is pasted into issues and chat.
+///
+/// Reads the raw table for the reason the predicates below do - `load` fails on
+/// an unset `${VAR}`, and that is when this report is most useful - so a
+/// malformed entry contributes nothing rather than failing the report.
+fn header_names(entry: &toml::Value) -> Option<String> {
+    let configured: std::collections::BTreeMap<String, String> = entry
+        .get("headers")
+        .and_then(toml::Value::as_table)
+        .map(|table| {
+            table
+                .iter()
+                .filter_map(|(name, value)| {
+                    value.as_str().map(|value| (name.clone(), value.to_owned()))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let effective = config::effective_headers(&configured);
+    if effective.is_empty() {
+        return None;
+    }
+    // A name the entry did not write is one drep added, and saying so answers
+    // the question this line exists for: is the user agent going out mine or
+    // drep's own. Derived by comparing the two sets rather than by naming
+    // `User-Agent` here, so a second default cannot be added without this line
+    // reporting it.
+    //
+    // Sorted, because `effective_headers` returns a `BTreeMap` - the order is
+    // the map's, not the order the file happened to list.
+    Some(
+        effective
+            .keys()
+            .map(|name| {
+                if configured.contains_key(name) {
+                    name.clone()
+                } else {
+                    format!("{name} (default)")
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(", "),
+    )
+}
+
 /// Whether this raw entry names the Codex backend.
 ///
 /// Named for the same reason `entry_is_enabled` is: the two raw-tree predicates in
@@ -412,6 +464,13 @@ fn entry_is_codex(entry: &toml::Value) -> bool {
     entry.get("backend").and_then(toml::Value::as_str) == Some("codex")
 }
 
+/// Whether a raw `[[llm]]` table is in the failover chain.
+///
+/// The default comes from `LlmConfig::default()` rather than a literal `true`,
+/// so this cannot disagree with what `config::load` will actually decide. The
+/// raw table is read instead of the loaded config because `load` fails on an
+/// unset `${VAR}` - and a fresh clone with no key exported is exactly when this
+/// report is most useful.
 fn entry_is_enabled(entry: &toml::Value) -> bool {
     entry
         .get("enabled")

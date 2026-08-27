@@ -3,6 +3,8 @@
 //! The parent module validates the raw TOML tree before forgetting whether a
 //! defaulted field was explicit. This module owns the typed values themselves.
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Deserializer};
 use toml::Value;
 
@@ -88,8 +90,23 @@ impl<'de> Deserialize<'de> for ReasoningEffort {
 }
 
 /// One provider in the failover chain.
+///
+/// `deny_unknown_fields` because the alternative is what a misspelled key was
+/// doing until this attribute arrived: serde dropped it without a word, and a
+/// user who wrote `[llm.headers]` before drep could send one got a config that
+/// read as configured and sent nothing. That is the same silent-drop failure
+/// `ConfigError::SiteOnlyField` exists to refuse one file over, and there is no
+/// reason for `drep.toml` to be laxer than the policy file about it.
+///
+/// It is the one pass that does not honour "a disabled entry is inert", because
+/// serde rejects at deserialization and there is no entry yet to skip. So a
+/// parked provider carrying a field from a newer drep refuses to load the file
+/// rather than being ignored. That is the wanted trade - a typo in a parked
+/// entry is still a typo, and the entry is one line from being re-enabled - but
+/// it is a deviation from a rule `${VAR}` expansion, field validation and
+/// credential resolution all keep.
 #[derive(Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct LlmConfig {
     pub enabled: bool,
     pub backend: BackendKind,
@@ -101,6 +118,24 @@ pub struct LlmConfig {
     /// Declared after `api_key` because the field order is the resolution order:
     /// an explicit key wins, then this, then the per-machine store.
     pub api_key_command: Option<Vec<String>>,
+    /// Extra HTTP headers sent with every request to this provider.
+    ///
+    /// For the gateway that identifies its clients by `User-Agent`, bills
+    /// against a header, or authenticates outside its protocol's default
+    /// scheme. A name that collides with one the protocol sets replaces it, so
+    /// this can carry an `Authorization` the SDK's own scheme would not produce.
+    ///
+    /// **A value here can be a credential.** A project or tenant token is the
+    /// ordinary case, which is the whole reason `Debug` here, `LlmClient`'s
+    /// `Debug`, `doctor`'s listing and `ConfigError::UnusableHeaderValue` all
+    /// print the name and never the value. This is the one place that argument
+    /// is made; the others cite it.
+    ///
+    /// A `BTreeMap` rather than a list of pairs: a header set twice is one
+    /// header, and the sorted order makes the rendered config and the `doctor`
+    /// listing stable. `config::effective_headers` overlays it on drep's own
+    /// defaults to get what is actually sent.
+    pub headers: BTreeMap<String, String>,
     pub protocol: Option<String>,
     pub reasoning_effort: Option<ReasoningEffort>,
     pub temperature: Option<f32>,
@@ -133,6 +168,12 @@ impl std::fmt::Debug for LlmConfig {
                     .as_deref()
                     .map(describe_command)
                     .unwrap_or_else(|| "None".to_owned()),
+            )
+            // Names only, spelled exactly as `LlmClient`'s `Debug` spells it:
+            // a header value is as likely to be a credential as `api_key` is.
+            .field(
+                "headers",
+                &self.headers.keys().map(String::as_str).collect::<Vec<_>>(),
             )
             .field("protocol", &self.protocol)
             .field("reasoning_effort", &self.reasoning_effort)
@@ -169,6 +210,7 @@ impl Default for LlmConfig {
             model: None,
             api_key: None,
             api_key_command: None,
+            headers: BTreeMap::new(),
             protocol: None,
             reasoning_effort: None,
             temperature: None,
@@ -189,6 +231,7 @@ pub(super) struct ExplicitFields {
     endpoint: bool,
     api_key: bool,
     api_key_command: bool,
+    headers: bool,
     protocol: bool,
     reasoning_effort: bool,
     temperature: bool,
@@ -206,6 +249,7 @@ pub(super) fn explicit_fields(tree: &Value) -> Vec<ExplicitFields> {
                     endpoint: entry.get("endpoint").is_some(),
                     api_key: entry.get("api_key").is_some(),
                     api_key_command: entry.get("api_key_command").is_some(),
+                    headers: entry.get("headers").is_some(),
                     protocol: entry.get("protocol").is_some(),
                     reasoning_effort: entry.get("reasoning_effort").is_some(),
                     temperature: entry.get("temperature").is_some(),
@@ -259,6 +303,7 @@ pub(super) fn validate(
                 (fields.endpoint, "endpoint"),
                 (fields.api_key, "api_key"),
                 (fields.api_key_command, "api_key_command"),
+                (fields.headers, "headers"),
                 (fields.protocol, "protocol"),
                 (fields.temperature, "temperature"),
                 (fields.max_tokens, "max_tokens"),
@@ -276,4 +321,43 @@ pub(super) fn validate(
         }
         BackendKind::Unknown(_) => unreachable!("handled above"),
     }
+}
+
+/// Fails to compile when a field is added to [`LlmConfig`] without deciding what
+/// the three hand-maintained lists beside it should say.
+///
+/// `ExplicitFields`, `explicit_fields` and the Codex rejection list in
+/// [`validate`] are parallel to this struct and kept in step by hand. Adding
+/// `headers` took six coordinated edits and nothing would have failed had the
+/// last two been missed - a Codex entry would simply have started accepting an
+/// HTTP-only field, defeating the documented guarantee that a subscription
+/// selection cannot silently become API billing. `deny_unknown_fields` cannot
+/// catch that: the field is known, it is the lists that forgot it.
+///
+/// The same guard `config::site` uses for its policy fields, for the reason
+/// stated there: a list kept in step with a type by hand is a list that drifts
+/// silently.
+#[cfg(test)]
+fn _every_provider_field_is_classified(config: &LlmConfig) {
+    let LlmConfig {
+        // Not backend-specific: every entry has these whatever it runs.
+        enabled: _,
+        backend: _,
+        model: _,
+        max_concurrent: _,
+        timeout_secs: _,
+        // HTTP-only: each of these has a row in the Codex rejection list in
+        // `validate`, and a field in `ExplicitFields` so the rejection can tell
+        // "written" from "defaulted".
+        endpoint: _,
+        api_key: _,
+        api_key_command: _,
+        headers: _,
+        protocol: _,
+        temperature: _,
+        max_tokens: _,
+        max_retries: _,
+        // Codex-only: rejected on an HTTP entry by the arm above.
+        reasoning_effort: _,
+    } = config;
 }

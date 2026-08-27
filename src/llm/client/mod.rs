@@ -35,6 +35,7 @@
 //!   reasoning models mid-thought; drep passed a large sentinel to work around
 //!   it. That workaround is gone.)
 
+use std::collections::BTreeMap;
 use std::time::Duration;
 
 use futures::StreamExt;
@@ -80,6 +81,16 @@ pub struct LlmClient {
     /// models mid-thought, and drep had to pass a large sentinel instead.
     pub(crate) max_tokens: Option<u32>,
     pub(crate) timeout_secs: u64,
+    /// Exactly the headers this client sends, default included.
+    ///
+    /// The effective set rather than the configured one, resolved once in
+    /// [`crate::config::effective_headers`]. Applying the default inside the
+    /// request instead left three readers disagreeing about the same question:
+    /// a config naming one header printed one here and in `doctor` while the
+    /// request carried two, and a config naming none printed an empty set while
+    /// the request still carried a `User-Agent`. That is the divergence
+    /// `auth::source_of` exists to prevent one module over.
+    pub(crate) headers: BTreeMap<String, String>,
     pub(crate) retry_config: RetryConfig,
 }
 
@@ -97,6 +108,13 @@ impl std::fmt::Debug for LlmClient {
             .field("temperature", &self.temperature)
             .field("max_tokens", &self.max_tokens)
             .field("timeout_secs", &self.timeout_secs)
+            // Names only, spelled exactly as `LlmConfig`'s `Debug` spells it. A
+            // header value is as likely to be a credential as `api_key` is, and
+            // this impl exists precisely so no `{:?}` emits one.
+            .field(
+                "headers",
+                &self.headers.keys().map(String::as_str).collect::<Vec<_>>(),
+            )
             .finish()
     }
 }
@@ -182,6 +200,7 @@ impl LlmClient {
             temperature: cfg.temperature,
             max_tokens: cfg.max_tokens,
             timeout_secs: cfg.timeout_secs,
+            headers: crate::config::effective_headers(&cfg.headers),
             retry_config: RetryConfig {
                 max_attempts,
                 initial_delay: Duration::from_secs(1),
@@ -238,6 +257,15 @@ impl LlmClient {
             Some(limit) => builder.max_tokens(limit),
             None => builder,
         };
+
+        // No ordering rule here, and that is the point: `self.headers` is
+        // already the effective set, resolved once when the client was built, so
+        // this loop cannot get the precedence between drep's own `User-Agent`
+        // and an operator's replacement for it wrong.
+        let mut builder = builder;
+        for (name, value) in &self.headers {
+            builder = builder.header(name, value);
+        }
 
         let options = builder
             .build()
