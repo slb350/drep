@@ -375,13 +375,9 @@ hand-writes `Debug` to redact `api_key`, prints an `api_key_command` as its
 program name plus an argument count, and prints `headers` as its names alone,
 because an argv and a header value can each carry the credential too.
 
-`[llm.headers]` is applied in `LlmClient::complete_json`, after drep's own
-`User-Agent: drep/<version>` and therefore winning over it, and after the SDK's
-protocol defaults for the same reason - `AgentOptionsBuilder::header` replaces
-case-insensitively, so a configured `Authorization` is the one sent. Headers stay
-out of the cache key: the endpoint, model, protocol and temperature are in it
-because each changes the answer, while a rotated token and a bumped user agent do
-not, and keying on them would discard a warm cache whenever either moved.
+`[llm.headers]` and drep's own `User-Agent: drep/<version>` are merged once, by `config::effective_headers` at `LlmClient::new`, and the result is stored as `LlmClient::headers`. The default is only created when the configured table names no user agent, matched case-insensitively, so an entry that sets one gets one header rather than two. `complete_json` applies that resolved map and settles no precedence of its own, which is what keeps the request, `LlmClient`'s `Debug` and `drep doctor` answering the same question the same way: with the default applied inside the request instead, a config naming one header printed one and sent two, and a config naming none printed an empty set and still sent a user agent - and the operator debugging a gateway 403 is asking `doctor` exactly that. `doctor` marks a name the entry did not write as `(default)`, comparing the configured set against the effective one rather than naming `User-Agent` itself, so a second default cannot be added without that listing reporting it. The resolved map still goes on after the SDK's protocol defaults, and `AgentOptionsBuilder::header` replaces case-insensitively, so a configured `Authorization` is the one sent.
+
+Headers stay out of the cache key: the endpoint, model, protocol and temperature are in it because each changes the answer, while a rotated token and a bumped user agent do not, and keying on them would discard a warm cache whenever either moved.
 
 ### The site policy layer
 
