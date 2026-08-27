@@ -31,6 +31,7 @@
 //! numbers `[[llm]]` entries in *this* file's order, and a bare `#2` that could
 //! mean either file is exactly the ambiguity those messages exist to avoid.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use open_agent::ApiProtocol;
@@ -171,6 +172,22 @@ pub enum ConfigError {
     )]
     UnusableHeaderValue { index: usize, name: String },
 
+    /// Both spellings, never either value: which of the two is the credential is
+    /// exactly what this error cannot know, so it quotes neither, the way
+    /// `UnusableHeaderValue` above quotes none.
+    #[error(
+        "[[llm]] #{} in file order: `{first}` and `{second}` are one HTTP header name written \
+         twice; header names are case-insensitive, so only one of them is sent, and which one \
+         is decided by their byte order rather than by anything this file says - remove the \
+         spelling you did not mean",
+        index + 1
+    )]
+    DuplicateHeaderName {
+        index: usize,
+        first: String,
+        second: String,
+    },
+
     #[error(
         "[[llm]] #{} in file order: unknown backend `{value}`; expected `http` or `codex`",
         index + 1
@@ -284,11 +301,12 @@ pub const DEFAULT_USER_AGENT: &str = concat!("drep/", env!("CARGO_PKG_VERSION"))
 ///
 /// Case-insensitive, because HTTP header names are: a configured `user-agent`
 /// replaces the default rather than joining it, which is what the SDK's own
-/// `HeaderMap` would do at send time anyway.
-pub fn effective_headers(
-    configured: &std::collections::BTreeMap<String, String>,
-) -> std::collections::BTreeMap<String, String> {
-    let mut headers = std::collections::BTreeMap::new();
+/// `HeaderMap` would do at send time anyway. Default-against-configured is the
+/// only collision this function has to settle - `validate` has already refused a
+/// pair of configured spellings, because there the two names are equally the
+/// user's and picking one is not the caller's to do.
+pub fn effective_headers(configured: &BTreeMap<String, String>) -> BTreeMap<String, String> {
+    let mut headers = BTreeMap::new();
     if !configured
         .keys()
         .any(|name| name.eq_ignore_ascii_case("user-agent"))
@@ -341,9 +359,12 @@ pub fn load(path: &Path) -> Result<Config, ConfigError> {
     })?;
 
     // Read off the raw tree, the way `disabled_provider_indices` and
-    // `backend::explicit_fields` are: `Config` has no `refuse_markers` field and
-    // no `deny_unknown_fields`, so serde would deserialize this file happily and
-    // say nothing.
+    // `backend::explicit_fields` are, and before deserialization because this
+    // pass owns both the variant and the wording. `Config` denies unknown
+    // fields, so a `refuse_markers` left to serde is refused - as a
+    // `ConfigError::Parse` reading "unknown field, expected `max_review_rounds`
+    // or `llm`", which tells a developer their line is a typo to delete rather
+    // than that the field is machine policy and lives in another file.
     if let Some(field) = site_only_field(&tree) {
         return Err(ConfigError::SiteOnlyField {
             path: path.to_path_buf(),
@@ -452,6 +473,15 @@ fn validate(
         // parse is `http`'s own, through the same types the SDK builds its
         // `HeaderMap` from, so the two cannot come to disagree about what is
         // sendable.
+        //
+        // `folded` is keyed the way HTTP compares header names, which is what
+        // makes two `BTreeMap` keys one header. A pair of spellings is refused
+        // rather than resolved, for the reason `AmbiguousApiKey` above is: the
+        // SDK's `HeaderMap` keeps the last insertion and this map is walked in
+        // byte order, so `Authorization` and `authorization` both configured
+        // means the credential that goes out was chosen by ASCII - while
+        // `doctor` and both `Debug` impls go on listing the one that does not.
+        let mut folded: BTreeMap<String, &String> = BTreeMap::new();
         for (name, value) in &llm.headers {
             if reqwest::header::HeaderName::from_bytes(name.as_bytes()).is_err() {
                 return Err(ConfigError::UnusableHeaderName {
@@ -463,6 +493,13 @@ fn validate(
                 return Err(ConfigError::UnusableHeaderValue {
                     index,
                     name: name.clone(),
+                });
+            }
+            if let Some(first) = folded.insert(name.to_ascii_lowercase(), name) {
+                return Err(ConfigError::DuplicateHeaderName {
+                    index,
+                    first: first.clone(),
+                    second: name.clone(),
                 });
             }
         }

@@ -131,10 +131,13 @@ pub struct LlmConfig {
     /// print the name and never the value. This is the one place that argument
     /// is made; the others cite it.
     ///
-    /// A `BTreeMap` rather than a list of pairs: a header set twice is one
-    /// header, and the sorted order makes the rendered config and the `doctor`
-    /// listing stable. `config::effective_headers` overlays it on drep's own
-    /// defaults to get what is actually sent.
+    /// A `BTreeMap` rather than a list of pairs, so the rendered config and the
+    /// `doctor` listing come out in a stable order. That alone does not make the
+    /// set unambiguous: two spellings of one name are two map keys and one HTTP
+    /// header, so `ConfigError::DuplicateHeaderName` refuses that pair at load
+    /// rather than letting byte order decide which of them is sent.
+    /// `config::effective_headers` overlays what survives on drep's own defaults
+    /// to get what is actually sent.
     pub headers: BTreeMap<String, String>,
     pub protocol: Option<String>,
     pub reasoning_effort: Option<ReasoningEffort>,

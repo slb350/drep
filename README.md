@@ -507,7 +507,7 @@ A name here replaces the one drep or the protocol would otherwise send, so an `A
 
 Unconfigured, drep sends `User-Agent: drep/<version>`. reqwest sends none by default, and an endpoint that logs or bills per client cannot attribute a request that carries no user agent.
 
-A name or value drep cannot encode is refused when the config loads, naming the entry and the header, rather than failing once per reviewed file.
+A name or value drep cannot encode is refused when the config loads, naming the entry and the header, rather than failing once per reviewed file. So are two spellings of one name: `Authorization` and `authorization` in the same table are one HTTP header, only one of them reaches the endpoint, and resolving that for you would be picking which credential goes out.
 
 Headers are not part of the cache key, for the reason `api_key` never has been: a caller-supplied credential is not part of what makes an answer, and keying on one would throw away a warm cache on every rotation. `drep doctor` lists what a provider will actually send, marking what drep supplied and never printing a value:
 

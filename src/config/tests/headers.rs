@@ -4,6 +4,7 @@
 //! here is that each printer obeys it.
 
 use std::collections::BTreeMap;
+use std::env;
 
 use super::support::write_config;
 use crate::config::{ConfigError, DEFAULT_USER_AGENT, LlmConfig, effective_headers, load};
@@ -109,6 +110,89 @@ fn an_unsendable_header_value_is_rejected_without_being_quoted_back() {
     assert!(
         !message.contains("secret"),
         "the value is the half that carries the token: {message}"
+    );
+}
+
+/// The rule runs after `${VAR}` expansion, and that ordering is the whole of it.
+///
+/// A control character written literally into `drep.toml` is visible in the
+/// file. One arriving through a `${VAR}` - a helper appending a newline to the
+/// token it mints - is not, and that is the case that happens. Re-implemented as
+/// a raw-tree pass before expansion, the shape `load` already uses twice for
+/// `site_only_field` and `backend::explicit_fields`, this rule would still pass
+/// every literal test above and let that token through to fail identically on
+/// every file of the run.
+#[test]
+fn a_header_value_is_checked_after_its_environment_reference_expands() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let path = write_config(
+        &temp,
+        "[[llm]]\nmodel = \"m\"\nendpoint = \"http://e/v1\"\n\
+         headers = { \"X-Tenant-Token\" = \"${DREP_TEST_UNSENDABLE_TOKEN}\" }\n",
+    );
+
+    // A name unique to this test, so a parallel run or a variable leaked from
+    // elsewhere cannot poison the assertion, and restored on both branches so the
+    // surrounding tests stay deterministic.
+    let var = "DREP_TEST_UNSENDABLE_TOKEN";
+    let previous = env::var(var).ok();
+    // SAFETY: the process is single-threaded at this point and the name is
+    // unique to this test.
+    unsafe { env::set_var(var, "secret\nvalue") };
+    let result = load(&path);
+    // SAFETY: see above.
+    match previous {
+        Some(prev) => unsafe { env::set_var(var, prev) },
+        None => unsafe { env::remove_var(var) },
+    }
+
+    let err = result.expect_err("the expanded token cannot be sent in a header");
+    let message = err.to_string();
+
+    assert!(
+        matches!(&err, ConfigError::UnusableHeaderValue { name, .. } if name == "X-Tenant-Token"),
+        "the check reads the expanded value, not the `${{VAR}}` that stood in for it: {err:?}"
+    );
+    assert!(
+        !message.contains("secret"),
+        "and still never quotes the token back: {message}"
+    );
+}
+
+/// Two spellings of one header name are refused rather than silently resolved.
+///
+/// They are two keys to a `BTreeMap` and one header to HTTP, so the map keeps
+/// both, `doctor` and both `Debug` impls list both, and the request sends
+/// whichever the SDK's case-insensitive `HeaderMap` happens to insert last -
+/// which is byte order, not anything the user wrote. With `Authorization` and
+/// `authorization` both configured that decides which credential goes out.
+#[test]
+fn two_spellings_of_one_header_name_are_rejected_at_load() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let path = write_config(
+        &temp,
+        "[[llm]]\nmodel = \"m\"\nendpoint = \"http://e/v1\"\n\
+         headers = { \"X-Tenant-Token\" = \"prod-token\", \"x-tenant-token\" = \"staging-token\" }\n",
+    );
+
+    let err = load(&path).expect_err("one header name written twice is ambiguous");
+    let message = err.to_string();
+
+    assert!(
+        matches!(
+            &err,
+            ConfigError::DuplicateHeaderName { first, second, .. }
+                if first == "X-Tenant-Token" && second == "x-tenant-token"
+        ),
+        "got {err:?}"
+    );
+    assert!(
+        message.contains("X-Tenant-Token") && message.contains("x-tenant-token"),
+        "both spellings, so the user can see which one to remove: {message}"
+    );
+    assert!(
+        !message.contains("prod-token") && !message.contains("staging-token"),
+        "and neither value, because either could be the credential: {message}"
     );
 }
 

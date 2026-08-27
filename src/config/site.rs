@@ -164,9 +164,13 @@ pub struct SiteConfig {
 /// field is added. `config::site_only_field` used to be a hard-coded
 /// `tree.get("refuse_markers")` in the other module: a third field added here
 /// would have compiled, said nothing, and been silently dropped from a
-/// `drep.toml` that named it, because `Config` has no `deny_unknown_fields`. That
-/// is the one outcome [`super::ConfigError::SiteOnlyField`] exists to prevent, and
-/// it would have been reintroduced by the ordinary act of adding a policy field.
+/// `drep.toml` that named it - the one outcome
+/// [`super::ConfigError::SiteOnlyField`] exists to prevent, reintroduced by the
+/// ordinary act of adding a policy field. `Config` has since gained
+/// `deny_unknown_fields`, so the same omission now costs the message rather than
+/// the refusal: the key is rejected as a misspelling, against a list of the two
+/// keys `drep.toml` does take, and a developer reads that as a line to delete
+/// rather than as policy that lives in this file.
 ///
 /// Both fields are rejected in `drep.toml`. A repository can already lower its
 /// own `max_concurrent`, but silently dropping the ceiling spelling makes a
