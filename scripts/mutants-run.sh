@@ -56,6 +56,16 @@ cleanup_mutation_scratch() {
 cleanup_mutation_scratch
 trap cleanup_mutation_scratch EXIT
 
+# --cap-lints: `[lints.rust] warnings = "deny"` in Cargo.toml applies to the
+# mutated build too, and a mutant that replaces a function body leaves the
+# arguments unread. `unused_variable` is then a hard error, the mutant is
+# recorded UNVIABLE, and unviable is silently not a failure - so the gate passes
+# having compiled the mutant and never run it. On the branch that found this, 16
+# of 17 mutants in the diff were unviable for that reason and for one missing
+# `use`, and the sweep still exited 0. Capping lints for the scratch build only
+# took that to 1, which is a mutant whose return type has no `Default` and is
+# genuinely unbuildable.
+#
 # --minimum-test-timeout: cargo-mutants derives the per-mutant timeout from the
 # unmutated baseline, which on a fast suite is a second or two. With -j running
 # several full suites at once on a loaded machine, a healthy mutant can exceed
@@ -64,9 +74,10 @@ trap cleanup_mutation_scratch EXIT
 # MUTANTS_JOBS so the same script can be driven harder on a 32-thread box than
 # on the laptop the hook runs on; see scripts/mutants-remote.sh.
 cargo mutants -j "${MUTANTS_JOBS:-4}" --no-shuffle --minimum-test-timeout 60 \
-  --output "$OUT_DIR" "$@" && status=0 || status=$?
+  --cap-lints true --output "$OUT_DIR" "$@" && status=0 || status=$?
 
 MISSED="$OUT_DIR/mutants.out/missed.txt"
+UNVIABLE="$OUT_DIR/mutants.out/unviable.txt"
 
 # The verdict comes from the results, not from the exit code alone.
 #
@@ -91,6 +102,19 @@ if [ -s "$MISSED" ]; then
   echo "correct behaviour from incorrect. Fix the test, never the mutant list." >&2
   cat "$MISSED" >&2
   exit 2
+fi
+
+# Unviable is reported rather than passed over in silence. It is not a failure -
+# some mutants cannot be built at all, and there is nothing to fix in a test for
+# one whose return type has no `Default` - but it is also not a verdict, because
+# the mutant never ran. Left unprinted it reads as a pass: the summary line
+# scrolls past, `missed.txt` is empty, and a sweep that built its whole scope and
+# tested none of it exits 0. Naming the count is what makes "the gate has stopped
+# covering this file" something a reader can notice.
+if [ -s "$UNVIABLE" ]; then
+  echo "note: $(wc -l <"$UNVIABLE" | tr -d ' ') mutant(s) did not build, so nothing was"
+  echo "proven about them either way. A count that climbs means the gate is losing scope."
+  cat "$UNVIABLE"
 fi
 
 if [ "$status" -eq 3 ]; then
