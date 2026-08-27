@@ -1,11 +1,16 @@
 # drep's own commit gate.
 #
-# Install (the `core.hooksPath` dance is explained in CLAUDE.md):
+# Install. `pre-commit install` refuses outright ("Cowardly refusing to install
+# hooks with `core.hooksPath` set") when any git config level points
+# core.hooksPath elsewhere, so clear it around the install:
 #
 #     git config --local core.hooksPath "" \
 #       && pre-commit install \
 #       && pre-commit install --hook-type pre-push
 #     git config --local --unset core.hooksPath
+#
+# On a fresh clone core.hooksPath is unset and the two `pre-commit install`
+# lines are enough on their own.
 #
 # `pre-commit` is expected on PATH (`uv tool install pre-commit`). Every hook
 # below is `language: system`, so pre-commit builds no environments and the tool
