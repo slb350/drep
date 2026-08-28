@@ -6,8 +6,8 @@
 # Mutation testing is the most CPU-hungry gate in this repo: every mutant is a
 # full build plus a full test run, and the hook fires on a laptop the developer
 # is still using. Measured on 12 mutants from src/docs/fence.rs: local M5 Max at
-# -j 4 takes 1m54 with the machine pinned; strix at -j 4 takes 38s end to end,
-# sync included, and costs this machine nothing.
+# -j 4 takes 1m54 with the machine pinned. The mutation offload follows the
+# repository's Linux CI owner, now homelab-1, and costs this machine nothing.
 #
 # More jobs is not better, and -j 4 on a 32-thread box is not a typo. Each job
 # gets its own copy of the tree *including* target/, which is how its builds
@@ -25,7 +25,7 @@
 # Falls back to a local run, loudly, when the host is unreachable. A commit gate
 # that silently skips itself because the LAN blipped is worse than a slow one.
 #
-#   DREP_MUTANTS_HOST    ssh target (default: strix.local)
+#   DREP_MUTANTS_HOST    ssh target (default: homelab-1.local)
 #   DREP_MUTANTS_DIR     remote path, $HOME-relative (default: ci/<repo name>)
 #   DREP_MUTANTS_REMOTE  0 to force a local run
 #   MUTANTS_JOBS         -j for the remote run (default: 4)
@@ -43,7 +43,7 @@ cd "$(git rev-parse --show-toplevel)"
 # shellcheck source=scripts/mutants-common.sh
 . scripts/mutants-common.sh
 
-HOST="${DREP_MUTANTS_HOST:-strix.local}"
+HOST="${DREP_MUTANTS_HOST:-homelab-1.local}"
 REMOTE_DIR="${DREP_MUTANTS_DIR:-ci/$(basename "$PWD")}"
 REMOTE="$HOST:$REMOTE_DIR"
 JOBS="${MUTANTS_JOBS:-4}"

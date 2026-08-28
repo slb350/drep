@@ -12,11 +12,11 @@ permissions:
   contents: read
 
 jobs:
-  # Strix has one repository-scoped runner, so separate Linux jobs would only
+  # homelab-1 has one repository-scoped runner, so separate Linux jobs would only
   # serialize while repeating checkout, cache and toolchain setup. Keep the
   # complete Linux gate in one allocation; macOS remains independent below.
   linux:
-    name: validate (Strix)
+    name: validate (homelab-1)
     if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: [self-hosted, linux, x64, drep-linux]
     steps:

@@ -507,17 +507,17 @@ exit-3 push handshake. Deterministic tools still run and still gate;
 ## Distribution
 
 `dist-workspace.toml` drives cargo-dist. Four targets are built on two
-repository-scoped homelab runners: Strix builds both Linux targets and owns
+repository-scoped homelab runners: homelab-1 builds both Linux targets and owns
 global plan, host and Homebrew publication work, while the arm64 Mac mini uses
 the native macOS SDK to build both Apple targets. The generated
 `.github/workflows/release.yml` is tag-only and creates the GitHub release and
 Homebrew publication. crates.io remains a separate `cargo publish --locked`
 operation because cargo-dist does not publish Rust crates. The arm64 Linux
-runner mapping names Strix's x86_64 host explicitly; cargo-dist uses that host
+runner mapping names homelab-1's x86_64 host explicitly; cargo-dist uses that host
 fact to provision cargo-zigbuild and Zig instead of assuming native arm64.
 `.github/build-setup.yml` installs pinned Zig 0.16.0 and cargo-zigbuild 0.23.0
 for that matrix row before cargo-dist's generated dependency step. That avoids
-the generated pip fallback, which Strix's PEP 668-managed Python rejects.
+the generated pip fallback, which homelab-1's PEP 668-managed Python rejects.
 The same setup installs stable Rust plus the matrix-selected target on macOS
 before cargo-dist is installed, so the Mac service never depends on an
 interactive user's shell profile or a runner-global Cargo path.
@@ -525,7 +525,7 @@ Reqwest enables `native-tls-vendored` only for arm64 Linux, which compiles
 OpenSSL for that target instead of requiring an arm64 OpenSSL sysroot on the
 x86_64 host or adding the source build to native targets.
 
-Cargo-dist's global jobs have two explicit Strix host prerequisites that its
+Cargo-dist's global jobs have two explicit homelab-1 host prerequisites that its
 generated workflow assumes are present on a GitHub-hosted image: `gh` must be
 on the service PATH, and Homebrew publication uses Linuxbrew's supported
 `/home/linuxbrew/.linuxbrew` prefix. The hardened service keeps home directories
@@ -535,13 +535,13 @@ dedicated Cargo bin directory because global jobs download a cached `dist`
 there without adding that directory to `GITHUB_PATH`.
 
 `.github/workflows/rust.yml` runs format, clippy, tests and the 1.88 MSRV check
-in one Strix allocation, plus the test suite on the native Mac mini. Both
+in one homelab-1 allocation, plus the test suite on the native Mac mini. Both
 stable toolchains include Clippy: the test suite runs a real Rust fixture to
 verify compiler-grounded semantic suppression. Its jobs
 accept pushes and same-repository pull requests but skip forked pull requests
 before a LAN runner is selected. `.github/workflows/mutants.yml` follows the
 successful `rust` workflow for a push to `main` and checks out that exact SHA on
-the same hardened Strix service labelled `drep-linux`; pull-request workflow
+the same hardened homelab-1 service labelled `drep-linux`; pull-request workflow
 completions cannot trigger it. The mutation workflow keeps `target/` warm,
 rejects any other persistent workspace state, and pins `cargo-mutants` 27.1.0;
 `scripts/mutants-run.sh` remains the single definition of the mutation verdict.

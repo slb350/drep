@@ -9,8 +9,8 @@ cargo-dist-version = "0.32.0"
 ci = "github"
 # Which actions to run on pull requests
 pr-run-mode = "skip"
-# The x86_64 Strix runner cross-builds arm64 Linux. Cargo-dist's generated pip
-# fallback is incompatible with Strix's PEP 668-managed Python, so inject the
+# The x86_64 homelab-1 runner cross-builds arm64 Linux. Cargo-dist's generated
+# pip fallback is incompatible with its PEP 668-managed Python, so inject the
 # pinned native tools before its dependency step; that step then becomes a
 # no-op because cargo-zigbuild is already on PATH. Cargo-dist copies this file
 # into release.yml, so changing either source requires `dist init`.
@@ -32,7 +32,7 @@ install-path = "CARGO_HOME"
 # Whether to install an updater program
 install-updater = false
 
-# Linux and global release work stays on the hardened Strix runner. The M1 Mac
+# Linux and global release work stays on the hardened homelab-1 runner. The M1 Mac
 # mini builds both Apple targets natively through the macOS SDK, including the
 # x86_64 target from its arm64 host.
 [dist.github-custom-runners]
