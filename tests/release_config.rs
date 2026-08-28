@@ -122,6 +122,10 @@ fn github_ci_uses_only_guarded_homelab_runners() {
             job.lines().any(|line| line == expected_guard),
             "{job_name} must reject forked pull requests before using a homelab runner"
         );
+        assert!(
+            job.contains("uses: Swatinem/rust-cache@") && job.contains("cache-bin: false"),
+            "{job_name} must not let rust-cache delete runner-provisioned Cargo binaries"
+        );
     }
 
     let linux = workflow_job(&workflow, "linux");

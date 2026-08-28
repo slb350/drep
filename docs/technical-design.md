@@ -539,7 +539,12 @@ in one homelab-1 allocation, plus the test suite on the native Mac mini. Both
 stable toolchains include Clippy: the test suite runs a real Rust fixture to
 verify compiler-grounded semantic suppression. Its jobs
 accept pushes and same-repository pull requests but skip forked pull requests
-before a LAN runner is selected. `.github/workflows/mutants.yml` follows the
+before a LAN runner is selected. Both validation jobs disable rust-cache's
+Cargo binary caching. The action's default save cleanup removes every binary
+that existed when the job began, but these self-hosted runners keep pinned
+publisher tools in that same Cargo bin directory. Registry, Git and target
+caching remain enabled without allowing validation to delete host-owned tools.
+`.github/workflows/mutants.yml` follows the
 successful `rust` workflow for a push to `main` and checks out that exact SHA on
 the same hardened homelab-1 service labelled `drep-linux`; pull-request workflow
 completions cannot trigger it. The mutation workflow keeps `target/` warm,
