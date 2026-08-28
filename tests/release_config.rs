@@ -236,8 +236,8 @@ fn mutation_ci_is_main_only_on_the_pinned_homelab_runner() {
         "the full sweep must require the repository-scoped homelab-1 label"
     );
     assert!(
-        mutants.contains("timeout-minutes: 90"),
-        "the full sweep needs headroom above its observed runtime while still releasing a wedged runner"
+        mutants.contains("timeout-minutes: 180"),
+        "the throttled shared-host sweep needs contention headroom while still releasing a wedged runner"
     );
     assert!(
         mutants.contains("tool: cargo-mutants@27.1.0"),
