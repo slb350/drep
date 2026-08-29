@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.7.1] - 2026-08-29
+
+### Fixed
+
+- Updated the runtime `chacha20` dependency from the yanked 0.10.1 release to
+  0.10.2, which fixes an SSE4.1 intrinsic used by the SSE2 backend for the RNG
+  and legacy 64-bit-counter variants. The dependency remains compatible with
+  drep's Rust 1.88 minimum.
+- Developer mutation offload now uses a user-owned cache tree on homelab-1
+  instead of the protected GitHub-runner checkout, so staged and manual sweeps
+  can sync without colliding with CI ownership.
+
 ## [2.7.0] - 2026-08-26
 
 ### Added

@@ -286,6 +286,12 @@ fn remote_mutation_sweep_defaults_to_homelab_1() {
         "developer mutation offload must follow Linux CI ownership to homelab-1"
     );
     assert!(
+        script.contains(
+            "REMOTE_DIR=\"${DREP_MUTANTS_DIR:-.cache/drep-mutants/$(basename \"$PWD\")}\""
+        ),
+        "developer mutation offload must not collide with the protected runner checkout"
+    );
+    assert!(
         !script.contains("strix.local"),
         "the executable mutation wrapper must not retain a Strix default"
     );

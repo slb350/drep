@@ -1,6 +1,6 @@
 [package]
 name = "drep-ai"
-version = "2.7.0"
+version = "2.7.1"
 edition = "2024"
 # `ignore` 0.4.30 introduced let-chains that require Rust 1.88 without
 # declaring that floor. The current `ignore` now declares 1.88 itself;

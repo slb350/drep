@@ -360,7 +360,7 @@ async fn a_grandchild_inheriting_output_cannot_hold_a_review_open() {
 
     let result = client.complete_json("review", "payload").await;
     let pid = std::fs::read_to_string(dir.path().join("grandchild.pid")).expect("grandchild pid");
-    let running = super::probe_and_stop_process(&pid);
+    let running = crate::test_support::probe_and_stop_process(&pid);
 
     assert!(result.is_ok(), "got {result:?}");
     assert!(

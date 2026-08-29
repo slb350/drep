@@ -282,6 +282,24 @@ pub(crate) fn write_executable(path: &std::path::Path, contents: impl AsRef<str>
     std::fs::write(path, contents.as_ref()).expect("writing the executable must succeed");
 }
 
+/// Report whether a Unix test process is still running, then stop it if so.
+///
+/// Grandchild-pipe tests deliberately leave a descendant alive after the
+/// configured child exits. Centralizing the cleanup keeps those fixtures from
+/// accumulating sleepers on a parallel or mutation-test runner.
+#[cfg(unix)]
+pub(crate) fn probe_and_stop_process(pid: &str) -> bool {
+    let running = std::process::Command::new("/bin/kill")
+        .args(["-0", pid])
+        .status()
+        .expect("probe grandchild")
+        .success();
+    if running {
+        let _ = std::process::Command::new("/bin/kill").arg(pid).status();
+    }
+    running
+}
+
 /// Sum regular-file bytes one directory level beneath `root`.
 pub(crate) fn two_level_tree_size(root: &std::path::Path) -> u64 {
     std::fs::read_dir(root)

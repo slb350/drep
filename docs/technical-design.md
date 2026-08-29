@@ -550,3 +550,7 @@ the same hardened homelab-1 service labelled `drep-linux`; pull-request workflow
 completions cannot trigger it. The mutation workflow keeps `target/` warm,
 rejects any other persistent workspace state, and pins `cargo-mutants` 27.1.0;
 `scripts/mutants-run.sh` remains the single definition of the mutation verdict.
+Developer offload through `scripts/mutants-remote.sh` uses the SSH account's
+`~/.cache/drep-mutants/<repo>` tree instead. It must not use `~/ci`: on
+homelab-1 that name resolves into `/srv/ci`, whose runner-owned checkout is a
+separate trust and permission boundary.

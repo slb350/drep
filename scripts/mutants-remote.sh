@@ -26,7 +26,8 @@
 # that silently skips itself because the LAN blipped is worse than a slow one.
 #
 #   DREP_MUTANTS_HOST    ssh target (default: homelab-1.local)
-#   DREP_MUTANTS_DIR     remote path, $HOME-relative (default: ci/<repo name>)
+#   DREP_MUTANTS_DIR     remote path, $HOME-relative
+#                        (default: .cache/drep-mutants/<repo name>)
 #   DREP_MUTANTS_REMOTE  0 to force a local run
 #   MUTANTS_JOBS         -j for the remote run (default: 4)
 #   MUTANTS_LOCAL_JOBS   -j for a local or fallback run (default: 4)
@@ -44,7 +45,7 @@ cd "$(git rev-parse --show-toplevel)"
 . scripts/mutants-common.sh
 
 HOST="${DREP_MUTANTS_HOST:-homelab-1.local}"
-REMOTE_DIR="${DREP_MUTANTS_DIR:-ci/$(basename "$PWD")}"
+REMOTE_DIR="${DREP_MUTANTS_DIR:-.cache/drep-mutants/$(basename "$PWD")}"
 REMOTE="$HOST:$REMOTE_DIR"
 JOBS="${MUTANTS_JOBS:-4}"
 
