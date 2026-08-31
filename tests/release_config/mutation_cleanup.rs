@@ -63,6 +63,9 @@ fn mutation_scratch_cleanup_preserves_adjacent_state() {
         ])
         .env("DREP_MUTANTS_TMPDIR", &scratch)
         .env("MUTANTS_OUT_DIR", temp.path().join("out"))
+        .env_remove("DREP_MUTANTS_HOST_LOCK")
+        .env_remove("DREP_MUTANTS_HOST_LOCK_WAIT_SECONDS")
+        .env_remove("DREP_MUTANTS_RESULT_TOKEN")
         .output()
         .expect("run mutation wrapper with fake cargo");
 
