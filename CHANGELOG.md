@@ -7,15 +7,66 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- Model traffic now treats every configured endpoint as an exact origin. The
+  `open-agent-sdk` floor is 0.11.2, which refuses redirects for both completion
+  request paths, and drep's own authenticated `GET /models` client now does the
+  same. Neither cross-origin nor same-origin `30x` responses can replay a
+  protocol key or configured credential header; the original status is
+  reported instead.
+
 ### Added
 
-- `[llm.headers]` on an `[[llm]]` entry: extra HTTP headers sent with every request to that provider, for an endpoint that identifies its clients by `User-Agent`, bills against a header, or authenticates outside its protocol's default scheme. A name here replaces the one drep or the protocol would otherwise send, so an `Authorization` in this table is the one that goes out, and `${VAR}` expands in a value as it does anywhere else in the file. `backend = "codex"` rejects the table with the other HTTP-only fields. A header name or value that cannot be encoded is rejected at load, naming the entry and the header but never the value, because leaving it to the request meant one identical failure per reviewed file — each rendered as a transport failure, which reads as the endpoint being down. Two spellings of one name are rejected the same way and for the same reason: header names are case-insensitive, so `Authorization` and `authorization` in one table are one header, only one of them is sent, and which one is decided by byte order rather than by anything the file says. Headers are not part of the cache key, for the reason `api_key` never has been: a caller-supplied credential is not part of what makes an answer, and keying on one would discard the cache on a rotation.
+- `[llm.headers]` on an `[[llm]]` entry: extra HTTP headers sent with every
+  request to that provider, for an endpoint that identifies its clients by
+  `User-Agent`, bills against a header, or authenticates outside its protocol's
+  default scheme. A name here replaces the one drep or the protocol would
+  otherwise send, so an `Authorization` in this table is the one that goes out,
+  and `${VAR}` expands in a value as it does anywhere else in the file.
+  `backend = "codex"` rejects the table with the other HTTP-only fields. A header
+  name or value that cannot be encoded is rejected at load, naming the entry and
+  the header but never the value, because leaving it to the request meant one
+  identical failure per reviewed file — each rendered as a transport failure,
+  which reads as the endpoint being down. Two spellings of one name are rejected
+  the same way and for the same reason: header names are case-insensitive, so
+  `Authorization` and `authorization` in one table are one header, only one of
+  them is sent, and which one is decided by byte order rather than by anything
+  the file says. The canonical effective set is part of cache identity because
+  an arbitrary header may select a tenant, model route, or feature variant;
+  values reach only the cache digest, never a log or cache file as text.
 
-- drep now sends `User-Agent: drep/<version>` when nothing is configured. reqwest sends no user agent by default, and an endpoint that logs or bills per client cannot attribute a request that carries none. `drep doctor` lists the headers a provider will actually send, marking the ones drep supplied — `headers: User-Agent (default), X-Tenant-Token` — and never their values, since a project or tenant token is the ordinary thing to put in a header. The effective set is resolved once in `config::effective_headers`, so the report, `{:?}` and the request cannot disagree about it.
+- drep now sends `User-Agent: drep/<version>` when nothing is configured.
+  reqwest sends no user agent by default, and an endpoint that logs or bills per
+  client cannot attribute a request that carries none. `drep doctor` lists the
+  headers a provider will actually send, marking the ones drep supplied —
+  `headers: User-Agent (default), X-Tenant-Token` — and never their values, since
+  a project or tenant token is the ordinary thing to put in a header. The
+  effective set is resolved once in `config::effective_headers`, so the report,
+  `{:?}` and the request cannot disagree about it.
 
 ### Changed
 
-- An unknown key in `drep.toml` is now a load error instead of being silently dropped, at the top level and in an `[[llm]]` entry alike. serde discarded it without a word, so a `[llm.headers]` table written against a drep that could not send one, or a `max_reveiw_rounds` that ran at the default, produced a config that read as configured and did nothing of what it said. `drep.toml` was laxer about this than the site policy file, which has rejected unknown keys since it arrived. One consequence worth knowing: this is the only pass that does not skip a disabled entry, because serde rejects before there is an entry to skip, so a parked provider carrying a field from a newer drep now refuses to load the file.
+- An absent `api_key` now omits the protocol authentication header instead of
+  sending `Bearer not-needed` or `x-api-key: not-needed`, so a custom header can
+  be the complete authentication scheme. `drep doctor` labels the credential
+  line as the protocol key and does not prescribe a login when configured
+  headers may authenticate the request.
+
+- `max_tokens` is now part of response-cache identity. Changing the output
+  ceiling issues the differently bounded request instead of reusing a complete
+  answer produced under the previous limit.
+
+- An unknown key in `drep.toml` is now a load error instead of being silently
+  dropped, at the top level and in an `[[llm]]` entry alike. serde discarded it
+  without a word, so a `[llm.headers]` table written against a drep that could
+  not send one, or a `max_reveiw_rounds` that ran at the default, produced a
+  config that read as configured and did nothing of what it said. `drep.toml`
+  was laxer about this than the site policy file, which has rejected unknown
+  keys since it arrived. One consequence worth knowing: this is the only pass
+  that does not skip a disabled entry, because serde rejects before there is an
+  entry to skip, so a parked provider carrying a field from a newer drep now
+  refuses to load the file.
 
 ## [2.7.1] - 2026-08-29
 

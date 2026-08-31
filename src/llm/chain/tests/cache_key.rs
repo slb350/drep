@@ -7,6 +7,8 @@
 //! hit that never came from A. That bug ships green under every test in
 //! `failover.rs`.
 
+use std::collections::BTreeMap;
+
 use serde_json::json;
 
 use super::support::{CONTENT, GOOD_JSON, SYSTEM, server_returning_json};
@@ -256,6 +258,77 @@ async fn two_providers_differing_only_in_temperature_key_differently() {
     assert_ne!(
         key_cool, key_warm,
         "temperature changes the answer, so it must change the key"
+    );
+}
+
+/// A configured output ceiling changes the request and therefore the answer
+/// eligible for reuse. A complete response under a small ceiling can still be
+/// valid JSON, so completeness alone cannot keep it out of the cache.
+#[tokio::test]
+async fn two_providers_differing_only_in_max_tokens_key_differently() {
+    let server = server_returning_json().await;
+    let (cache, _dir) = temp_cache();
+
+    let mut unset = cfg_for(&server, "same-model", 1);
+    unset.max_tokens = None;
+    let mut short = cfg_for(&server, "same-model", 1);
+    short.max_tokens = Some(1_024);
+    let mut long = cfg_for(&server, "same-model", 1);
+    long.max_tokens = Some(32_768);
+
+    let chain = fast_retry_chain(&[unset, short, long]);
+    let keys = chain
+        .providers()
+        .iter()
+        .map(|provider| provider.cache_key(&cache, SYSTEM, CONTENT))
+        .collect::<Vec<_>>();
+
+    assert!(
+        keys[0] != keys[1] && keys[0] != keys[2] && keys[1] != keys[2],
+        "unset, low and high ceilings are three requests: {keys:?}"
+    );
+}
+
+/// Arbitrary caller headers can select a route, tenant or feature variant.
+/// The cache cannot know which names are answer-affecting, so their effective
+/// values are part of request identity by default.
+#[tokio::test]
+async fn two_providers_differing_only_in_a_header_value_key_differently() {
+    let server = server_returning_json().await;
+    let (cache, _dir) = temp_cache();
+
+    let mut blue = cfg_for(&server, "same-model", 1);
+    blue.headers = BTreeMap::from([("X-Model-Route".to_owned(), "blue".to_owned())]);
+    let mut green = cfg_for(&server, "same-model", 1);
+    green.headers = BTreeMap::from([("X-Model-Route".to_owned(), "green".to_owned())]);
+
+    let chain = fast_retry_chain(&[blue, green]);
+
+    assert_ne!(
+        chain.providers()[0].cache_key(&cache, SYSTEM, CONTENT),
+        chain.providers()[1].cache_key(&cache, SYSTEM, CONTENT),
+        "a different route must not reuse the previous route's answer"
+    );
+}
+
+/// HTTP header names are case-insensitive on the wire, so spelling alone must
+/// not discard a warm cache when the effective request is otherwise identical.
+#[tokio::test]
+async fn equivalent_header_name_casing_has_one_cache_identity() {
+    let server = server_returning_json().await;
+    let (cache, _dir) = temp_cache();
+
+    let mut title_case = cfg_for(&server, "same-model", 1);
+    title_case.headers = BTreeMap::from([("X-Model-Route".to_owned(), "blue".to_owned())]);
+    let mut lower_case = cfg_for(&server, "same-model", 1);
+    lower_case.headers = BTreeMap::from([("x-model-route".to_owned(), "blue".to_owned())]);
+
+    let chain = fast_retry_chain(&[title_case, lower_case]);
+
+    assert_eq!(
+        chain.providers()[0].cache_key(&cache, SYSTEM, CONTENT),
+        chain.providers()[1].cache_key(&cache, SYSTEM, CONTENT),
+        "header spelling does not change the HTTP request"
     );
 }
 

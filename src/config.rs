@@ -31,7 +31,7 @@
 //! numbers `[[llm]]` entries in *this* file's order, and a bare `#2` that could
 //! mean either file is exactly the ambiguity those messages exist to avoid.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 
 use open_agent::ApiProtocol;
@@ -346,6 +346,19 @@ pub fn parse_protocol(raw: Option<&str>) -> Option<ApiProtocol> {
 /// reported with the variable's name rather than as a downstream parse
 /// failure inside the substituted text.
 pub fn load(path: &Path) -> Result<Config, ConfigError> {
+    load_with_env(path, |name| std::env::var(name))
+}
+
+/// Test seam for `${VAR}` expansion without mutating process-global state.
+///
+/// `std::env::set_var` is unsafe in edition 2024 because the test harness is
+/// multithreaded. Passing the lookup also proves validation sees the expanded
+/// value through the same production path rather than recreating that ordering
+/// in a test.
+pub(crate) fn load_with_env<F>(path: &Path, lookup: F) -> Result<Config, ConfigError>
+where
+    F: Fn(&str) -> Result<String, std::env::VarError>,
+{
     let content =
         std::fs::read_to_string(path).map_err(|err| ConfigError::Io(path.to_path_buf(), err))?;
 
@@ -378,7 +391,7 @@ pub fn load(path: &Path) -> Result<Config, ConfigError> {
     // in `Config.llm` with its `${VAR}` unexpanded, which nothing reads - only
     // `providers()` is consulted, and it filters the entry out.
     let disabled = disabled_provider_indices(&tree);
-    expand_env_except(&mut tree, path, &disabled)?;
+    expand_env_except(&mut tree, path, &disabled, &lookup)?;
     let explicit_fields = backend::explicit_fields(&tree);
 
     let config: Config = tree.try_into().map_err(|err: toml::de::Error| {
@@ -481,21 +494,22 @@ fn validate(
         // byte order, so `Authorization` and `authorization` both configured
         // means the credential that goes out was chosen by ASCII - while
         // `doctor` and both `Debug` impls go on listing the one that does not.
-        let mut folded: BTreeMap<String, &String> = BTreeMap::new();
+        let mut folded: HashMap<reqwest::header::HeaderName, &String> = HashMap::new();
         for (name, value) in &llm.headers {
-            if reqwest::header::HeaderName::from_bytes(name.as_bytes()).is_err() {
-                return Err(ConfigError::UnusableHeaderName {
-                    index,
-                    name: name.clone(),
-                });
-            }
+            let parsed =
+                reqwest::header::HeaderName::from_bytes(name.as_bytes()).map_err(|_| {
+                    ConfigError::UnusableHeaderName {
+                        index,
+                        name: name.clone(),
+                    }
+                })?;
             if reqwest::header::HeaderValue::from_bytes(value.as_bytes()).is_err() {
                 return Err(ConfigError::UnusableHeaderValue {
                     index,
                     name: name.clone(),
                 });
             }
-            if let Some(first) = folded.insert(name.to_ascii_lowercase(), name) {
+            if let Some(first) = folded.insert(parsed, name) {
                 return Err(ConfigError::DuplicateHeaderName {
                     index,
                     first: first.clone(),

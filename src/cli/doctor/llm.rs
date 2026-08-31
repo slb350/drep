@@ -224,17 +224,17 @@ pub(super) async fn write_llm_section<W: Write>(
                     }
                 }
             } else {
+                let configured_headers = configured_headers(entry);
                 let line = key_source_line(
                     entry,
                     expanded_command(&loaded, file_index),
                     &store,
+                    &configured_headers,
                     semantic,
                 )
                 .await;
-                writeln!(out, "     key: {line}")?;
-                if let Some(names) = header_names(entry) {
-                    writeln!(out, "     headers: {names}")?;
-                }
+                writeln!(out, "     protocol key: {line}")?;
+                writeln!(out, "     headers: {}", header_names(&configured_headers))?;
             }
         } else {
             writeln!(out, "  -  {description} (disabled - skipped)")?;
@@ -300,6 +300,7 @@ async fn key_source_line(
     entry: &Value,
     resolved_argv: Option<&[String]>,
     store: &AuthStore,
+    configured_headers: &std::collections::BTreeMap<String, String>,
     semantic: super::Semantic,
 ) -> String {
     let api_key = entry.get("api_key").and_then(|v| v.as_str());
@@ -344,6 +345,9 @@ async fn key_source_line(
             KeySource::Command.label(),
             key_command_status(resolved_argv).await
         ),
+        (KeySource::Missing, _) if !configured_headers.is_empty() => {
+            "not set; configured headers may supply authentication".to_owned()
+        }
         (source, _) => source.label().to_string(),
     }
 }
@@ -399,39 +403,33 @@ fn report_load_result<W: Write>(
     Ok(())
 }
 
-/// The headers this entry will actually send, or `None` when it sends none.
-///
-/// Goes through `config::effective_headers`, the same function that fills
-/// `LlmClient::headers`, so the report cannot describe a set the request will
-/// not carry. It listed the raw table alone once, which meant a config naming
-/// one header printed one and sent two, and a config naming none printed
-/// nothing while the request carried drep's own `User-Agent` - and the operator
-/// asking `doctor` what user agent is going out is precisely the one who did
-/// not configure it.
-///
-/// Names only, never values: a project or tenant token is the ordinary thing to
-/// put in a header, and this output is pasted into issues and chat.
+/// The valid string-valued header names this raw entry configured.
 ///
 /// Reads the raw table for the reason the predicates below do - `load` fails on
 /// an unset `${VAR}`, and that is when this report is most useful - so a
 /// malformed entry contributes nothing rather than failing the report.
-fn header_names(entry: &toml::Value) -> Option<String> {
-    let configured: std::collections::BTreeMap<String, String> = entry
+fn configured_headers(entry: &toml::Value) -> std::collections::BTreeMap<String, String> {
+    entry
         .get("headers")
         .and_then(toml::Value::as_table)
         .map(|table| {
             table
                 .iter()
-                .filter_map(|(name, value)| {
-                    value.as_str().map(|value| (name.clone(), value.to_owned()))
-                })
+                .filter_map(|(name, value)| value.as_str().map(|_| (name.clone(), String::new())))
                 .collect()
         })
-        .unwrap_or_default();
-    let effective = config::effective_headers(&configured);
-    if effective.is_empty() {
-        return None;
-    }
+        .unwrap_or_default()
+}
+
+/// The headers this entry will actually send.
+///
+/// Goes through `config::effective_headers`, the same function that fills
+/// `LlmClient::headers`, so the report cannot describe a set the request will
+/// not carry. Names only, never values: a project or tenant token is the
+/// ordinary thing to put in a header, and this output is pasted into issues and
+/// chat.
+fn header_names(configured: &std::collections::BTreeMap<String, String>) -> String {
+    let effective = config::effective_headers(configured);
     // A name the entry did not write is one drep added, and saying so answers
     // the question this line exists for: is the user agent going out mine or
     // drep's own. Derived by comparing the two sets rather than by naming
@@ -440,19 +438,17 @@ fn header_names(entry: &toml::Value) -> Option<String> {
     //
     // Sorted, because `effective_headers` returns a `BTreeMap` - the order is
     // the map's, not the order the file happened to list.
-    Some(
-        effective
-            .keys()
-            .map(|name| {
-                if configured.contains_key(name) {
-                    name.clone()
-                } else {
-                    format!("{name} (default)")
-                }
-            })
-            .collect::<Vec<_>>()
-            .join(", "),
-    )
+    effective
+        .keys()
+        .map(|name| {
+            if configured.contains_key(name) {
+                name.clone()
+            } else {
+                format!("{name} (default)")
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// Whether this raw entry names the Codex backend.

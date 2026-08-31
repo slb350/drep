@@ -91,6 +91,10 @@ pub struct LlmClient {
     /// the request still carried a `User-Agent`. That is the divergence
     /// `auth::source_of` exists to prevent one module over.
     pub(crate) headers: BTreeMap<String, String>,
+    /// Precomputed because every reviewed file asks for the same provider's
+    /// cache identity. It may depend on credential-bearing header values, so it
+    /// is deliberately omitted from `Debug`.
+    request_identity: String,
     pub(crate) retry_config: RetryConfig,
 }
 
@@ -143,6 +147,18 @@ impl LlmClient {
         self.temperature
     }
 
+    /// Every HTTP request option that can change the answer while the endpoint
+    /// and model stay the same.
+    ///
+    /// Header names are canonicalised to lower case because HTTP compares them
+    /// case-insensitively. Values remain exact: an arbitrary header can select a
+    /// tenant, model route or feature variant, and drep cannot infer from its
+    /// name whether changing it changes the answer. The returned digest is fed
+    /// into the cache hash and is never logged.
+    pub fn request_identity(&self) -> &str {
+        &self.request_identity
+    }
+
     /// The wire protocol this client speaks. For display, and for the cache key:
     /// the same model at the same endpoint over two protocols is two requests.
     pub fn protocol(&self) -> ApiProtocol {
@@ -170,10 +186,11 @@ impl LlmClient {
             .clone()
             .ok_or_else(|| LlmError::NotConfigured("LLM model is not set in config".to_string()))?;
 
-        let api_key = cfg
-            .api_key
-            .clone()
-            .unwrap_or_else(|| "not-needed".to_string());
+        // The SDK deliberately omits protocol authentication for an empty key.
+        // This is what lets a gateway authenticate entirely through a custom
+        // header rather than receiving a fabricated `Bearer not-needed` or
+        // `x-api-key: not-needed` beside its real credential.
+        let api_key = cfg.api_key.clone().unwrap_or_default();
 
         // `config::load` already rejected an unknown name, so this cannot fail for a
         // config that came through the loader. It is re-checked rather than unwrapped
@@ -192,6 +209,9 @@ impl LlmClient {
         // bogus "no exception was captured" failure.
         let max_attempts = cfg.max_retries.max(1);
 
+        let headers = crate::config::effective_headers(&cfg.headers);
+        let request_identity = build_request_identity(protocol, cfg.max_tokens, &headers)?;
+
         Ok(LlmClient {
             base_url: endpoint,
             model,
@@ -200,7 +220,8 @@ impl LlmClient {
             temperature: cfg.temperature,
             max_tokens: cfg.max_tokens,
             timeout_secs: cfg.timeout_secs,
-            headers: crate::config::effective_headers(&cfg.headers),
+            headers,
+            request_identity,
             retry_config: RetryConfig {
                 max_attempts,
                 initial_delay: Duration::from_secs(1),
@@ -393,6 +414,49 @@ impl LlmClient {
             None => Answer::NoJson { text, finish },
         })
     }
+}
+
+/// Build the fixed digest nested inside the response-cache key.
+///
+/// Length-prefixing through the cache's own encoder handles arbitrary UTF-8
+/// header values without reserving an escaping byte. Only the digest is kept;
+/// the framed credential-bearing text is never stored or logged.
+fn build_request_identity(
+    protocol: ApiProtocol,
+    max_tokens: Option<u32>,
+    headers: &BTreeMap<String, String>,
+) -> Result<String, LlmError> {
+    use crate::llm::cache::write_field;
+
+    let mut identity = blake3::Hasher::new();
+    write_field(&mut identity, protocol.as_str().as_bytes());
+    match max_tokens {
+        Some(limit) => {
+            write_field(&mut identity, b"set");
+            write_field(&mut identity, &limit.to_be_bytes());
+        }
+        None => write_field(&mut identity, b"unset"),
+    }
+
+    let mut canonical_headers = headers
+        .iter()
+        .map(|(name, value)| {
+            let canonical =
+                reqwest::header::HeaderName::from_bytes(name.as_bytes()).map_err(|_| {
+                    LlmError::NotConfigured(format!("header name `{name}` cannot be encoded"))
+                })?;
+            Ok((canonical, value))
+        })
+        .collect::<Result<Vec<_>, LlmError>>()?;
+    canonical_headers.sort_by(|left, right| left.0.as_str().cmp(right.0.as_str()));
+    let header_count = u64::try_from(canonical_headers.len())
+        .expect("the process cannot hold more than u64::MAX headers");
+    write_field(&mut identity, &header_count.to_be_bytes());
+    for (name, value) in canonical_headers {
+        write_field(&mut identity, name.as_str().as_bytes());
+        write_field(&mut identity, value.as_bytes());
+    }
+    Ok(identity.finalize().to_hex().to_string())
 }
 
 /// What one query produced, before the retry decision.

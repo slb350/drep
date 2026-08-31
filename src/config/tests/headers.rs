@@ -4,10 +4,12 @@
 //! here is that each printer obeys it.
 
 use std::collections::BTreeMap;
-use std::env;
+use std::env::VarError;
 
 use super::support::write_config;
-use crate::config::{ConfigError, DEFAULT_USER_AGENT, LlmConfig, effective_headers, load};
+use crate::config::{
+    ConfigError, DEFAULT_USER_AGENT, LlmConfig, effective_headers, load, load_with_env,
+};
 
 /// The ordinary case: a table of extra headers on one provider.
 #[test]
@@ -131,20 +133,10 @@ fn a_header_value_is_checked_after_its_environment_reference_expands() {
          headers = { \"X-Tenant-Token\" = \"${DREP_TEST_UNSENDABLE_TOKEN}\" }\n",
     );
 
-    // A name unique to this test, so a parallel run or a variable leaked from
-    // elsewhere cannot poison the assertion, and restored on both branches so the
-    // surrounding tests stay deterministic.
-    let var = "DREP_TEST_UNSENDABLE_TOKEN";
-    let previous = env::var(var).ok();
-    // SAFETY: the process is single-threaded at this point and the name is
-    // unique to this test.
-    unsafe { env::set_var(var, "secret\nvalue") };
-    let result = load(&path);
-    // SAFETY: see above.
-    match previous {
-        Some(prev) => unsafe { env::set_var(var, prev) },
-        None => unsafe { env::remove_var(var) },
-    }
+    let result = load_with_env(&path, |name| match name {
+        "DREP_TEST_UNSENDABLE_TOKEN" => Ok("secret\nvalue".to_owned()),
+        _ => Err(VarError::NotPresent),
+    });
 
     let err = result.expect_err("the expanded token cannot be sent in a header");
     let message = err.to_string();

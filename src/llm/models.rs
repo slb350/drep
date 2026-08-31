@@ -33,6 +33,10 @@
 //! negotiable per request: bearer for OpenAI-compatible, `x-api-key` plus a
 //! version for Anthropic.
 //!
+//! The configured endpoint is the exact origin allowed to receive that header.
+//! A redirect is reported like any other non-success status and is never
+//! followed, including when its destination stays on the same origin.
+//!
 //! ## Failure is never fatal
 //!
 //! A listing is a convenience during setup. An endpoint that does not serve one

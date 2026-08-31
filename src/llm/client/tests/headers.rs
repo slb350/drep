@@ -6,6 +6,7 @@
 
 use std::collections::BTreeMap;
 
+use open_agent::ApiProtocol;
 use wiremock::matchers::{header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -18,9 +19,13 @@ use crate::test_support::{cfg_for, sse};
 /// client fails, so a header that did not arrive fails the test on the request
 /// rather than on a value read back out of the config.
 async fn server_requiring(name: &str, value: &str) -> MockServer {
+    server_requiring_at("/v1/chat/completions", name, value).await
+}
+
+async fn server_requiring_at(request_path: &str, name: &str, value: &str) -> MockServer {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
-        .and(path("/v1/chat/completions"))
+        .and(path(request_path))
         .and(header(name, value))
         .respond_with(
             ResponseTemplate::new(200)
@@ -100,6 +105,50 @@ async fn a_configured_authorization_replaces_the_protocol_default() {
         .expect("the configured Authorization is the one sent");
 }
 
+async fn assert_header_only_auth_omits_protocol_key(protocol: Option<&str>, protocol_header: &str) {
+    let request_path = if protocol.is_some() {
+        "/v1/messages"
+    } else {
+        "/v1/chat/completions"
+    };
+    let server = server_requiring_at(request_path, "X-Gateway-Key", "gateway-secret").await;
+    let mut config = cfg_for(&server, "m", 1);
+    config.api_key = None;
+    config.protocol = protocol.map(str::to_owned);
+    config.headers = BTreeMap::from([("X-Gateway-Key".to_owned(), "gateway-secret".to_owned())]);
+
+    let client = LlmClient::new(&config).expect("client");
+
+    // The shared fixture speaks OpenAI-flavoured SSE. Anthropic parsing may
+    // reject the response body, but the request log below is the contract under
+    // test and the mock only records it when the custom key arrived.
+    let _ = client.complete_json("sys", "user").await;
+
+    let requests = server.received_requests().await.expect("request log");
+    assert_eq!(requests.len(), 1);
+    assert!(
+        !requests[0].headers.contains_key(protocol_header),
+        "an absent api_key must not fabricate {protocol_header}: {:?}",
+        requests[0].headers
+    );
+}
+
+/// A gateway may authenticate outside the OpenAI protocol's default scheme.
+/// An absent `api_key` therefore means no protocol Authorization header, not a
+/// made-up bearer token that a strict gateway rejects before reading its own.
+#[tokio::test]
+async fn openai_header_only_auth_sends_no_protocol_key() {
+    assert_header_only_auth_omits_protocol_key(None, "authorization").await;
+}
+
+/// The same contract over the Anthropic wire: a custom gateway key replaces
+/// the need for `x-api-key` rather than travelling beside a fabricated value.
+#[tokio::test]
+async fn anthropic_header_only_auth_sends_no_protocol_key() {
+    assert_header_only_auth_omits_protocol_key(Some(ApiProtocol::Anthropic.as_str()), "x-api-key")
+        .await;
+}
+
 /// `{:?}` on a client prints header names and never their values.
 ///
 /// The twin of the `LlmConfig` assertion. Both impls exist so that no `{:?}`,
@@ -122,5 +171,16 @@ fn debug_prints_header_names_and_never_their_values() {
     assert!(
         !rendered.contains("super-secret-value"),
         "a header value must never reach a log: {rendered}"
+    );
+
+    let identity = client.request_identity();
+    assert_eq!(identity.len(), 64, "request identity is a BLAKE3 digest");
+    assert!(
+        identity.bytes().all(|byte| byte.is_ascii_hexdigit()),
+        "request identity is hex: {identity}"
+    );
+    assert!(
+        !identity.contains("super-secret-value"),
+        "the long-lived identity must not retain header plaintext"
     );
 }

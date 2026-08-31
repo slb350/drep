@@ -48,3 +48,27 @@ async fn the_default_user_agent_is_reported_even_when_none_is_configured() {
         "got {report}"
     );
 }
+
+/// A provider may authenticate entirely through a configured header. Doctor
+/// must not prescribe a protocol key as though that working scheme were absent.
+#[tokio::test]
+async fn header_only_auth_is_not_reported_as_a_missing_credential() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::write(
+        dir.path().join("drep.toml"),
+        "[[llm]]\nendpoint = \"http://e/v1\"\nmodel = \"m\"\n\n\
+         [llm.headers]\n\"Authorization\" = \"Bearer gateway-secret\"\n",
+    )
+    .expect("drep.toml");
+
+    let report = super::a_llm_section::report_for(dir.path()).await;
+
+    assert!(
+        report.contains("protocol key: not set; configured headers may supply authentication"),
+        "got {report}"
+    );
+    assert!(
+        !report.contains("run `drep auth login`"),
+        "header authentication must not be diagnosed as missing: {report}"
+    );
+}

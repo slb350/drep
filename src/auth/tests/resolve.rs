@@ -53,8 +53,9 @@ async fn an_explicit_key_in_the_config_wins_over_a_stored_one() {
 
 #[tokio::test]
 async fn an_entry_with_no_stored_key_is_left_unset_and_reported_missing() {
-    // Not defaulted to anything: `LlmClient::new` applies `not-needed`, which a
-    // local server accepts. Inventing a value here would hide that decision.
+    // Not defaulted to anything: `LlmClient::new` turns absence into the empty
+    // SDK key that omits protocol authentication. Inventing a value here would
+    // hide that decision.
     let mut config = config_with(&["https://e/v1"]);
 
     let sources = resolve(&mut config, &AuthStore::new())
