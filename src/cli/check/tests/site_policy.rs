@@ -68,7 +68,12 @@ async fn an_unparseable_site_policy_stops_the_check_before_anything_is_analyzed(
 #[tokio::test]
 async fn a_missing_site_policy_leaves_the_check_running_normally() {
     let dir = tempfile::tempdir().expect("tempdir");
-    write_drep_toml(dir.path(), DEAD_ENDPOINT);
+    let endpoint = wiremock::MockServer::start().await;
+    wiremock::Mock::given(wiremock::matchers::method("POST"))
+        .respond_with(wiremock::ResponseTemplate::new(503))
+        .mount(&endpoint)
+        .await;
+    write_drep_toml(dir.path(), &format!("{}/v1", endpoint.uri()));
     let source = write_source(dir.path());
 
     let exit = run(dir.path(), source, &dir.path().join("absent-site.toml"))

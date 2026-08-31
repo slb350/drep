@@ -12,6 +12,8 @@
 mod common;
 #[path = "release_config/mutation_cleanup.rs"]
 mod mutation_cleanup;
+#[path = "release_config/mutation_policy.rs"]
+mod mutation_policy;
 
 fn dist_config() -> String {
     common::without_comments("dist-workspace.toml")
@@ -19,14 +21,6 @@ fn dist_config() -> String {
 
 fn rust_workflow() -> String {
     common::without_comments(".github/workflows/rust.yml")
-}
-
-fn mutation_workflow() -> String {
-    common::without_comments(".github/workflows/mutants.yml")
-}
-
-fn remote_mutation_script() -> String {
-    common::without_comments("scripts/mutants-remote.sh")
 }
 
 fn release_workflow() -> String {
@@ -67,6 +61,8 @@ const SAME_REPOSITORY_PR_GUARD: &str = "github.event_name == 'push' || github.ev
 const RUST_TOOLCHAIN_ACTION: &str =
     "dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c";
 const SETUP_ZIG_ACTION: &str = "mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29";
+const INSTALL_ACTION: &str = "taiki-e/install-action@1ed6d7be6168f6c9046541087ff549b6bc581fdf";
+const CARGO_ZIGBUILD_TOOL: &str = "cargo-zigbuild@0.23.3";
 struct ReleaseTarget {
     triple: &'static str,
     runner: &'static str,
@@ -191,112 +187,6 @@ fn maintained_actions_are_pinned_to_full_commit_shas() {
     }
 }
 
-/// Full mutation testing runs once, after trusted main validation succeeds.
-///
-/// A staged sweep cannot notice a test-only change weakening coverage of
-/// production code outside the diff, so the full sweep remains an automated
-/// main-branch gate. The public repository must never route pull-request code
-/// to homelab-1, and the hosted workflow must not duplicate its hours of work.
-#[test]
-fn mutation_ci_is_main_only_on_the_pinned_homelab_runner() {
-    let validation = rust_workflow();
-    assert!(
-        !validation.contains("\n  mutants:\n"),
-        "the validation workflow must not duplicate the full mutation sweep"
-    );
-
-    let workflow = mutation_workflow();
-    let trigger = workflow
-        .split_once("\njobs:")
-        .map(|(trigger, _)| trigger)
-        .expect("the mutation workflow must declare jobs");
-    assert!(
-        trigger.contains("workflow_run:")
-            && trigger.contains("workflows: [rust]")
-            && trigger.contains("types: [completed]")
-            && trigger.contains("branches: [main]"),
-        "full mutation CI must follow completed main-branch Rust validation"
-    );
-    assert!(
-        !trigger.contains("pull_request")
-            && !trigger.contains("workflow_dispatch")
-            && !trigger.contains("\n  push:"),
-        "public or manually selected code must never be routed to the homelab runner"
-    );
-
-    let mutants = workflow_job(&workflow, "mutants");
-    assert!(
-        mutants.contains("github.event.workflow_run.event == 'push'")
-            && mutants.contains("github.event.workflow_run.conclusion == 'success'")
-            && mutants.contains("ref: ${{ github.event.workflow_run.head_sha }}"),
-        "mutation testing must follow a successful push validation and check out that exact commit"
-    );
-    assert!(
-        mutants.contains("runs-on: [self-hosted, linux, x64, drep-linux]"),
-        "the full sweep must require the repository-scoped homelab-1 label"
-    );
-    assert!(
-        mutants.contains("timeout-minutes: 180"),
-        "the throttled shared-host sweep needs contention headroom while still releasing a wedged runner"
-    );
-    assert!(
-        mutants.contains("tool: cargo-mutants@27.1.0"),
-        "the mutation gate must retain its verified cargo-mutants version"
-    );
-    assert!(
-        mutants.contains("clean: false")
-            && mutants
-                .contains("git status --porcelain=v1 --untracked-files=all --ignored=matching")
-            && mutants.contains("^!! target/$"),
-        "the warm target cache must be retained only behind a fail-closed workspace check"
-    );
-    assert!(
-        mutants.contains("./scripts/mutants-run.sh"),
-        "homelab CI and local hooks must share one mutation verdict implementation"
-    );
-}
-
-/// A no-argument full sweep must remain a genuinely empty cargo-mutants scope.
-///
-/// `printf '%q' "$@"` prints `''` when the argument list is empty. Embedded
-/// directly in the remote command, that becomes one empty argument and makes
-/// cargo-mutants reject the invocation before its baseline runs.
-#[test]
-fn remote_full_mutation_sweep_passes_no_phantom_argument() {
-    let script = remote_mutation_script();
-
-    assert!(
-        script.contains("if [ \"$#\" -gt 0 ]; then")
-            && script.contains("printf -v REMOTE_ARGS ' %q' \"$@\"")
-            && script.contains("./scripts/mutants-run.sh$REMOTE_ARGS"),
-        "the remote wrapper must append quoted arguments only when at least one exists"
-    );
-    assert!(
-        !script.contains("$(printf '%q ' \"$@\")"),
-        "empty positional parameters must not be formatted into a literal empty argument"
-    );
-}
-
-#[test]
-fn remote_mutation_sweep_defaults_to_homelab_1() {
-    let script = remote_mutation_script();
-
-    assert!(
-        script.contains("HOST=\"${DREP_MUTANTS_HOST:-homelab-1.local}\""),
-        "developer mutation offload must follow Linux CI ownership to homelab-1"
-    );
-    assert!(
-        script.contains(
-            "REMOTE_DIR=\"${DREP_MUTANTS_DIR:-.cache/drep-mutants/$(basename \"$PWD\")}\""
-        ),
-        "developer mutation offload must not collide with the protected runner checkout"
-    );
-    assert!(
-        !script.contains("strix.local"),
-        "the executable mutation wrapper must not retain a Strix default"
-    );
-}
-
 /// The platforms a release builds for.
 ///
 /// A target that falls out of this list does not fail anything: the installer
@@ -399,16 +289,17 @@ fn arm64_linux_cross_build_tools_are_reproducibly_provisioned() {
     assert!(
         setup.contains(&format!("uses: {SETUP_ZIG_ACTION}"))
             && setup.contains("version: 0.16.0")
-            && setup
-                .contains("uses: taiki-e/install-action@6cd13508893c0e7eab5f273c2575d3859bd7229a")
-            && setup.contains("tool: cargo-zigbuild@0.23.0"),
+            && setup.contains(&format!("uses: {INSTALL_ACTION}"))
+            && setup.contains(&format!("tool: {CARGO_ZIGBUILD_TOOL}")),
         "only the arm64 Linux lane must install the pinned Zig cross-build tools"
     );
 
     let workflow = release_workflow();
     let local_build = workflow_job(&workflow, "build-local-artifacts");
     assert!(
-        local_build.contains(SETUP_ZIG_ACTION) && local_build.contains("cargo-zigbuild@0.23.0"),
+        local_build.contains(SETUP_ZIG_ACTION)
+            && local_build.contains(INSTALL_ACTION)
+            && local_build.contains(CARGO_ZIGBUILD_TOOL),
         "the generated release workflow must include the configured cross-build setup"
     );
 }

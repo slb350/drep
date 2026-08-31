@@ -7,16 +7,16 @@
 # full build plus a full test run, and the hook fires on a laptop the developer
 # is still using. Measured on 12 mutants from src/docs/fence.rs: local M5 Max at
 # -j 4 takes 1m54 with the machine pinned. The mutation offload follows the
-# repository's Linux CI owner, now homelab-1, and costs this machine nothing.
+# repository's dedicated mutation owner, homelab-2, and costs this machine
+# nothing. Ordinary Linux validation and release remain on homelab-1.
 #
-# More jobs is not better, and -j 4 on a 32-thread box is not a typo. Each job
+# More jobs is not automatically better. Each job
 # gets its own copy of the tree *including* target/, which is how its builds
 # stay warm - so raising -j multiplies a multi-gigabyte copy before any mutant
-# is tested. Measured on that same scope: 38s at -j 4, 54s at -j 8, 72s at
-# -j 16, never above 2200% CPU of a possible 3200. The run is I/O-bound on the
-# copy, not CPU-bound. Timings drift by a third between runs on a shared box,
-# so treat MUTANTS_JOBS as a knob to measure, not a number to raise on
-# principle.
+# is tested. On the former 32-thread host, the same scope measured 38s at -j 4,
+# 54s at -j 8, and 72s at -j 16: the copy path was I/O-bound, not CPU-bound.
+# Keep the four-worker baseline on homelab-2 until its own complete sweep gives
+# a measured reason to change it.
 #
 # The verdict rule is NOT duplicated here. This script syncs, invokes
 # scripts/mutants-run.sh on the remote, and propagates its exit code - so the
@@ -25,9 +25,17 @@
 # Falls back to a local run, loudly, when the host is unreachable. A commit gate
 # that silently skips itself because the LAN blipped is worse than a slow one.
 #
-#   DREP_MUTANTS_HOST    ssh target (default: homelab-1.local)
+#   DREP_MUTANTS_HOST    ssh target (default: homelab-2.local)
 #   DREP_MUTANTS_DIR     remote path, $HOME-relative
 #                        (default: .cache/drep-mutants/<repo name>)
+#   DREP_MUTANTS_REMOTE_HOST_LOCK
+#                        absolute lock path shared with the hosted runner
+#                        (default: /srv/ci/drep-mutants/host.lock)
+#   DREP_MUTANTS_HOST_LOCK_WAIT_SECONDS
+#                        wait for both remote locks (default: 1800)
+#   DREP_MUTANTS_RSYNC_TIMEOUT_SECONDS
+#                        rsync I/O timeout while the host lock is held
+#                        (default: 300)
 #   DREP_MUTANTS_REMOTE  0 to force a local run
 #   MUTANTS_JOBS         -j for the remote run (default: 4)
 #   MUTANTS_LOCAL_JOBS   -j for a local or fallback run (default: 4)
@@ -44,10 +52,27 @@ cd "$(git rev-parse --show-toplevel)"
 # shellcheck source=scripts/mutants-common.sh
 . scripts/mutants-common.sh
 
-HOST="${DREP_MUTANTS_HOST:-homelab-1.local}"
+HOST="${DREP_MUTANTS_HOST:-homelab-2.local}"
 REMOTE_DIR="${DREP_MUTANTS_DIR:-.cache/drep-mutants/$(basename "$PWD")}"
 REMOTE="$HOST:$REMOTE_DIR"
 JOBS="${MUTANTS_JOBS:-4}"
+REMOTE_HOST_LOCK="${DREP_MUTANTS_REMOTE_HOST_LOCK:-/srv/ci/drep-mutants/host.lock}"
+RSYNC_IO_TIMEOUT_SECONDS="${DREP_MUTANTS_RSYNC_TIMEOUT_SECONDS:-300}"
+
+case "$REMOTE_HOST_LOCK" in
+  /*) ;;
+  *)
+    echo "mutants-remote: DREP_MUTANTS_REMOTE_HOST_LOCK must be absolute" >&2
+    exit 64
+    ;;
+esac
+validate_mutants_host_lock_wait_seconds mutants-remote
+case "$RSYNC_IO_TIMEOUT_SECONDS" in
+  0|''|*[!0-9]*)
+    echo "mutants-remote: DREP_MUTANTS_RSYNC_TIMEOUT_SECONDS must be a positive integer" >&2
+    exit 64
+    ;;
+esac
 
 run_local() {
   MUTANTS_JOBS="${MUTANTS_LOCAL_JOBS:-4}" exec ./scripts/mutants-run.sh "$@"
@@ -69,6 +94,99 @@ if ! ssh -o BatchMode=yes -o ConnectTimeout=5 "$HOST" true 2>/dev/null; then
 fi
 
 echo "mutants: running on $HOST (-j $JOBS), results mirrored back to $MUTANTS_OUT_DIR"
+
+# Keep one remote SSH process alive for the entire transaction. Its open file
+# descriptor holds the host-wide lock while this process synchronizes source,
+# runs mutation, and mirrors the matching result. Named pipes are used instead
+# of Bash 4's `coproc` because macOS still ships Bash 3.2.
+RUN_TOKEN="$$-$RANDOM-$RANDOM"
+SESSION_DIR="$MUTANTS_OUT_DIR/remote-session-$RUN_TOKEN"
+CONTROL_IN="$SESSION_DIR/control-in"
+CONTROL_OUT="$SESSION_DIR/control-out"
+mkdir -p "$SESSION_DIR"
+mkfifo "$CONTROL_IN" "$CONTROL_OUT"
+
+# shellcheck disable=SC2016  # This is the literal remote Bash program.
+REMOTE_SCRIPT='set -euo pipefail
+host_lock=$1
+wait_seconds=$2
+remote_dir=$3
+out_dir=$4
+jobs=$5
+run_token=$6
+shift 6
+export PATH="$HOME/.cargo/bin:$PATH"
+exec 9>"$host_lock"
+flock -E 75 -w "$wait_seconds" 9
+printf "mutants-lock-ready:%s\n" "$run_token"
+IFS= read -r action
+[[ $action == run ]] || exit 74
+cd "$HOME/$remote_dir"
+mkdir -p "$out_dir"
+unset DREP_MUTANTS_HOST_LOCK DREP_MUTANTS_HOST_LOCK_WAIT_SECONDS
+set +e
+DREP_MUTANTS_RESULT_TOKEN="$run_token" MUTANTS_JOBS="$jobs" \
+  ./scripts/mutants-run.sh "$@"
+status=$?
+set -e
+result_token_file="$out_dir/.run-token"
+[[ -f $result_token_file && ! -L $result_token_file ]] || exit 76
+[[ $(<"$result_token_file") == "$run_token" ]] || exit 76
+printf "mutants-run-finished:%s:%s\n" "$run_token" "$status"
+IFS= read -r action
+[[ $action == mirrored ]] || exit 74
+exit "$status"'
+
+REMOTE_COMMAND=
+printf -v REMOTE_COMMAND 'bash -c %q bash' "$REMOTE_SCRIPT"
+for remote_arg in \
+  "$REMOTE_HOST_LOCK" \
+  "$MUTANTS_HOST_LOCK_WAIT_SECONDS" \
+  "$REMOTE_DIR" \
+  "$MUTANTS_OUT_DIR" \
+  "$JOBS" \
+  "$RUN_TOKEN" \
+  "$@"
+do
+  printf -v remote_arg_q '%q' "$remote_arg"
+  REMOTE_COMMAND+=" $remote_arg_q"
+done
+
+ssh -o BatchMode=yes "$HOST" "$REMOTE_COMMAND" \
+  <"$CONTROL_IN" >"$CONTROL_OUT" &
+REMOTE_SESSION_PID=$!
+exec 7>"$CONTROL_IN"
+exec 8<"$CONTROL_OUT"
+remote_session_open=1
+
+# shellcheck disable=SC2329  # Invoked by the EXIT trap.
+cleanup_remote_session() {
+  if [ "$remote_session_open" -eq 1 ]; then
+    kill "$REMOTE_SESSION_PID" 2>/dev/null || true
+    wait "$REMOTE_SESSION_PID" 2>/dev/null || true
+  fi
+  exec 7>&- 8<&-
+  find "$SESSION_DIR" -depth -delete 2>/dev/null || true
+}
+trap cleanup_remote_session EXIT
+
+exit_after_remote_session_failure() {
+  if wait "$REMOTE_SESSION_PID"; then
+    status=74
+  else
+    status=$?
+  fi
+  remote_session_open=0
+  exit "$status"
+}
+
+if ! IFS= read -r ready <&8; then
+  exit_after_remote_session_failure
+fi
+if [ "$ready" != "mutants-lock-ready:$RUN_TOKEN" ]; then
+  echo "mutants-remote: unexpected remote lock handshake" >&2
+  exit 74
+fi
 
 # --mkpath creates the destination directory as part of the transfer, which is
 # an `ssh mkdir -p` round trip saved on every commit.
@@ -92,6 +210,7 @@ echo "mutants: running on $HOST (-j $JOBS), results mirrored back to $MUTANTS_OU
 # this whole offload exists to reuse - 1.7GB of it - and --delete-excluded
 # would otherwise take it, turning every run into a cold build.
 rsync -a --delete --force --delete-excluded --filter='P /target' --mkpath \
+  --timeout="$RSYNC_IO_TIMEOUT_SECONDS" \
   --exclude target --exclude 'mutants.out*' \
   --exclude .git --exclude node_modules \
   --exclude dist --exclude build --exclude .drep \
@@ -111,34 +230,50 @@ if [ -n "${MUTANTS_EXTRA_FILES:-}" ]; then
     esac
   done
   # shellcheck disable=SC2086  # word splitting is the interface: it is a list
-  rsync -aR --mkpath ${MUTANTS_EXTRA_FILES} "$REMOTE/"
+  rsync -aR --mkpath --timeout="$RSYNC_IO_TIMEOUT_SECONDS" \
+    ${MUTANTS_EXTRA_FILES} "$REMOTE/"
 fi
 
-# flock serialises two commits racing for the same remote tree; they would
-# otherwise share one target/ and one results directory. -w so a stuck run
-# cannot block a commit forever.
-#
-# `bash -s` rather than a quoted one-liner: the arguments are quoted with
-# printf %q, which is bash's dialect, so the remote end must be bash whatever
-# login shell the account uses.
-status=0
-REMOTE_ARGS=
-if [ "$#" -gt 0 ]; then
-  printf -v REMOTE_ARGS ' %q' "$@"
-fi
-# shellcheck disable=SC2087  # local expansion is the point: the remote dir, the
-# job count and the %q-quoted arguments are all known here. \$HOME is escaped so
-# it resolves there.
-ssh -o BatchMode=yes "$HOST" bash -s <<EOF || status=$?
-set -euo pipefail
-export PATH=\$HOME/.cargo/bin:\$PATH
-cd ~/'$REMOTE_DIR'
-mkdir -p '$MUTANTS_OUT_DIR'
-MUTANTS_JOBS=$JOBS flock -w 1800 '$MUTANTS_OUT_DIR' ./scripts/mutants-run.sh$REMOTE_ARGS
-EOF
+printf 'run\n' >&7
+finished_status=
+while IFS= read -r remote_line <&8; do
+  case "$remote_line" in
+    "mutants-run-finished:$RUN_TOKEN:"*)
+      finished_status=${remote_line##*:}
+      break
+      ;;
+    *) printf '%s\n' "$remote_line" ;;
+  esac
+done
+
+case "$finished_status" in
+  ''|*[!0-9]*)
+    exit_after_remote_session_failure
+    ;;
+esac
 
 # Mirror the results back so `missed.txt`, the logs and the diffs of surviving
-# mutants can be read here, where the fix gets written.
-rsync -a --mkpath "$REMOTE/$MUTANTS_OUT_DIR/" "$MUTANTS_OUT_DIR/" 2>/dev/null || true
+# mutants can be read here, where the fix gets written. The remote process still
+# owns the host lock here, and its unique `.run-token` proved this run reached
+# cargo-mutants rather than exposing a previous result after an early failure.
+rsync -a --mkpath --timeout="$RSYNC_IO_TIMEOUT_SECONDS" \
+  "$REMOTE/$MUTANTS_OUT_DIR/" "$MUTANTS_OUT_DIR/" 2>/dev/null ||
+  echo "warning: mutation completed but its result mirror failed" >&2
+printf 'mirrored\n' >&7
 
-exit "$status"
+while IFS= read -r remote_line <&8; do
+  printf '%s\n' "$remote_line"
+done
+if wait "$REMOTE_SESSION_PID"; then
+  status=0
+else
+  status=$?
+fi
+remote_session_open=0
+
+if [ "$status" -ne "$finished_status" ]; then
+  echo "mutants-remote: remote status changed after the result handshake" >&2
+  exit 74
+fi
+
+exit "$finished_status"

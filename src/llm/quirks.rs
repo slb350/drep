@@ -43,6 +43,7 @@
 //! stop `drep init`.
 
 use std::collections::BTreeMap;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -369,7 +370,8 @@ impl Registry {
 
     /// Write the cache to `path`, creating the directory if needed.
     pub fn save(&self, path: &Path) -> Result<(), QuirksError> {
-        if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
+        let parent = path.parent().filter(|p| !p.as_os_str().is_empty());
+        if let Some(parent) = parent {
             // Through `auth`'s helper, not `create_dir_all`: this file shares a
             // directory with `auth.toml`, so creating it here without narrowing
             // it to 0700 would leave the credential store's own directory
@@ -380,22 +382,20 @@ impl Registry {
         let body = toml::to_string(self)
             .map_err(|err| QuirksError::Cache(path.to_path_buf(), err.to_string()))?;
 
-        // Written beside the target and renamed over it. `fs::write` truncates
-        // in place, so a crash mid-write - or two `drep init` runs sharing a
-        // cache path - leaves a half-written file. That is self-healing, since
-        // an unparseable cache falls back to the presets and is refetched, but
-        // it costs a 4 MB download to recover from something a rename avoids.
-        // `rename` is atomic within a directory, which is why the temporary
-        // sits next to the target rather than in the system temp dir.
-        let temporary = path.with_extension("toml.tmp");
-        std::fs::write(&temporary, body)
-            .map_err(|err| QuirksError::Cache(temporary.clone(), err.to_string()))?;
-        std::fs::rename(&temporary, path).map_err(|err| {
-            // A failed rename leaves the temporary behind; clearing it keeps a
-            // failure from accumulating one file per attempt.
-            let _ = std::fs::remove_file(&temporary);
-            QuirksError::Cache(path.to_path_buf(), err.to_string())
-        })
+        // Written through a random, exclusively-created sibling and renamed
+        // over the target. A predictable `.tmp` name lets a planted symlink
+        // redirect `fs::write` into another file before the rename. The random
+        // sibling also isolates concurrent `drep init` runs from one another.
+        let mut temporary =
+            tempfile::NamedTempFile::new_in(parent.unwrap_or_else(|| Path::new(".")))
+                .map_err(|err| QuirksError::Cache(path.to_path_buf(), err.to_string()))?;
+        temporary
+            .write_all(body.as_bytes())
+            .map_err(|err| QuirksError::Cache(path.to_path_buf(), err.to_string()))?;
+        temporary
+            .persist(path)
+            .map(|_| ())
+            .map_err(|err| QuirksError::Cache(path.to_path_buf(), err.error.to_string()))
     }
 
     /// Distil models.dev's document down to what drep reads.

@@ -276,6 +276,66 @@ async fn a_foreign_chainer_comment_does_not_count_as_forwarding() {
 }
 
 #[tokio::test]
+async fn a_foreign_chainer_that_only_echoes_the_hook_path_does_not_count_as_forwarding() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    crate::test_support::git_init(dir.path());
+    let chainer_dir = configured_chainer_dir(dir.path());
+    let foreign = "#!/bin/sh\necho hooks/pre-push\nexit 0\n";
+    crate::test_support::write_executable(&chainer_dir.join("pre-push"), foreign);
+
+    let mut out = Vec::new();
+    install(&mut out, dir.path(), HookKind::PrePush, false)
+        .await
+        .expect("install");
+
+    assert!(
+        String::from_utf8(out)
+            .expect("utf8")
+            .contains("does not appear to chain"),
+        "printing the path does not execute the repository hook"
+    );
+    assert_eq!(
+        std::fs::read_to_string(chainer_dir.join("pre-push")).expect("read"),
+        foreign
+    );
+}
+
+#[tokio::test]
+async fn a_foreign_chainer_that_directly_executes_the_hook_is_accepted() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    crate::test_support::git_init(dir.path());
+    let chainer_dir = configured_chainer_dir(dir.path());
+    let foreign = concat!(
+        "#!/bin/sh\n",
+        "exec \"$(git rev-parse --git-common-dir)/hooks/pre-push\" \"$@\"\n",
+    );
+    let chainer = chainer_dir.join("pre-push");
+    std::fs::write(&chainer, foreign).expect("foreign chainer");
+    crate::test_support::clear_executable(&chainer);
+
+    let mut out = Vec::new();
+    install(&mut out, dir.path(), HookKind::PrePush, false)
+        .await
+        .expect("install");
+
+    let rendered = String::from_utf8(out).expect("utf8");
+    assert!(
+        !rendered.contains("does not appear to chain"),
+        "a direct exec is a working forwarder: {rendered}"
+    );
+    assert!(
+        rendered.contains("is not executable; making it so"),
+        "a valid foreign forwarder still needs its mode repaired: {rendered}"
+    );
+    crate::test_support::assert_executable(&chainer);
+    assert_eq!(
+        std::fs::read_to_string(&chainer).expect("read chainer"),
+        foreign,
+        "drep must not rewrite a foreign hook"
+    );
+}
+
+#[tokio::test]
 async fn install_refreshes_an_outdated_managed_chainer() {
     let dir = tempfile::tempdir().expect("tempdir");
     crate::test_support::git_init(dir.path());

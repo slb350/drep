@@ -12,6 +12,8 @@
 //! Both begin with `# Managed by \`drep init\`.` - that marker is how this
 //! module recognises a hook it wrote and may rewrite.
 
+mod forwarding;
+
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
@@ -380,12 +382,7 @@ fn ensure_chainer<W: Write>(out: &mut W, dir: &Path, name: &str) -> Result<()> {
         }
         Ok(bytes) => {
             let body = String::from_utf8_lossy(&bytes);
-            let marker = format!("hooks/{name}");
-            let mentions_hook_in_command = body.lines().any(|line| {
-                let line = line.trim_start();
-                !line.starts_with('#') && line.contains(&marker)
-            });
-            if mentions_hook_in_command {
+            if forwarding::appears_to_forward(&body, name) {
                 ensure_executable(out, &chainer)?;
                 return Ok(());
             }

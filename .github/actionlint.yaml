@@ -2,6 +2,8 @@ self-hosted-runner:
   labels:
     - drep-linux
     - drep-macos
+    - homelab-2
+    - drep-mutants
 
 # cargo-dist owns release.yml. Keep actionlint's workflow and expression checks,
 # but suppress the generator's advisory-only ShellCheck findings rather than
