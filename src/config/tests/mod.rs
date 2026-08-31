@@ -9,6 +9,7 @@ mod backends;
 mod credentials;
 mod env;
 mod fields;
+mod headers;
 mod providers;
 mod site;
 mod support;

@@ -445,3 +445,5 @@ mod http {
         assert_eq!(Http::new().max_bytes, MAX_LISTING_BYTES);
     }
 }
+
+mod redirects;

@@ -31,6 +31,7 @@
 //! numbers `[[llm]]` entries in *this* file's order, and a bare `#2` that could
 //! mean either file is exactly the ambiguity those messages exist to avoid.
 
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 
 use open_agent::ApiProtocol;
@@ -63,8 +64,14 @@ pub const DEFAULT_MAX_REVIEW_ROUNDS: u32 = 3;
 /// `#[serde(default)]` means a file with an empty body deserializes
 /// successfully; `validate` is what then rejects it, because a config
 /// declaring no provider cannot run the mandatory LLM layer.
+///
+/// `deny_unknown_fields` for the reason [`LlmConfig`] carries it: a misspelled
+/// `max_reveiw_rounds` was accepted, dropped, and run at the default, which is a
+/// file that reads as configured and is not. `site_only_field` runs against the
+/// raw tree before this deserialization, so `SiteOnlyField` still answers for a
+/// policy key rather than being swallowed by a generic unknown-key message.
 #[derive(Debug, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct Config {
     pub max_review_rounds: u32,
     pub llm: Vec<LlmConfig>,
@@ -147,6 +154,39 @@ pub enum ConfigError {
         index + 1
     )]
     UnknownProtocol { index: usize, value: String },
+
+    #[error(
+        "[[llm]] #{} in file order: `{name}` cannot be sent as an HTTP header name",
+        index + 1
+    )]
+    UnusableHeaderName { index: usize, name: String },
+
+    /// Names the header, never its value: the value is the half that carries a
+    /// tenant or project token, and an error message is the one place it would
+    /// escape into a terminal, a CI log or a bug report. The rule
+    /// `KeyCommandError` already follows for a credential helper's output.
+    #[error(
+        "[[llm]] #{} in file order: the value configured for header `{name}` \
+         contains a character that cannot be sent in a header",
+        index + 1
+    )]
+    UnusableHeaderValue { index: usize, name: String },
+
+    /// Both spellings, never either value: which of the two is the credential is
+    /// exactly what this error cannot know, so it quotes neither, the way
+    /// `UnusableHeaderValue` above quotes none.
+    #[error(
+        "[[llm]] #{} in file order: `{first}` and `{second}` are one HTTP header name written \
+         twice; header names are case-insensitive, so only one of them is sent, and which one \
+         is decided by their byte order rather than by anything this file says - remove the \
+         spelling you did not mean",
+        index + 1
+    )]
+    DuplicateHeaderName {
+        index: usize,
+        first: String,
+        second: String,
+    },
 
     #[error(
         "[[llm]] #{} in file order: unknown backend `{value}`; expected `http` or `codex`",
@@ -239,6 +279,48 @@ pub fn default_config_path() -> PathBuf {
     PathBuf::from("drep.toml")
 }
 
+/// What drep calls itself to an endpoint when the config names no `User-Agent`.
+///
+/// The crate version rather than a bare name, because the useful question a
+/// gateway operator asks of a user agent is which build sent this. reqwest sends
+/// none at all by default, and an endpoint that logs or bills per client cannot
+/// attribute a request that carries none.
+pub const DEFAULT_USER_AGENT: &str = concat!("drep/", env!("CARGO_PKG_VERSION"));
+
+/// The headers a provider will actually send: drep's defaults, then the
+/// configured table over the top.
+///
+/// The single statement of that precedence, for the reason [`crate::auth`] keeps
+/// one statement of the credential order: the request path, `LlmClient`'s
+/// `Debug` and `drep doctor` all have to answer the same question about the same
+/// entry, and when the default was applied inside the request instead, they
+/// answered differently. A config naming one header printed one and sent two,
+/// and a config naming none printed an empty set and sent a `User-Agent`. The
+/// operator debugging a gateway 403 is asking `doctor` exactly that question,
+/// and the case where it was silent was the case where they had not set one.
+///
+/// Case-insensitive, because HTTP header names are: a configured `user-agent`
+/// replaces the default rather than joining it, which is what the SDK's own
+/// `HeaderMap` would do at send time anyway. Default-against-configured is the
+/// only collision this function has to settle - `validate` has already refused a
+/// pair of configured spellings, because there the two names are equally the
+/// user's and picking one is not the caller's to do.
+pub fn effective_headers(configured: &BTreeMap<String, String>) -> BTreeMap<String, String> {
+    let mut headers = BTreeMap::new();
+    if !configured
+        .keys()
+        .any(|name| name.eq_ignore_ascii_case("user-agent"))
+    {
+        headers.insert("User-Agent".to_owned(), DEFAULT_USER_AGENT.to_owned());
+    }
+    headers.extend(
+        configured
+            .iter()
+            .map(|(name, value)| (name.clone(), value.clone())),
+    );
+    headers
+}
+
 /// Parses a `protocol =` value, or `None` when it names nothing the SDK speaks.
 ///
 /// The single definition of what a protocol name means, and it owns none of the
@@ -264,6 +346,19 @@ pub fn parse_protocol(raw: Option<&str>) -> Option<ApiProtocol> {
 /// reported with the variable's name rather than as a downstream parse
 /// failure inside the substituted text.
 pub fn load(path: &Path) -> Result<Config, ConfigError> {
+    load_with_env(path, |name| std::env::var(name))
+}
+
+/// Test seam for `${VAR}` expansion without mutating process-global state.
+///
+/// `std::env::set_var` is unsafe in edition 2024 because the test harness is
+/// multithreaded. Passing the lookup also proves validation sees the expanded
+/// value through the same production path rather than recreating that ordering
+/// in a test.
+pub(crate) fn load_with_env<F>(path: &Path, lookup: F) -> Result<Config, ConfigError>
+where
+    F: Fn(&str) -> Result<String, std::env::VarError>,
+{
     let content =
         std::fs::read_to_string(path).map_err(|err| ConfigError::Io(path.to_path_buf(), err))?;
 
@@ -277,9 +372,12 @@ pub fn load(path: &Path) -> Result<Config, ConfigError> {
     })?;
 
     // Read off the raw tree, the way `disabled_provider_indices` and
-    // `backend::explicit_fields` are: `Config` has no `refuse_markers` field and
-    // no `deny_unknown_fields`, so serde would deserialize this file happily and
-    // say nothing.
+    // `backend::explicit_fields` are, and before deserialization because this
+    // pass owns both the variant and the wording. `Config` denies unknown
+    // fields, so a `refuse_markers` left to serde is refused - as a
+    // `ConfigError::Parse` reading "unknown field, expected `max_review_rounds`
+    // or `llm`", which tells a developer their line is a typo to delete rather
+    // than that the field is machine policy and lives in another file.
     if let Some(field) = site_only_field(&tree) {
         return Err(ConfigError::SiteOnlyField {
             path: path.to_path_buf(),
@@ -293,7 +391,7 @@ pub fn load(path: &Path) -> Result<Config, ConfigError> {
     // in `Config.llm` with its `${VAR}` unexpanded, which nothing reads - only
     // `providers()` is consulted, and it filters the entry out.
     let disabled = disabled_provider_indices(&tree);
-    expand_env_except(&mut tree, path, &disabled)?;
+    expand_env_except(&mut tree, path, &disabled, &lookup)?;
     let explicit_fields = backend::explicit_fields(&tree);
 
     let config: Config = tree.try_into().map_err(|err: toml::de::Error| {
@@ -374,6 +472,50 @@ fn validate(
         }
         if llm.api_key_command.as_ref().is_some_and(Vec::is_empty) {
             return Err(ConfigError::EmptyApiKeyCommand { index });
+        }
+        // Rejected here rather than left to the request, for the reason the
+        // misspelled protocol below is: a header drep cannot encode fails
+        // identically on every file of the run, and `LlmError::NotConfigured`
+        // neither fails over nor sticks, so a 200-file diff reported a typo two
+        // hundred times - each one rendered as a transport failure, which reads
+        // as the endpoint being down.
+        //
+        // After `${VAR}` expansion, so what is checked is what will be sent: a
+        // token whose expansion carries a stray control character is the case a
+        // name-only check would pass and every request would then fail. The
+        // parse is `http`'s own, through the same types the SDK builds its
+        // `HeaderMap` from, so the two cannot come to disagree about what is
+        // sendable.
+        //
+        // `folded` is keyed the way HTTP compares header names, which is what
+        // makes two `BTreeMap` keys one header. A pair of spellings is refused
+        // rather than resolved, for the reason `AmbiguousApiKey` above is: the
+        // SDK's `HeaderMap` keeps the last insertion and this map is walked in
+        // byte order, so `Authorization` and `authorization` both configured
+        // means the credential that goes out was chosen by ASCII - while
+        // `doctor` and both `Debug` impls go on listing the one that does not.
+        let mut folded: HashMap<reqwest::header::HeaderName, &String> = HashMap::new();
+        for (name, value) in &llm.headers {
+            let parsed =
+                reqwest::header::HeaderName::from_bytes(name.as_bytes()).map_err(|_| {
+                    ConfigError::UnusableHeaderName {
+                        index,
+                        name: name.clone(),
+                    }
+                })?;
+            if reqwest::header::HeaderValue::from_bytes(value.as_bytes()).is_err() {
+                return Err(ConfigError::UnusableHeaderValue {
+                    index,
+                    name: name.clone(),
+                });
+            }
+            if let Some(first) = folded.insert(parsed, name) {
+                return Err(ConfigError::DuplicateHeaderName {
+                    index,
+                    first: first.clone(),
+                    second: name.clone(),
+                });
+            }
         }
 
         if llm.backend != BackendKind::Http {

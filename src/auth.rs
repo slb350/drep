@@ -40,7 +40,8 @@
 //!    substituted;
 //! 2. `api_key_command`, an argv drep runs to mint one;
 //! 3. a key held here for the same endpoint;
-//! 4. nothing, which `LlmClient::new` turns into `not-needed`.
+//! 4. nothing, which `LlmClient::new` turns into an empty key so the SDK sends
+//!    no protocol authentication header.
 //!
 //! An explicit value in the file always wins. A user who writes
 //! `api_key = "${OPENROUTER_API_KEY}"` has said where the key comes from, and
@@ -74,8 +75,8 @@ pub enum KeySource {
     Command,
     /// The config named nothing and the store had one for this endpoint.
     Store,
-    /// Neither. The provider will authenticate as `not-needed`, which a local
-    /// server accepts and a cloud one answers with a 401.
+    /// Neither. The provider sends no protocol authentication header; a custom
+    /// header may still provide the endpoint's complete authentication scheme.
     Missing,
 }
 

@@ -57,7 +57,6 @@ REMOTE_DIR="${DREP_MUTANTS_DIR:-.cache/drep-mutants/$(basename "$PWD")}"
 REMOTE="$HOST:$REMOTE_DIR"
 JOBS="${MUTANTS_JOBS:-4}"
 REMOTE_HOST_LOCK="${DREP_MUTANTS_REMOTE_HOST_LOCK:-/srv/ci/drep-mutants/host.lock}"
-HOST_LOCK_WAIT_SECONDS="${DREP_MUTANTS_HOST_LOCK_WAIT_SECONDS:-1800}"
 RSYNC_IO_TIMEOUT_SECONDS="${DREP_MUTANTS_RSYNC_TIMEOUT_SECONDS:-300}"
 
 case "$REMOTE_HOST_LOCK" in
@@ -67,12 +66,7 @@ case "$REMOTE_HOST_LOCK" in
     exit 64
     ;;
 esac
-case "$HOST_LOCK_WAIT_SECONDS" in
-  ''|*[!0-9]*)
-    echo "mutants-remote: DREP_MUTANTS_HOST_LOCK_WAIT_SECONDS must be a non-negative integer" >&2
-    exit 64
-    ;;
-esac
+validate_mutants_host_lock_wait_seconds mutants-remote
 case "$RSYNC_IO_TIMEOUT_SECONDS" in
   0|''|*[!0-9]*)
     echo "mutants-remote: DREP_MUTANTS_RSYNC_TIMEOUT_SECONDS must be a positive integer" >&2
@@ -147,7 +141,7 @@ REMOTE_COMMAND=
 printf -v REMOTE_COMMAND 'bash -c %q bash' "$REMOTE_SCRIPT"
 for remote_arg in \
   "$REMOTE_HOST_LOCK" \
-  "$HOST_LOCK_WAIT_SECONDS" \
+  "$MUTANTS_HOST_LOCK_WAIT_SECONDS" \
   "$REMOTE_DIR" \
   "$MUTANTS_OUT_DIR" \
   "$JOBS" \

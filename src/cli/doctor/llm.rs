@@ -224,14 +224,17 @@ pub(super) async fn write_llm_section<W: Write>(
                     }
                 }
             } else {
+                let configured_headers = configured_headers(entry);
                 let line = key_source_line(
                     entry,
                     expanded_command(&loaded, file_index),
                     &store,
+                    &configured_headers,
                     semantic,
                 )
                 .await;
-                writeln!(out, "     key: {line}")?;
+                writeln!(out, "     protocol key: {line}")?;
+                writeln!(out, "     headers: {}", header_names(&configured_headers))?;
             }
         } else {
             writeln!(out, "  -  {description} (disabled - skipped)")?;
@@ -297,6 +300,7 @@ async fn key_source_line(
     entry: &Value,
     resolved_argv: Option<&[String]>,
     store: &AuthStore,
+    configured_headers: &std::collections::BTreeMap<String, String>,
     semantic: super::Semantic,
 ) -> String {
     let api_key = entry.get("api_key").and_then(|v| v.as_str());
@@ -341,6 +345,9 @@ async fn key_source_line(
             KeySource::Command.label(),
             key_command_status(resolved_argv).await
         ),
+        (KeySource::Missing, _) if !configured_headers.is_empty() => {
+            "not set; configured headers may supply authentication".to_owned()
+        }
         (source, _) => source.label().to_string(),
     }
 }
@@ -396,13 +403,54 @@ fn report_load_result<W: Write>(
     Ok(())
 }
 
-/// Whether a raw `[[llm]]` table is in the failover chain.
+/// The valid string-valued header names this raw entry configured.
 ///
-/// The default comes from `LlmConfig::default()` rather than a literal `true`,
-/// so this cannot disagree with what `config::load` will actually decide. The
-/// raw table is read instead of the loaded config because `load` fails on an
-/// unset `${VAR}` - and a fresh clone with no key exported is exactly when this
-/// report is most useful.
+/// Reads the raw table for the reason the predicates below do - `load` fails on
+/// an unset `${VAR}`, and that is when this report is most useful - so a
+/// malformed entry contributes nothing rather than failing the report.
+fn configured_headers(entry: &toml::Value) -> std::collections::BTreeMap<String, String> {
+    entry
+        .get("headers")
+        .and_then(toml::Value::as_table)
+        .map(|table| {
+            table
+                .iter()
+                .filter_map(|(name, value)| value.as_str().map(|_| (name.clone(), String::new())))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// The headers this entry will actually send.
+///
+/// Goes through `config::effective_headers`, the same function that fills
+/// `LlmClient::headers`, so the report cannot describe a set the request will
+/// not carry. Names only, never values: a project or tenant token is the
+/// ordinary thing to put in a header, and this output is pasted into issues and
+/// chat.
+fn header_names(configured: &std::collections::BTreeMap<String, String>) -> String {
+    let effective = config::effective_headers(configured);
+    // A name the entry did not write is one drep added, and saying so answers
+    // the question this line exists for: is the user agent going out mine or
+    // drep's own. Derived by comparing the two sets rather than by naming
+    // `User-Agent` here, so a second default cannot be added without this line
+    // reporting it.
+    //
+    // Sorted, because `effective_headers` returns a `BTreeMap` - the order is
+    // the map's, not the order the file happened to list.
+    effective
+        .keys()
+        .map(|name| {
+            if configured.contains_key(name) {
+                name.clone()
+            } else {
+                format!("{name} (default)")
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 /// Whether this raw entry names the Codex backend.
 ///
 /// Named for the same reason `entry_is_enabled` is: the two raw-tree predicates in
@@ -412,6 +460,13 @@ fn entry_is_codex(entry: &toml::Value) -> bool {
     entry.get("backend").and_then(toml::Value::as_str) == Some("codex")
 }
 
+/// Whether a raw `[[llm]]` table is in the failover chain.
+///
+/// The default comes from `LlmConfig::default()` rather than a literal `true`,
+/// so this cannot disagree with what `config::load` will actually decide. The
+/// raw table is read instead of the loaded config because `load` fails on an
+/// unset `${VAR}` - and a fresh clone with no key exported is exactly when this
+/// report is most useful.
 fn entry_is_enabled(entry: &toml::Value) -> bool {
     entry
         .get("enabled")

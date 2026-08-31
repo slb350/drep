@@ -488,12 +488,72 @@ Check the plan's own terms before pointing a commit gate at it. They are not
 uniform, and some restrict a subscription to a named list of client tools or to
 interactive use.
 
+### Extra request headers
+
+Some endpoints want more than a bearer token: one identifies its clients by
+`User-Agent`, another bills against a header, another authenticates outside its
+protocol's default scheme. `[llm.headers]` is a table per provider, sent with
+every request to it:
+
+```toml
+[[llm]]
+endpoint = "https://gateway.example/v1"
+model = "m"
+api_key_command = ["gcloud", "auth", "print-access-token"]
+
+[llm.headers]
+"User-Agent" = "acme-gate/3.1"
+"X-Tenant-Token" = "${TENANT_TOKEN}"
+```
+
+A name here replaces the one drep or the protocol would otherwise send, so an
+`Authorization` in this table is the one that goes out. `${VAR}` expands as it
+does anywhere else in the file, which is how a token stays out of the config.
+
+HTTP requests do not follow redirects, including redirects that stay on the
+same origin. The configured endpoint is the exact destination allowed to
+receive its protocol key and custom headers; a `30x` is reported instead. The
+authenticated model-listing request made by `drep init` follows the same rule.
+
+Unconfigured, drep sends `User-Agent: drep/<version>`. reqwest sends none by
+default, and an endpoint that logs or bills per client cannot attribute a
+request that carries no user agent.
+
+A name or value drep cannot encode is refused when the config loads, naming the
+entry and the header, rather than failing once per reviewed file. So are two
+spellings of one name: `Authorization` and `authorization` in the same table are
+one HTTP header, only one of them reaches the endpoint, and resolving that for
+you would be picking which credential goes out.
+
+The effective header set is part of the cache key. drep cannot know whether an
+arbitrary name is only a credential or selects a tenant, model route, or feature
+variant, so changing a value deliberately starts a fresh cache entry. Header
+names are canonicalised case-insensitively, and values reach only the cache
+digest — never a log, report, or cache file as text.
+
+When no `api_key` resolves, drep sends no protocol authentication header. That
+lets `X-Gateway-Key` or another configured header be the complete authentication
+scheme instead of travelling beside a fabricated protocol credential.
+`drep doctor` calls its credential line `protocol key`; when configured headers
+may authenticate the request it does not prescribe `drep auth login`. The
+following line lists what the provider will actually send, marking what drep
+supplied and never printing a value:
+
+```console
+     headers: User-Agent (default), X-Tenant-Token
+```
+
 ### Other keys
 
 `temperature` (unset means the parameter is not sent at all, which is what some
 models require — `k3` and `gpt-5.6-sol` reject any value), `max_tokens` (unset
 by default, so a reasoning model is never truncated mid-thought; a few endpoints
-refuse a request without it), `max_retries`, `max_concurrent`.
+refuse a request without it; the configured ceiling is part of the cache key),
+`max_retries`, `max_concurrent`.
+
+An unknown key in an `[[llm]]` entry is a load error rather than something
+quietly ignored, so a misspelling is visible at the prompt instead of at the
+endpoint.
 
 Both are properties of the model rather than the endpoint, which is why the
 wizard resolves them per model. Editing either by hand always wins: drep reads

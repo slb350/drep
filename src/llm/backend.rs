@@ -37,10 +37,10 @@ impl ProviderBackend {
         }
     }
 
-    /// Request-shape discriminator independent of provider identity and model.
+    /// Request discriminator independent of provider identity and model.
     pub fn request_identity(&self) -> &str {
         match self {
-            Self::Http(client) => client.protocol().as_str(),
+            Self::Http(client) => client.request_identity(),
             Self::Codex(_) => "codex-jsonl-v1",
         }
     }

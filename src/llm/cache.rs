@@ -29,6 +29,16 @@
 //! representation, so equal values hash alike without collapsing neighboring
 //! `f32` values.
 //!
+//! **The request identity is conservative.** It contains the wire protocol,
+//! `max_tokens`, and the effective header set. Header names are lower-cased and
+//! sorted before they reach the hash, because spelling does not change an HTTP
+//! request; values remain exact because an arbitrary header can select a tenant,
+//! model route or feature variant and drep cannot infer that from its name. A
+//! token rotation therefore cold-starts that provider's cache. That cost is the
+//! safe default: reusing an answer from a different route is a false claim about
+//! which model reviewed the file. Values are hash input only and are never
+//! written into the cache entry or its path as text.
+//!
 //! **The backend identity is part of the key, not just the model.** A model name is
 //! not a globally unique identity: the canonical failover pair is one open
 //! model served from a local runtime and from a cloud provider, which name it
@@ -129,26 +139,24 @@ impl Cache {
     }
 
     /// Compute the key for
-    /// `(system_prompt, content, backend, model, request_shape, temperature)`.
+    /// `(system_prompt, content, backend, model, request_identity, temperature)`.
     ///
     /// Deliberately does NOT consult `self`: the key is content-only, so two
     /// `Cache` instances at different roots produce the same key for the
     /// same inputs. That is what criterion 7 asserts and what makes the
     /// cache portable across CI runs.
     ///
-    /// `request_shape` is in the key because one endpoint can serve the same model
-    /// over both wire formats - `api.minimax.io` publishes `/v1` and
-    /// `/anthropic/v1` for `MiniMax-M3` - and the two are different requests
-    /// with different reasoning handling. Keying without it files one
-    /// protocol's answer where the other looks for its own, which is the same
-    /// defect that put `endpoint` in the key.
+    /// `request_identity` is in the key because one endpoint can serve the same
+    /// model through different protocol, token-ceiling and header-selected
+    /// routes. Keying without it files one request's answer where another looks
+    /// for its own, which is the same defect that put `endpoint` in the key.
     pub fn key(
         &self,
         system_prompt: &str,
         content: &str,
         backend: &str,
         model: &str,
-        request_shape: &str,
+        request_identity: &str,
         temperature: Option<f32>,
     ) -> CacheKey {
         let mut hasher = blake3::Hasher::new();
@@ -156,7 +164,7 @@ impl Cache {
         write_field(&mut hasher, content.as_bytes());
         write_field(&mut hasher, backend.as_bytes());
         write_field(&mut hasher, model.as_bytes());
-        write_field(&mut hasher, request_shape.as_bytes());
+        write_field(&mut hasher, request_identity.as_bytes());
         // `{:?}` on an ordinary finite `f32` is the shortest string that
         // round-trips, so values such as `0.2` and `0.20` share a key while
         // neighboring finite values do not. Config validation excludes NaN;
@@ -405,9 +413,9 @@ fn is_lower_hex(value: &str, expected_len: usize) -> bool {
 /// `("a","bc")`) without depending on any byte that cannot appear in the
 /// payload. The length is a fixed 8-byte big-endian `u64`, so a single
 /// field can be at most `u64::MAX` bytes long - far longer than any real
-/// prompt.
-fn write_field(hasher: &mut blake3::Hasher, bytes: &[u8]) {
-    let len = u64::try_from(bytes.len()).expect("prompt field longer than u64::MAX bytes");
+/// input.
+pub(crate) fn write_field(hasher: &mut blake3::Hasher, bytes: &[u8]) {
+    let len = u64::try_from(bytes.len()).expect("cache field longer than u64::MAX bytes");
     hasher.update(&len.to_be_bytes());
     hasher.update(bytes);
 }

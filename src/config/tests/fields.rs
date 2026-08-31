@@ -26,6 +26,7 @@ max_tokens = 4096
 timeout_secs = 120
 max_retries = 5
 max_concurrent = 8
+headers = { "X-Trace" = "on" }
 "#,
     );
 
@@ -46,6 +47,7 @@ max_concurrent = 8
     assert_eq!(llm.timeout_secs, 120);
     assert_eq!(llm.max_retries, 5);
     assert_eq!(llm.max_concurrent, 8);
+    assert_eq!(llm.headers.get("X-Trace").map(String::as_str), Some("on"));
 }
 
 #[test]

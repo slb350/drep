@@ -289,15 +289,11 @@ pub(crate) fn write_executable(path: &std::path::Path, contents: impl AsRef<str>
 /// accumulating sleepers on a parallel or mutation-test runner.
 #[cfg(unix)]
 pub(crate) fn probe_and_stop_process(pid: &str) -> bool {
-    let running = std::process::Command::new("/bin/kill")
-        .args(["-0", pid])
+    std::process::Command::new("/bin/kill")
+        .arg(pid)
         .status()
-        .expect("probe grandchild")
-        .success();
-    if running {
-        let _ = std::process::Command::new("/bin/kill").arg(pid).status();
-    }
-    running
+        .expect("stop grandchild")
+        .success()
 }
 
 /// Sum regular-file bytes one directory level beneath `root`.

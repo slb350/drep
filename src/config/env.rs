@@ -51,25 +51,26 @@ pub(super) fn expand_env_except(
     tree: &mut Value,
     source: &Path,
     skip: &BTreeSet<usize>,
+    lookup: &impl Fn(&str) -> Result<String, env::VarError>,
 ) -> Result<(), ConfigError> {
     if skip.is_empty() {
-        return expand_env_in(tree, source);
+        return expand_env_in(tree, source, lookup);
     }
     let Some(table) = tree.as_table_mut() else {
-        return expand_env_in(tree, source);
+        return expand_env_in(tree, source, lookup);
     };
     for (key, value) in table.iter_mut() {
         if key != "llm" {
-            expand_env_in(value, source)?;
+            expand_env_in(value, source, lookup)?;
             continue;
         }
         let Some(entries) = value.as_array_mut() else {
-            expand_env_in(value, source)?;
+            expand_env_in(value, source, lookup)?;
             continue;
         };
         for (index, entry) in entries.iter_mut().enumerate() {
             if !skip.contains(&index) {
-                expand_env_in(entry, source)?;
+                expand_env_in(entry, source, lookup)?;
             }
         }
     }
@@ -82,19 +83,23 @@ pub(super) fn expand_env_except(
 /// to `LlmConfig` inherits the behaviour without remembering to opt in. The
 /// reference is the path that contained it, so an unset variable's error
 /// message points at the file rather than the variable alone.
-pub(super) fn expand_env_in(value: &mut Value, source: &Path) -> Result<(), ConfigError> {
+pub(super) fn expand_env_in(
+    value: &mut Value,
+    source: &Path,
+    lookup: &impl Fn(&str) -> Result<String, env::VarError>,
+) -> Result<(), ConfigError> {
     match value {
         Value::String(s) => {
-            *s = expand_string(s, source)?;
+            *s = expand_string(s, source, lookup)?;
         }
         Value::Table(table) => {
             for (_, inner) in table.iter_mut() {
-                expand_env_in(inner, source)?;
+                expand_env_in(inner, source, lookup)?;
             }
         }
         Value::Array(items) => {
             for inner in items.iter_mut() {
-                expand_env_in(inner, source)?;
+                expand_env_in(inner, source, lookup)?;
             }
         }
         _ => {}
@@ -215,7 +220,11 @@ fn collect_env_refs(value: &Value, seen: &mut BTreeSet<String>, out: &mut Vec<St
 /// A literal `$` that is not followed by `{` is preserved. An unterminated
 /// `${` (no closing `}`) is also an error, because the alternative - silently
 /// dropping it - leaves the file's contract unstated.
-fn expand_string(s: &str, source: &Path) -> Result<String, ConfigError> {
+fn expand_string(
+    s: &str,
+    source: &Path,
+    lookup: &impl Fn(&str) -> Result<String, env::VarError>,
+) -> Result<String, ConfigError> {
     let mut out = String::with_capacity(s.len());
     let mut chars = s.chars().peekable();
     while let Some(c) = chars.next() {
@@ -251,7 +260,7 @@ fn expand_string(s: &str, source: &Path) -> Result<String, ConfigError> {
                 "empty environment variable reference `${}`".to_owned(),
             ));
         }
-        let value = match env::var(&name) {
+        let value = match lookup(&name) {
             Ok(value) => value,
             Err(env::VarError::NotPresent) => {
                 return Err(ConfigError::EnvVarUnset(name, source.display().to_string()));

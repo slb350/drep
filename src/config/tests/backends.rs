@@ -116,6 +116,7 @@ fn codex_rejects_every_explicit_http_only_field() {
         ("endpoint", "endpoint = \"https://api.openai.com/v1\""),
         ("api_key", "api_key = \"literal-for-test\""),
         ("api_key_command", "api_key_command = [\"print-token\"]"),
+        ("headers", "headers = { \"X-Anything\" = \"v\" }"),
         ("protocol", "protocol = \"openai\""),
         ("temperature", "temperature = 0.2"),
         ("max_tokens", "max_tokens = 4096"),

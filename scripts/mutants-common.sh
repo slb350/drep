@@ -12,3 +12,18 @@
 # target/ because it is already gitignored. Overridable so a caller with a
 # different layout does not have to edit three scripts.
 MUTANTS_OUT_DIR="${MUTANTS_OUT_DIR:-target/mutants}"
+
+# One lock wait policy for both the remote transaction wrapper and direct/CI
+# mutation runs. The two scripts acquire the lock at different boundaries, but
+# accepting and defaulting the operator's value must not drift between them.
+MUTANTS_HOST_LOCK_WAIT_SECONDS="${DREP_MUTANTS_HOST_LOCK_WAIT_SECONDS:-1800}"
+
+validate_mutants_host_lock_wait_seconds() {
+  local caller="$1"
+  case "$MUTANTS_HOST_LOCK_WAIT_SECONDS" in
+    ''|*[!0-9]*)
+      echo "$caller: DREP_MUTANTS_HOST_LOCK_WAIT_SECONDS must be a non-negative integer" >&2
+      return 64
+      ;;
+  esac
+}

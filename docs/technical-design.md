@@ -322,7 +322,9 @@ by `doctor`. The top-level `max_review_rounds` defaults to 3 and rejects zero.
 
 A provider's credential is resolved in one pass, in `auth::resolve`, in this
 order: an explicit `api_key`, then `api_key_command`, then the endpoint-keyed
-store, then nothing — which `LlmClient::new` turns into `not-needed`.
+store, then nothing — which `LlmClient::new` turns into an empty key so the SDK
+sends no protocol authentication header. A configured header may provide the
+endpoint's complete authentication scheme in that last case.
 `auth::source_of` is the only statement of that order, and `doctor` calls it
 rather than restating it. `api_key_command` is an argv run with no shell, whose
 stdout trimmed at both ends is the credential — the trailing newline every
@@ -354,8 +356,8 @@ final drain retain bytes the helper wrote before exiting without waiting for
 the descendant to close the pipe.
 
 `backend` defaults to `http`. HTTP entries
-accept `endpoint`, `api_key`, `api_key_command`, `protocol`, `temperature`,
-`max_tokens` and
+accept `endpoint`, `api_key`, `api_key_command`, `headers`, `protocol`,
+`temperature`, `max_tokens` and
 `max_retries`; they reject the Codex-only `reasoning_effort`. A `codex` entry
 requires `model`, accepts an optional `reasoning_effort`, and rejects every
 HTTP-only field, so a subscription selection cannot silently become API
@@ -368,9 +370,50 @@ rejected; `max_concurrent = 0` is rejected, since a semaphore with no permits
 would hang with no message. Disabled entries are inert - `${VAR}` expansion and
 field validation both skip them, and so does credential resolution, which for an
 `api_key_command` also means no subprocess - so parking a cloud provider does not
-require its key to be set. `LlmConfig` hand-writes `Debug` to redact `api_key`,
-and prints an `api_key_command` as its program name plus an argument count,
-because an argv can carry the credential too.
+require its key to be set. An unknown key in an entry is a load error rather than a silent drop, which is
+what a `[llm.headers]` table written against a drep that could not send one used
+to be: accepted, discarded, and indistinguishable from working. `LlmConfig`
+hand-writes `Debug` to redact `api_key`, prints an `api_key_command` as its
+program name plus an argument count, and prints `headers` as its names alone,
+because an argv and a header value can each carry the credential too.
+
+`[llm.headers]` and drep's own `User-Agent: drep/<version>` are merged once, by
+`config::effective_headers` at `LlmClient::new`, and the result is stored as
+`LlmClient::headers`. The default is only created when the configured table
+names no user agent, matched case-insensitively, so an entry that sets one gets
+one header rather than two. `complete_json` applies that resolved map and
+settles no precedence of its own, which is what keeps the request, `LlmClient`'s
+`Debug` and `drep doctor` answering the same question the same way: with the
+default applied inside the request instead, a config naming one header printed
+one and sent two, and a config naming none printed an empty set and still sent a
+user agent - and the operator debugging a gateway 403 is asking `doctor`
+exactly that. `doctor` marks a name the entry did not write as `(default)`,
+comparing the configured set against the effective one rather than naming
+`User-Agent` itself, so a second default cannot be added without that listing
+reporting it. The resolved map still goes on after the SDK's protocol defaults,
+and `AgentOptionsBuilder::header` replaces case-insensitively, so a configured
+`Authorization` is the one sent. That replacement never has to choose between
+two *configured* spellings, because `validate` refuses a table holding both:
+the two are equal keys to HTTP and distinct keys to a `BTreeMap`, so the
+surviving one would be chosen by byte order while `doctor` and both `Debug`
+impls went on listing the other.
+
+The cache key carries a conservative request identity: protocol, `max_tokens`,
+and the effective header set, in addition to endpoint, model, prompt, and
+temperature. Header names are canonicalised case-insensitively and values
+remain exact hash inputs. drep cannot tell whether an arbitrary header is only
+a credential or selects a tenant, route, or feature variant, so a rotation
+cold-starts the cache rather than reusing an answer from a request that may have
+reached different backing behavior.
+
+Every HTTP endpoint is an exact origin rather than the start of a redirect
+chain. `open-agent-sdk` 0.11.2 disables redirects for both completion request
+paths; `http::client` independently disables them for drep's model-listing and
+quirks fetchers. This is deliberately stricter than stripping selected headers
+only on a cross-origin hop: an Anthropic `x-api-key` is not one of reqwest's
+built-in sensitive names, and a same-origin redirect would replay even a
+standard `Authorization` header. A `30x` therefore reaches the caller's normal
+status classification and no second request is made.
 
 ### The site policy layer
 

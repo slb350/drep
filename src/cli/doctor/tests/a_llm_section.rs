@@ -23,7 +23,7 @@ fn write_py(dir: &Path) {
 }
 
 /// Run `doctor` against `dir` and return what it printed.
-async fn report_for(dir: &Path) -> String {
+pub(super) async fn report_for(dir: &Path) -> String {
     let mut out = Vec::new();
     super::run_scoped(&mut out, &args(dir), dir)
         .await

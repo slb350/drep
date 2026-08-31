@@ -4,7 +4,8 @@
 //! left is `drep init` asking two questions over plain GET: which models an
 //! endpoint serves ([`crate::llm::models`]) and what those models accept
 //! ([`crate::llm::quirks`]). Both are one request against a host the user
-//! named, both must be bounded, and both must be non-fatal.
+//! named, both must be bounded, must never follow a redirect, and must be
+//! non-fatal.
 //!
 //! They live here rather than in either module because the bound is a safety
 //! property, and a safety property written twice is written once and forgotten
@@ -35,16 +36,19 @@ pub enum ReadError {
     Malformed(String),
 }
 
-/// A client with `timeout` covering the whole request.
+/// A client with `timeout` covering the whole request and redirects disabled.
 ///
 /// The one place a proxy, a user agent or a redirect policy would ever go.
 /// There used to be two of these, differing by accident rather than by choice.
+/// Neither caller follows redirects: the configured URL is the exact origin
+/// that may receive its request, and the model listing carries a credential.
 ///
 /// The error is a `String` so each caller can map it into its own enum without
 /// this module knowing about either.
 pub fn client(timeout: Duration) -> Result<reqwest::Client, String> {
     reqwest::Client::builder()
         .timeout(timeout)
+        .redirect(reqwest::redirect::Policy::none())
         .build()
         .map_err(|err| err.to_string())
 }

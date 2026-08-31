@@ -20,9 +20,6 @@ use std::path::Path;
 /// than only through the one field that happens to use it.
 #[test]
 fn env_expansion_descends_into_arrays() {
-    // SAFETY: single-threaded test process; no other thread reads env here.
-    unsafe { env::set_var("DREP_ARRAY_PROBE", "expanded") };
-
     let mut tree: Value = toml::from_str(
         r#"
 values = ["${DREP_ARRAY_PROBE}", "literal"]
@@ -31,7 +28,11 @@ nested = { inner = ["${DREP_ARRAY_PROBE}"] }
     )
     .expect("fixture parses");
 
-    expand_env_in(&mut tree, Path::new("probe.toml")).expect("expansion succeeds");
+    expand_env_in(&mut tree, Path::new("probe.toml"), &|name| match name {
+        "DREP_ARRAY_PROBE" => Ok("expanded".to_owned()),
+        _ => Err(env::VarError::NotPresent),
+    })
+    .expect("expansion succeeds");
 
     let values = tree["values"].as_array().expect("array");
     assert_eq!(values[0].as_str(), Some("expanded"));
