@@ -250,6 +250,10 @@ fn mutation_ci_is_main_only_on_the_pinned_homelab_runner() {
         "the mutation gate must retain its verified cargo-mutants version"
     );
     assert!(
+        mutants.contains("components: clippy"),
+        "the mutation runner must install Clippy because the suite exercises configured Rust compilers"
+    );
+    assert!(
         mutants.contains("clean: false")
             && mutants
                 .contains("git status --porcelain=v1 --untracked-files=all --ignored=matching")
