@@ -5,6 +5,7 @@
 //! the tests can read what would otherwise go to stdout.
 
 mod a_codex;
+mod a_headers;
 mod a_key_command;
 mod a_languages;
 mod a_llm_section;

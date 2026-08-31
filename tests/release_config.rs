@@ -25,6 +25,10 @@ fn mutation_workflow() -> String {
     common::without_comments(".github/workflows/mutants.yml")
 }
 
+fn remote_mutation_script() -> String {
+    common::without_comments("scripts/mutants-remote.sh")
+}
+
 fn release_workflow() -> String {
     common::without_comments(".github/workflows/release.yml")
 }
@@ -118,6 +122,10 @@ fn github_ci_uses_only_guarded_homelab_runners() {
             job.lines().any(|line| line == expected_guard),
             "{job_name} must reject forked pull requests before using a homelab runner"
         );
+        assert!(
+            job.contains("uses: Swatinem/rust-cache@") && job.contains("cache-bin: false"),
+            "{job_name} must not let rust-cache delete runner-provisioned Cargo binaries"
+        );
     }
 
     let linux = workflow_job(&workflow, "linux");
@@ -126,7 +134,7 @@ fn github_ci_uses_only_guarded_homelab_runners() {
             && linux.contains("cargo clippy --all-targets --all-features")
             && linux.contains("cargo test --all-targets --all-features")
             && linux.contains("cargo +1.88.0 check"),
-        "the single Strix lane must retain format, clippy, test and MSRV gates"
+        "the single homelab-1 lane must retain format, clippy, test and MSRV gates"
     );
     let macos = workflow_job(&workflow, "test-macos");
     assert!(
@@ -137,7 +145,7 @@ fn github_ci_uses_only_guarded_homelab_runners() {
         !workflow.contains("\n  lint:\n")
             && !workflow.contains("\n  test-linux:\n")
             && !workflow.contains("\n  msrv:\n"),
-        "serial Strix validation must not repeat runner and checkout setup across jobs"
+        "serial homelab-1 validation must not repeat runner and checkout setup across jobs"
     );
 
     assert!(
@@ -188,7 +196,7 @@ fn maintained_actions_are_pinned_to_full_commit_shas() {
 /// A staged sweep cannot notice a test-only change weakening coverage of
 /// production code outside the diff, so the full sweep remains an automated
 /// main-branch gate. The public repository must never route pull-request code
-/// to Strix, and the hosted workflow must not duplicate its hours of work.
+/// to homelab-1, and the hosted workflow must not duplicate its hours of work.
 #[test]
 fn mutation_ci_is_main_only_on_the_pinned_homelab_runner() {
     let validation = rust_workflow();
@@ -225,11 +233,11 @@ fn mutation_ci_is_main_only_on_the_pinned_homelab_runner() {
     );
     assert!(
         mutants.contains("runs-on: [self-hosted, linux, x64, drep-linux]"),
-        "the full sweep must require the repository-scoped Strix label"
+        "the full sweep must require the repository-scoped homelab-1 label"
     );
     assert!(
-        mutants.contains("timeout-minutes: 90"),
-        "the full sweep needs headroom above its observed runtime while still releasing a wedged runner"
+        mutants.contains("timeout-minutes: 180"),
+        "the throttled shared-host sweep needs contention headroom while still releasing a wedged runner"
     );
     assert!(
         mutants.contains("tool: cargo-mutants@27.1.0"),
@@ -255,7 +263,7 @@ fn mutation_ci_is_main_only_on_the_pinned_homelab_runner() {
 /// cargo-mutants reject the invocation before its baseline runs.
 #[test]
 fn remote_full_mutation_sweep_passes_no_phantom_argument() {
-    let script = common::without_comments("scripts/mutants-remote.sh");
+    let script = remote_mutation_script();
 
     assert!(
         script.contains("if [ \"$#\" -gt 0 ]; then")
@@ -269,11 +277,31 @@ fn remote_full_mutation_sweep_passes_no_phantom_argument() {
     );
 }
 
+#[test]
+fn remote_mutation_sweep_defaults_to_homelab_1() {
+    let script = remote_mutation_script();
+
+    assert!(
+        script.contains("HOST=\"${DREP_MUTANTS_HOST:-homelab-1.local}\""),
+        "developer mutation offload must follow Linux CI ownership to homelab-1"
+    );
+    assert!(
+        script.contains(
+            "REMOTE_DIR=\"${DREP_MUTANTS_DIR:-.cache/drep-mutants/$(basename \"$PWD\")}\""
+        ),
+        "developer mutation offload must not collide with the protected runner checkout"
+    );
+    assert!(
+        !script.contains("strix.local"),
+        "the executable mutation wrapper must not retain a Strix default"
+    );
+}
+
 /// The platforms a release builds for.
 ///
 /// A target that falls out of this list does not fail anything: the installer
 /// keeps working everywhere else and tells that one user "unsupported
-/// platform". Both Linux triples build on Strix, with its x86_64 host
+/// platform". Both Linux triples build on homelab-1, with its x86_64 host
 /// cross-compiling arm64, so dropping one saves nothing that would justify it.
 #[test]
 fn every_supported_platform_is_built() {

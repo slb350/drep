@@ -50,10 +50,13 @@ cleanup_mutation_scratch() {
     \( -name 'cargo-mutants-*.tmp' -o \
     -path "$TMPDIR"/'cargo-mutants-*.tmp/*' -o \
     -name 'drep-diff-test-*' -o \
-    -path "$TMPDIR"/'drep-diff-test-*/*' \) -delete
+    -path "$TMPDIR"/'drep-diff-test-*/*' \) -delete 2>/dev/null || true
 }
 
 cleanup_mutation_scratch
+# `find -delete` can race with a copy still tearing itself down and report ENOENT
+# for an entry that has already vanished. Losing stale scratch is harmless, so
+# cleanup ignores that status and the EXIT trap preserves the script's verdict.
 trap cleanup_mutation_scratch EXIT
 
 # --cap-lints: `[lints.rust] warnings = "deny"` in Cargo.toml applies to the

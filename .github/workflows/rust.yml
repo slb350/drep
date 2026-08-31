@@ -12,11 +12,11 @@ permissions:
   contents: read
 
 jobs:
-  # Strix has one repository-scoped runner, so separate Linux jobs would only
+  # homelab-1 has one repository-scoped runner, so separate Linux jobs would only
   # serialize while repeating checkout, cache and toolchain setup. Keep the
   # complete Linux gate in one allocation; macOS remains independent below.
   linux:
-    name: validate (Strix)
+    name: validate (homelab-1)
     if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: [self-hosted, linux, x64, drep-linux]
     steps:
@@ -28,6 +28,10 @@ jobs:
           components: rustfmt, clippy
 
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          # Its default save cleanup deletes every Cargo binary present when
+          # the action starts. These runners own pinned publisher tools.
+          cache-bin: false
 
       - name: Format
         run: cargo fmt --all --check
@@ -66,5 +70,7 @@ jobs:
           components: clippy
 
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          cache-bin: false
 
       - run: cargo test --all-targets --all-features

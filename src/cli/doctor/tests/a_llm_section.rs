@@ -23,7 +23,7 @@ fn write_py(dir: &Path) {
 }
 
 /// Run `doctor` against `dir` and return what it printed.
-async fn report_for(dir: &Path) -> String {
+pub(super) async fn report_for(dir: &Path) -> String {
     let mut out = Vec::new();
     super::run_scoped(&mut out, &args(dir), dir)
         .await
@@ -555,53 +555,4 @@ async fn a_provider_with_no_key_anywhere_says_where_to_get_one() {
     let report = report_with_empty_store(dir.path()).await;
 
     assert!(report.contains("drep auth login"), "got {report}");
-}
-
-/// `doctor` says which headers will actually be sent, and never what they hold.
-///
-/// The effective set, through the same `config::effective_headers` the client
-/// uses, so the report cannot describe a set the request will not carry. Values
-/// are withheld because this output gets pasted into issues and chat.
-#[tokio::test]
-async fn configured_header_names_are_listed_without_their_values() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    std::fs::write(
-        dir.path().join("drep.toml"),
-        "[[llm]]\nendpoint = \"http://e/v1\"\nmodel = \"m\"\napi_key = \"k\"\n\n\
-         [llm.headers]\n\"X-Tenant-Token\" = \"super-secret-value\"\n\"User-Agent\" = \"acme/1.0\"\n",
-    )
-    .expect("drep.toml");
-
-    let report = report_for(dir.path()).await;
-
-    assert!(
-        report.contains("headers: User-Agent, X-Tenant-Token"),
-        "names, sorted: {report}"
-    );
-    assert!(
-        !report.contains("super-secret-value"),
-        "a header value must never reach the report: {report}"
-    );
-}
-
-/// An entry configuring no headers still reports the one drep sends.
-///
-/// The case the listing used to be silent about, and the one where silence
-/// mattered: the operator debugging a gateway 403 is asking what user agent is
-/// going out precisely because they never set one.
-#[tokio::test]
-async fn the_default_user_agent_is_reported_even_when_none_is_configured() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    std::fs::write(
-        dir.path().join("drep.toml"),
-        "[[llm]]\nendpoint = \"http://e/v1\"\nmodel = \"m\"\napi_key = \"k\"\n",
-    )
-    .expect("drep.toml");
-
-    let report = report_for(dir.path()).await;
-
-    assert!(
-        report.contains("headers: User-Agent (default)"),
-        "got {report}"
-    );
 }

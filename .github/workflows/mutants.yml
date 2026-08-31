@@ -27,9 +27,12 @@ jobs:
   mutants:
     if: github.event.workflow_run.event == 'push' && github.event.workflow_run.conclusion == 'success'
     runs-on: [self-hosted, linux, x64, drep-linux]
-    timeout-minutes: 90
+    # The target deliberately runs this shared-host workload at low CPU weight.
+    # Its uncontended sweep was already ~81 minutes, so contention must not
+    # convert polite scheduling into a false infrastructure failure.
+    timeout-minutes: 180
     steps:
-      # Keeping target/ makes the 32-thread Strix run take minutes instead of
+      # Keeping target/ makes the homelab-1 run take minutes instead of
       # hours. Everything else must still be an exact checkout: unexpected
       # ignored or untracked state fails closed rather than influencing a sweep.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -56,7 +59,7 @@ jobs:
         with:
           toolchain: stable
 
-      - uses: taiki-e/install-action@6cd13508893c0e7eab5f273c2575d3859bd7229a # v2.86.6
+      - uses: taiki-e/install-action@37f7c5781271959fb65b6b35224e28652ff2b63d # v2.87.0
         with:
           tool: cargo-mutants@27.1.0
 

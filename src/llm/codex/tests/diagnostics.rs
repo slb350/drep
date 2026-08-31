@@ -135,14 +135,14 @@ fn a_grandchild_inheriting_stdout_cannot_hold_the_diagnostic_open() {
     crate::test_support::write_executable(
         &executable,
         format!(
-            "#!/bin/sh\ncapture=$(dirname \"$0\")\nsleep 4 &\nprintf '%s' \"$!\" > \"$capture/grandchild.pid\"\nprintf '%s' '{}'\n",
+            "#!/bin/sh\ncapture=$(dirname \"$0\")\nsleep 30 &\nprintf '%s' \"$!\" > \"$capture/grandchild.pid\"\nprintf '%s' '{}'\n",
             CHATGPT
         ),
     );
 
     let status = probe(&executable, &ChildEnvironment::default()).expect("valid diagnostic");
     let pid = std::fs::read_to_string(dir.path().join("grandchild.pid")).expect("grandchild pid");
-    let running = super::probe_and_stop_process(&pid);
+    let running = crate::test_support::probe_and_stop_process(&pid);
 
     assert_eq!(status.cli_version(), "0.148.0");
     assert!(running, "probe waited for the unrelated grandchild to exit");

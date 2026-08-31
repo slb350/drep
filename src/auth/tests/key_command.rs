@@ -404,16 +404,28 @@ async fn output_that_is_not_utf8_is_refused_rather_than_replaced_with_placeholde
 async fn a_grandchild_inheriting_stdout_cannot_hold_credential_resolution_open() {
     let dir = tempfile::tempdir().expect("tempdir");
     let stub = dir.path().join("background-child");
-    write_executable(&stub, "#!/bin/sh\n(sleep 5) &\nprintf '%s' token\n");
+    // This distinguishes the direct helper's exit from the inherited pipe; it
+    // is not a shell-spawn benchmark. Leave enough scheduler headroom for an
+    // oversubscribed full-suite runner while keeping the two outcomes distinct.
+    write_executable(
+        &stub,
+        "#!/bin/sh\ncapture=$(dirname \"$0\")\nsleep 30 &\nprintf '%s' \"$!\" > \"$capture/grandchild.pid\"\nprintf '%s' token\n",
+    );
 
-    let key = command::run(
+    let result = command::run(
         &[stub.to_string_lossy().into_owned()],
-        std::time::Duration::from_secs(2),
+        std::time::Duration::from_secs(10),
     )
-    .await
-    .expect("the direct helper exited successfully");
+    .await;
+    let pid = std::fs::read_to_string(dir.path().join("grandchild.pid")).expect("grandchild pid");
+    let running = crate::test_support::probe_and_stop_process(&pid);
+    let key = result.expect("the direct helper exited successfully");
 
     assert_eq!(key, "token");
+    assert!(
+        running,
+        "credential resolution waited for the unrelated grandchild to exit"
+    );
 }
 
 /// A helper that prints more than any credential can be is refused, not read.
