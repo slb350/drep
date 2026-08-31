@@ -26,13 +26,13 @@ jobs:
   # this main-only lane is the comprehensive backstop.
   mutants:
     if: github.event.workflow_run.event == 'push' && github.event.workflow_run.conclusion == 'success'
-    runs-on: [self-hosted, linux, x64, drep-linux]
-    # The target deliberately runs this shared-host workload at low CPU weight.
-    # Its uncontended sweep was already ~81 minutes, so contention must not
-    # convert polite scheduling into a false infrastructure failure.
+    runs-on: [self-hosted, linux, x64, homelab-2, drep-mutants]
+    # Mutation has its own bounded runner. Validation and release retain the
+    # drep-linux owner on homelab-1, so a full sweep cannot occupy their only
+    # runner or compete with production workloads.
     timeout-minutes: 180
     steps:
-      # Keeping target/ makes the homelab-1 run take minutes instead of
+      # Keeping target/ makes the mutation-host run take minutes instead of
       # hours. Everything else must still be an exact checkout: unexpected
       # ignored or untracked state fails closed rather than influencing a sweep.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

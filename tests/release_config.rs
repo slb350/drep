@@ -29,6 +29,10 @@ fn remote_mutation_script() -> String {
     common::without_comments("scripts/mutants-remote.sh")
 }
 
+fn mutation_run_script() -> String {
+    common::without_comments("scripts/mutants-run.sh")
+}
+
 fn release_workflow() -> String {
     common::without_comments(".github/workflows/release.yml")
 }
@@ -234,12 +238,12 @@ fn mutation_ci_is_main_only_on_the_pinned_homelab_runner() {
         "mutation testing must follow a successful push validation and check out that exact commit"
     );
     assert!(
-        mutants.contains("runs-on: [self-hosted, linux, x64, drep-linux]"),
-        "the full sweep must require the repository-scoped homelab-1 label"
+        mutants.contains("runs-on: [self-hosted, linux, x64, homelab-2, drep-mutants]"),
+        "the full sweep must require the dedicated homelab-2 mutation label"
     );
     assert!(
         mutants.contains("timeout-minutes: 180"),
-        "the throttled shared-host sweep needs contention headroom while still releasing a wedged runner"
+        "the dedicated mutation sweep needs bounded completion headroom while still releasing a wedged runner"
     );
     assert!(
         mutants.contains("tool: cargo-mutants@27.1.0"),
@@ -260,18 +264,19 @@ fn mutation_ci_is_main_only_on_the_pinned_homelab_runner() {
 
 /// A no-argument full sweep must remain a genuinely empty cargo-mutants scope.
 ///
-/// `printf '%q' "$@"` prints `''` when the argument list is empty. Embedded
-/// directly in the remote command, that becomes one empty argument and makes
-/// cargo-mutants reject the invocation before its baseline runs.
+/// Expanding `"$@"` as part of the remote-command argument loop contributes
+/// zero words when the caller supplied no scope. The remote script shifts only
+/// its six transport fields, leaving a genuinely empty argument vector for
+/// cargo-mutants.
 #[test]
 fn remote_full_mutation_sweep_passes_no_phantom_argument() {
     let script = remote_mutation_script();
 
     assert!(
-        script.contains("if [ \"$#\" -gt 0 ]; then")
-            && script.contains("printf -v REMOTE_ARGS ' %q' \"$@\"")
-            && script.contains("./scripts/mutants-run.sh$REMOTE_ARGS"),
-        "the remote wrapper must append quoted arguments only when at least one exists"
+        script.contains("for remote_arg in")
+            && script.contains("shift 6")
+            && script.contains("./scripts/mutants-run.sh \"$@\""),
+        "the remote wrapper must preserve an empty post-transport argument vector"
     );
     assert!(
         !script.contains("$(printf '%q ' \"$@\")"),
@@ -280,12 +285,12 @@ fn remote_full_mutation_sweep_passes_no_phantom_argument() {
 }
 
 #[test]
-fn remote_mutation_sweep_defaults_to_homelab_1() {
+fn remote_mutation_sweep_defaults_to_homelab_2() {
     let script = remote_mutation_script();
 
     assert!(
-        script.contains("HOST=\"${DREP_MUTANTS_HOST:-homelab-1.local}\""),
-        "developer mutation offload must follow Linux CI ownership to homelab-1"
+        script.contains("HOST=\"${DREP_MUTANTS_HOST:-homelab-2.local}\""),
+        "developer mutation offload must follow mutation ownership to homelab-2"
     );
     assert!(
         script.contains(
@@ -295,7 +300,68 @@ fn remote_mutation_sweep_defaults_to_homelab_1() {
     );
     assert!(
         !script.contains("strix.local"),
-        "the executable mutation wrapper must not retain a Strix default"
+        "deprecated Strix must never return as the mutation default"
+    );
+}
+
+#[test]
+fn remote_mutation_session_owns_sync_run_and_fresh_result_mirroring() {
+    let script = remote_mutation_script();
+
+    assert!(
+        script.contains("DREP_MUTANTS_REMOTE_HOST_LOCK:-/srv/ci/drep-mutants/host.lock")
+            && script.contains("exec 9>\"$host_lock\"")
+            && script.contains("flock -E 75 -w \"$wait_seconds\" 9"),
+        "developer and hosted mutation must share the homelab-2 host lock"
+    );
+    assert!(
+        script.contains("DREP_MUTANTS_HOST_LOCK_WAIT_SECONDS")
+            && script.contains("DREP_MUTANTS_RSYNC_TIMEOUT_SECONDS")
+            && script.contains("--timeout=\"$RSYNC_IO_TIMEOUT_SECONDS\""),
+        "remote lock and transfer waits must remain explicitly bounded"
+    );
+    assert!(
+        script.contains("mkfifo \"$CONTROL_IN\" \"$CONTROL_OUT\"")
+            && script.contains("mutants-lock-ready:$RUN_TOKEN")
+            && script.contains("mutants-run-finished:$RUN_TOKEN")
+            && script.contains("DREP_MUTANTS_RESULT_TOKEN")
+            && script.contains(".run-token")
+            && script.contains("printf 'mirrored\\n'"),
+        "one remote lock session must prove that mirrored results belong to the current run"
+    );
+    assert!(
+        script.contains("kill \"$REMOTE_SESSION_PID\"")
+            && script.contains("wait \"$REMOTE_SESSION_PID\""),
+        "abnormal local exit must terminate and reap the remote lock session"
+    );
+    let session_start = script
+        .find("REMOTE_SESSION_PID=$!")
+        .expect("remote session PID assignment must exist");
+    let source_sync = script
+        .find("rsync -a --delete")
+        .expect("source synchronization must exist");
+    assert!(
+        session_start < source_sync,
+        "the host lock must be acquired before source synchronization begins"
+    );
+}
+
+#[test]
+fn mutation_runner_holds_the_configured_host_lock() {
+    let script = mutation_run_script();
+
+    assert!(
+        script.contains("DREP_MUTANTS_HOST_LOCK")
+            && script.contains("DREP_MUTANTS_HOST_LOCK_WAIT_SECONDS")
+            && script.contains("flock -w")
+            && script.contains("exec 9>\"$HOST_LOCK\""),
+        "a configured mutation host must serialize GitHub and laptop-offloaded sweeps"
+    );
+    assert!(
+        script.contains("DREP_MUTANTS_RESULT_TOKEN")
+            && script.contains("$OUT_DIR/mutants.out")
+            && script.contains("$OUT_DIR/.run-token"),
+        "each remote run must clear stale output and publish its own freshness token"
     );
 }
 

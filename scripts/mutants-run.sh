@@ -21,14 +21,46 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 OUT_DIR="$MUTANTS_OUT_DIR"
 mkdir -p "$OUT_DIR"
 
+# A dedicated mutation host may serve both GitHub and laptop-offloaded runs in
+# separate persistent workspaces. When its operator provides a shared lock,
+# serialize those otherwise independent checkouts before either can clean
+# scratch or start cargo-mutants. Local fallback runs leave the variable unset
+# and retain checkout-local behavior.
+HOST_LOCK="${DREP_MUTANTS_HOST_LOCK:-}"
+if [ -n "$HOST_LOCK" ]; then
+  case "$HOST_LOCK" in
+    /*) ;;
+    *)
+      echo "mutants-run: DREP_MUTANTS_HOST_LOCK must be absolute" >&2
+      exit 64
+      ;;
+  esac
+  HOST_LOCK_WAIT_SECONDS="${DREP_MUTANTS_HOST_LOCK_WAIT_SECONDS:-1800}"
+  case "$HOST_LOCK_WAIT_SECONDS" in
+    ''|*[!0-9]*)
+      echo "mutants-run: DREP_MUTANTS_HOST_LOCK_WAIT_SECONDS must be a non-negative integer" >&2
+      exit 64
+      ;;
+  esac
+  command -v flock >/dev/null || {
+    echo "mutants-run: flock is required for the configured host lock" >&2
+    exit 69
+  }
+  exec 9>"$HOST_LOCK"
+  if ! flock -w "$HOST_LOCK_WAIT_SECONDS" 9; then
+    echo "mutants-run: another mutation sweep owns $HOST_LOCK" >&2
+    exit 75
+  fi
+fi
+
 # Scratch copies go beside the checkout, not in the system temp dir.
 #
 # cargo-mutants copies the whole tree, target/ included, into `$TMPDIR` once per
 # job and deletes the copies only on a clean exit. A run that is cancelled or
-# hits the job timeout strands them, and Strix mounts `/tmp` as a tmpfs: in
-# another repository five such sweeps pinned 31 GiB of RAM with nothing else
-# running. The `github-drep` service's PrivateTmp lands on that same tmpfs.
-# Here the copies sit on the NVMe and a stale one costs disk.
+# hits the job timeout strands them. The former Strix host mounted `/tmp` as a
+# tmpfs; in another repository five such sweeps pinned 31 GiB of RAM with
+# nothing else running. Here the copies sit on disk and a stale one costs
+# storage instead of memory.
 #
 # A sibling of the checkout rather than a child, because cargo-mutants' copy
 # excludes only `mutants.out`: a scratch copy under `target/` would itself be
@@ -58,6 +90,17 @@ cleanup_mutation_scratch
 # for an entry that has already vanished. Losing stale scratch is harmless, so
 # cleanup ignores that status and the EXIT trap preserves the script's verdict.
 trap cleanup_mutation_scratch EXIT
+
+# A caller that mirrors results across machines needs proof that the output is
+# from this invocation, not a previous sweep. Clear only the exact prior result
+# tree, remove any old marker without following it, and publish the caller's
+# unique token immediately before cargo-mutants starts.
+find "$OUT_DIR/mutants.out" -depth -delete 2>/dev/null || true
+RESULT_TOKEN_FILE="$OUT_DIR/.run-token"
+find "$RESULT_TOKEN_FILE" -depth -delete 2>/dev/null || true
+if [ -n "${DREP_MUTANTS_RESULT_TOKEN:-}" ]; then
+  (umask 077; printf '%s\n' "$DREP_MUTANTS_RESULT_TOKEN" >"$RESULT_TOKEN_FILE")
+fi
 
 # --minimum-test-timeout: cargo-mutants derives the per-mutant timeout from the
 # unmutated baseline, which on a fast suite is a second or two. With -j running
