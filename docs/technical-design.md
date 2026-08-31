@@ -515,7 +515,7 @@ Homebrew publication. crates.io remains a separate `cargo publish --locked`
 operation because cargo-dist does not publish Rust crates. The arm64 Linux
 runner mapping names homelab-1's x86_64 host explicitly; cargo-dist uses that host
 fact to provision cargo-zigbuild and Zig instead of assuming native arm64.
-`.github/build-setup.yml` installs pinned Zig 0.16.0 and cargo-zigbuild 0.23.0
+`.github/build-setup.yml` installs pinned Zig 0.16.0 and cargo-zigbuild 0.23.3
 for that matrix row before cargo-dist's generated dependency step. That avoids
 the generated pip fallback, which homelab-1's PEP 668-managed Python rejects.
 The same setup installs stable Rust plus the matrix-selected target on macOS

@@ -67,6 +67,8 @@ const SAME_REPOSITORY_PR_GUARD: &str = "github.event_name == 'push' || github.ev
 const RUST_TOOLCHAIN_ACTION: &str =
     "dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c";
 const SETUP_ZIG_ACTION: &str = "mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29";
+const INSTALL_ACTION: &str = "taiki-e/install-action@1ed6d7be6168f6c9046541087ff549b6bc581fdf";
+const CARGO_ZIGBUILD_TOOL: &str = "cargo-zigbuild@0.23.3";
 struct ReleaseTarget {
     triple: &'static str,
     runner: &'static str,
@@ -399,16 +401,17 @@ fn arm64_linux_cross_build_tools_are_reproducibly_provisioned() {
     assert!(
         setup.contains(&format!("uses: {SETUP_ZIG_ACTION}"))
             && setup.contains("version: 0.16.0")
-            && setup
-                .contains("uses: taiki-e/install-action@6cd13508893c0e7eab5f273c2575d3859bd7229a")
-            && setup.contains("tool: cargo-zigbuild@0.23.0"),
+            && setup.contains(&format!("uses: {INSTALL_ACTION}"))
+            && setup.contains(&format!("tool: {CARGO_ZIGBUILD_TOOL}")),
         "only the arm64 Linux lane must install the pinned Zig cross-build tools"
     );
 
     let workflow = release_workflow();
     let local_build = workflow_job(&workflow, "build-local-artifacts");
     assert!(
-        local_build.contains(SETUP_ZIG_ACTION) && local_build.contains("cargo-zigbuild@0.23.0"),
+        local_build.contains(SETUP_ZIG_ACTION)
+            && local_build.contains(INSTALL_ACTION)
+            && local_build.contains(CARGO_ZIGBUILD_TOOL),
         "the generated release workflow must include the configured cross-build setup"
     );
 }

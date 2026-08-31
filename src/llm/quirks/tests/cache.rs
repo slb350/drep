@@ -270,6 +270,31 @@ fn saving_reports_a_directory_it_cannot_create() {
     assert!(err.to_string().contains("could not write"), "got {err}");
 }
 
+#[cfg(unix)]
+#[test]
+fn saving_never_writes_through_a_predictable_temporary_symlink() {
+    use std::os::unix::fs::symlink;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = cache_path(&dir);
+    let predictable = path.with_extension("toml.tmp");
+    let outside = dir.path().join("outside.txt");
+    std::fs::write(&outside, "keep me").expect("outside seed");
+    symlink(&outside, &predictable).expect("planted sibling symlink");
+
+    Registry::distil(DOCUMENT, 0)
+        .expect("distils")
+        .save(&path)
+        .expect("saves without using the planted name");
+
+    assert_eq!(
+        std::fs::read_to_string(&outside).expect("outside body"),
+        "keep me",
+        "cache publication must not write through an attacker-planted sibling symlink"
+    );
+    assert!(path.is_file(), "the cache must still be published");
+}
+
 #[test]
 fn the_cache_keeps_only_the_two_facts_drep_reads() {
     // The reason the document is distilled rather than stored: models.dev is

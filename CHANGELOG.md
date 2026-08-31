@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.7.2] - 2026-08-31
+
+### Changed
+
+- Refreshed the Rust 1.88-compatible lockfile, including `open-agent-sdk` 0.11.1, and updated the release and mutation toolchain to `taiki-e/install-action` 2.87.2 and `cargo-zigbuild` 0.23.3.
+
+### Fixed
+
+- Model-quirks cache publication now uses a random, exclusively created sibling file, so an attacker-planted predictable temporary symlink cannot redirect the fetched registry into another user-writable file.
+- Foreign global hook detection now requires the repository hook path to be the command's executable word, so harmless mentions such as `echo hooks/pre-push` cannot be mistaken for a working forwarder that enforces the commit gate.
+- The homelab-1 release runner now exposes its cached `dist` to job steps. The runner's `.path` file overrides the service unit's `PATH` for every step and was missing the Cargo bin directory, so the v2.7.1 global artifact job failed with `dist: command not found` after all four local builds had succeeded. The `ExecStartPre` gate now asserts that entry alongside dist's version, so the runner refuses to start rather than failing a release.
+
 ## [2.7.1] - 2026-08-29
 
 ### Fixed
