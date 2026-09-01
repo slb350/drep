@@ -178,11 +178,7 @@ fn maintained_actions_are_pinned_to_full_commit_shas() {
             );
         }
     };
-    for path in [
-        ".github/workflows/rust.yml",
-        ".github/workflows/mutants.yml",
-        ".github/build-setup.yml",
-    ] {
+    for path in [".github/workflows/rust.yml", ".github/build-setup.yml"] {
         assert_pinned(path);
     }
 }

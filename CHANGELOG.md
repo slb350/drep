@@ -49,13 +49,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- Full mutation CI now runs on the repository-scoped `homelab-legion` runner,
-  while Linux validation and release remain on `homelab-1`. Developer mutation
-  offload remains on `homelab-2`; this cutover changes hosted CI only. The job's
-  bounded timeout is now seven hours. A 30-mutant sample using the same Legion
-  service limits, seven-worker setting, and tracked mutation command took 6
-  minutes 4 seconds; extrapolating that sample across the current 1,491-mutant
-  set puts a healthy sweep beyond the former three-hour ceiling.
+- Mutation testing is no longer a GitHub Actions workload. The staged commit
+  gate and explicit local or offloaded sweep commands remain available, but a
+  push to `main` no longer starts the multi-hour full sweep or consumes a CI
+  runner.
 
 - The per-mutant test-time floor is now 120 seconds. During the first full
   seven-worker Legion sweep, seven independent test phases reached the former

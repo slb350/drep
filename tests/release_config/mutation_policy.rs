@@ -1,8 +1,4 @@
-use super::{common, rust_workflow, workflow_job};
-
-fn mutation_workflow() -> String {
-    common::without_comments(".github/workflows/mutants.yml")
-}
+use super::{common, rust_workflow};
 
 fn remote_mutation_script() -> String {
     common::without_comments("scripts/mutants-remote.sh")
@@ -16,78 +12,19 @@ fn mutation_common_script() -> String {
     common::without_comments("scripts/mutants-common.sh")
 }
 
-/// Full mutation testing runs once, after trusted main validation succeeds.
-///
-/// A staged sweep cannot notice a test-only change weakening coverage of
-/// production code outside the diff, so the full sweep remains an automated
-/// main-branch gate. The public repository must never route pull-request code
-/// to homelab-1, and the hosted workflow must not duplicate its hours of work.
+/// Mutation testing is an explicit local tool, not a hosted CI workload.
 #[test]
-fn mutation_ci_is_main_only_on_the_pinned_homelab_runner() {
+fn mutation_testing_is_absent_from_github_ci() {
     let validation = rust_workflow();
     assert!(
         !validation.contains("\n  mutants:\n"),
-        "the validation workflow must not duplicate the full mutation sweep"
-    );
-
-    let workflow = mutation_workflow();
-    let trigger = workflow
-        .split_once("\njobs:")
-        .map(|(trigger, _)| trigger)
-        .expect("the mutation workflow must declare jobs");
-    assert!(
-        trigger.contains("workflow_run:")
-            && trigger.contains("workflows: [rust]")
-            && trigger.contains("types: [completed]")
-            && trigger.contains("branches: [main]"),
-        "full mutation CI must follow completed main-branch Rust validation"
+        "the validation workflow must not run mutation testing"
     );
     assert!(
-        !trigger.contains("pull_request")
-            && !trigger.contains("workflow_dispatch")
-            && !trigger.contains("\n  push:"),
-        "public or manually selected code must never be routed to the homelab runner"
-    );
-
-    let mutants = workflow_job(&workflow, "mutants");
-    assert!(
-        mutants.contains("github.event.workflow_run.event == 'push'")
-            && mutants.contains("github.event.workflow_run.conclusion == 'success'")
-            && mutants.contains("ref: ${{ github.event.workflow_run.head_sha }}"),
-        "mutation testing must follow a successful push validation and check out that exact commit"
-    );
-    assert!(
-        mutants.contains("runs-on: [self-hosted, linux, x64, homelab-legion, drep-mutants]"),
-        "the full sweep must require the dedicated homelab-legion mutation label"
-    );
-    let timeout_lines = mutants
-        .lines()
-        .map(str::trim)
-        .filter(|line| line.starts_with("timeout-minutes:"))
-        .collect::<Vec<_>>();
-    assert_eq!(
-        timeout_lines,
-        ["timeout-minutes: 420"],
-        "the dedicated mutation sweep needs one exact measured timeout while still releasing a wedged runner"
-    );
-    assert!(
-        mutants.contains("tool: cargo-mutants@27.1.0"),
-        "the mutation gate must retain its verified cargo-mutants version"
-    );
-    assert!(
-        mutants.contains("components: clippy"),
-        "the mutation runner must install Clippy because the suite exercises configured Rust compilers"
-    );
-    assert!(
-        mutants.contains("clean: false")
-            && mutants
-                .contains("git status --porcelain=v1 --untracked-files=all --ignored=matching")
-            && mutants.contains("^!! target/$"),
-        "the warm target cache must be retained only behind a fail-closed workspace check"
-    );
-    assert!(
-        mutants.contains("./scripts/mutants-run.sh"),
-        "homelab CI and local hooks must share one mutation verdict implementation"
+        !std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join(".github/workflows/mutants.yml")
+            .exists(),
+        "a standalone mutation workflow would still trigger after main validation"
     );
 }
 
