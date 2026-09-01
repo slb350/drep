@@ -26,7 +26,7 @@ jobs:
   # this main-only lane is the comprehensive backstop.
   mutants:
     if: github.event.workflow_run.event == 'push' && github.event.workflow_run.conclusion == 'success'
-    runs-on: [self-hosted, linux, x64, homelab-2, drep-mutants]
+    runs-on: [self-hosted, linux, x64, homelab-legion, drep-mutants]
     # Mutation has its own bounded runner. Validation and release retain the
     # drep-linux owner on homelab-1, so a full sweep cannot occupy their only
     # runner or compete with production workloads.

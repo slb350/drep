@@ -57,8 +57,8 @@ fn mutation_ci_is_main_only_on_the_pinned_homelab_runner() {
         "mutation testing must follow a successful push validation and check out that exact commit"
     );
     assert!(
-        mutants.contains("runs-on: [self-hosted, linux, x64, homelab-2, drep-mutants]"),
-        "the full sweep must require the dedicated homelab-2 mutation label"
+        mutants.contains("runs-on: [self-hosted, linux, x64, homelab-legion, drep-mutants]"),
+        "the full sweep must require the dedicated homelab-legion mutation label"
     );
     assert!(
         mutants.contains("timeout-minutes: 180"),

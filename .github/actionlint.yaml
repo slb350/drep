@@ -2,7 +2,7 @@ self-hosted-runner:
   labels:
     - drep-linux
     - drep-macos
-    - homelab-2
+    - homelab-legion
     - drep-mutants
 
 # cargo-dist owns release.yml. Keep actionlint's workflow and expression checks,

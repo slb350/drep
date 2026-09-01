@@ -47,6 +47,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Full mutation CI now runs on the repository-scoped `homelab-legion` runner,
+  while Linux validation and release remain on `homelab-1`. Developer mutation
+  offload remains on `homelab-2`; this cutover changes hosted CI only.
+
 - An absent `api_key` now omits the protocol authentication header instead of
   sending `Bearer not-needed` or `x-api-key: not-needed`, so a custom header can
   be the complete authentication scheme. `drep doctor` labels the credential
