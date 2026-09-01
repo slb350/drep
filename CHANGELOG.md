@@ -55,6 +55,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   minutes 4 seconds; extrapolating that sample across the current 1,491-mutant
   set puts a healthy sweep beyond the former three-hour ceiling.
 
+- The per-mutant test-time floor is now 120 seconds. During the first full
+  seven-worker Legion sweep, seven independent test phases reached the former
+  60-second floor together after 47-61 second parallel builds, while adjacent
+  mutants completed the same suite in 24-54 seconds. The higher floor provides
+  headroom for the observed shared-capacity delays instead of classifying them
+  as mutation-induced nontermination.
+
 - An absent `api_key` now omits the protocol authentication header instead of
   sending `Bearer not-needed` or `x-api-key: not-needed`, so a custom header can
   be the complete authentication scheme. `drep doctor` labels the credential

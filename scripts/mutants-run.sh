@@ -114,7 +114,7 @@ if [ -n "${DREP_MUTANTS_RESULT_TOKEN:-}" ]; then
   (umask 077; printf '%s\n' "$DREP_MUTANTS_RESULT_TOKEN" >"$RESULT_TOKEN_FILE")
 fi
 
-cargo mutants -j "${MUTANTS_JOBS:-4}" --no-shuffle --minimum-test-timeout 60 \
+cargo mutants -j "${MUTANTS_JOBS:-4}" --no-shuffle --minimum-test-timeout 120 \
   --cap-lints true --output "$OUT_DIR" "$@" && status=0 || status=$?
 
 MISSED="$OUT_DIR/mutants.out/missed.txt"

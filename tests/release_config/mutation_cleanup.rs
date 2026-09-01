@@ -43,6 +43,7 @@ fn mutation_scratch_cleanup_preserves_adjacent_state() {
     let stale_test = scratch.join("drep-diff-test-stale/nested");
     let adjacent = scratch.join("cargo-mutants-stale.tmp.keep");
     let outside = temp.path().join("outside");
+    let captured_args = temp.path().join("cargo-args");
     std::fs::create_dir_all(&stale).expect("stale scratch tree");
     std::fs::write(stale.join("file"), "stale").expect("stale scratch file");
     std::fs::create_dir_all(&stale_test).expect("stale test scratch tree");
@@ -57,11 +58,12 @@ fn mutation_scratch_cleanup_preserves_adjacent_state() {
     let output = std::process::Command::new("bash")
         .args([
             "-c",
-            "cargo() { mkdir -p \"$TMPDIR/cargo-mutants-trap.tmp/nested\" \"$TMPDIR/drep-diff-test-trap/nested\"; }; export -f cargo; \"$1\"",
+            "cargo() { mkdir -p \"$TMPDIR/cargo-mutants-trap.tmp/nested\" \"$TMPDIR/drep-diff-test-trap/nested\"; printf '%s\\n' \"$@\" >\"$DREP_MUTANTS_CAPTURE_ARGS\"; }; export -f cargo; \"$1\"",
             "mutation-cleanup-test",
             &script,
         ])
         .env("DREP_MUTANTS_TMPDIR", &scratch)
+        .env("DREP_MUTANTS_CAPTURE_ARGS", &captured_args)
         .env("MUTANTS_OUT_DIR", temp.path().join("out"))
         .env_remove("DREP_MUTANTS_HOST_LOCK")
         .env_remove("DREP_MUTANTS_HOST_LOCK_WAIT_SECONDS")
@@ -81,4 +83,18 @@ fn mutation_scratch_cleanup_preserves_adjacent_state() {
     assert!(!scratch.join("cargo-mutants-link.tmp").exists());
     assert!(adjacent.join("keep").exists());
     assert!(outside.join("keep").exists());
+
+    let args = std::fs::read_to_string(captured_args).expect("captured cargo arguments");
+    let timeout_values = args
+        .lines()
+        .collect::<Vec<_>>()
+        .windows(2)
+        .filter(|pair| pair[0] == "--minimum-test-timeout")
+        .map(|pair| pair[1])
+        .collect::<Vec<_>>();
+    assert_eq!(
+        timeout_values,
+        ["120"],
+        "the executed mutation command needs one exact test-timeout floor above the observed 60-second capacity false positives"
+    );
 }
