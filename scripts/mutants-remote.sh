@@ -52,7 +52,7 @@ cd "$(git rev-parse --show-toplevel)"
 # shellcheck source=scripts/mutants-common.sh
 . scripts/mutants-common.sh
 
-HOST="${DREP_MUTANTS_HOST:-homelab-2.local}"
+HOST="${DREP_MUTANTS_HOST:-192.168.68.72}"
 REMOTE_DIR="${DREP_MUTANTS_DIR:-.cache/drep-mutants/$(basename "$PWD")}"
 REMOTE="$HOST:$REMOTE_DIR"
 JOBS="${MUTANTS_JOBS:-4}"

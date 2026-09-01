@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Trusted pushes to `main` now run mutation testing only for production code in
+  the complete pushed diff, after Linux and macOS validation accept the same
+  revision. The exhaustive 1,490-mutant sweep remains on Legion as a weekly
+  Sunday backstop and an explicit default-branch manual workflow instead of
+  consuming several hours after every ordinary push. A controlled 28-mutant
+  Legion benchmark took 8m50s at seven workers, 7m48s at five, 7m20s at four,
+  6m45s at three, and 6m49s at two; three workers were fastest and stayed below
+  the service's 9 GiB memory-reclaim threshold. Developer mutation offload now
+  defaults to Legion's reserved Ethernet address too; homelab-2 is no longer a
+  hosted or developer mutation owner.
+
 ## [2.8.0] - 2026-08-31
 
 ### Security
@@ -50,8 +63,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - Full mutation CI now runs on the repository-scoped `homelab-legion` runner,
-  while Linux validation and release remain on `homelab-1`. Developer mutation
-  offload remains on `homelab-2`; this cutover changes hosted CI only. The job's
+  while Linux validation and release remain on `homelab-1`. At the 2.8.0 tag,
+  developer mutation offload still defaulted to `homelab-2`. The job's
   bounded timeout is now seven hours. A 30-mutant sample using the same Legion
   service limits, seven-worker setting, and tracked mutation command took 6
   minutes 4 seconds; extrapolating that sample across the current 1,491-mutant

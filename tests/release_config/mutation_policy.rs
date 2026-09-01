@@ -16,18 +16,37 @@ fn mutation_common_script() -> String {
     common::without_comments("scripts/mutants-common.sh")
 }
 
-/// Full mutation testing runs once, after trusted main validation succeeds.
+/// Trusted main pushes mutate only their production diff after validation.
 ///
-/// A staged sweep cannot notice a test-only change weakening coverage of
-/// production code outside the diff, so the full sweep remains an automated
-/// main-branch gate. The public repository must never route pull-request code
-/// to homelab-1, and the hosted workflow must not duplicate its hours of work.
+/// The exhaustive sweep remains a scheduled and explicitly dispatched
+/// backstop. It must not multiply all 1,490 mutants after every ordinary push,
+/// and pull-request code must never reach the homelab runner.
 #[test]
-fn mutation_ci_is_main_only_on_the_pinned_homelab_runner() {
+fn mutation_ci_splits_main_diff_checks_from_exhaustive_sweeps() {
     let validation = rust_workflow();
+    let diff_mutants = workflow_job(&validation, "mutants-diff");
     assert!(
-        !validation.contains("\n  mutants:\n"),
-        "the validation workflow must not duplicate the full mutation sweep"
+        diff_mutants.contains("needs: [linux, test-macos]")
+            && diff_mutants
+                .contains("if: github.event_name == 'push' && github.ref == 'refs/heads/main'")
+            && diff_mutants
+                .contains("runs-on: [self-hosted, linux, x64, homelab-legion, drep-mutants]"),
+        "routine mutation must follow successful trusted validation on Legion"
+    );
+    assert!(
+        diff_mutants.contains("fetch-depth: 0")
+            && diff_mutants.contains("clean: false")
+            && diff_mutants
+                .contains("git status --porcelain=v1 --untracked-files=all --ignored=matching")
+            && diff_mutants.contains("^!! target/$"),
+        "the diff lane needs complete history and a fail-closed warm workspace"
+    );
+    assert!(
+        diff_mutants.contains("tool: cargo-mutants@27.1.0")
+            && diff_mutants.contains("components: clippy")
+            && diff_mutants
+                .contains("./scripts/mutants-run.sh --in-diff \"${{ github.event.before }}\""),
+        "routine CI must run the shared verdict over the complete pushed diff"
     );
 
     let workflow = mutation_workflow();
@@ -36,25 +55,24 @@ fn mutation_ci_is_main_only_on_the_pinned_homelab_runner() {
         .map(|(trigger, _)| trigger)
         .expect("the mutation workflow must declare jobs");
     assert!(
-        trigger.contains("workflow_run:")
-            && trigger.contains("workflows: [rust]")
-            && trigger.contains("types: [completed]")
-            && trigger.contains("branches: [main]"),
-        "full mutation CI must follow completed main-branch Rust validation"
+        trigger.contains("workflow_dispatch:")
+            && trigger.contains("schedule:")
+            && trigger.contains("cron:"),
+        "exhaustive mutation must be scheduled and manually dispatchable"
     );
     assert!(
-        !trigger.contains("pull_request")
-            && !trigger.contains("workflow_dispatch")
+        !trigger.contains("workflow_run:")
+            && !trigger.contains("pull_request")
             && !trigger.contains("\n  push:"),
-        "public or manually selected code must never be routed to the homelab runner"
+        "ordinary pushes and pull requests must not start an exhaustive sweep"
     );
 
     let mutants = workflow_job(&workflow, "mutants");
     assert!(
-        mutants.contains("github.event.workflow_run.event == 'push'")
-            && mutants.contains("github.event.workflow_run.conclusion == 'success'")
-            && mutants.contains("ref: ${{ github.event.workflow_run.head_sha }}"),
-        "mutation testing must follow a successful push validation and check out that exact commit"
+        mutants.contains(
+            "if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)"
+        ) && mutants.contains("ref: ${{ github.sha }}"),
+        "manual full sweeps must fail closed outside the default branch and use the triggering SHA"
     );
     assert!(
         mutants.contains("runs-on: [self-hosted, linux, x64, homelab-legion, drep-mutants]"),
@@ -87,7 +105,7 @@ fn mutation_ci_is_main_only_on_the_pinned_homelab_runner() {
     );
     assert!(
         mutants.contains("./scripts/mutants-run.sh"),
-        "homelab CI and local hooks must share one mutation verdict implementation"
+        "exhaustive CI and local hooks must share one mutation verdict implementation"
     );
 }
 
@@ -114,12 +132,12 @@ fn remote_full_mutation_sweep_passes_no_phantom_argument() {
 }
 
 #[test]
-fn remote_mutation_sweep_defaults_to_homelab_2() {
+fn remote_mutation_sweep_defaults_to_legion_ethernet() {
     let script = remote_mutation_script();
 
     assert!(
-        script.contains("HOST=\"${DREP_MUTANTS_HOST:-homelab-2.local}\""),
-        "developer mutation offload must follow mutation ownership to homelab-2"
+        script.contains("HOST=\"${DREP_MUTANTS_HOST:-192.168.68.72}\""),
+        "developer mutation offload must follow hosted mutation ownership to Legion Ethernet"
     );
     assert!(
         script.contains(
@@ -128,8 +146,8 @@ fn remote_mutation_sweep_defaults_to_homelab_2() {
         "developer mutation offload must not collide with the protected runner checkout"
     );
     assert!(
-        !script.contains("strix.local"),
-        "deprecated Strix must never return as the mutation default"
+        !script.contains("homelab-2.local") && !script.contains("strix.local"),
+        "retired mutation hosts must never return as the offload default"
     );
 }
 
@@ -141,7 +159,7 @@ fn remote_mutation_session_owns_sync_run_and_fresh_result_mirroring() {
         script.contains("DREP_MUTANTS_REMOTE_HOST_LOCK:-/srv/ci/drep-mutants/host.lock")
             && script.contains("exec 9>\"$host_lock\"")
             && script.contains("flock -E 75 -w \"$wait_seconds\" 9"),
-        "developer and hosted mutation must share the homelab-2 host lock"
+        "developer and hosted mutation must share the Legion host lock"
     );
     assert!(
         script.contains("DREP_MUTANTS_HOST_LOCK_WAIT_SECONDS")

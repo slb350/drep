@@ -587,13 +587,18 @@ Cargo binary caching. The action's default save cleanup removes every binary
 that existed when the job began, but these self-hosted runners keep pinned
 publisher tools in that same Cargo bin directory. Registry, Git and target
 caching remain enabled without allowing validation to delete host-owned tools.
-`.github/workflows/mutants.yml` follows the
-successful `rust` workflow for a push to `main` and checks out that exact SHA on
-the same hardened homelab-1 service labelled `drep-linux`; pull-request workflow
-completions cannot trigger it. The mutation workflow keeps `target/` warm,
-rejects any other persistent workspace state, and pins `cargo-mutants` 27.1.0;
-`scripts/mutants-run.sh` remains the single definition of the mutation verdict.
+After the Linux and macOS jobs accept a trusted push to `main`, `rust.yml`
+mutates only production code in the complete pushed diff on the dedicated
+Legion runner. It fetches full history so `github.event.before` is an exact
+base rather than assuming one pushed commit. `.github/workflows/mutants.yml`
+owns the exhaustive sweep: it runs weekly or by explicit dispatch, refuses a
+manual ref outside the default branch, and never triggers for a push or pull
+request. Both mutation lanes keep `target/` warm, reject any other persistent
+workspace state, and pin `cargo-mutants` 27.1.0. `scripts/mutants-run.sh`
+remains the single definition of the verdict.
+
 Developer offload through `scripts/mutants-remote.sh` uses the SSH account's
-`~/.cache/drep-mutants/<repo>` tree instead. It must not use `~/ci`: on
-homelab-1 that name resolves into `/srv/ci`, whose runner-owned checkout is a
-separate trust and permission boundary.
+`~/.cache/drep-mutants/<repo>` tree instead of the protected runner checkout.
+It defaults to Legion's reserved Ethernet address and shares the host lock with
+hosted mutation, so the two entrypoints cannot run concurrently. Homelab-2 is
+no longer a Drep mutation owner.
