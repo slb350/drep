@@ -22,6 +22,23 @@ fn a_missing_file_loads_as_an_empty_store() {
 }
 
 #[test]
+fn a_store_read_error_is_not_treated_as_a_missing_file() {
+    // A directory at the configured file path reliably produces a read error
+    // other than NotFound. Collapsing every read failure to an empty store
+    // would hide permissions, filesystem damage, and configuration mistakes.
+    let (_dir, path) = temp_store();
+    std::fs::create_dir_all(&path).expect("create directory at store path");
+
+    let err = AuthStore::load(&path).expect_err("a real read failure is fatal");
+
+    assert!(
+        matches!(err, AuthError::Read(ref error_path, ref source)
+            if error_path == &path && source.kind() != std::io::ErrorKind::NotFound),
+        "expected the original non-NotFound read error, got {err:?}"
+    );
+}
+
+#[test]
 fn a_stored_key_round_trips_through_the_file() {
     let (_dir, path) = temp_store();
     let mut store = AuthStore::new();
@@ -71,6 +88,25 @@ fn the_saved_file_is_readable_only_by_its_owner() {
     let mut store = AuthStore::new();
     store.set("https://e/v1", "k").expect("set");
     store.save(&path).expect("save");
+
+    let mode = std::fs::metadata(&path)
+        .expect("metadata")
+        .permissions()
+        .mode();
+    assert_eq!(mode & 0o777, 0o600, "got {:o}", mode & 0o777);
+}
+
+#[cfg(unix)]
+#[test]
+fn restrict_narrows_an_existing_file() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let (_dir, path) = temp_store();
+    std::fs::create_dir_all(path.parent().expect("parent")).expect("create parent");
+    std::fs::write(&path, "secret").expect("write fixture");
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).expect("widen fixture");
+
+    restrict(&path, 0o600).expect("restrict existing file");
 
     let mode = std::fs::metadata(&path)
         .expect("metadata")
