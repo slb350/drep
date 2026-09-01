@@ -30,7 +30,7 @@ jobs:
     # Mutation has its own bounded runner. Validation and release retain the
     # drep-linux owner on homelab-1, so a full sweep cannot occupy their only
     # runner or compete with production workloads.
-    timeout-minutes: 180
+    timeout-minutes: 420
     steps:
       # Keeping target/ makes the mutation-host run take minutes instead of
       # hours. Everything else must still be an exact checkout: unexpected

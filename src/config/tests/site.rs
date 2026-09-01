@@ -109,6 +109,20 @@ fn an_unreadable_site_file_is_fatal_rather_than_treated_as_absent() {
     );
 }
 
+/// Failure to inspect a policy name is not evidence that the policy is absent.
+#[test]
+fn a_site_metadata_error_is_fatal_rather_than_treated_as_absent() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let path = temp.path().join("s".repeat(1024));
+
+    let loaded = site::load(&path);
+
+    assert!(
+        matches!(loaded, Err(SiteConfigError::Read(_, _))),
+        "a name that cannot be inspected must fail closed: {loaded:?}"
+    );
+}
+
 /// A dangling symlink is a policy name that exists but cannot be read.
 ///
 /// `path_from` deliberately uses `symlink_metadata` so that name keeps the

@@ -54,3 +54,16 @@ pub(crate) fn output_schema_bytes() -> &'static [u8] {
             .expect("the in-memory response schema is always serializable")
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn encoded_schema_matches_the_structured_schema() {
+        let encoded: serde_json::Value =
+            serde_json::from_slice(output_schema_bytes()).expect("schema bytes are valid JSON");
+
+        assert_eq!(encoded, output_schema());
+    }
+}

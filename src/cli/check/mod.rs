@@ -298,14 +298,11 @@ pub(crate) async fn run_against(
             // Otherwise Drop refunds the pending slot. Pure failures did not
             // complete a review, and a clean answer consumes no remediation round.
         }
-        semantic::LiveReview::Unbounded
-            if should_report_unlimited(args.unlimited_reviews, live_answered) =>
-        {
-            review_activity = Some(ReviewActivity::Unlimited);
+        semantic::LiveReview::Unbounded => {
+            review_activity = should_report_unlimited(args.unlimited_reviews, live_answered)
+                .then_some(ReviewActivity::Unlimited);
         }
-        semantic::LiveReview::Skip
-        | semantic::LiveReview::Unbounded
-        | semantic::LiveReview::Denied { .. } => {}
+        semantic::LiveReview::Skip | semantic::LiveReview::Denied { .. } => {}
     }
     llm_result.merge(live_result);
 

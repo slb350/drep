@@ -181,6 +181,20 @@ mod tests {
     }
 
     #[test]
+    fn a_store_read_error_is_not_treated_as_an_absent_store() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join(DEFAULT_PATH);
+        std::fs::create_dir_all(&path).expect("directory in place of store file");
+
+        let err = Store::load(dir.path()).expect_err("a present unreadable store must fail");
+
+        assert!(
+            err.to_string().contains("could not read"),
+            "the error should identify the failed read: {err:#}"
+        );
+    }
+
+    #[test]
     fn applying_a_recorded_fingerprint_suppresses_the_same_source_context() {
         let hunks = vec![vec![Hunk::whole_file(
             PathBuf::from("src/lib.rs"),

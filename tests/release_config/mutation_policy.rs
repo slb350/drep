@@ -60,9 +60,15 @@ fn mutation_ci_is_main_only_on_the_pinned_homelab_runner() {
         mutants.contains("runs-on: [self-hosted, linux, x64, homelab-legion, drep-mutants]"),
         "the full sweep must require the dedicated homelab-legion mutation label"
     );
-    assert!(
-        mutants.contains("timeout-minutes: 180"),
-        "the dedicated mutation sweep needs bounded completion headroom while still releasing a wedged runner"
+    let timeout_lines = mutants
+        .lines()
+        .map(str::trim)
+        .filter(|line| line.starts_with("timeout-minutes:"))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        timeout_lines,
+        ["timeout-minutes: 420"],
+        "the dedicated mutation sweep needs one exact measured timeout while still releasing a wedged runner"
     );
     assert!(
         mutants.contains("tool: cargo-mutants@27.1.0"),

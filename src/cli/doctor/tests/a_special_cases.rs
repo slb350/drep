@@ -1,7 +1,7 @@
 //! Output-sink behaviour: `doctor` is diagnosis and must not turn a writer
 //! failure into a gate failure.
 
-use crate::cli::doctor::{DoctorArgs, run};
+use crate::cli::doctor::{DoctorArgs, classify_output};
 
 /// A sink that refuses every write with `BrokenPipe`, as a closed pipe does.
 struct ClosedPipe;
@@ -46,34 +46,17 @@ async fn a_closed_pipe_is_not_a_failure_but_a_real_write_error_is() {
         config: None,
     };
 
-    // `run` owns the classification; `run_to` propagates, which is why the
-    // pipe case is asserted through `run`.
     let mut sink = ClosedPipe;
-    assert!(
-        super::run_scoped(&mut sink, &args, dir.path())
-            .await
-            .is_err(),
-        "run_to reports the write failure to its caller"
-    );
+    let pipe_result = super::run_scoped(&mut sink, &args, dir.path()).await;
     assert_eq!(
-        run(&args).await.expect("stdout is a real sink here"),
+        classify_output(pipe_result).expect("a closed pipe is clean"),
         crate::Exit::Clean
     );
 
     let mut sink = BadDisk;
-    let err = super::run_scoped(&mut sink, &args, dir.path())
-        .await
-        .expect_err("a real IO error must surface");
+    let disk_result = super::run_scoped(&mut sink, &args, dir.path()).await;
     assert!(
-        !crate::cli::doctor::is_broken_pipe(&err),
-        "a disk error is not a closed pipe"
-    );
-    let mut sink = ClosedPipe;
-    let err = super::run_scoped(&mut sink, &args, dir.path())
-        .await
-        .expect_err("closed pipe");
-    assert!(
-        crate::cli::doctor::is_broken_pipe(&err),
-        "and a closed pipe is"
+        classify_output(disk_result).is_err(),
+        "a real output failure must not be classified as success"
     );
 }

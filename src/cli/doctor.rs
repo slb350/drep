@@ -49,7 +49,13 @@ pub struct DoctorArgs {
 /// `Ok(Exit::Clean)`; failures to produce the report remain ordinary errors.
 pub async fn run(args: &DoctorArgs) -> Result<Exit> {
     let mut out = std::io::stdout().lock();
-    match run_to(&mut out, args).await {
+    classify_output(run_to(&mut out, args).await)
+}
+
+/// Treat a reader closing stdout as a clean diagnostic exit while preserving
+/// every other report failure.
+fn classify_output(result: Result<Exit>) -> Result<Exit> {
+    match result {
         Ok(exit) => Ok(exit),
         // `drep doctor | head -5` closes the pipe under us. That is the
         // reader's choice, not a diagnostic failure, and turning it into exit 2
@@ -60,7 +66,7 @@ pub async fn run(args: &DoctorArgs) -> Result<Exit> {
 }
 
 /// Whether `err` is the reader having closed the pipe.
-pub(crate) fn is_broken_pipe(err: &anyhow::Error) -> bool {
+fn is_broken_pipe(err: &anyhow::Error) -> bool {
     err.downcast_ref::<std::io::Error>()
         .is_some_and(|io| io.kind() == std::io::ErrorKind::BrokenPipe)
 }

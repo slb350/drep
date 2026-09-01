@@ -49,7 +49,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Full mutation CI now runs on the repository-scoped `homelab-legion` runner,
   while Linux validation and release remain on `homelab-1`. Developer mutation
-  offload remains on `homelab-2`; this cutover changes hosted CI only.
+  offload remains on `homelab-2`; this cutover changes hosted CI only. The job's
+  bounded timeout is now seven hours. A 30-mutant sample using the same Legion
+  service limits, seven-worker setting, and tracked mutation command took 6
+  minutes 4 seconds; extrapolating that sample across the current 1,491-mutant
+  set puts a healthy sweep beyond the former three-hour ceiling.
 
 - An absent `api_key` now omits the protocol authentication header instead of
   sending `Bearer not-needed` or `x-api-key: not-needed`, so a custom header can
