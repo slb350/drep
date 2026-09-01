@@ -44,9 +44,15 @@ fn mutation_ci_splits_main_diff_checks_from_exhaustive_sweeps() {
     assert!(
         diff_mutants.contains("tool: cargo-mutants@27.1.0")
             && diff_mutants.contains("components: clippy")
-            && diff_mutants
-                .contains("./scripts/mutants-run.sh --in-diff \"${{ github.event.before }}\""),
-        "routine CI must run the shared verdict over the complete pushed diff"
+            && diff_mutants.contains("PUSH_BASE: ${{ github.event.before }}")
+            && diff_mutants.contains("PUSH_HEAD: ${{ github.sha }}")
+            && diff_mutants.contains(
+                "git diff --no-ext-diff --unified=0 \"$PUSH_BASE\" \"$PUSH_HEAD\" > \"$RUNNER_TEMP/pushed.diff\""
+            )
+            && diff_mutants.contains(
+                "./scripts/mutants-run.sh --in-diff \"$RUNNER_TEMP/pushed.diff\""
+            ),
+        "routine CI must materialize and run the shared verdict over the complete pushed diff"
     );
 
     let workflow = mutation_workflow();

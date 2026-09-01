@@ -116,4 +116,13 @@ jobs:
         with:
           tool: cargo-mutants@27.1.0
 
-      - run: ./scripts/mutants-run.sh --in-diff "${{ github.event.before }}"
+      - name: Materialize pushed diff
+        shell: bash
+        env:
+          PUSH_BASE: ${{ github.event.before }}
+          PUSH_HEAD: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          git diff --no-ext-diff --unified=0 "$PUSH_BASE" "$PUSH_HEAD" > "$RUNNER_TEMP/pushed.diff"
+
+      - run: ./scripts/mutants-run.sh --in-diff "$RUNNER_TEMP/pushed.diff"
