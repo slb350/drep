@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Java, Kotlin, Scala and Groovy are registered languages. A repository of
+  `.java` files previously reported "No source files drep recognises were found
+  here" and `drep check` exited 0 having sent nothing to the model, because
+  unknown extensions are dropped at language grouping ahead of both halves. That
+  is the silent pass drep exists to refuse, and on a 200-file Java repository it
+  was the whole of drep's answer. Java gets checkstyle and Kotlin gets ktlint;
+  Scala and Groovy ship with no deterministic tool, since scalafmt, scalafix and
+  CodeNarc are build plugins rather than CLIs. `.gradle` counts as Groovy, so a
+  change to a build script is read. `.kts` is Kotlin, which covers
+  `build.gradle.kts` because `Path::extension` reports `kts` for it.
+- `ToolSpec::config_flag`, for a checker that will not find its own config.
+  ruff reads `pyproject.toml` out of the working directory unprompted;
+  checkstyle exits 1 with "Must specify a config XML", so without this it could
+  never run at all. When set, the config path `config_files` already discovered
+  is appended as `[config_flag, <path>]` ahead of the file arguments, first
+  match in declaration order.
+- `sarif` and `ktlint` output parsers. SARIF is written against the 2.1.0 spec
+  rather than against checkstyle, since it is where the rest of the JVM linters
+  converge, and it strips the `file:` URI scheme so findings are filed under a
+  path that matches the files drep was asked to check. ktlint's reporter is
+  shaped like eslint's with different keys throughout, so it gets its own format
+  rather than teaching the `json` parser to guess between the two.
+
 ### Changed
 
 - Trusted pushes to `main` now run mutation testing only for production code in

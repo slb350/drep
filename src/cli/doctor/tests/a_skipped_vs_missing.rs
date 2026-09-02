@@ -133,6 +133,7 @@ static GHOST_TOOL: ToolSpec = ToolSpec {
     command: &["drep-ghost-linter-no-machine-has-this"],
     local_paths: &[],
     config_files: &["ghost.config"],
+    config_flag: None,
     output_format: "json",
     diagnostics_stream: "stdout",
     timeout_secs: 120,

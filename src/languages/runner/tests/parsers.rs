@@ -234,3 +234,136 @@ fn unknown_output_format_is_error_not_empty() {
     let err = parse_output(&spec, "anything", "root").unwrap_err();
     assert!(err.0.contains("not-a-format"));
 }
+
+// ---- parsers: sarif ----
+
+/// Trimmed from a real `checkstyle -c checkstyle.xml -f sarif` run: the driver
+/// block and rule descriptions are dropped, the two results are verbatim.
+fn checkstyle_sarif() -> &'static str {
+    r#"{
+      "$schema": "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json",
+      "version": "2.1.0",
+      "runs": [
+        {
+          "tool": { "driver": { "name": "Checkstyle", "version": "14.1.0" } },
+          "results": [
+            {
+              "level": "error",
+              "locations": [
+                { "physicalLocation": {
+                    "artifactLocation": { "uri": "file:/private/tmp/jvmfix/Sample.java" },
+                    "region": { "startColumn": 8, "startLine": 2 } } }
+              ],
+              "message": { "id": "import.unused", "text": "Unused import - java.util.List." },
+              "ruleId": "com.puppycrawl.tools.checkstyle.checks.imports.UnusedImportsCheck"
+            },
+            {
+              "level": "warning",
+              "locations": [
+                { "physicalLocation": {
+                    "artifactLocation": { "uri": "file:/private/tmp/jvmfix/Sample.java" },
+                    "region": { "startColumn": 14, "startLine": 5 } } }
+              ],
+              "message": { "id": "ws.notFollowed", "text": "'=' is not followed by whitespace." },
+              "ruleId": "com.puppycrawl.tools.checkstyle.checks.whitespace.WhitespaceAroundCheck"
+            }
+          ]
+        }
+      ]
+    }"#
+}
+
+#[test]
+fn sarif_parser_reads_rule_location_and_message() {
+    let spec = checkstyle_like_spec();
+    let findings = parse_output(&spec, checkstyle_sarif(), "root").expect("sarif parses");
+    assert_eq!(findings.len(), 2);
+    assert_eq!(
+        findings[0].kind,
+        "com.puppycrawl.tools.checkstyle.checks.imports.UnusedImportsCheck"
+    );
+    assert_eq!(findings[0].line, 2);
+    assert_eq!(findings[0].column, Some(8));
+    assert_eq!(findings[0].message, "Unused import - java.util.List.");
+}
+
+/// SARIF carries a URI, drep matches findings against the paths it was asked
+/// to check. A finding filed under `file:/private/tmp/...` is filed under a
+/// path that never matches, so it is dropped as belonging to another file.
+#[test]
+fn sarif_parser_strips_the_file_uri_scheme() {
+    let spec = checkstyle_like_spec();
+    let findings = parse_output(&spec, checkstyle_sarif(), "root").unwrap();
+    assert_eq!(findings[0].file_path, "/private/tmp/jvmfix/Sample.java");
+}
+
+#[test]
+fn sarif_parser_maps_the_sarif_level_to_severity() {
+    let spec = checkstyle_like_spec();
+    let findings = parse_output(&spec, checkstyle_sarif(), "root").unwrap();
+    assert_eq!(findings[0].severity, Severity::Error);
+    assert_eq!(findings[1].severity, Severity::Warning);
+}
+
+#[test]
+fn sarif_parser_treats_no_output_as_clean() {
+    let spec = checkstyle_like_spec();
+    let findings = parse_output(&spec, "", "root").expect("empty output is a clean run");
+    assert!(findings.is_empty());
+}
+
+#[test]
+fn sarif_parser_errors_on_unparseable_input() {
+    let spec = checkstyle_like_spec();
+    let err = parse_output(&spec, "not json at all", "root")
+        .expect_err("garbage must not be reported as clean");
+    assert!(err.0.contains("checkstyle"), "message was {:?}", err.0);
+}
+
+// ---- parsers: ktlint ----
+
+/// Verbatim from `ktlint --log-level=none --reporter=json`.
+fn ktlint_json() -> &'static str {
+    r#"[
+        {
+            "file": "/private/tmp/jvmfix/Sample.kt",
+            "errors": [
+                { "line": 5, "column": 10, "message": "Unexpected whitespace",
+                  "rule": "standard:parameter-list-spacing" },
+                { "line": 6, "column": 10, "message": "Missing spacing around \"=\"",
+                  "rule": "standard:op-spacing" }
+            ]
+        }
+    ]"#
+}
+
+#[test]
+fn ktlint_parser_reads_every_error_under_its_file() {
+    let spec = ktlint_like_spec();
+    let findings = parse_output(&spec, ktlint_json(), "root").expect("ktlint json parses");
+    assert_eq!(findings.len(), 2);
+    for finding in &findings {
+        assert_eq!(finding.file_path, "/private/tmp/jvmfix/Sample.kt");
+        assert_eq!(finding.severity, Severity::Error);
+    }
+    assert_eq!(findings[0].kind, "standard:parameter-list-spacing");
+    assert_eq!(findings[0].line, 5);
+    assert_eq!(findings[0].column, Some(10));
+    assert_eq!(findings[1].message, "Missing spacing around \"=\"");
+}
+
+/// ktlint prints `[]` for a clean run, and nothing at all when it has no files
+/// to look at.
+#[test]
+fn ktlint_parser_treats_empty_and_empty_array_as_clean() {
+    let spec = ktlint_like_spec();
+    assert!(parse_output(&spec, "", "root").unwrap().is_empty());
+    assert!(parse_output(&spec, "[]", "root").unwrap().is_empty());
+}
+
+#[test]
+fn ktlint_parser_errors_on_unparseable_input() {
+    let spec = ktlint_like_spec();
+    let err = parse_output(&spec, "{oops", "root").expect_err("garbage is not a clean run");
+    assert!(err.0.contains("ktlint"), "message was {:?}", err.0);
+}

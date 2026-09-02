@@ -14,7 +14,8 @@ use crate::files::{is_markdown, is_scan_target};
 /// unsupported - never accepted and silently dropped. See
 /// `the_two_file_classes_are_disjoint` below.
 const REGISTERED_EXTENSIONS: &[&str] = &[
-    ".py", ".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts", ".go", ".rs",
+    ".py", ".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts", ".go", ".rs", ".java",
+    ".kt", ".kts", ".scala", ".sc", ".groovy", ".gradle",
 ];
 
 #[test]

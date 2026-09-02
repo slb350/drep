@@ -28,6 +28,8 @@ pub const DEFAULT_TOOL_TIMEOUT_SECS: u64 = 120;
 ///         into this tool". A tool with none of them present is skipped: its
 ///         defaults are not the project's chosen style, so running it anyway
 ///         would invent findings the project never asked for.
+///     config_flag: Flag that hands the discovered config file to the tool,
+///         for the checkers that will not look for it themselves.
 ///     output_format: How to parse the tool's diagnostics into findings.
 ///     diagnostics_stream: Which stream carries them. `go vet` writes to
 ///         stderr, so reading only stdout would report every Go file clean.
@@ -46,6 +48,15 @@ pub struct ToolSpec {
     /// project's chosen style, so running it anyway would invent findings the
     /// project never asked for.
     pub config_files: &'static [&'static str],
+    /// Flag that hands the discovered config file to the tool, e.g. `"-c"`.
+    ///
+    /// Most checkers find their own config: ruff reads `pyproject.toml` out of
+    /// the working directory without being told. The JVM linters do not.
+    /// `checkstyle` run bare exits 1 with "Must specify a config XML", so
+    /// without this it could not run at all. When set, the config path
+    /// `config_files` already discovered is appended as
+    /// `[config_flag, <path>]` ahead of the file arguments.
+    pub config_flag: Option<&'static str>,
     /// How to parse the tool's diagnostics into findings.
     pub output_format: &'static str,
     /// Which stream carries them. `go vet` writes to stderr, so reading only
@@ -82,6 +93,7 @@ impl Default for ToolSpec {
             command: &[],
             local_paths: &[],
             config_files: &[],
+            config_flag: None,
             output_format: "json",
             diagnostics_stream: "stdout",
             timeout_secs: DEFAULT_TOOL_TIMEOUT_SECS,

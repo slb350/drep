@@ -73,3 +73,31 @@ pub(crate) fn clippy_like_spec() -> ToolSpec {
 /// Re-exported so this suite's `use super::support::*` importers reach the
 /// crate-wide helper rather than a local copy.
 pub(crate) use crate::test_support::write_executable;
+
+/// checkstyle emits SARIF 2.1.0 on stdout. `-c` is appended by `config_flag`
+/// rather than written here, since which ruleset a project uses is exactly
+/// what `config_files` discovers.
+pub(crate) fn checkstyle_like_spec() -> ToolSpec {
+    ToolSpec {
+        name: "checkstyle",
+        command: &["checkstyle", "-f", "sarif"],
+        local_paths: &[],
+        config_files: &["checkstyle.xml"],
+        config_flag: Some("-c"),
+        output_format: "sarif",
+        diagnostics_stream: "stdout",
+        ..ToolSpec::default()
+    }
+}
+
+pub(crate) fn ktlint_like_spec() -> ToolSpec {
+    ToolSpec {
+        name: "ktlint",
+        command: &["ktlint", "--log-level=none", "--reporter=json"],
+        local_paths: &[],
+        config_files: &[".editorconfig"],
+        output_format: "ktlint",
+        diagnostics_stream: "stdout",
+        ..ToolSpec::default()
+    }
+}

@@ -236,7 +236,17 @@ mod tests {
         let names: Vec<&str> = langs.iter().map(|l| l.name).collect();
         assert_eq!(
             names,
-            vec!["python", "javascript", "typescript", "go", "rust"]
+            vec![
+                "python",
+                "javascript",
+                "typescript",
+                "go",
+                "rust",
+                "java",
+                "kotlin",
+                "scala",
+                "groovy"
+            ]
         );
     }
 
@@ -305,6 +315,52 @@ mod tests {
             vec![Path::new("a.py")],
             "the markdown file is dropped, not attached to python"
         );
+    }
+
+    /// The JVM family. Java is the one that motivated it: a repository of
+    /// `.java` files reported "No source files drep recognises were found
+    /// here" and `drep check` exited 0 having analyzed nothing, which is the
+    /// silent pass the deterministic half exists to refuse.
+    #[test]
+    fn jvm_extensions_resolve_to_their_languages() {
+        for (path, expected) in [
+            ("Main.java", "java"),
+            ("Main.kt", "kotlin"),
+            ("Main.kts", "kotlin"),
+            ("Main.scala", "scala"),
+            ("Main.sc", "scala"),
+            ("Main.groovy", "groovy"),
+            ("build.gradle", "groovy"),
+        ] {
+            let detected = detect(Path::new(path));
+            assert_eq!(
+                detected.map(|lang| lang.name),
+                Some(expected),
+                "{path} should resolve to {expected}"
+            );
+        }
+    }
+
+    /// `.gradle` is Groovy source that drep should read, but `.gradle.kts` is
+    /// Kotlin and `Path::extension` returns `kts` for it, so the two do not
+    /// collide.
+    #[test]
+    fn gradle_kts_is_kotlin_not_groovy() {
+        assert_eq!(
+            detect(Path::new("build.gradle.kts")).map(|lang| lang.name),
+            Some("kotlin")
+        );
+    }
+
+    #[test]
+    fn jvm_build_directories_are_vendored() {
+        let dirs = vendored_dirs();
+        for expected in ["build", ".gradle", "out"] {
+            assert!(
+                dirs.contains(&expected),
+                "{expected} is a JVM build output and should never be descended into, got {dirs:?}"
+            );
+        }
     }
 
     #[test]

@@ -400,3 +400,102 @@ async fn a_filename_that_looks_like_a_flag_is_passed_as_a_path() {
         "it must not reach the tool as a bare option: {argv:?}"
     );
 }
+
+// ---- run_tool: config_flag ----
+
+/// Builds an argv-recording stub in a temp repo, runs `spec` against it, and
+/// returns what the tool actually received.
+fn argv_after_running(spec: &ToolSpec, config_files: &[&str]) -> (TempDir, Vec<String>) {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let bin = dir.path().join("bin");
+    std::fs::create_dir_all(&bin).expect("mkdir bin");
+    write_executable(
+        &bin.join("argvdump"),
+        format!(
+            "#!/bin/sh\nfor a in \"$@\"; do echo \"$a\"; done > {}/argv.txt\nexit 0\n",
+            dir.path().display()
+        ),
+    );
+    for config in config_files {
+        let path = dir.path().join(config);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).expect("mkdir config parent");
+        }
+        std::fs::write(path, "").expect("config");
+    }
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("runtime");
+    runtime.block_on(run_tool(spec, dir.path(), &["Sample.java".to_owned()]));
+    let argv = std::fs::read_to_string(dir.path().join("argv.txt")).unwrap_or_default();
+    let lines = argv.lines().map(str::to_owned).collect();
+    (dir, lines)
+}
+
+/// checkstyle exits 1 with "Must specify a config XML" when run bare, so the
+/// ruleset `config_files` found has to reach it or the tool can never run.
+#[test]
+fn config_flag_passes_the_discovered_config_before_the_files() {
+    let spec = ToolSpec {
+        name: "argvdump",
+        command: &["argvdump", "-f", "sarif"],
+        local_paths: &["bin/argvdump"],
+        config_files: &["config/checkstyle/checkstyle.xml"],
+        config_flag: Some("-c"),
+        output_format: "sarif",
+        diagnostics_stream: "stdout",
+        ..ToolSpec::default()
+    };
+    let (_dir, argv) = argv_after_running(&spec, &["config/checkstyle/checkstyle.xml"]);
+    assert_eq!(
+        argv,
+        vec![
+            "-f",
+            "sarif",
+            "-c",
+            "config/checkstyle/checkstyle.xml",
+            "Sample.java"
+        ],
+        "the config must land between the static command and the files"
+    );
+}
+
+/// The first entry in `config_files` that exists wins, matching the order the
+/// list is written in rather than whatever the filesystem returns.
+#[test]
+fn config_flag_uses_the_first_config_file_that_exists() {
+    let spec = ToolSpec {
+        name: "argvdump",
+        command: &["argvdump"],
+        local_paths: &["bin/argvdump"],
+        config_files: &["checkstyle.xml", "config/checkstyle/checkstyle.xml"],
+        config_flag: Some("-c"),
+        output_format: "sarif",
+        diagnostics_stream: "stdout",
+        ..ToolSpec::default()
+    };
+    let (_dir, argv) = argv_after_running(&spec, &["config/checkstyle/checkstyle.xml"]);
+    assert_eq!(
+        argv,
+        vec!["-c", "config/checkstyle/checkstyle.xml", "Sample.java"]
+    );
+}
+
+/// A tool that finds its own config is untouched, which is every tool that
+/// shipped before this one.
+#[test]
+fn no_config_flag_leaves_the_command_alone() {
+    let spec = ToolSpec {
+        name: "argvdump",
+        command: &["argvdump", "check"],
+        local_paths: &["bin/argvdump"],
+        config_files: &["pyproject.toml"],
+        config_flag: None,
+        output_format: "lines",
+        diagnostics_stream: "stdout",
+        ..ToolSpec::default()
+    };
+    let (_dir, argv) = argv_after_running(&spec, &["pyproject.toml"]);
+    assert_eq!(argv, vec!["check", "Sample.java"]);
+}
