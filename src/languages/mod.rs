@@ -355,7 +355,7 @@ mod tests {
     #[test]
     fn jvm_build_directories_are_vendored() {
         let dirs = vendored_dirs();
-        for expected in ["build", ".gradle", "out"] {
+        for expected in ["build", ".gradle", "target"] {
             assert!(
                 dirs.contains(&expected),
                 "{expected} is a JVM build output and should never be descended into, got {dirs:?}"

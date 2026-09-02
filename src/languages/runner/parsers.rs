@@ -452,6 +452,11 @@ fn sarif_severity(level: Option<&str>) -> Severity {
 /// `file:/abs/path` and `file:///abs/path` both name a local path. drep matches
 /// findings against the paths it was asked to check, so a finding left under a
 /// URI is filed against a path that matches nothing and is silently dropped.
+///
+/// The path is percent-decoded because producers encode it: checkstyle's
+/// SarifLogger maps a space to `%20` and a quote to `%22`, and a spec-compliant
+/// producer percent-encodes everything reserved. Left encoded, the finding's
+/// path never matches the file drep was asked to check.
 fn strip_file_uri(uri: &str) -> String {
     let path = uri
         .strip_prefix("file://")
@@ -461,8 +466,49 @@ fn strip_file_uri(uri: &str) -> String {
     if path.is_empty() {
         uri.to_owned()
     } else {
-        path.to_owned()
+        percent_decode(path)
     }
+}
+
+/// Decode RFC 3986 `%HH` sequences byte-wise. Anything that is not a valid
+/// triplet passes through verbatim, and malformed UTF-8 at the end of decoding
+/// degrades lossily rather than failing the finding. checkstyle encodes only
+/// the space and the quote, so a literal `%20` *in* a filename is ambiguous
+/// with an encoded one at the source; decoding is the better wrong there,
+/// because spaces in paths are common and `%20` in a name is not.
+fn percent_decode(text: &str) -> String {
+    if !text.contains('%') {
+        return text.to_owned();
+    }
+    let bytes = text.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        let triplet = match bytes.get(i..i + 3) {
+            // `hi * 16 + lo`, not `hi << 4 | lo`: the two nibbles never share
+            // a set bit, so `|` and `^` agree on every reachable input and the
+            // mutation gate cannot observe the difference.
+            Some(&[b'%', hi, lo]) => hex_value(hi)
+                .zip(hex_value(lo))
+                .map(|(hi, lo)| hi * 16 + lo),
+            _ => None,
+        };
+        match triplet {
+            Some(byte) => {
+                decoded.push(byte);
+                i += 3;
+            }
+            None => {
+                decoded.push(bytes[i]);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&decoded).into_owned()
+}
+
+fn hex_value(byte: u8) -> Option<u8> {
+    (byte as char).to_digit(16).map(|d| d as u8)
 }
 
 /// ktlint's JSON reporter: one record per file with a nested `errors` array.
@@ -470,6 +516,12 @@ fn strip_file_uri(uri: &str) -> String {
 /// Shaped like eslint's but with different keys throughout - `file` for
 /// `filePath`, `errors` for `messages`, `rule` for `ruleId` - so it gets its
 /// own format rather than teaching `parse_json` to guess between them.
+///
+/// Why not ktlint's own `sarif` reporter, given `parse_sarif` exists: that
+/// reporter files every result under a relative URI with
+/// `uriBaseId: "%SRCROOT%"` bound to the process *home*, not the working
+/// directory, so a finding's path resolves to nothing drep was asked to
+/// check. The JSON reporter emits plain absolute paths instead.
 fn parse_ktlint(spec: &ToolSpec, output: &str) -> Result<Vec<Finding>, ToolOutputError> {
     let trimmed = output.trim();
     if trimmed.is_empty() {

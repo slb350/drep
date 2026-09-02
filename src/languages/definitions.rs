@@ -10,10 +10,17 @@
 use super::spec::{DEFAULT_TOOL_TIMEOUT_SECS, LanguageSupport, ToolSpec};
 
 /// Build outputs shared by the JVM languages. Gradle writes `build` and
-/// `.gradle`, Maven writes `target`, and IDE-driven builds write `out`.
-/// Declared once rather than repeated across four entries that can never
-/// legitimately disagree.
-static JVM_VENDORED_DIRS: &[&str] = &["build", ".gradle", "target", "out"];
+/// `.gradle`, Maven writes `target`. Declared once rather than repeated across
+/// four entries that can never legitimately disagree.
+///
+/// The set is global in effect: `files::is_ignored_dir` consults the union of
+/// every language's vendored directories, so an entry here skips the directory
+/// in a repository with no JVM code at all. `out` is therefore deliberately
+/// absent: IntelliJ's build output is nearly always gitignored anyway (which
+/// the walker honors on its own), while the name is generic enough that a
+/// checked-in `out/` of real sources in some other ecosystem would be silently
+/// dropped from review.
+static JVM_VENDORED_DIRS: &[&str] = &["build", ".gradle", "target"];
 
 /// Python deterministic checker.
 pub static RUFF: ToolSpec = ToolSpec {

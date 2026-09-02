@@ -297,12 +297,100 @@ fn sarif_parser_strips_the_file_uri_scheme() {
     assert_eq!(findings[0].file_path, "/private/tmp/jvmfix/Sample.java");
 }
 
+/// checkstyle's SarifLogger percent-encodes exactly the space and the double
+/// quote in a file name (`renderFileNameUri`). Left encoded, the finding's
+/// path never matches the file drep was asked to check and displays mangled.
+#[test]
+fn sarif_parser_percent_decodes_the_uri_path() {
+    let spec = checkstyle_like_spec();
+    let sarif = r#"{
+      "version": "2.1.0",
+      "runs": [ { "results": [
+        { "level": "warning",
+          "locations": [ { "physicalLocation": {
+              "artifactLocation": { "uri": "file:/repo/My%20Sources/Has%22Quote%22.java" },
+              "region": { "startLine": 3 } } } ],
+          "message": { "text": "m" },
+          "ruleId": "r" }
+      ] } ]
+    }"#;
+    let findings = parse_output(&spec, sarif, "root").unwrap();
+    assert_eq!(findings[0].file_path, "/repo/My Sources/Has\"Quote\".java");
+}
+
+/// A `%` that does not open a valid hex triplet is a literal, not an encoding:
+/// a file genuinely named `100%.java` must survive the round trip.
+#[test]
+fn sarif_parser_leaves_malformed_percent_sequences_alone() {
+    let spec = checkstyle_like_spec();
+    for uri in [
+        "file:/repo/100%.java",
+        "file:/repo/100%2x.java",
+        "file:/repo/ends%2.java",
+    ] {
+        let sarif = format!(
+            r#"{{ "version": "2.1.0", "runs": [ {{ "results": [
+                {{ "level": "warning",
+                  "locations": [ {{ "physicalLocation": {{
+                      "artifactLocation": {{ "uri": "{uri}" }},
+                      "region": {{ "startLine": 1 }} }} }} ],
+                  "message": {{ "text": "m" }}, "ruleId": "r" }}
+            ] }} ] }}"#
+        );
+        let findings = parse_output(&spec, &sarif, "root").unwrap();
+        assert_eq!(
+            findings[0].file_path,
+            uri.strip_prefix("file:").unwrap(),
+            "{uri} should pass through undecoded"
+        );
+    }
+}
+
 #[test]
 fn sarif_parser_maps_the_sarif_level_to_severity() {
     let spec = checkstyle_like_spec();
     let findings = parse_output(&spec, checkstyle_sarif(), "root").unwrap();
     assert_eq!(findings[0].severity, Severity::Error);
     assert_eq!(findings[1].severity, Severity::Warning);
+}
+
+/// checkstyle emits `note` for its INFO severity level. `none` is SARIF for
+/// "this rule was evaluated and had nothing to say". Neither is a warning, and
+/// both must stay distinguishable from one: the fixture above never carries
+/// either, so only a dedicated test keeps the arm from collapsing into the
+/// catch-all.
+#[test]
+fn sarif_levels_note_and_none_map_to_info_not_warning() {
+    let spec = checkstyle_like_spec();
+    let sarif = r#"{
+      "version": "2.1.0",
+      "runs": [ { "results": [
+        { "level": "note",
+          "locations": [ { "physicalLocation": {
+              "artifactLocation": { "uri": "file:/repo/A.java" },
+              "region": { "startLine": 1 } } } ],
+          "message": { "text": "informational" },
+          "ruleId": "com.puppycrawl.tools.checkstyle.checks.SomeInfoCheck" },
+        { "level": "none",
+          "locations": [ { "physicalLocation": {
+              "artifactLocation": { "uri": "file:/repo/A.java" },
+              "region": { "startLine": 2 } } } ],
+          "message": { "text": "evaluated, nothing to say" },
+          "ruleId": "com.puppycrawl.tools.checkstyle.checks.SomeQuietCheck" }
+      ] } ]
+    }"#;
+    let findings = parse_output(&spec, sarif, "root").unwrap();
+    assert_eq!(findings.len(), 2);
+    assert_eq!(
+        findings[0].severity,
+        Severity::Info,
+        "note is informational"
+    );
+    assert_eq!(
+        findings[1].severity,
+        Severity::Info,
+        "none must not become a warning"
+    );
 }
 
 #[test]
