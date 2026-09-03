@@ -195,6 +195,23 @@ Three rules decide what runs:
 | TypeScript | `.ts` `.tsx` `.mts` `.cts` | eslint, tsc |
 | Go | `.go` | gofmt, go vet |
 | Rust | `.rs` | clippy |
+| Java | `.java` | checkstyle |
+| Kotlin | `.kt` `.kts` | ktlint |
+| Scala | `.scala` `.sc` | none |
+| Groovy | `.groovy` `.gradle` | none |
+
+Scala and Groovy have no deterministic tool. scalafmt, scalafix and CodeNarc are
+all build-plugin-first, with no standalone CLI drep can invoke the way it invokes
+ruff. Their entries exist for the semantic half, which needs no tool.
+
+checkstyle is the one checker that will not look for its own config, so the
+ruleset drep discovers is handed to it with `-c`. It refuses to run without one.
+
+ktlint's only discoverable configuration is `.editorconfig`, so a Kotlin file
+in a repository that has one counts as opted in — even one the project wrote
+for its editor rather than for ktlint, which then enforces ktlint's full
+standard ruleset, and which drep reports as unavailable (a failed check, not
+a pass) when the `ktlint` binary is not installed.
 
 The LLM half reads any of them. It parses nothing, so it needs no grammar per
 language; it is told which language it is reading and which conventions that

@@ -19,6 +19,7 @@ use serde_json::Value;
 
 use crate::analysis::findings::{Finding, Severity};
 use crate::languages::runner::ToolOutputError;
+use crate::languages::runner::uri::strip_file_uri;
 use crate::languages::spec::ToolSpec;
 
 /// `[vet: ]./path/to/file.go:12:6: message` - the compiler-style position
@@ -57,6 +58,8 @@ pub fn parse_output(
         "position" => Ok(parse_positions(spec, output)),
         "tsc" => Ok(parse_tsc(spec, output)),
         "cargo" => parse_cargo(spec, output),
+        "sarif" => parse_sarif(spec, output),
+        "ktlint" => parse_ktlint(spec, output),
         other => Err(ToolOutputError(format!(
             "{}: no parser for output format {other:?}",
             spec.name,
@@ -348,6 +351,167 @@ fn parse_json(
                 line,
                 column,
                 message_text,
+                None,
+            ));
+        }
+    }
+    Ok(findings)
+}
+
+/// SARIF 2.1.0: `runs[].results[]`, the interchange format checkstyle emits.
+///
+/// Written against the spec rather than against checkstyle, because SARIF is
+/// what the rest of the JVM linters converge on and a second one should need
+/// no parser. Empty input is a clean run for the same reason it is under
+/// `json`; anything else that will not parse is an error.
+fn parse_sarif(spec: &ToolSpec, output: &str) -> Result<Vec<Finding>, ToolOutputError> {
+    let trimmed = output.trim();
+    if trimmed.is_empty() {
+        return Ok(Vec::new());
+    }
+    let payload: Value = serde_json::from_str(trimmed).map_err(|err| {
+        ToolOutputError(format!("{} produced unparseable SARIF: {err}", spec.name))
+    })?;
+
+    let runs = payload
+        .get("runs")
+        .and_then(Value::as_array)
+        .ok_or_else(|| ToolOutputError(format!("{}: SARIF has no runs array", spec.name)))?;
+
+    let mut findings = Vec::new();
+    for run in runs {
+        let results = run
+            .get("results")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        for result in results {
+            let kind = result
+                .get("ruleId")
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+                .unwrap_or_else(|| spec.name.to_owned());
+            let message = result
+                .get("message")
+                .and_then(|m| m.get("text"))
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_owned();
+
+            // First location only. SARIF allows several, but every checker
+            // here reports one per diagnostic, and reporting the same finding
+            // once per location would double-count a gate.
+            let physical = result
+                .get("locations")
+                .and_then(Value::as_array)
+                .and_then(|locations| locations.first())
+                .and_then(|location| location.get("physicalLocation"));
+            let file_path = physical
+                .and_then(|p| p.get("artifactLocation"))
+                .and_then(|a| a.get("uri"))
+                .and_then(Value::as_str)
+                .map(strip_file_uri)
+                .unwrap_or_default();
+            let region = physical.and_then(|p| p.get("region"));
+            let line = region
+                .and_then(|r| r.get("startLine"))
+                .and_then(Value::as_u64)
+                .map(|n| n as u32)
+                .unwrap_or(1);
+            let column = region
+                .and_then(|r| r.get("startColumn"))
+                .and_then(Value::as_u64)
+                .map(|n| n as u32);
+
+            findings.push(Finding::deterministic(
+                kind,
+                sarif_severity(result.get("level").and_then(Value::as_str)),
+                file_path,
+                line,
+                column,
+                message,
+                None,
+            ));
+        }
+    }
+    Ok(findings)
+}
+
+/// SARIF `level` to drep severity.
+///
+/// `none` is SARIF for "this rule was evaluated and had nothing to say", which
+/// no tool should emit as a result, so it lands on Info rather than inventing
+/// a fourth level. An absent level defaults to `warning` per the spec.
+fn sarif_severity(level: Option<&str>) -> Severity {
+    match level {
+        Some("error") => Severity::Error,
+        Some("note") | Some("none") => Severity::Info,
+        _ => Severity::Warning,
+    }
+}
+
+/// ktlint's JSON reporter: one record per file with a nested `errors` array.
+///
+/// Shaped like eslint's but with different keys throughout - `file` for
+/// `filePath`, `errors` for `messages`, `rule` for `ruleId` - so it gets its
+/// own format rather than teaching `parse_json` to guess between them.
+///
+/// Why not ktlint's own `sarif` reporter, given `parse_sarif` exists: that
+/// reporter files every result under a relative URI with
+/// `uriBaseId: "%SRCROOT%"` bound to the process *home*, not the working
+/// directory, so a finding's path resolves to nothing drep was asked to
+/// check. The JSON reporter emits plain absolute paths instead.
+fn parse_ktlint(spec: &ToolSpec, output: &str) -> Result<Vec<Finding>, ToolOutputError> {
+    let trimmed = output.trim();
+    if trimmed.is_empty() {
+        return Ok(Vec::new());
+    }
+    let payload: Value = serde_json::from_str(trimmed).map_err(|err| {
+        ToolOutputError(format!("{} produced unparseable JSON: {err}", spec.name))
+    })?;
+    let entries = payload.as_array().ok_or_else(|| {
+        ToolOutputError(format!(
+            "{}: expected a JSON array, got {}",
+            spec.name,
+            json_kind_name(&payload)
+        ))
+    })?;
+
+    let mut findings = Vec::new();
+    for entry in entries {
+        let file_path = entry
+            .get("file")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_owned();
+        let errors = entry
+            .get("errors")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        for error in errors {
+            findings.push(Finding::deterministic(
+                error
+                    .get("rule")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned)
+                    .unwrap_or_else(|| spec.name.to_owned()),
+                Severity::Error,
+                file_path.clone(),
+                error
+                    .get("line")
+                    .and_then(Value::as_u64)
+                    .map(|n| n as u32)
+                    .unwrap_or(1),
+                error
+                    .get("column")
+                    .and_then(Value::as_u64)
+                    .map(|n| n as u32),
+                error
+                    .get("message")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_owned(),
                 None,
             ));
         }

@@ -24,6 +24,7 @@ use crate::analysis::findings::Finding;
 use crate::languages::spec::{DEFAULT_TOOL_TIMEOUT_SECS, ToolSpec};
 
 pub mod parsers;
+mod uri;
 
 pub use parsers::parse_output;
 
@@ -308,9 +309,21 @@ pub(crate) async fn run_tool_at(
         executable
     };
 
-    let mut argv: Vec<String> = Vec::with_capacity(spec.command.len() + files.len());
+    let mut argv: Vec<String> = Vec::with_capacity(spec.command.len() + files.len() + 2);
     argv.push(executable.to_string_lossy().into_owned());
     argv.extend(spec.command[1..].iter().map(|s| (*s).to_owned()));
+    // A tool that will not look for its own config gets handed the one
+    // `config_files` found. First match in declaration order, so the list reads
+    // as a preference rather than as whatever the filesystem returns.
+    if let Some(flag) = spec.config_flag
+        && let Some(config) = spec
+            .config_files
+            .iter()
+            .find(|name| workspace_root.join(name).exists())
+    {
+        argv.push(flag.to_owned());
+        argv.push((*config).to_owned());
+    }
     // A repository can contain a file whose name begins with `-`, and every
     // checker here would read `--fix` as an option rather than a path. `--`
     // is the conventional guard but is not universally supported across
