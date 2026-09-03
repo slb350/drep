@@ -100,6 +100,31 @@ fn json_parser_rejects_object_payload() {
     assert!(err.0.contains("array"));
 }
 
+/// The error names the kind it actually got, not only the kind it wanted.
+///
+/// Asserting on "array" alone passes however `json_kind_name` answers, so the
+/// half of the message that tells you *what arrived* went unpinned - which is
+/// the half that distinguishes a tool printing a bare number from one printing
+/// a wrapped object.
+#[test]
+fn json_parser_error_names_the_kind_it_received() {
+    let spec = ruff_like_spec();
+    for (payload, kind) in [
+        (r#"{"not":"an array"}"#, "object"),
+        ("12", "number"),
+        (r#""text""#, "string"),
+        ("true", "bool"),
+        ("null", "null"),
+    ] {
+        let err = parse_output(&spec, payload, "root").unwrap_err();
+        assert!(
+            err.0.contains(kind),
+            "{payload} should be reported as {kind}, got {}",
+            err.0
+        );
+    }
+}
+
 #[test]
 fn json_parser_rejects_invalid_json() {
     let spec = ruff_like_spec();
