@@ -19,7 +19,13 @@ pub static TFLINT: ToolSpec = ToolSpec {
     timeout_context: None,
     establishes_compilation: false,
     serial_in_repository: false,
-    accepts_files: true,
+    // tflint dropped positional file arguments in v0.47: handed `main.tf` it
+    // exits 1 with a SARIF `tflint-errors` run saying "Command line arguments
+    // support was dropped in v0.47. Use --chdir or --filter instead.", which
+    // parses as a phantom blocking finding on every Terraform file. Run the
+    // configured module bare and narrow findings back to the requested files,
+    // exactly as tsc and clippy do.
+    accepts_files: false,
 };
 
 /// Terraform language entry.

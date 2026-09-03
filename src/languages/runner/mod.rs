@@ -366,11 +366,6 @@ pub(crate) async fn run_tool_at(
     // surfaced as exit 2 on every Rust repository rather than as wrong
     // findings. Its output is narrowed back to `files` after parsing.
     if spec.accepts_files {
-        // A repository can contain a file whose name begins with `-`, and every
-        // checker here would read `--fix` as an option rather than a path. `--`
-        // is the conventional guard but is not universally supported across
-        // ruff/eslint/tsc/gofmt/go vet/clippy, whereas a `./` prefix is
-        // unambiguous to any argument parser and leaves ordinary paths untouched.
         argv.extend(files.iter().map(|f| {
             if f.starts_with('-') {
                 format!("./{f}")

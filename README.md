@@ -227,11 +227,13 @@ already makes for gofmt and clippy: it has no conventional config file, so a
 project marker (`CMakeLists.txt`, `Makefile`, `meson.build`,
 `compile_commands.json`) is what opts a C or C++ tree in.
 
-`dotnet format` and `tsc` and `cargo clippy` all check a project rather than a
-file list, so drep runs them bare and narrows their findings back to the files
-it was asked about. `mix credo` needs the project's dependencies fetched; when
-they are not, drep reports the check as unavailable, which is a failed run
-rather than a pass.
+`dotnet format`, `tflint`, `tsc` and `cargo clippy` all check a project rather
+than a file list, so drep runs them bare and narrows their findings back to
+the files it was asked about. (tflint dropped positional file arguments in
+v0.47; file selection there is `--filter`, which drep does not need because it
+narrows after parsing.) `mix credo` needs the project's dependencies fetched;
+when they are not, drep reports the check as unavailable, which is a failed
+run rather than a pass.
 
 checkstyle is the one checker that will not look for its own config, so the
 ruleset drep discovers is handed to it with `-c`. It refuses to run without one.

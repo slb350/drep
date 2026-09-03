@@ -237,6 +237,28 @@ mod tests {
         }
     }
 
+    /// tflint and `dotnet format` are project-level tools too: both reject or
+    /// ignore file arguments, so they run bare and `retain_requested` narrows
+    /// their findings.
+    ///
+    /// tflint's failure is the nastier one and earned the pin: handed
+    /// `main.tf`, v0.47+ exits 1 emitting a SARIF `tflint-errors` run whose
+    /// result says "Command line arguments support was dropped in v0.47. Use
+    /// --chdir or --filter instead." - which the SARIF parser would read as a
+    /// phantom blocking finding on every Terraform file, forever. Verified
+    /// against the real 0.64.0 binary.
+    #[test]
+    fn whole_project_linters_do_not_take_file_arguments() {
+        assert!(
+            !definitions::TFLINT.accepts_files,
+            "tflint dropped positional file arguments in v0.47"
+        );
+        assert!(
+            !definitions::DOTNET_FORMAT.accepts_files,
+            "dotnet format checks a project, not a file list"
+        );
+    }
+
     #[test]
     fn only_clippy_is_serialized_within_a_repository() {
         assert!(
