@@ -28,7 +28,7 @@ static POSITION: LazyLock<Regex> = LazyLock::new(|| {
 /// `src/app.ts(14,22): error TS2345: message` - the tsc shape.
 static TSC: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
-        r"^(?P<file>.+?)\((?P<line>\d+),(?P<col>\d+)\):\s*(?:error|warning)\s+(?P<code>TS\d+):\s*(?P<message>.+)$",
+        r"^(?P<file>.+?)\((?P<line>\d+),(?P<col>\d+)\):\s*(?P<severity>error|warning)\s+(?P<code>TS\d+):\s*(?P<message>.+)$",
     )
     .expect("TSC regex compiles")
 });
@@ -126,8 +126,20 @@ fn parse_captured(
 }
 
 /// `file(line,col): error TS1234: message`.
+///
+/// The severity word is read rather than assumed. The regex has always
+/// matched `warning` as well as `error`, and every match was reported as an
+/// error - so a tsc warning blocked a commit under `--fail-on error` while
+/// claiming to be something it was not. On a scale where a warning blocks,
+/// the gate gets switched off.
 pub(super) fn parse_tsc(output: &str) -> Vec<Finding> {
-    parse_captured(output, &TSC, |_| Severity::Error)
+    parse_captured(output, &TSC, |caps| {
+        if &caps["severity"] == "warning" {
+            Severity::Warning
+        } else {
+            Severity::Error
+        }
+    })
 }
 
 /// `file(line,col): severity CODE: message [project]`, skipping other lines.

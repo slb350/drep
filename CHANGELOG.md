@@ -48,6 +48,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the absolute path on every diagnostic line, matched nothing and every C# file
   came back clean. Both sides are now compared as absolute paths. tsc and
   clippy were unaffected because both answer relative.
+- `parse_lines` built its rewrite suggestion as `command[..len - 1]`, which
+  underflows on a `usize` when the argv is empty. `parse_output` is public, so
+  a spec naming that format with no command panicked the gate rather than
+  reporting a finding. A spec with no rewrite command to name now gets no
+  suggestion.
+- tsc warnings were reported as errors. The regex has always matched `warning`
+  alongside `error` while the parser assigned `Severity::Error` to every match,
+  so a warning blocked a commit under `--fail-on error` while claiming to be
+  something it was not. The severity word is now read.
 - `json_kind_name` was untested: the error for a non-array tool payload
   asserted only the kind it *wanted*, so the half naming what actually arrived
   passed under any answer and two mutants survived on it.
