@@ -500,13 +500,19 @@ mod tests {
     /// silently won by one side and the other language's files are never
     /// analyzed by its own tools. This must be a test, not a convention,
     /// because nothing in the type system stops the collision.
+    ///
+    /// Compared case-insensitively, because that is how `by_extension` and
+    /// `by_filename` compare. A set of the literals as written would call
+    /// `.RB` and `.rb` distinct and pass, while `detect` treats them as one
+    /// claim and hands every Ruby file to whichever entry came first - the
+    /// exact collision this guards, invisible to the guard.
     #[test]
     fn no_two_languages_claim_the_same_extension_or_filename() {
-        let mut seen: BTreeSet<&str> = BTreeSet::new();
+        let mut seen: BTreeSet<String> = BTreeSet::new();
         for lang in ALL_LANGUAGES {
             for claimed in lang.extensions.iter().chain(lang.filenames.iter()) {
                 assert!(
-                    seen.insert(claimed),
+                    seen.insert(claimed.to_ascii_lowercase()),
                     "{claimed} is claimed by {} and an earlier language",
                     lang.name
                 );

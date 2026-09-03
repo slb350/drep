@@ -67,7 +67,7 @@ pub(super) fn parse_cargo(spec: &ToolSpec, output: &str) -> Result<Vec<Finding>,
 
         findings.push(Finding::deterministic(
             kind,
-            Severity::Error,
+            cargo_severity(message.and_then(|m| m.get("level")).and_then(Value::as_str)),
             file_path,
             line,
             column,
@@ -76,4 +76,23 @@ pub(super) fn parse_cargo(spec: &ToolSpec, output: &str) -> Result<Vec<Finding>,
         ));
     }
     Ok(findings)
+}
+
+/// cargo's diagnostic `level` to drep severity.
+///
+/// It was hardcoded to Error, so a clippy warning displayed as an error. That
+/// never changed the gate - `any_blocking_tool_finding` blocks on any tool
+/// finding whatever its severity, because the tool is the project's own choice
+/// - but it made the rendered line say something the compiler did not.
+///
+/// `note` and `help` are cargo's sub-diagnostics; they arrive as their own
+/// messages only when a lint is configured to emit them standalone, and they
+/// are not defects on their own. `failure-note` is: it reports the build
+/// itself failing.
+fn cargo_severity(level: Option<&str>) -> Severity {
+    match level {
+        Some("warning") => Severity::Warning,
+        Some("note") | Some("help") => Severity::Info,
+        _ => Severity::Error,
+    }
 }

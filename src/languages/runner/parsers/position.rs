@@ -20,8 +20,16 @@ use crate::languages::spec::ToolSpec;
 ///
 /// The optional `vet: ` prefix and the `^` anchor matter: Go interleaves
 /// `# example.com/pkg` package headers, and we skip those by *not* matching.
+///
+/// The file group is lazy rather than colon-free. Forbidding a colon dropped
+/// `C:\src\main.go:12:6: message` outright, and because this parser skips
+/// what it cannot match, a Windows `go vet` run lost every diagnostic
+/// silently and the gate passed. Laziness plus the mandatory `:line:col:`
+/// suffix still resolves unambiguously - the first position-shaped suffix
+/// wins - while a package header, having no such suffix, still fails to
+/// match.
 static POSITION: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"^(?:vet:\s*)?(?P<file>[^\s:][^:]*):(?P<line>\d+):(?P<col>\d+):\s*(?P<message>.+)$")
+    Regex::new(r"^(?:vet:\s*)?(?P<file>\S.*?):(?P<line>\d+):(?P<col>\d+):\s*(?P<message>.+)$")
         .expect("POSITION regex compiles")
 });
 

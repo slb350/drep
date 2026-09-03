@@ -48,6 +48,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the absolute path on every diagnostic line, matched nothing and every C# file
   came back clean. Both sides are now compared as absolute paths. tsc and
   clippy were unaffected because both answer relative.
+- `go vet` diagnostics on Windows were silently dropped. The position parser's
+  file group forbade a colon, so an absolute path like `C:\src\main.go:12:6:`
+  never matched, and because that parser skips what it cannot match the run
+  reported clean. The group is lazy now, resolved by the mandatory
+  `:line:col:` suffix, and a Go package header still fails to match.
+- cargo diagnostics all displayed as errors. A clippy warning rendered as an
+  error because the severity was hardcoded rather than read from the message's
+  `level`. The gate is unaffected either way, since any deterministic finding
+  blocks whatever its severity, but the line the user reads now says what the
+  compiler said.
 - `parse_lines` built its rewrite suggestion as `command[..len - 1]`, which
   underflows on a `usize` when the argv is empty. `parse_output` is public, so
   a spec naming that format with no command panicked the gate rather than

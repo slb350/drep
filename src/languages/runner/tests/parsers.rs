@@ -574,3 +574,58 @@ fn tsc_parser_reads_the_severity_word() {
     assert_eq!(findings[1].severity, Severity::Warning);
     assert_eq!(findings[1].kind, "TS6133");
 }
+
+/// cargo's `level` decides the displayed severity.
+///
+/// It was hardcoded to Error, so a clippy warning rendered as an error. The
+/// gate is unaffected either way - any tool finding blocks - but the line the
+/// user reads should say what the compiler said.
+#[test]
+fn cargo_parser_reads_the_diagnostic_level() {
+    let spec = ToolSpec {
+        name: "clippy",
+        output_format: "cargo",
+        ..ToolSpec::default()
+    };
+    let event = |level: &str| {
+        format!(
+            r#"{{"reason":"compiler-message","message":{{"level":"{level}","message":"m","code":{{"code":"C1"}},"spans":[{{"is_primary":true,"file_name":"a.rs","line_start":1,"column_start":1}}]}}}}"#
+        )
+    };
+    for (level, expected) in [
+        ("error", Severity::Error),
+        ("warning", Severity::Warning),
+        ("note", Severity::Info),
+        ("help", Severity::Info),
+        ("failure-note", Severity::Error),
+        ("something-new", Severity::Error),
+    ] {
+        let findings = parse_output(&spec, &event(level), "root").expect("cargo parse");
+        assert_eq!(findings[0].severity, expected, "level {level}");
+    }
+}
+
+/// A Windows absolute path carries a drive-letter colon, and the position
+/// parser must still see the diagnostic.
+///
+/// The file group forbade colons outright, so `C:\src\main.go:12:6: msg` did
+/// not match - and because this parser skips what it cannot match, a Windows
+/// `go vet` run lost every diagnostic and the gate passed clean.
+#[test]
+fn position_parser_reads_a_windows_drive_letter_path() {
+    let spec = ToolSpec {
+        name: "go vet",
+        output_format: "position",
+        ..ToolSpec::default()
+    };
+    let findings = parse_output(
+        &spec,
+        r"C:\src\main.go:12:6: fmt.Printf format %d has arg of wrong type",
+        "root",
+    )
+    .expect("position parse");
+    assert_eq!(findings.len(), 1);
+    assert_eq!(findings[0].file_path, r"C:\src\main.go");
+    assert_eq!(findings[0].line, 12);
+    assert_eq!(findings[0].column, Some(6));
+}
