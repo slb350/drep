@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.9.0] - 2026-09-02
+
 ### Added
 
 - Java, Kotlin, Scala and Groovy are registered languages. A repository of
@@ -758,7 +760,11 @@ LLM for review, and gates commits and pushes on the result. That is all it does.
 - Python, JavaScript, TypeScript, Go and Rust are all first-class. Adding a
   language is an entry in one table.
 
-[Unreleased]: https://github.com/slb350/drep/compare/v2.7.0...HEAD
+[Unreleased]: https://github.com/slb350/drep/compare/v2.9.0...HEAD
+[2.9.0]: https://github.com/slb350/drep/compare/v2.8.0...v2.9.0
+[2.8.0]: https://github.com/slb350/drep/compare/v2.7.2...v2.8.0
+[2.7.2]: https://github.com/slb350/drep/compare/v2.7.1...v2.7.2
+[2.7.1]: https://github.com/slb350/drep/compare/v2.7.0...v2.7.1
 [2.7.0]: https://github.com/slb350/drep/compare/v2.6.1...v2.7.0
 [2.6.1]: https://github.com/slb350/drep/compare/v2.6.0...v2.6.1
 [2.6.0]: https://github.com/slb350/drep/compare/v2.5.1...v2.6.0
