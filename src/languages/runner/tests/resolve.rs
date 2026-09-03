@@ -141,3 +141,102 @@ fn missing_nested_tool_detail_names_the_workspace_search_boundary() {
         outcome.detail
     );
 }
+
+/// A `*.ext` config entry matches any file in the directory with that
+/// extension, and nothing outside it.
+///
+/// C# is why this exists: `dotnet format` must run from the directory holding
+/// the `.csproj` or `.sln`, and those are named after the project, so no fixed
+/// name can find them.
+#[test]
+fn a_glob_config_marker_matches_by_extension() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path();
+    let spec = ToolSpec {
+        name: "globbed",
+        config_files: &["*.csproj"],
+        ..ToolSpec::default()
+    };
+
+    assert!(
+        !is_configured(&spec, root),
+        "an empty directory has no marker"
+    );
+
+    std::fs::write(root.join("notes.txt"), "").unwrap();
+    assert!(
+        !is_configured(&spec, root),
+        "another extension is not the marker"
+    );
+
+    std::fs::write(root.join("Widget.csproj"), "").unwrap();
+    assert!(
+        is_configured(&spec, root),
+        "any name with the extension counts"
+    );
+}
+
+/// The glob is anchored to the directory, not applied recursively.
+///
+/// `configuration_root` already walks ancestors to find the workspace; a
+/// recursive marker would make every ancestor of a project its workspace too,
+/// and the tool would run from the repository root.
+#[test]
+fn a_glob_config_marker_does_not_look_in_subdirectories() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path();
+    std::fs::create_dir(root.join("src")).unwrap();
+    std::fs::write(root.join("src").join("Widget.csproj"), "").unwrap();
+
+    let spec = ToolSpec {
+        name: "globbed",
+        config_files: &["*.csproj"],
+        ..ToolSpec::default()
+    };
+    assert!(
+        !is_configured(&spec, root),
+        "the project lives in src/, so src/ is the workspace and not the root"
+    );
+    assert!(is_configured(&spec, &root.join("src")));
+}
+
+/// A literal name that happens to contain `*` is still literal.
+#[test]
+fn only_a_leading_star_dot_is_treated_as_a_glob() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path();
+    let spec = ToolSpec {
+        name: "literal",
+        config_files: &["eslint.config.js"],
+        ..ToolSpec::default()
+    };
+    std::fs::write(root.join("other.js"), "").unwrap();
+    assert!(
+        !is_configured(&spec, root),
+        "a literal entry must not match by extension"
+    );
+    std::fs::write(root.join("eslint.config.js"), "").unwrap();
+    assert!(is_configured(&spec, root));
+}
+
+/// No shipped tool combines a glob marker with `config_flag`.
+///
+/// `run_tool_at` hands the flag the first `config_files` entry that exists as
+/// a literal path, which a glob never does - so such a tool would run without
+/// the config it cannot start without. checkstyle is the only tool with a
+/// flag and all four of its markers are literal names; this fails if that
+/// stops being true.
+#[test]
+fn no_tool_pairs_a_glob_marker_with_a_config_flag() {
+    for language in crate::languages::definitions::ALL_LANGUAGES {
+        for spec in language.tools {
+            if spec.config_flag.is_some() {
+                assert!(
+                    spec.config_files.iter().all(|name| !name.starts_with("*.")),
+                    "{} passes its config by flag, so its markers must be literal",
+                    spec.name
+                );
+            }
+        }
+    }
+}

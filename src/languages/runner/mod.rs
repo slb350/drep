@@ -241,7 +241,38 @@ fn which_first_in(command: &str, path: &std::ffi::OsStr) -> Option<String> {
 pub fn is_configured(spec: &ToolSpec, root: &Path) -> bool {
     spec.config_files
         .iter()
-        .any(|name| root.join(name).exists())
+        .any(|name| marker_present(root, name))
+}
+
+/// Whether `name` names a marker present directly in `root`.
+///
+/// A `*.ext` entry matches any file in the directory carrying that extension.
+/// C# is the first language whose workspace is identified by a glob rather
+/// than a fixed name: MSBuild has to run from the directory holding the
+/// `.csproj` or `.sln`, and those are named after the project. Keying
+/// `dotnet format` on `.editorconfig` instead - the file it reads its rules
+/// from - picks whichever ancestor happens to hold one, which in a solution
+/// laid out with projects in subdirectories is a directory with no project in
+/// it at all, where MSBuild exits with "Could not find a project or solution
+/// file" and drep reports a configured tool that could not run.
+///
+/// Only a leading `*.` is a glob. A name is otherwise taken literally, so
+/// `.eslintrc.json` and the rest keep costing one `exists` rather than a
+/// directory read.
+fn marker_present(root: &Path, name: &str) -> bool {
+    let Some(extension) = name.strip_prefix("*.") else {
+        return root.join(name).exists();
+    };
+    let Ok(entries) = std::fs::read_dir(root) else {
+        // An unreadable directory holds no marker we can see. `exists()`
+        // answers false the same way for a path we cannot stat.
+        return false;
+    };
+    entries.flatten().any(|entry| {
+        Path::new(&entry.file_name())
+            .extension()
+            .is_some_and(|found| found.eq_ignore_ascii_case(extension))
+    })
 }
 
 /// The nearest configured ancestor for `file`, bounded by `repository_root`.
@@ -436,7 +467,7 @@ pub(crate) async fn run_tool_at(
         Ok(findings) => ToolOutcome {
             tool: spec.name,
             status: ToolStatus::Ok,
-            findings: retain_requested(spec, findings, files),
+            findings: retain_requested(spec, findings, files, workspace_root),
             detail: truncate(other.trim(), 200),
             compilation_succeeded,
         },
@@ -492,26 +523,45 @@ fn eligible_executable(
     ))
 }
 
-/// Narrow a whole-project tool's findings to the files actually being checked.
+/// Narrow a tool's findings to the files actually being checked.
+///
+/// A whole-project tool (`cargo clippy`, `tsc`, `dotnet format`) reports on
+/// everything it compiled, and a commit gate that blocked on pre-existing
+/// issues in untouched code would be unusable: the author cannot fix what they
+/// did not write, and every commit would fail until the whole project was
+/// clean.
 ///
 /// A no-op for a tool that took the file list as arguments - it only reported
-/// on what it was given. For one that did not (`cargo clippy`), the output
-/// covers the entire crate, and a commit gate that blocked on pre-existing
-/// issues in untouched code would be unusable: the author cannot fix what they
-/// did not write, and every commit would fail until the whole crate was clean.
+/// on what it was given. cppcheck is the first shipped tool where that is not
+/// quite true, since it follows `#include` and can raise a finding in a header
+/// the commit never touched; that is left alone here deliberately, because
+/// narrowing every tool changes a contract this module documents and tests
+/// rather than fixing a defect.
 ///
-/// Paths are compared after stripping a leading `./`, because the tool reports
-/// them relative to the project root and the caller's list may carry the
-/// prefix the dash-guard adds.
-fn retain_requested(spec: &ToolSpec, findings: Vec<Finding>, files: &[String]) -> Vec<Finding> {
+/// Comparison is on absolute paths. Stripping a leading `./` is not enough:
+/// the caller's list is workspace-relative (`plan_tasks` builds each argument
+/// by `strip_prefix(workspace_root)`) while a tool is free to answer in either
+/// form, and `dotnet format` answers with the absolute path on every line.
+/// Compared as strings those never match, so the filter emptied the vector and
+/// every C# file was reported clean - the silent pass this module exists to
+/// refuse. `Path::join` with an absolute argument yields that argument, so one
+/// join normalises both forms.
+fn retain_requested(
+    spec: &ToolSpec,
+    findings: Vec<Finding>,
+    files: &[String],
+    workspace_root: &Path,
+) -> Vec<Finding> {
     if spec.accepts_files {
         return findings;
     }
-    let wanted: std::collections::BTreeSet<&str> =
-        files.iter().map(|f| normalize_path(f)).collect();
+    let wanted: std::collections::BTreeSet<PathBuf> = files
+        .iter()
+        .map(|f| workspace_root.join(normalize_path(f)))
+        .collect();
     findings
         .into_iter()
-        .filter(|finding| wanted.contains(normalize_path(&finding.file_path)))
+        .filter(|finding| wanted.contains(&workspace_root.join(normalize_path(&finding.file_path))))
         .collect()
 }
 

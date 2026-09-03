@@ -7,6 +7,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Thirteen more registered languages: Shell, Swift, C, C++, C#, Ruby, PHP, Vue,
+  Svelte, Terraform, Elixir, SQL and Docker. Each brings the deterministic tool
+  its ecosystem actually ships - shellcheck, swiftlint, cppcheck, dotnet format,
+  rubocop, phpcs, tflint, credo, sqlfluff, hadolint - with Vue and Svelte
+  routed to the eslint the project already configures. Every tool's output
+  shape was captured from the real binary rather than from documentation, and
+  `tests/real_tool_output.rs` holds those captures against the shipped specs, so
+  a tool changing its format fails there instead of silently reporting every
+  file clean.
+- A `config_files` entry may be a `*.ext` glob, matching any file in the
+  directory with that extension. C# is the first language whose workspace is
+  identified by a glob rather than a fixed name: MSBuild has to run from the
+  directory holding the `.csproj` or `.sln`, and those are named after the
+  project. Only a leading `*.` is a glob, so every existing literal marker
+  still costs one `exists` rather than a directory read.
+- A language can claim a whole file name, not only an extension.
+  `Path::extension` answers `None` for `Dockerfile`, `Gemfile` and `Rakefile`,
+  so an extension-only registry dropped them ahead of both analysis layers -
+  the same silent pass unregistered `.java` produced, on files most
+  repositories have. Extension is matched first, so a name can never shadow a
+  language that claims the suffix and `Dockerfile.ts` stays TypeScript.
+
+### Changed
+
+- `parsers.rs` is a directory module with one submodule per output *shape*
+  rather than per tool. Five of the checkers drep now ships emit SARIF, so they
+  share one parser and a sixth SARIF producer costs a table entry instead of a
+  parser. `definitions.rs` is split by ecosystem for the same reason: both
+  files were near the 600-line limit with thirteen languages due.
+
+### Fixed
+
+- A whole-project tool that reports absolute paths had every finding dropped.
+  `retain_requested` compared reported paths against the caller's list as
+  strings, and that list is workspace-relative because `plan_tasks` builds each
+  argument by stripping the workspace root - so `dotnet format`, which prints
+  the absolute path on every diagnostic line, matched nothing and every C# file
+  came back clean. Both sides are now compared as absolute paths. tsc and
+  clippy were unaffected because both answer relative.
+- `json_kind_name` was untested: the error for a non-array tool payload
+  asserted only the kind it *wanted*, so the half naming what actually arrived
+  passed under any answer and two mutants survived on it.
+
 ## [2.9.0] - 2026-09-02
 
 ### Added

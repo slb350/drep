@@ -499,3 +499,80 @@ fn no_config_flag_leaves_the_command_alone() {
     let (_dir, argv) = argv_after_running(&spec, &["pyproject.toml"]);
     assert_eq!(argv, vec!["check", "Sample.java"]);
 }
+
+/// A whole-project tool that answers with absolute paths still has its
+/// findings kept.
+///
+/// `plan_tasks` builds each argument by stripping `workspace_root`, so the
+/// caller's list is workspace-relative, while `dotnet format` prints the
+/// absolute path on every diagnostic line. Compared as strings those never
+/// match, so the filter emptied the vector and every C# file came back clean -
+/// a tool that ran, found real defects, and reported a pass.
+#[tokio::test]
+async fn a_whole_project_tools_absolute_paths_still_match_the_requested_files() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path();
+    std::fs::write(root.join("marker"), "").expect("config file");
+
+    // The stub prints the absolute path of the file it was never handed,
+    // exactly as `dotnet format` does.
+    let absolute = root.join("asked.rs");
+    let stub = format!(
+        "#!/bin/sh\nprintf '%s\\n' '{}'\n",
+        absolute.to_string_lossy()
+    );
+    let tool = root.join("wholeproject");
+    write_executable(&tool, &stub);
+
+    let spec = ToolSpec {
+        name: "wholeproject",
+        command: &["wholeproject"],
+        local_paths: &["wholeproject"],
+        config_files: &["marker"],
+        output_format: "lines",
+        accepts_files: false,
+        ..ToolSpec::default()
+    };
+
+    let outcome = run_tool(&spec, root, &["asked.rs".to_owned()]).await;
+    assert_eq!(outcome.status, ToolStatus::Ok, "detail: {}", outcome.detail);
+    assert_eq!(
+        outcome.findings.len(),
+        1,
+        "an absolute path naming the requested file is the requested file"
+    );
+}
+
+/// The narrowing still drops a whole-project tool's findings in files the
+/// commit did not touch, absolute or not.
+#[tokio::test]
+async fn a_whole_project_tools_untouched_files_are_still_dropped() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path();
+    std::fs::write(root.join("marker"), "").expect("config file");
+
+    let elsewhere = root.join("untouched.rs");
+    let stub = format!(
+        "#!/bin/sh\nprintf '%s\\n' '{}'\n",
+        elsewhere.to_string_lossy()
+    );
+    let tool = root.join("wholeproject");
+    write_executable(&tool, &stub);
+
+    let spec = ToolSpec {
+        name: "wholeproject",
+        command: &["wholeproject"],
+        local_paths: &["wholeproject"],
+        config_files: &["marker"],
+        output_format: "lines",
+        accepts_files: false,
+        ..ToolSpec::default()
+    };
+
+    let outcome = run_tool(&spec, root, &["asked.rs".to_owned()]).await;
+    assert_eq!(outcome.status, ToolStatus::Ok, "detail: {}", outcome.detail);
+    assert!(
+        outcome.findings.is_empty(),
+        "a commit gate must not block on a file the commit never touched"
+    );
+}

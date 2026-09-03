@@ -33,12 +33,12 @@ pub(super) fn parse_sarif(spec: &ToolSpec, output: &str) -> Result<Vec<Finding>,
 
     let mut findings = Vec::new();
     for run in runs {
-        let results = run
+        for result in run
             .get("results")
             .and_then(Value::as_array)
-            .cloned()
-            .unwrap_or_default();
-        for result in results {
+            .into_iter()
+            .flatten()
+        {
             let kind = result
                 .get("ruleId")
                 .and_then(Value::as_str)

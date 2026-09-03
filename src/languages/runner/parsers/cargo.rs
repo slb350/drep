@@ -26,43 +26,41 @@ pub(super) fn parse_cargo(spec: &ToolSpec, output: &str) -> Result<Vec<Finding>,
             continue;
         }
 
-        let message = event.get("message").cloned().unwrap_or(Value::Null);
+        let message = event.get("message");
         // First primary span. With cargo's output exactly one span per
         // diagnostic is primary, and array order is preserved.
         let primary = message
-            .get("spans")
+            .and_then(|m| m.get("spans"))
             .and_then(Value::as_array)
             .and_then(|spans| {
                 spans
                     .iter()
                     .find(|s| s.get("is_primary") == Some(&Value::Bool(true)))
-            })
-            .cloned()
-            .unwrap_or(Value::Null);
+            });
 
         let kind = message
-            .get("code")
+            .and_then(|m| m.get("code"))
             .and_then(|c| c.get("code"))
             .and_then(Value::as_str)
             .map(str::to_owned)
             .unwrap_or_else(|| spec.name.to_owned());
 
         let file_path = primary
-            .get("file_name")
+            .and_then(|p| p.get("file_name"))
             .and_then(Value::as_str)
             .unwrap_or("")
             .to_owned();
         let line = primary
-            .get("line_start")
+            .and_then(|p| p.get("line_start"))
             .and_then(Value::as_u64)
             .map(|n| n as u32)
             .unwrap_or(1);
         let column = primary
-            .get("column_start")
+            .and_then(|p| p.get("column_start"))
             .and_then(Value::as_u64)
             .map(|n| n as u32);
         let message_text = message
-            .get("message")
+            .and_then(|m| m.get("message"))
             .and_then(Value::as_str)
             .unwrap_or("")
             .to_owned();

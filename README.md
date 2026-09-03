@@ -199,10 +199,39 @@ Three rules decide what runs:
 | Kotlin | `.kt` `.kts` | ktlint |
 | Scala | `.scala` `.sc` | none |
 | Groovy | `.groovy` `.gradle` | none |
+| Shell | `.sh` `.bash` | shellcheck |
+| Swift | `.swift` | swiftlint |
+| C | `.c` `.h` | cppcheck |
+| C++ | `.cpp` `.hpp` `.cc` `.hh` `.cxx` `.hxx` | cppcheck |
+| C# | `.cs` | dotnet format |
+| Ruby | `.rb` `.rake` `.gemspec`, `Gemfile`, `Rakefile` | rubocop |
+| PHP | `.php` | phpcs |
+| Vue | `.vue` | eslint |
+| Svelte | `.svelte` | eslint |
+| Terraform | `.tf` `.tfvars` | tflint |
+| Elixir | `.ex` `.exs` | credo |
+| SQL | `.sql` | sqlfluff |
+| Docker | `Dockerfile`, `Containerfile`, `.dockerfile` | hadolint |
+
+A language is matched on file extension, and on the whole file name for the
+files that have no extension - `Dockerfile`, `Gemfile`, `Rakefile`. Extension
+wins where both could match, so `Dockerfile.ts` is TypeScript.
 
 Scala and Groovy have no deterministic tool. scalafmt, scalafix and CodeNarc are
 all build-plugin-first, with no standalone CLI drep can invoke the way it invokes
 ruff. Their entries exist for the semantic half, which needs no tool.
+
+Most tools run only where the project has configured them, so a repository with
+no `.rubocop.yml` gets no RuboCop findings. cppcheck is the exception drep
+already makes for gofmt and clippy: it has no conventional config file, so a
+project marker (`CMakeLists.txt`, `Makefile`, `meson.build`,
+`compile_commands.json`) is what opts a C or C++ tree in.
+
+`dotnet format` and `tsc` and `cargo clippy` all check a project rather than a
+file list, so drep runs them bare and narrows their findings back to the files
+it was asked about. `mix credo` needs the project's dependencies fetched; when
+they are not, drep reports the check as unavailable, which is a failed run
+rather than a pass.
 
 checkstyle is the one checker that will not look for its own config, so the
 ruleset drep discovers is handed to it with `-c`. It refuses to run without one.

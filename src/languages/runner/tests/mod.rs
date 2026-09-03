@@ -6,6 +6,12 @@
 //! If you add a file here, declare it in this directory's `mod.rs`.
 
 mod parsers;
+mod parsers_credo;
+mod parsers_msbuild;
+mod parsers_phpcs;
+mod parsers_rubocop;
+mod parsers_shellcheck;
+mod parsers_sqlfluff;
 mod resolve;
 mod run_tool;
 pub(crate) mod support;

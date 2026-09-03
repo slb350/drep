@@ -27,15 +27,43 @@ pub fn detect(path: &Path) -> Option<&'static LanguageSupport> {
 /// needs; recovering it afterwards by comparing pointers meant scanning the
 /// table twice for an answer the first scan already had.
 fn detect_index(path: &Path) -> Option<usize> {
-    let ext = path.extension()?.to_str()?;
-    // No allocation: the table's extensions are ASCII literals that all begin
-    // with a dot, so `[1..]` is the bare suffix and `eq_ignore_ascii_case` does
-    // the case folding that `to_lowercase()` used to do into two throwaway
-    // `String`s per call - on a function called once per walked file.
+    // Extension first, whole name second, and never the other way round: a
+    // name match must not shadow a language that claims the suffix, or a file
+    // called `Dockerfile.ts` would stop being TypeScript.
+    if let Some(ext) = path.extension().and_then(|e| e.to_str())
+        && let Some(index) = by_extension(ext)
+    {
+        return Some(index);
+    }
+    by_filename(path.file_name()?.to_str()?)
+}
+
+/// The language claiming `ext`, which carries no leading dot.
+///
+/// No allocation: the table's extensions are ASCII literals that all begin
+/// with a dot, so `[1..]` is the bare suffix and `eq_ignore_ascii_case` does
+/// the case folding that `to_lowercase()` used to do into two throwaway
+/// `String`s per call - on a function called once per walked file.
+fn by_extension(ext: &str) -> Option<usize> {
     ALL_LANGUAGES.iter().position(|lang| {
         lang.extensions
             .iter()
             .any(|known| known[1..].eq_ignore_ascii_case(ext))
+    })
+}
+
+/// The language claiming the whole file name `name`.
+///
+/// `Path::extension` answers `None` for `Dockerfile`, `Makefile`, `Gemfile`
+/// and `Jenkinsfile`, so without this they are dropped at language grouping
+/// and reported as a clean run - the silent pass drep exists to refuse.
+/// Case-insensitive, matching the extension lookup and the rest of drep's
+/// file-target policy.
+fn by_filename(name: &str) -> Option<usize> {
+    ALL_LANGUAGES.iter().position(|lang| {
+        lang.filenames
+            .iter()
+            .any(|known| known.eq_ignore_ascii_case(name))
     })
 }
 
@@ -245,7 +273,20 @@ mod tests {
                 "java",
                 "kotlin",
                 "scala",
-                "groovy"
+                "groovy",
+                "shell",
+                "swift",
+                "c",
+                "cpp",
+                "csharp",
+                "ruby",
+                "php",
+                "vue",
+                "svelte",
+                "terraform",
+                "elixir",
+                "sql",
+                "docker"
             ]
         );
     }
@@ -377,5 +418,99 @@ mod tests {
             count, 1,
             "JavaScript and TypeScript both declare node_modules; the set must collapse"
         );
+    }
+
+    /// One representative path per extension and filename the coverage
+    /// expansion registered. Each is the language `detect` must answer for
+    /// the deterministic layer to ever run: a dropped entry is the silent
+    /// pass - analyzed as clean, having analyzed nothing - that registering
+    /// the language exists to prevent.
+    #[test]
+    fn newly_registered_extensions_and_filenames_resolve_to_their_languages() {
+        for (path, expected) in [
+            ("deploy.sh", "shell"),
+            ("build.bash", "shell"),
+            ("App.swift", "swift"),
+            ("main.c", "c"),
+            ("header.h", "c"),
+            ("impl.cpp", "cpp"),
+            ("widget.hpp", "cpp"),
+            ("Program.cs", "csharp"),
+            ("app.rb", "ruby"),
+            ("task.rake", "ruby"),
+            ("app.gemspec", "ruby"),
+            ("lib.php", "php"),
+            ("Widget.vue", "vue"),
+            ("Page.svelte", "svelte"),
+            ("main.tf", "terraform"),
+            ("vars.tfvars", "terraform"),
+            ("application.ex", "elixir"),
+            ("test.exs", "elixir"),
+            ("query.sql", "sql"),
+            ("Dockerfile", "docker"),
+            ("Containerfile", "docker"),
+            ("CI.dockerfile", "docker"),
+            ("Gemfile", "ruby"),
+            ("Rakefile", "ruby"),
+        ] {
+            let detected = detect(Path::new(path));
+            assert_eq!(
+                detected.map(|lang| lang.name),
+                Some(expected),
+                "{path} should resolve to {expected}"
+            );
+        }
+    }
+
+    /// A whole-name claim must never shadow an extension claim: `Dockerfile`
+    /// is Docker's, but `Dockerfile.ts` is TypeScript, and a lookup order
+    /// that tried names first would silently hand `.ts` files to hadolint's
+    /// SARIF and skip tsc entirely.
+    #[test]
+    fn extension_wins_over_whole_name_match() {
+        assert_eq!(
+            detect(Path::new("Dockerfile.ts")).map(|lang| lang.name),
+            Some("typescript")
+        );
+    }
+
+    /// Every registered entry carries the fields the report and the prompt
+    /// render. An empty `conventions` is not fatal, but it is also not what
+    /// any entry here intends, and an empty `name` or `display_name` would
+    /// render as a blank line in `doctor`'s listing.
+    #[test]
+    fn every_language_declares_a_name_a_display_name_and_conventions() {
+        for lang in ALL_LANGUAGES {
+            assert!(!lang.name.is_empty(), "name is empty: {lang:?}");
+            assert!(
+                !lang.display_name.is_empty(),
+                "{} has no display name",
+                lang.name
+            );
+            assert!(
+                !lang.conventions.is_empty(),
+                "{} has no conventions for the prompt",
+                lang.name
+            );
+        }
+    }
+
+    /// No two languages may claim the same extension or filename: the lookup
+    /// answers with whichever entry registered first, so a duplicate is
+    /// silently won by one side and the other language's files are never
+    /// analyzed by its own tools. This must be a test, not a convention,
+    /// because nothing in the type system stops the collision.
+    #[test]
+    fn no_two_languages_claim_the_same_extension_or_filename() {
+        let mut seen: BTreeSet<&str> = BTreeSet::new();
+        for lang in ALL_LANGUAGES {
+            for claimed in lang.extensions.iter().chain(lang.filenames.iter()) {
+                assert!(
+                    seen.insert(claimed),
+                    "{claimed} is claimed by {} and an earlier language",
+                    lang.name
+                );
+            }
+        }
     }
 }

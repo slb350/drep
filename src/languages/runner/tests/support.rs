@@ -101,3 +101,75 @@ pub(crate) fn ktlint_like_spec() -> ToolSpec {
         ..ToolSpec::default()
     }
 }
+
+pub(crate) fn shellcheck_like_spec() -> ToolSpec {
+    ToolSpec {
+        name: "shellcheck",
+        command: &["shellcheck", "-f", "json"],
+        local_paths: &[],
+        config_files: &[".shellcheckrc"],
+        output_format: "shellcheck",
+        diagnostics_stream: "stdout",
+        ..ToolSpec::default()
+    }
+}
+
+pub(crate) fn rubocop_like_spec() -> ToolSpec {
+    ToolSpec {
+        name: "rubocop",
+        command: &["rubocop", "--format", "json", "--force-exclusion"],
+        local_paths: &["bin/rubocop"],
+        config_files: &[".rubocop.yml"],
+        output_format: "rubocop",
+        diagnostics_stream: "stdout",
+        ..ToolSpec::default()
+    }
+}
+
+pub(crate) fn phpcs_like_spec() -> ToolSpec {
+    ToolSpec {
+        name: "phpcs",
+        command: &["phpcs", "--report=json"],
+        local_paths: &["vendor/bin/phpcs"],
+        config_files: &["phpcs.xml"],
+        output_format: "phpcs",
+        diagnostics_stream: "stdout",
+        ..ToolSpec::default()
+    }
+}
+
+pub(crate) fn credo_like_spec() -> ToolSpec {
+    ToolSpec {
+        name: "credo",
+        command: &["mix", "credo", "--format", "json"],
+        local_paths: &[],
+        config_files: &[".credo.exs"],
+        output_format: "credo",
+        diagnostics_stream: "stdout",
+        ..ToolSpec::default()
+    }
+}
+
+pub(crate) fn sqlfluff_like_spec() -> ToolSpec {
+    ToolSpec {
+        name: "sqlfluff",
+        command: &["sqlfluff", "lint", "--format", "json"],
+        local_paths: &["venv/bin/sqlfluff"],
+        config_files: &[".sqlfluff"],
+        output_format: "sqlfluff",
+        diagnostics_stream: "stdout",
+        ..ToolSpec::default()
+    }
+}
+
+pub(crate) fn dotnet_format_like_spec() -> ToolSpec {
+    ToolSpec {
+        name: "dotnet format",
+        command: &["dotnet", "format", "--verify-no-changes", "--no-restore"],
+        local_paths: &[],
+        config_files: &[".editorconfig"],
+        output_format: "msbuild",
+        diagnostics_stream: "stdout",
+        ..ToolSpec::default()
+    }
+}

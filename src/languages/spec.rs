@@ -111,6 +111,8 @@ impl Default for ToolSpec {
 ///     name: Registry key (lowercase, e.g. "typescript").
 ///     display_name: How the language is named to the LLM and to users.
 ///     extensions: Lowercased suffixes this language owns, including the dot.
+///     filenames: Whole file names this language owns, for extensionless files
+///         such as `Dockerfile` and `Gemfile`.
 ///     tools: Deterministic checkers, in the order they should run.
 ///     conventions: Language-specific guidance appended to the analysis
 ///         prompt - the part that used to be hardcoded as PEP 8.
@@ -125,6 +127,19 @@ pub struct LanguageSupport {
     pub display_name: &'static str,
     /// Lowercased suffixes this language owns, including the dot.
     pub extensions: &'static [&'static str],
+    /// Whole file names this language owns, for files that carry no extension
+    /// at all.
+    ///
+    /// `Path::extension` returns `None` for `Dockerfile`, `Gemfile` and
+    /// `Rakefile`, so an extension-only registry drops them before either
+    /// analysis layer sees them - the same silent pass that unregistered
+    /// `.java` produced, on files most repositories have. Only names a
+    /// registered language actually claims belong here: `Makefile` and
+    /// `Jenkinsfile` are deliberately absent, because no language claims them
+    /// and a name with no owner would still resolve to nothing.
+    /// Matched only when the extension lookup finds nothing, so a name here
+    /// can never shadow a language that claims the suffix.
+    pub filenames: &'static [&'static str],
     /// Deterministic checkers, in the order they should run.
     pub tools: &'static [&'static ToolSpec],
     /// Language-specific guidance appended to the analysis prompt - the part

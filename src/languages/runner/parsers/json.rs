@@ -6,7 +6,7 @@ use crate::analysis::findings::{Finding, Severity};
 use crate::languages::runner::ToolOutputError;
 use crate::languages::spec::ToolSpec;
 
-use super::json_kind_name;
+use super::{expect_array, json_payload};
 
 /// Normalise ruff/eslint-shaped JSON into Findings.
 pub(super) fn parse_json(
@@ -14,26 +14,10 @@ pub(super) fn parse_json(
     output: &str,
     root_name: &str,
 ) -> Result<Vec<Finding>, ToolOutputError> {
-    // Empty input parses as `[]` - ruff and eslint print zero findings as
-    // literally nothing on stdout, and that must not be a parse error.
-    // Anything else that fails to parse is a real error: it means we are
-    // not reading what we think we are.
-    let trimmed = output.trim();
-    let payload: Value = if trimmed.is_empty() {
-        Value::Array(Vec::new())
-    } else {
-        serde_json::from_str(trimmed).map_err(|err| {
-            ToolOutputError(format!("{} produced unparseable JSON: {err}", spec.name))
-        })?
+    let Some(payload) = json_payload(spec, output)? else {
+        return Ok(Vec::new());
     };
-
-    let entries = payload.as_array().ok_or_else(|| {
-        ToolOutputError(format!(
-            "{}: expected a JSON array, got {}",
-            spec.name,
-            json_kind_name(&payload)
-        ))
-    })?;
+    let entries = expect_array(spec, &payload)?;
 
     let mut findings = Vec::new();
     for entry in entries {
@@ -91,12 +75,12 @@ pub(super) fn parse_json(
             .and_then(Value::as_str)
             .map(str::to_owned)
             .unwrap_or_else(|| root_name.to_owned());
-        let messages = obj
+        for message in obj
             .get("messages")
             .and_then(Value::as_array)
-            .cloned()
-            .unwrap_or_default();
-        for message in messages {
+            .into_iter()
+            .flatten()
+        {
             let obj = message.as_object();
             let line = obj
                 .and_then(|m| m.get("line"))
@@ -143,20 +127,10 @@ pub(super) fn parse_json(
 /// directory, so a finding's path resolves to nothing drep was asked to
 /// check. The JSON reporter emits plain absolute paths instead.
 pub(super) fn parse_ktlint(spec: &ToolSpec, output: &str) -> Result<Vec<Finding>, ToolOutputError> {
-    let trimmed = output.trim();
-    if trimmed.is_empty() {
+    let Some(payload) = json_payload(spec, output)? else {
         return Ok(Vec::new());
-    }
-    let payload: Value = serde_json::from_str(trimmed).map_err(|err| {
-        ToolOutputError(format!("{} produced unparseable JSON: {err}", spec.name))
-    })?;
-    let entries = payload.as_array().ok_or_else(|| {
-        ToolOutputError(format!(
-            "{}: expected a JSON array, got {}",
-            spec.name,
-            json_kind_name(&payload)
-        ))
-    })?;
+    };
+    let entries = expect_array(spec, &payload)?;
 
     let mut findings = Vec::new();
     for entry in entries {
@@ -165,12 +139,12 @@ pub(super) fn parse_ktlint(spec: &ToolSpec, output: &str) -> Result<Vec<Finding>
             .and_then(Value::as_str)
             .unwrap_or("")
             .to_owned();
-        let errors = entry
+        for error in entry
             .get("errors")
             .and_then(Value::as_array)
-            .cloned()
-            .unwrap_or_default();
-        for error in errors {
+            .into_iter()
+            .flatten()
+        {
             findings.push(Finding::deterministic(
                 error
                     .get("rule")

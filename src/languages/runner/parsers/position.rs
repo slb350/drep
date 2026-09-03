@@ -1,14 +1,16 @@
-//! Compiler-style positions: `file:line:col: message` and
-//! `file(line,col): code: message`.
+//! Compiler-style positions: `file:line:col: message`,
+//! `file(line,col): code: message`, and MSBuild's severity-carrying variant
+//! of the same shape.
 //!
-//! Both are line-oriented and deliberately *skip* lines they do not recognise,
-//! because Go interleaves `# example.com/pkg` package headers among its
-//! diagnostics; a parser that errored on those would report every Go package
-//! unanalyzable.
+//! All three are line-oriented and deliberately *skip* lines they do not
+//! recognise, because Go interleaves `# example.com/pkg` package headers
+//! among its diagnostics and MSBuild interleaves restore and build chatter
+//! among its own; a parser that errored on those would report every Go
+//! package or C# project unanalyzable.
 
 use std::sync::LazyLock;
 
-use regex::Regex;
+use regex::{Captures, Regex};
 
 use crate::analysis::findings::{Finding, Severity};
 use crate::languages::spec::ToolSpec;
@@ -29,6 +31,25 @@ static TSC: LazyLock<Regex> = LazyLock::new(|| {
         r"^(?P<file>.+?)\((?P<line>\d+),(?P<col>\d+)\):\s*(?:error|warning)\s+(?P<code>TS\d+):\s*(?P<message>.+)$",
     )
     .expect("TSC regex compiles")
+});
+
+/// `/tmp/cs/Program.cs(2,8): error WHITESPACE: message [/tmp/cs/cs.csproj]` -
+/// the MSBuild shape `dotnet format --verify-no-changes` writes to stdout.
+///
+/// Modeled on the tsc shape but parameterised where tsc is fixed: the
+/// severity word is captured rather than assumed, and the code is any
+/// identifier (`WHITESPACE`, `CS0168`, `IDE0059`) rather than `TS\d+`, so
+/// neither regex can serve the other's tool.
+///
+/// The trailing ` [project]` group is optional and anchored to `$`, so it
+/// strips exactly the last bracketed suffix - the project name MSBuild
+/// appends to every diagnostic - and leaves bracketed text inside the
+/// message alone.
+static MSBUILD: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r"^(?P<file>.+?)\((?P<line>\d+),(?P<col>\d+)\):\s*(?P<severity>error|warning|info)\s+(?P<code>[A-Za-z0-9_]+):\s*(?P<message>.*?)(?:\s+\[[^\]]*\])?$",
+    )
+    .expect("MSBUILD regex compiles")
 });
 
 /// `file:line:col: message`, skipping the package headers Go interleaves.
@@ -65,36 +86,68 @@ pub(super) fn parse_positions(spec: &ToolSpec, output: &str) -> Vec<Finding> {
     findings
 }
 
-/// `file(line,col): error TS1234: message`.
-pub(super) fn parse_tsc(spec: &ToolSpec, output: &str) -> Vec<Finding> {
+/// Extract one finding from every line `re` matches, skipping the rest.
+///
+/// `file`, `code` and `message` are mandatory named groups in both the tsc
+/// and MSBuild regexes, so indexing cannot miss once `captures` has matched;
+/// the `unwrap_or` fallbacks they replace were dead. `line` and `col` keep
+/// theirs because an overflowing number really does fail `u32` parsing.
+/// The severity word is the one place the two shapes disagree - tsc's regex
+/// matches it without capturing, MSBuild's captures it - so it arrives as a
+/// closure over the captures.
+///
+/// The message is trimmed because the MSBUILD regex's lazy `message` group
+/// can leave a trailing space on a line without a project suffix.
+fn parse_captured(
+    output: &str,
+    re: &Regex,
+    severity: impl Fn(&Captures<'_>) -> Severity,
+) -> Vec<Finding> {
     let mut findings = Vec::new();
     for line in output.lines() {
-        let Some(caps) = TSC.captures(line.trim()) else {
+        let Some(caps) = re.captures(line.trim()) else {
+            // Restore chatter, package headers and blank lines are not
+            // diagnostics.
             continue;
         };
-        let file = caps.name("file").map(|m| m.as_str()).unwrap_or("");
-        let line_num = caps
-            .name("line")
-            .and_then(|m| m.as_str().parse::<u32>().ok())
-            .unwrap_or(1);
-        let col = caps
-            .name("col")
-            .and_then(|m| m.as_str().parse::<u32>().ok())
-            .unwrap_or(1);
-        let code = caps.name("code").map(|m| m.as_str()).unwrap_or(spec.name);
-        let message = caps
-            .name("message")
-            .map(|m| m.as_str().trim())
-            .unwrap_or("");
+        let line_num = caps["line"].parse::<u32>().ok().unwrap_or(1);
+        let col = caps["col"].parse::<u32>().ok().unwrap_or(1);
         findings.push(Finding::deterministic(
-            code.to_owned(),
-            Severity::Error,
-            file.to_owned(),
+            caps["code"].to_owned(),
+            severity(&caps),
+            caps["file"].to_owned(),
             line_num,
             Some(col),
-            message.to_owned(),
+            caps["message"].trim().to_owned(),
             None,
         ));
     }
     findings
+}
+
+/// `file(line,col): error TS1234: message`.
+pub(super) fn parse_tsc(output: &str) -> Vec<Finding> {
+    parse_captured(output, &TSC, |_| Severity::Error)
+}
+
+/// `file(line,col): severity CODE: message [project]`, skipping other lines.
+///
+/// Line-oriented and skip-on-no-match, exactly like `parse_tsc`: MSBuild
+/// interleaves restore and build chatter among the diagnostics, and erroring
+/// on those would report every C# project unanalyzable.
+pub(super) fn parse_msbuild(output: &str) -> Vec<Finding> {
+    parse_captured(output, &MSBUILD, |caps| msbuild_severity(&caps["severity"]))
+}
+
+/// MSBuild's severity word to drep severity.
+///
+/// The regex admits only `error`, `warning` and `info`, so the catch-all is
+/// reached for `info` - kept as a match arm rather than falling through so
+/// each of the three words stays separately observable.
+fn msbuild_severity(word: &str) -> Severity {
+    match word {
+        "error" => Severity::Error,
+        "warning" => Severity::Warning,
+        _ => Severity::Info,
+    }
 }
