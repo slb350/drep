@@ -29,7 +29,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rather than against checkstyle, since it is where the rest of the JVM linters
   converge, and it strips the `file:` URI scheme and percent-decodes the path so
   findings are filed under a path that matches the files drep was asked to
-  check. ktlint's reporter is
+  check. A Windows producer's `file:/C:/repo/Sample.java` also loses the root
+  slash RFC 8089 puts ahead of the drive letter: left in place it makes the path
+  drive-relative, so it matches nothing in the absolute-path table `check` uses
+  to rewrite a finding back to the path the user asked about, and every finding
+  keeps a location no file has. ktlint's reporter is
   shaped like eslint's with different keys throughout, so it gets its own format
   rather than teaching the `json` parser to guess between the two.
 

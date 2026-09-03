@@ -19,6 +19,7 @@ use serde_json::Value;
 
 use crate::analysis::findings::{Finding, Severity};
 use crate::languages::runner::ToolOutputError;
+use crate::languages::runner::uri::strip_file_uri;
 use crate::languages::spec::ToolSpec;
 
 /// `[vet: ]./path/to/file.go:12:6: message` - the compiler-style position
@@ -447,68 +448,6 @@ fn sarif_severity(level: Option<&str>) -> Severity {
         Some("note") | Some("none") => Severity::Info,
         _ => Severity::Warning,
     }
-}
-
-/// `file:/abs/path` and `file:///abs/path` both name a local path. drep matches
-/// findings against the paths it was asked to check, so a finding left under a
-/// URI is filed against a path that matches nothing and is silently dropped.
-///
-/// The path is percent-decoded because producers encode it: checkstyle's
-/// SarifLogger maps a space to `%20` and a quote to `%22`, and a spec-compliant
-/// producer percent-encodes everything reserved. Left encoded, the finding's
-/// path never matches the file drep was asked to check.
-fn strip_file_uri(uri: &str) -> String {
-    let path = uri
-        .strip_prefix("file://")
-        .or_else(|| uri.strip_prefix("file:"))
-        .unwrap_or(uri);
-    // `file:///abs` leaves a leading empty authority; `file:/abs` does not.
-    if path.is_empty() {
-        uri.to_owned()
-    } else {
-        percent_decode(path)
-    }
-}
-
-/// Decode RFC 3986 `%HH` sequences byte-wise. Anything that is not a valid
-/// triplet passes through verbatim, and malformed UTF-8 at the end of decoding
-/// degrades lossily rather than failing the finding. checkstyle encodes only
-/// the space and the quote, so a literal `%20` *in* a filename is ambiguous
-/// with an encoded one at the source; decoding is the better wrong there,
-/// because spaces in paths are common and `%20` in a name is not.
-fn percent_decode(text: &str) -> String {
-    if !text.contains('%') {
-        return text.to_owned();
-    }
-    let bytes = text.as_bytes();
-    let mut decoded = Vec::with_capacity(bytes.len());
-    let mut i = 0;
-    while i < bytes.len() {
-        let triplet = match bytes.get(i..i + 3) {
-            // `hi * 16 + lo`, not `hi << 4 | lo`: the two nibbles never share
-            // a set bit, so `|` and `^` agree on every reachable input and the
-            // mutation gate cannot observe the difference.
-            Some(&[b'%', hi, lo]) => hex_value(hi)
-                .zip(hex_value(lo))
-                .map(|(hi, lo)| hi * 16 + lo),
-            _ => None,
-        };
-        match triplet {
-            Some(byte) => {
-                decoded.push(byte);
-                i += 3;
-            }
-            None => {
-                decoded.push(bytes[i]);
-                i += 1;
-            }
-        }
-    }
-    String::from_utf8_lossy(&decoded).into_owned()
-}
-
-fn hex_value(byte: u8) -> Option<u8> {
-    (byte as char).to_digit(16).map(|d| d as u8)
 }
 
 /// ktlint's JSON reporter: one record per file with a nested `errors` array.

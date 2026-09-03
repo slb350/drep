@@ -287,6 +287,19 @@ fn sarif_parser_reads_rule_location_and_message() {
     assert_eq!(findings[0].message, "Unused import - java.util.List.");
 }
 
+/// One SARIF result naming `uri`, for the URI-handling tests.
+fn sarif_for_uri(uri: &str) -> String {
+    format!(
+        r#"{{ "version": "2.1.0", "runs": [ {{ "results": [
+            {{ "level": "warning",
+              "locations": [ {{ "physicalLocation": {{
+                  "artifactLocation": {{ "uri": "{uri}" }},
+                  "region": {{ "startLine": 1 }} }} }} ],
+              "message": {{ "text": "m" }}, "ruleId": "r" }}
+        ] }} ] }}"#
+    )
+}
+
 /// SARIF carries a URI, drep matches findings against the paths it was asked
 /// to check. A finding filed under `file:/private/tmp/...` is filed under a
 /// path that never matches, so it is dropped as belonging to another file.
@@ -303,19 +316,45 @@ fn sarif_parser_strips_the_file_uri_scheme() {
 #[test]
 fn sarif_parser_percent_decodes_the_uri_path() {
     let spec = checkstyle_like_spec();
-    let sarif = r#"{
-      "version": "2.1.0",
-      "runs": [ { "results": [
-        { "level": "warning",
-          "locations": [ { "physicalLocation": {
-              "artifactLocation": { "uri": "file:/repo/My%20Sources/Has%22Quote%22.java" },
-              "region": { "startLine": 3 } } } ],
-          "message": { "text": "m" },
-          "ruleId": "r" }
-      ] } ]
-    }"#;
-    let findings = parse_output(&spec, sarif, "root").unwrap();
+    let sarif = sarif_for_uri("file:/repo/My%20Sources/Has%22Quote%22.java");
+    let findings = parse_output(&spec, &sarif, "root").unwrap();
     assert_eq!(findings[0].file_path, "/repo/My Sources/Has\"Quote\".java");
+}
+
+/// The drive-root rule, end to end through the parser; `strip_drive_root` has
+/// the reasoning.
+#[test]
+fn sarif_parser_drops_the_root_slash_before_a_windows_drive() {
+    let spec = checkstyle_like_spec();
+    let findings =
+        parse_output(&spec, &sarif_for_uri("file:/C:/repo/Sample.java"), "root").unwrap();
+    assert_eq!(findings[0].file_path, "C:/repo/Sample.java");
+}
+
+/// Every condition on the drive prefix has to hold, and each fixture here fails
+/// exactly one of them: the drive strip must not fire on an ordinary POSIX
+/// path, on a first component that merely starts with a letter, or on a name
+/// whose colon is not a drive separator.
+#[test]
+fn sarif_parser_keeps_paths_that_only_look_like_a_drive() {
+    let spec = checkstyle_like_spec();
+    for path in [
+        // No drive letter at all - the ordinary POSIX case.
+        "/repo/Sample.java",
+        // A letter, but no colon after it.
+        "/C/repo/Sample.java",
+        // A colon, but two characters in rather than one.
+        "/repo:/Sample.java",
+        // A drive-looking prefix that is not bounded by a separator.
+        "/C:x/Sample.java",
+        // Already drive-absolute: nothing to strip, and stripping would eat
+        // the drive letter.
+        "C:/repo/Sample.java",
+    ] {
+        let sarif = sarif_for_uri(&format!("file:{path}"));
+        let findings = parse_output(&spec, &sarif, "root").unwrap();
+        assert_eq!(findings[0].file_path, path, "{path} should pass through");
+    }
 }
 
 /// A `%` that does not open a valid hex triplet is a literal, not an encoding:
@@ -328,15 +367,7 @@ fn sarif_parser_leaves_malformed_percent_sequences_alone() {
         "file:/repo/100%2x.java",
         "file:/repo/ends%2.java",
     ] {
-        let sarif = format!(
-            r#"{{ "version": "2.1.0", "runs": [ {{ "results": [
-                {{ "level": "warning",
-                  "locations": [ {{ "physicalLocation": {{
-                      "artifactLocation": {{ "uri": "{uri}" }},
-                      "region": {{ "startLine": 1 }} }} }} ],
-                  "message": {{ "text": "m" }}, "ruleId": "r" }}
-            ] }} ] }}"#
-        );
+        let sarif = sarif_for_uri(uri);
         let findings = parse_output(&spec, &sarif, "root").unwrap();
         assert_eq!(
             findings[0].file_path,

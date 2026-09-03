@@ -24,6 +24,7 @@ use crate::analysis::findings::Finding;
 use crate::languages::spec::{DEFAULT_TOOL_TIMEOUT_SECS, ToolSpec};
 
 pub mod parsers;
+mod uri;
 
 pub use parsers::parse_output;
 
