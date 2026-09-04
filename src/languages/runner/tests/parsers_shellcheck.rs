@@ -1,10 +1,4 @@
 //! ShellCheck output parser.
-//!
-//! Wired in via `#[cfg(test)] mod tests;` in the parent module. These files
-//! were orphaned once - present on disk but reachable by no `mod`
-//! declaration, so cargo never compiled them and appending invalid Rust did
-//! not fail the build. If you add a file here, declare it in this
-//! directory's `mod.rs`.
 
 use super::support::*;
 use crate::analysis::findings::Severity;
@@ -98,4 +92,31 @@ fn shellcheck_level_mapping_covers_every_branch() {
         let findings = parse_output(&spec, &input, "root").unwrap();
         assert_eq!(findings[0].severity, expected, "level {level}");
     }
+}
+
+/// A diagnostic with no `file` falls back to the root name, exactly as the
+/// ruff/eslint parser does. An empty string would render as `:1:1: ...`, a
+/// finding that names no file.
+#[test]
+fn shellcheck_parser_missing_file_falls_back_to_root_name() {
+    let spec = shellcheck_like_spec();
+    let input = r#"[{"line":1,"column":1,"level":"warning","code":2086,"message":"m"}]"#;
+    let findings = parse_output(&spec, input, "fallback.sh").unwrap();
+    assert_eq!(findings[0].file_path, "fallback.sh");
+}
+
+/// Diagnostics in two files both land: a "first entry only" regression must
+/// not pass.
+#[test]
+fn shellcheck_parser_reads_findings_in_every_file() {
+    let spec = shellcheck_like_spec();
+    let input = r#"[
+        {"file":"a.sh","line":1,"column":1,"level":"warning","code":2034,"message":"m1"},
+        {"file":"b.sh","line":2,"column":3,"level":"error","code":2154,"message":"m2"}
+    ]"#;
+    let findings = parse_output(&spec, input, "root").unwrap();
+    assert_eq!(findings.len(), 2);
+    assert_eq!(findings[0].file_path, "a.sh");
+    assert_eq!(findings[1].file_path, "b.sh");
+    assert_eq!(findings[1].line, 2);
 }

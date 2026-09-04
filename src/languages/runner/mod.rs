@@ -21,12 +21,16 @@ use std::time::Duration;
 use tokio::process::Command;
 
 use crate::analysis::findings::Finding;
-use crate::languages::spec::{DEFAULT_TOOL_TIMEOUT_SECS, ToolSpec};
+use crate::languages::spec::{DEFAULT_TOOL_TIMEOUT_SECS, DiagnosticsStream, ToolSpec};
 
+mod narrow;
 pub mod parsers;
 mod uri;
 
 pub use parsers::parse_output;
+
+pub(crate) use narrow::joined_reported;
+use narrow::retain_requested;
 
 #[cfg(test)]
 mod tests;
@@ -239,12 +243,31 @@ fn which_first_in(command: &str, path: &std::ffi::OsStr) -> Option<String> {
 /// chosen eslint's defaults, so running it would invent findings the
 /// project never asked for.
 pub fn is_configured(spec: &ToolSpec, root: &Path) -> bool {
-    spec.config_files
-        .iter()
-        .any(|name| marker_present(root, name))
+    configured_marker(spec, root).is_some()
 }
 
-/// Whether `name` names a marker present directly in `root`.
+/// Which of `config_files` is present in `root`, in declaration order.
+///
+/// One definition of "which config file is here", because two callers need
+/// the answer and they need slightly different halves of it: eligibility
+/// wants only whether there was one, while `config_flag` has to pass the
+/// *name* to a tool that will not look for its own. The flag branch used to
+/// ask separately with a bare `join(name).exists()`, which does not
+/// understand the leading `*.` glob `marker_match` accepts - so a spec
+/// pairing a glob marker with a flag would be judged configured and then run
+/// without the flag it needs. Only the pairing of tools kept that dormant:
+/// `dotnet format` already has glob markers and checkstyle already has a
+/// flag.
+///
+/// The list reads as a preference rather than as whatever the filesystem
+/// returns, so the first declared match wins.
+fn configured_marker(spec: &ToolSpec, root: &Path) -> Option<String> {
+    spec.config_files
+        .iter()
+        .find_map(|name| marker_match(root, name))
+}
+
+/// The marker `name` claims in `root`, as the name of the file found.
 ///
 /// A `*.ext` entry matches any file in the directory carrying that extension.
 /// C# is the first language whose workspace is identified by a glob rather
@@ -259,19 +282,31 @@ pub fn is_configured(spec: &ToolSpec, root: &Path) -> bool {
 /// Only a leading `*.` is a glob. A name is otherwise taken literally, so
 /// `.eslintrc.json` and the rest keep costing one `exists` rather than a
 /// directory read.
-fn marker_present(root: &Path, name: &str) -> bool {
+fn marker_match(root: &Path, name: &str) -> Option<String> {
     let Some(extension) = name.strip_prefix("*.") else {
-        return root.join(name).exists();
+        return root.join(name).exists().then(|| name.to_owned());
     };
     let Ok(entries) = std::fs::read_dir(root) else {
         // An unreadable directory holds no marker we can see. `exists()`
         // answers false the same way for a path we cannot stat.
-        return false;
+        return None;
     };
-    entries.flatten().any(|entry| {
-        Path::new(&entry.file_name())
+    entries.flatten().find_map(|entry| {
+        let found = entry.file_name();
+        // The extension test first: it is a string comparison that rejects
+        // nearly every entry, while `file_type` falls back to an `lstat`
+        // whenever `readdir` reports `DT_UNKNOWN` (network mounts, some FUSE
+        // filesystems). This predicate runs once per ancestor directory per
+        // file per spec, so the selective half belongs in front.
+        //
+        // A *file* with the extension: a directory named `Widget.csproj` is
+        // not a project, and counting it would run the tool one level above
+        // the project it was meant to find.
+        let matches = Path::new(&found)
             .extension()
-            .is_some_and(|found| found.eq_ignore_ascii_case(extension))
+            .is_some_and(|ext| ext.eq_ignore_ascii_case(extension))
+            && entry.file_type().is_ok_and(|kind| kind.is_file());
+        matches.then(|| found.to_string_lossy().into_owned())
     })
 }
 
@@ -344,16 +379,13 @@ pub(crate) async fn run_tool_at(
     argv.push(executable.to_string_lossy().into_owned());
     argv.extend(spec.command[1..].iter().map(|s| (*s).to_owned()));
     // A tool that will not look for its own config gets handed the one
-    // `config_files` found. First match in declaration order, so the list reads
-    // as a preference rather than as whatever the filesystem returns.
+    // `config_files` found - through the same lookup that decided the tool was
+    // configured at all, so the two cannot disagree about what counts.
     if let Some(flag) = spec.config_flag
-        && let Some(config) = spec
-            .config_files
-            .iter()
-            .find(|name| workspace_root.join(name).exists())
+        && let Some(config) = configured_marker(spec, workspace_root)
     {
         argv.push(flag.to_owned());
-        argv.push((*config).to_owned());
+        argv.push(config);
     }
     // A repository can contain a file whose name begins with `-`, and every
     // checker here would read `--fix` as an option rather than a path. `--`
@@ -423,13 +455,18 @@ pub(crate) async fn run_tool_at(
     // invocation - and reporting that as `Ok` with zero findings is precisely
     // the "unavailable is not a pass" failure this module exists to prevent.
     // So the rule is the conjunction: non-zero AND nothing on the diagnostics
-    // stream.
+    // stream. For the skipping parsers the conjunction needs a second form:
+    // they drop lines they do not recognise by design, so a run whose every
+    // diagnostic is of a shape they do not know - an SDK error such as
+    // MSBuild's position-less `x.csproj : error NETSDK1004`, a rejected tsc
+    // option - parses as zero findings on a *non-empty* stream, invisible to
+    // the first form. The JSON-shaped parsers error on such output instead,
+    // which is already `Unavailable`.
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
-    let (diagnostics, other) = if spec.diagnostics_stream == "stderr" {
-        (stderr.as_ref(), stdout.as_ref())
-    } else {
-        (stdout.as_ref(), stderr.as_ref())
+    let (diagnostics, other) = match spec.diagnostics_stream {
+        DiagnosticsStream::Stderr => (stderr.as_ref(), stdout.as_ref()),
+        DiagnosticsStream::Stdout => (stdout.as_ref(), stderr.as_ref()),
     };
 
     let parse_result = parse_output(
@@ -451,11 +488,27 @@ pub(crate) async fn run_tool_at(
                 format!(
                     "{} exited {} without producing diagnostics: {}",
                     spec.name,
-                    output
-                        .status
-                        .code()
-                        .map_or("by signal".to_owned(), |c| c.to_string()),
-                    truncate(other.trim(), 200)
+                    exit_word(&output.status),
+                    stream_detail(other)
+                ),
+            )
+        }
+        Ok(findings)
+            if findings.is_empty()
+                && !output.status.success()
+                && spec.output_format.skips_unmatched_input() =>
+        {
+            // Exited non-zero and every line it did produce was dropped by a
+            // parser that skips what it cannot match: the run failed in a
+            // shape the parser does not know. The unmatched lines are the
+            // diagnostic, so they become the detail.
+            ToolOutcome::unavailable(
+                spec,
+                format!(
+                    "{} exited {} without a recognisable diagnostic: {}",
+                    spec.name,
+                    exit_word(&output.status),
+                    stream_detail(diagnostics)
                 ),
             )
         }
@@ -463,12 +516,12 @@ pub(crate) async fn run_tool_at(
             tool: spec.name,
             status: ToolStatus::Ok,
             findings: retain_requested(spec, findings, files, workspace_root),
-            detail: truncate(other.trim(), 200),
+            detail: stream_detail(other),
             compilation_succeeded,
         },
         Err(err) => ToolOutcome::unavailable(
             spec,
-            format!("{err}. other stream: {}", truncate(other.trim(), 200)),
+            format!("{err}. other stream: {}", stream_detail(other)),
         ),
     }
 }
@@ -518,70 +571,36 @@ fn eligible_executable(
     ))
 }
 
-/// Narrow a tool's findings to the files actually being checked.
+/// One of a tool's own streams, bounded for the `detail` field.
 ///
-/// A whole-project tool (`cargo clippy`, `tsc`, `dotnet format`) reports on
-/// everything it compiled, and a commit gate that blocked on pre-existing
-/// issues in untouched code would be unusable: the author cannot fix what they
-/// did not write, and every commit would fail until the whole project was
-/// clean.
+/// `crate::text::excerpt` is the single bounding of text drep did not write,
+/// and a tool's stdout and stderr are exactly that: they reach a terminal
+/// through `doctor` and through the failure block, so an escape sequence in
+/// them must be stripped rather than passed through. The predecessor here
+/// bounded *bytes* and stripped nothing, which is the second copy that rule
+/// exists to prevent.
 ///
-/// A no-op for a tool that took the file list as arguments - it only reported
-/// on what it was given. cppcheck is the first shipped tool where that is not
-/// quite true, since it follows `#include` and can raise a finding in a header
-/// the commit never touched; that is left alone here deliberately, because
-/// narrowing every tool changes a contract this module documents and tests
-/// rather than fixing a defect.
-///
-/// Comparison is on absolute paths. Stripping a leading `./` is not enough:
-/// the caller's list is workspace-relative (`plan_tasks` builds each argument
-/// by `strip_prefix(workspace_root)`) while a tool is free to answer in either
-/// form, and `dotnet format` answers with the absolute path on every line.
-/// Compared as strings those never match, so the filter emptied the vector and
-/// every C# file was reported clean - the silent pass this module exists to
-/// refuse. `Path::join` with an absolute argument yields that argument, so one
-/// join normalises both forms.
-fn retain_requested(
-    spec: &ToolSpec,
-    findings: Vec<Finding>,
-    files: &[String],
-    workspace_root: &Path,
-) -> Vec<Finding> {
-    if spec.accepts_files {
-        return findings;
+/// The empty case is the one thing `excerpt` cannot answer for this caller.
+/// A clean run's other stream is legitimately empty and `detail` is then the
+/// empty string; `excerpt` returns `<nothing>`, which is right for a quoted
+/// model response and wrong for a field `doctor` prints after a colon.
+pub(crate) fn stream_detail(stream: &str) -> String {
+    let trimmed = stream.trim();
+    if trimmed.is_empty() {
+        return String::new();
     }
-    let wanted: std::collections::BTreeSet<PathBuf> = files
-        .iter()
-        .map(|f| workspace_root.join(normalize_path(f)))
-        .collect();
-    findings
-        .into_iter()
-        .filter(|finding| wanted.contains(&workspace_root.join(normalize_path(&finding.file_path))))
-        .collect()
+    crate::text::excerpt(trimmed, DETAIL_MAX_CHARS)
 }
 
-/// A path with any leading `./` removed, for comparison.
-fn normalize_path(path: &str) -> &str {
-    path.strip_prefix("./").unwrap_or(path)
-}
+/// How much of a tool's stream reaches the `detail` field.
+const DETAIL_MAX_CHARS: usize = 200;
 
-/// Truncate a string to at most `max` bytes, on a char boundary.
+/// How a process ended, for a diagnostic sentence.
 ///
-/// Multibyte UTF-8 must land on a character boundary to keep the result valid.
-pub(crate) fn truncate(s: &str, max: usize) -> String {
-    if s.len() <= max {
-        return s.to_owned();
-    }
-    // Searched rather than walked with a mutable counter. A `while` loop
-    // decrementing `end` is correct, but it admits a mutation - `-=` swapped for
-    // `/=`, which is `end / 1` and therefore a no-op - that spins forever
-    // instead of failing. An infinite loop is a worse failure mode than a wrong
-    // answer, and this formulation cannot express it: the range is finite.
-    //
-    // Byte 0 is always a char boundary, so the search always succeeds.
-    let end = (0..=max)
-        .rev()
-        .find(|&i| s.is_char_boundary(i))
-        .unwrap_or(0);
-    s[..end].to_owned()
+/// Shared by the two `Unavailable` arms below so the signal wording has one
+/// definition rather than one per arm.
+fn exit_word(status: &std::process::ExitStatus) -> String {
+    status
+        .code()
+        .map_or("by signal".to_owned(), |code| code.to_string())
 }

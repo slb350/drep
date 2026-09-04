@@ -54,6 +54,16 @@ pub(super) fn parse_sarif(spec: &ToolSpec, output: &str) -> Result<Vec<Finding>,
             // First location only. SARIF allows several, but every checker
             // here reports one per diagnostic, and reporting the same finding
             // once per location would double-count a gate.
+            //
+            // A result with no usable artifact uri is not a finding: the tool
+            // is talking about the run, not the code. tflint is the case that
+            // forced this - it reports runtime errors (plugins never
+            // installed, arguments it dropped) as a `tflint-errors` run whose
+            // results carry no `locations`, verified against its real output.
+            // Read as a finding, the empty path matches nothing the run was
+            // asked about and narrowing drops it without a trace, so a tool
+            // that never examined a file reports every file clean. Error
+            // instead: we do not know what else the tool would have said.
             let physical = result
                 .get("locations")
                 .and_then(Value::as_array)
@@ -64,7 +74,13 @@ pub(super) fn parse_sarif(spec: &ToolSpec, output: &str) -> Result<Vec<Finding>,
                 .and_then(|a| a.get("uri"))
                 .and_then(Value::as_str)
                 .map(strip_file_uri)
-                .unwrap_or_default();
+                .ok_or_else(|| {
+                    ToolOutputError(format!(
+                        "{} reported a diagnostic with no file location: {}",
+                        spec.name,
+                        crate::text::excerpt(&format!("{kind}: {message}"), 120)
+                    ))
+                })?;
             let region = physical.and_then(|p| p.get("region"));
             let line = region
                 .and_then(|r| r.get("startLine"))

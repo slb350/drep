@@ -6,10 +6,14 @@ use crate::analysis::findings::{Finding, Severity};
 use crate::languages::runner::ToolOutputError;
 use crate::languages::spec::ToolSpec;
 
-use super::{expect_keyed_array, json_payload};
+use super::{expect_keyed_array, json_payload, path_or_root};
 
 /// `mix credo --format json`: `{issues: [...]}`.
-pub(super) fn parse_credo(spec: &ToolSpec, output: &str) -> Result<Vec<Finding>, ToolOutputError> {
+pub(super) fn parse_credo(
+    spec: &ToolSpec,
+    output: &str,
+    root_name: &str,
+) -> Result<Vec<Finding>, ToolOutputError> {
     let Some(payload) = json_payload(spec, output)? else {
         return Ok(Vec::new());
     };
@@ -32,11 +36,7 @@ pub(super) fn parse_credo(spec: &ToolSpec, output: &str) -> Result<Vec<Finding>,
                 .map(str::to_owned)
                 .unwrap_or_else(|| spec.name.to_owned()),
             credo_severity(issue.get("category").and_then(Value::as_str)),
-            issue
-                .get("filename")
-                .and_then(Value::as_str)
-                .unwrap_or("")
-                .to_owned(),
+            path_or_root(issue.get("filename"), root_name),
             issue
                 .get("line_no")
                 .and_then(Value::as_u64)

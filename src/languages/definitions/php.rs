@@ -1,6 +1,8 @@
 //! PHP: PHP_CodeSniffer over `.php`.
 
-use crate::languages::spec::{DEFAULT_TOOL_TIMEOUT_SECS, LanguageSupport, ToolSpec};
+use crate::languages::spec::{
+    DEFAULT_TOOL_TIMEOUT_SECS, DiagnosticsStream, LanguageSupport, OutputFormat, ToolSpec,
+};
 
 /// PHP deterministic checker.
 pub static PHPCS: ToolSpec = ToolSpec {
@@ -14,8 +16,8 @@ pub static PHPCS: ToolSpec = ToolSpec {
         ".phpcs.xml.dist",
     ],
     config_flag: None,
-    output_format: "phpcs",
-    diagnostics_stream: "stdout",
+    output_format: OutputFormat::Phpcs,
+    diagnostics_stream: DiagnosticsStream::Stdout,
     timeout_secs: DEFAULT_TOOL_TIMEOUT_SECS,
     timeout_context: None,
     establishes_compilation: false,
@@ -29,6 +31,7 @@ pub static PHP: LanguageSupport = LanguageSupport {
     display_name: "PHP",
     extensions: &[".php"],
     filenames: &[],
+    filename_prefixes: &[],
     tools: &[&PHPCS],
     conventions: &[
         "Undefined variables and array keys relied on as null",
@@ -38,3 +41,6 @@ pub static PHP: LanguageSupport = LanguageSupport {
     ],
     vendored_dirs: &["vendor"],
 };
+
+/// The family's entries in registration order. See `ALL_LANGUAGES`.
+pub(crate) static FAMILY: &[&LanguageSupport] = &[&PHP];

@@ -6,7 +6,7 @@ use crate::analysis::findings::{Finding, Severity};
 use crate::languages::runner::ToolOutputError;
 use crate::languages::spec::ToolSpec;
 
-use super::{expect_keyed_array, json_payload};
+use super::{expect_keyed_array, json_payload, path_or_root};
 
 /// `rubocop --format json`: `{files: [{path, offenses: [...]}]}`.
 ///
@@ -17,6 +17,7 @@ use super::{expect_keyed_array, json_payload};
 pub(super) fn parse_rubocop(
     spec: &ToolSpec,
     output: &str,
+    root_name: &str,
 ) -> Result<Vec<Finding>, ToolOutputError> {
     let Some(payload) = json_payload(spec, output)? else {
         return Ok(Vec::new());
@@ -25,11 +26,7 @@ pub(super) fn parse_rubocop(
 
     let mut findings = Vec::new();
     for file in files {
-        let file_path = file
-            .get("path")
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .to_owned();
+        let file_path = path_or_root(file.get("path"), root_name);
         for offense in file
             .get("offenses")
             .and_then(Value::as_array)

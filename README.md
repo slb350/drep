@@ -215,7 +215,9 @@ Three rules decide what runs:
 
 A language is matched on file extension, and on the whole file name for the
 files that have no extension - `Dockerfile`, `Gemfile`, `Rakefile`. Extension
-wins where both could match, so `Dockerfile.ts` is TypeScript.
+wins where both could match, so `Dockerfile.ts` is TypeScript. Docker's names
+also claim their dotted variants (`Dockerfile.dev`, `Containerfile.prod`),
+the per-environment family multi-image layouts produce.
 
 Scala and Groovy have no deterministic tool. scalafmt, scalafix and CodeNarc are
 all build-plugin-first, with no standalone CLI drep can invoke the way it invokes

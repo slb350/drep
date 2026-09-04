@@ -30,6 +30,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the same silent pass unregistered `.java` produced, on files most
   repositories have. Extension is matched first, so a name can never shadow a
   language that claims the suffix and `Dockerfile.ts` stays TypeScript.
+- `filename_prefixes`, claiming a name's dotted variants.
+  `Dockerfile.dev`/`Dockerfile.prod`/`Containerfile.web` are an unbounded
+  family an exact list cannot cover, and unclaimed they were dropped from
+  walk, staged and diff modes exactly as `Dockerfile` itself once was. The
+  extension lookup still runs first, and a variant must carry a non-empty
+  suffix after the dot, so `Dockerfile.` itself is not claimed.
+- A registry well-formedness test over every language, asserting the
+  contracts the type system cannot state: dot-prefixed single-suffix ASCII
+  extensions, non-empty command and timeout on every tool, no `config_flag`
+  without `config_files`, and single-component `vendored_dirs`. Each of
+  those was once broken silently - a `vendor/bundle` entry that could never
+  match anything was the one that existed on disk.
+- `.shellcheckrc` at the repository root, opting drep's own `scripts/` into
+  shellcheck through its own gate. shellcheck is now a required install for
+  committing script changes here.
 
 ### Changed
 
@@ -38,9 +53,95 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   share one parser and a sixth SARIF producer costs a table entry instead of a
   parser. `definitions.rs` is split by ecosystem for the same reason: both
   files were near the 600-line limit with thirteen languages due.
+- `ToolSpec.output_format` and `diagnostics_stream` are fieldless enums
+  rather than strings. A typo'd format failed only at runtime when the tool
+  ran, and a typo'd stream silently selected stdout; the dispatch match and
+  the stream selection are now exhaustive at compile time.
+- `ALL_LANGUAGES` is concatenated from each ecosystem file's own `FAMILY`
+  slice rather than maintained as one hand-written list, so a language
+  defined but never registered is invisible to no one: it would sit
+  unregistered in the file that defines it. The registration order now keeps
+  each family together, which moves Vue and Svelte up beside TypeScript in
+  `doctor`'s listing.
+- cppcheck runs with `--error-exitcode=2`. It otherwise exits 0 *with*
+  findings, leaving the runner's exit-status guard inoperative for it: a
+  cppcheck release that moved or renamed its SARIF stream would have read as
+  a permanent clean pass.
+- tflint runs with `--recursive`, because bare tflint lints only the module
+  in its working directory and a commit touching `modules/*/` produced no
+  findings while passing the layer. Verified against the real binary: the
+  recursive run descends, reports each finding's uri relative to the
+  invocation directory, and exits non-zero when any module has findings.
+  Each module's config is its own - a nested module without `.tflint.hcl` is
+  linted under tflint's defaults rather than the root config.
+- The canonical spelling of a path is resolved only after the exact spelling
+  has missed, on both sides of the narrowing. Every resolution is a
+  `realpath`, and under an ordinary checkout nothing ever misses, so building
+  the canonical index up front spent one syscall per finding and per planned
+  file on an answer nothing read.
+- One lookup answers "which config file is present here" for both the
+  eligibility check and `config_flag`, so the two cannot disagree about what
+  counts as present.
 
 ### Fixed
 
+- A failed `dotnet format` run reported every C# file clean, and the same
+  hole existed for `go vet` and tsc. Their parsers skip lines they do not
+  recognise by design, so a run whose every line is an error of a shape the
+  parser does not know - MSBuild's position-less
+  `x.csproj : error NETSDK1004` on an un-restored checkout, a rejected tsc
+  option - parsed as zero findings on a non-empty stream with a non-zero
+  exit, which the empty-stream guard cannot see. A non-zero exit with zero
+  parsed findings is now `Unavailable` for the three skipping formats, with
+  the unmatched lines as the detail. The JSON-shaped parsers already error
+  on such output.
+- A tflint error run reported every Terraform file clean. tflint reports
+  runtime errors - plugins never installed, arguments it dropped - as a
+  SARIF `tflint-errors` run whose results carry no location (verified
+  against the real binary); parsed as a finding, the empty path matched
+  nothing the run was asked about and was narrowed away. A SARIF result with
+  no usable location is now rejected with the tool's own message as the
+  detail, so the run is `Unavailable`. A `physicalLocation` with no `region`
+  remains a real finding and still defaults to line 1, and the empty
+  `tflint-errors` run a healthy tflint emits stays clean.
+- On a symlinked checkout, a whole-project tool's findings were dropped or
+  kept their resolved spelling. The child process runs with
+  `current_dir(workspace_root)`, so a tool deriving paths from its cwd
+  spells them through resolved symlinks - or emits `../..`-carrying
+  relatives, as tflint `--recursive` does - while drep's own paths keep the
+  spelling it was given. `retain_requested` and the `run_one` rewrite now
+  compare through one shared resolver in both the exact and the canonical
+  form, instead of each keeping its own slightly different normalisation.
+- shellcheck, rubocop, credo, sqlfluff and ktlint findings with no filename
+  rendered as `:1:1: ...` instead of falling back to the checked file's name
+  the way the ruff/eslint parser does.
+- eslint findings all displayed as errors: the per-message `severity` (1 or
+  2) was never read. Same display-truth class as the tsc fix, and just as
+  invisible to the gate.
+- A `*.csproj` glob marker matched a *directory* named `Widget.csproj`,
+  which would run `dotnet format` one level above the project it was meant
+  to find. Glob markers now match files only.
+- The MSBuild suffix strip ate any trailing bracketed token, project name or
+  not, so a message legitimately ending in `[field]` lost it. Only a
+  bracketed project-file path is stripped now.
+- Tool messages reached the terminal raw: the JSON reporters decode `\u001b`
+  escapes faithfully, so a crafted diagnostic carried a working terminal
+  escape into the report, and a multi-kilobyte message pushed the actionable
+  findings off the screen. The finding line now goes through
+  `text::excerpt` like every other text drep did not write. A tool's own
+  stdout and stderr reach the `detail` field the same way now: that path
+  bounded bytes and stripped nothing, so an escape sequence in a tool's
+  stderr still reached the terminal through `doctor` and the failure block.
+- A tool declaring a `*.ext` glob marker alongside `config_flag` would have
+  been judged configured by the glob and then run without the config it
+  cannot start without, because the flag looked its markers up as literal
+  paths. Latent rather than live: `dotnet format` has the glob markers and
+  checkstyle has the flag.
+- Ruby's `vendored_dirs` listed `vendor/bundle`, dead data the ignore check
+  could never match because it compares single path components. Elixir's
+  listed `deps`, which joined the global ignore union and would have
+  silently unwalked a checked-in `deps/` of real source in a non-Elixir
+  repository - the hazard the JVM family already excludes `out` for.
 - A whole-project tool that reports absolute paths had every finding dropped.
   `retain_requested` compared reported paths against the caller's list as
   strings, and that list is workspace-relative because `plan_tasks` builds each
@@ -65,8 +166,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   suggestion.
 - tsc warnings were reported as errors. The regex has always matched `warning`
   alongside `error` while the parser assigned `Severity::Error` to every match,
-  so a warning blocked a commit under `--fail-on error` while claiming to be
-  something it was not. The severity word is now read.
+  so the rendered line called a warning something the compiler never said. The
+  gate was unaffected - a tool finding blocks whatever its severity - but the
+  severity word is now read.
 - `json_kind_name` was untested: the error for a non-array tool payload
   asserted only the kind it *wanted*, so the half naming what actually arrived
   passed under any answer and two mutants survived on it.

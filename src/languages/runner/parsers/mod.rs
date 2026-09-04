@@ -22,7 +22,7 @@ use serde_json::{Map, Value};
 
 use crate::analysis::findings::Finding;
 use crate::languages::runner::ToolOutputError;
-use crate::languages::spec::ToolSpec;
+use crate::languages::spec::{OutputFormat, ToolSpec};
 
 mod cargo;
 mod credo;
@@ -48,23 +48,19 @@ pub fn parse_output(
     root_name: &str,
 ) -> Result<Vec<Finding>, ToolOutputError> {
     match spec.output_format {
-        "lines" => Ok(lines::parse_lines(spec, output)),
-        "json" => json::parse_json(spec, output, root_name),
-        "position" => Ok(position::parse_positions(spec, output)),
-        "tsc" => Ok(position::parse_tsc(output)),
-        "cargo" => cargo::parse_cargo(spec, output),
-        "sarif" => sarif::parse_sarif(spec, output),
-        "ktlint" => json::parse_ktlint(spec, output),
-        "shellcheck" => shellcheck::parse_shellcheck(spec, output),
-        "rubocop" => rubocop::parse_rubocop(spec, output),
-        "phpcs" => phpcs::parse_phpcs(spec, output),
-        "credo" => credo::parse_credo(spec, output),
-        "sqlfluff" => sqlfluff::parse_sqlfluff(spec, output),
-        "msbuild" => Ok(position::parse_msbuild(output)),
-        other => Err(ToolOutputError(format!(
-            "{}: no parser for output format {other:?}",
-            spec.name,
-        ))),
+        OutputFormat::Lines => Ok(lines::parse_lines(spec, output)),
+        OutputFormat::Json => json::parse_json(spec, output, root_name),
+        OutputFormat::Position => Ok(position::parse_positions(spec, output)),
+        OutputFormat::Tsc => Ok(position::parse_tsc(output)),
+        OutputFormat::Cargo => cargo::parse_cargo(spec, output),
+        OutputFormat::Sarif => sarif::parse_sarif(spec, output),
+        OutputFormat::Ktlint => json::parse_ktlint(spec, output, root_name),
+        OutputFormat::Shellcheck => shellcheck::parse_shellcheck(spec, output, root_name),
+        OutputFormat::Rubocop => rubocop::parse_rubocop(spec, output, root_name),
+        OutputFormat::Phpcs => phpcs::parse_phpcs(spec, output),
+        OutputFormat::Credo => credo::parse_credo(spec, output, root_name),
+        OutputFormat::Sqlfluff => sqlfluff::parse_sqlfluff(spec, output, root_name),
+        OutputFormat::Msbuild => Ok(position::parse_msbuild(output)),
     }
 }
 
@@ -166,4 +162,23 @@ pub(super) fn json_kind_name(value: &Value) -> &'static str {
         Value::Array(_) => "array",
         Value::Object(_) => "object",
     }
+}
+
+/// The path string in `field`, falling back to the run's first requested file.
+///
+/// Seven JSON-shaped parsers ask this question, varying only in which key
+/// they read (`filename`, `file`, `path`, `filepath`, `filePath`). Written
+/// out per parser it was four lines each, and the fallback rule - which
+/// decides where a diagnostic that named no file gets attributed - was stated
+/// seven times rather than once.
+///
+/// Takes the looked-up field rather than the container and a key, because the
+/// callers hold different containers: an eslint record is a `Map` reached
+/// through `expect_array`, while a credo issue is a `Value`. Both spell the
+/// lookup `.get(key)`, and leaving it at the call site keeps the key visible
+/// beside the shape it belongs to.
+pub(super) fn path_or_root(field: Option<&Value>, root_name: &str) -> String {
+    field
+        .and_then(Value::as_str)
+        .map_or_else(|| root_name.to_owned(), str::to_owned)
 }

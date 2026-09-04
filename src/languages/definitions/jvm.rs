@@ -1,6 +1,8 @@
 //! The JVM family: Java, Kotlin and Scala, plus Groovy build scripts.
 
-use crate::languages::spec::{DEFAULT_TOOL_TIMEOUT_SECS, LanguageSupport, ToolSpec};
+use crate::languages::spec::{
+    DEFAULT_TOOL_TIMEOUT_SECS, DiagnosticsStream, LanguageSupport, OutputFormat, ToolSpec,
+};
 
 /// Build outputs shared by the JVM languages. Gradle writes `build` and
 /// `.gradle`, Maven writes `target`. Declared once rather than repeated across
@@ -32,8 +34,8 @@ pub static CHECKSTYLE: ToolSpec = ToolSpec {
         "gradle/config/checkstyle/checkstyle.xml",
     ],
     config_flag: Some("-c"),
-    output_format: "sarif",
-    diagnostics_stream: "stdout",
+    output_format: OutputFormat::Sarif,
+    diagnostics_stream: DiagnosticsStream::Stdout,
     // A JVM start plus a full reflections scan of the check registry, on every
     // invocation. Two minutes is enough but not generous on a cold page cache.
     timeout_secs: DEFAULT_TOOL_TIMEOUT_SECS,
@@ -58,8 +60,8 @@ pub static KTLINT: ToolSpec = ToolSpec {
     // has not chosen ktlint's defaults, so it is skipped.
     config_files: &[".editorconfig"],
     config_flag: None,
-    output_format: "ktlint",
-    diagnostics_stream: "stdout",
+    output_format: OutputFormat::Ktlint,
+    diagnostics_stream: DiagnosticsStream::Stdout,
     timeout_secs: DEFAULT_TOOL_TIMEOUT_SECS,
     timeout_context: None,
     establishes_compilation: false,
@@ -73,6 +75,7 @@ pub static JAVA: LanguageSupport = LanguageSupport {
     display_name: "Java",
     extensions: &[".java"],
     filenames: &[],
+    filename_prefixes: &[],
     tools: &[&CHECKSTYLE],
     conventions: &[
         "Resources closed on every path, and try-with-resources where it applies",
@@ -93,6 +96,7 @@ pub static KOTLIN: LanguageSupport = LanguageSupport {
     display_name: "Kotlin",
     extensions: &[".kt", ".kts"],
     filenames: &[],
+    filename_prefixes: &[],
     tools: &[&KTLINT],
     conventions: &[
         "Platform types from Java interop dereferenced without a null check",
@@ -114,6 +118,7 @@ pub static SCALA: LanguageSupport = LanguageSupport {
     display_name: "Scala",
     extensions: &[".scala", ".sc"],
     filenames: &[],
+    filename_prefixes: &[],
     tools: &[],
     conventions: &[
         "Partial functions and non-exhaustive matches",
@@ -134,6 +139,7 @@ pub static GROOVY: LanguageSupport = LanguageSupport {
     display_name: "Groovy",
     extensions: &[".groovy", ".gradle"],
     filenames: &[],
+    filename_prefixes: &[],
     tools: &[],
     conventions: &[
         "Dynamic dispatch where a typed call would fail at compile time",
@@ -143,3 +149,6 @@ pub static GROOVY: LanguageSupport = LanguageSupport {
     ],
     vendored_dirs: JVM_VENDORED_DIRS,
 };
+
+/// The family's entries in registration order. See `ALL_LANGUAGES`.
+pub(crate) static FAMILY: &[&LanguageSupport] = &[&JAVA, &KOTLIN, &SCALA, &GROOVY];

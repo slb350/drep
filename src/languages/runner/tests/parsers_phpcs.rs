@@ -1,10 +1,4 @@
 //! PHP_CodeSniffer output parser.
-//!
-//! Wired in via `#[cfg(test)] mod tests;` in the parent module. These files
-//! were orphaned once - present on disk but reachable by no `mod`
-//! declaration, so cargo never compiled them and appending invalid Rust did
-//! not fail the build. If you add a file here, declare it in this
-//! directory's `mod.rs`.
 
 use super::support::*;
 use crate::analysis::findings::Severity;
@@ -102,4 +96,20 @@ fn phpcs_severity_mapping_covers_every_branch() {
         let findings = parse_output(&spec, &input, "root").unwrap();
         assert_eq!(findings[0].severity, expected, "type {kind}");
     }
+}
+
+/// Messages in two files both land: a "first entry only" regression must
+/// not pass.
+#[test]
+fn phpcs_parser_reads_findings_in_every_file() {
+    let spec = phpcs_like_spec();
+    let input = r#"{"totals":{"errors":2},"files":{
+        "/w/a.php":{"errors":1,"warnings":0,"messages":[{"message":"m1","source":"S1","severity":5,"fixable":false,"type":"ERROR","line":1,"column":1}]},
+        "/w/b.php":{"errors":1,"warnings":0,"messages":[{"message":"m2","source":"S2","severity":5,"fixable":false,"type":"ERROR","line":2,"column":2}]}
+    }}"#;
+    let findings = parse_output(&spec, input, "root").unwrap();
+    assert_eq!(findings.len(), 2);
+    let mut paths: Vec<&str> = findings.iter().map(|f| f.file_path.as_str()).collect();
+    paths.sort_unstable();
+    assert_eq!(paths, vec!["/w/a.php", "/w/b.php"]);
 }

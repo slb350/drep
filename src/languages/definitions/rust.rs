@@ -1,6 +1,6 @@
 //! The Rust ecosystem: clippy over `.rs`.
 
-use crate::languages::spec::{LanguageSupport, ToolSpec};
+use crate::languages::spec::{DiagnosticsStream, LanguageSupport, OutputFormat, ToolSpec};
 
 /// Rust linter - emits structured JSON via cargo's message-format.
 pub static CLIPPY: ToolSpec = ToolSpec {
@@ -9,8 +9,8 @@ pub static CLIPPY: ToolSpec = ToolSpec {
     local_paths: &[],
     config_files: &["Cargo.toml"],
     config_flag: None,
-    output_format: "cargo",
-    diagnostics_stream: "stdout",
+    output_format: OutputFormat::Cargo,
+    diagnostics_stream: DiagnosticsStream::Stdout,
     // Cargo's build lock is acquired by Cargo itself, so its wait is part of
     // the child process. Allow the same long-running ceiling as an LLM review
     // rather than failing a whole gate at the generic two-minute tool limit.
@@ -29,6 +29,7 @@ pub static RUST_LANG: LanguageSupport = LanguageSupport {
     display_name: "Rust",
     extensions: &[".rs"],
     filenames: &[],
+    filename_prefixes: &[],
     tools: &[&CLIPPY],
     conventions: &[
         "unwrap/expect on values that can legitimately be None or Err",
@@ -38,3 +39,6 @@ pub static RUST_LANG: LanguageSupport = LanguageSupport {
     ],
     vendored_dirs: &["target"],
 };
+
+/// The family's entries in registration order. See `ALL_LANGUAGES`.
+pub(crate) static FAMILY: &[&LanguageSupport] = &[&RUST_LANG];

@@ -1,6 +1,8 @@
 //! Shell: ShellCheck over `.sh` and `.bash`.
 
-use crate::languages::spec::{DEFAULT_TOOL_TIMEOUT_SECS, LanguageSupport, ToolSpec};
+use crate::languages::spec::{
+    DEFAULT_TOOL_TIMEOUT_SECS, DiagnosticsStream, LanguageSupport, OutputFormat, ToolSpec,
+};
 
 /// Shell deterministic checker.
 ///
@@ -12,8 +14,8 @@ pub static SHELLCHECK: ToolSpec = ToolSpec {
     local_paths: &[],
     config_files: &[".shellcheckrc"],
     config_flag: None,
-    output_format: "shellcheck",
-    diagnostics_stream: "stdout",
+    output_format: OutputFormat::Shellcheck,
+    diagnostics_stream: DiagnosticsStream::Stdout,
     timeout_secs: DEFAULT_TOOL_TIMEOUT_SECS,
     timeout_context: None,
     establishes_compilation: false,
@@ -27,6 +29,7 @@ pub static SHELL: LanguageSupport = LanguageSupport {
     display_name: "Shell",
     extensions: &[".sh", ".bash"],
     filenames: &[],
+    filename_prefixes: &[],
     tools: &[&SHELLCHECK],
     conventions: &[
         "Unquoted expansions that glob or word-split",
@@ -36,3 +39,6 @@ pub static SHELL: LanguageSupport = LanguageSupport {
     ],
     vendored_dirs: &[],
 };
+
+/// The family's entries in registration order. See `ALL_LANGUAGES`.
+pub(crate) static FAMILY: &[&LanguageSupport] = &[&SHELL];

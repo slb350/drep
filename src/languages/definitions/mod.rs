@@ -42,32 +42,46 @@ pub use swift::{SWIFT, SWIFTLINT};
 pub use terraform::{TERRAFORM, TFLINT};
 
 use super::spec::LanguageSupport;
+use std::sync::LazyLock;
 
 /// Every registered language, in registration order.
 ///
-/// The order is the order `doctor` reports languages in, so it is part of
-/// the output contract: append new entries rather than inserting.
-pub static ALL_LANGUAGES: &[&LanguageSupport] = &[
-    &PYTHON,
-    &JAVASCRIPT,
-    &TYPESCRIPT,
-    &GO,
-    &RUST_LANG,
-    &JAVA,
-    &KOTLIN,
-    &SCALA,
-    &GROOVY,
-    &SHELL,
-    &SWIFT,
-    &C,
-    &CPP,
-    &CSHARP,
-    &RUBY,
-    &PHP,
-    &VUE,
-    &SVELTE,
-    &TERRAFORM,
-    &ELIXIR,
-    &SQL,
-    &DOCKER,
-];
+/// Assembled from each ecosystem file's own `FAMILY` slice rather than
+/// maintained here as a hand-written list. A static can be defined and
+/// re-exported above while never being registered, and no test could see the
+/// omission - the same failure class as a test file no `mod` declares. With
+/// the list built beside the definitions, leaving a language out means
+/// leaving it out of the file that defines it.
+///
+/// The order is the order `doctor` reports languages in, so it remains part
+/// of the output contract - but the contract is now two-level: families in
+/// the order listed below, and within a family the order its own file writes.
+/// Appending a language to its family therefore moves nothing, while adding a
+/// family appends only at the position it is listed here. Assembling this way
+/// reordered the flat list once, on the commit that introduced it, by moving
+/// Vue and Svelte up beside TypeScript where they belong; the previous rule
+/// ("append rather than insert") described the hand-written list and would now
+/// forbid the grouping that replaced it.
+///
+/// `all_languages_returns_every_registered_language` pins the resulting
+/// sequence in full, so a reorder is a visible test change rather than a
+/// silent one.
+pub(crate) static ALL_LANGUAGES: LazyLock<Vec<&'static LanguageSupport>> = LazyLock::new(|| {
+    [
+        python::FAMILY,
+        javascript::FAMILY,
+        go::FAMILY,
+        rust::FAMILY,
+        jvm::FAMILY,
+        shell::FAMILY,
+        swift::FAMILY,
+        c_family::FAMILY,
+        ruby::FAMILY,
+        php::FAMILY,
+        terraform::FAMILY,
+        elixir::FAMILY,
+        sql::FAMILY,
+        docker::FAMILY,
+    ]
+    .concat()
+});

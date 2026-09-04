@@ -1,6 +1,8 @@
 //! SQL: sqlfluff over `.sql`.
 
-use crate::languages::spec::{DEFAULT_TOOL_TIMEOUT_SECS, LanguageSupport, ToolSpec};
+use crate::languages::spec::{
+    DEFAULT_TOOL_TIMEOUT_SECS, DiagnosticsStream, LanguageSupport, OutputFormat, ToolSpec,
+};
 
 /// SQL deterministic checker.
 pub static SQLFLUFF: ToolSpec = ToolSpec {
@@ -9,8 +11,8 @@ pub static SQLFLUFF: ToolSpec = ToolSpec {
     local_paths: &["venv/bin/sqlfluff", ".venv/bin/sqlfluff"],
     config_files: &[".sqlfluff"],
     config_flag: None,
-    output_format: "sqlfluff",
-    diagnostics_stream: "stdout",
+    output_format: OutputFormat::Sqlfluff,
+    diagnostics_stream: DiagnosticsStream::Stdout,
     timeout_secs: DEFAULT_TOOL_TIMEOUT_SECS,
     timeout_context: None,
     establishes_compilation: false,
@@ -27,6 +29,7 @@ pub static SQL: LanguageSupport = LanguageSupport {
     display_name: "SQL",
     extensions: &[".sql"],
     filenames: &[],
+    filename_prefixes: &[],
     tools: &[&SQLFLUFF],
     conventions: &[
         "Queries that scan a whole table where an index exists",
@@ -37,3 +40,6 @@ pub static SQL: LanguageSupport = LanguageSupport {
     ],
     vendored_dirs: &[],
 };
+
+/// The family's entries in registration order. See `ALL_LANGUAGES`.
+pub(crate) static FAMILY: &[&LanguageSupport] = &[&SQL];

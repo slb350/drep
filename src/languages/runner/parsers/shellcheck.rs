@@ -6,17 +6,18 @@ use crate::analysis::findings::{Finding, Severity};
 use crate::languages::runner::ToolOutputError;
 use crate::languages::spec::ToolSpec;
 
-use super::{expect_array, json_payload};
+use super::{expect_array, json_payload, path_or_root};
 
 /// `shellcheck -f json`: one flat record per diagnostic.
 ///
 /// `code` is a number on the wire but `SC`-prefixed in every place a user
 /// meets a ShellCheck rule - the tool's own wiki, suppressions, CI logs - so
-/// the finding `kind` carries the joined form. Sorting by `level` is the
-/// tool's own output order and is preserved.
+/// the finding `kind` carries the joined form. Output order is positional
+/// (file, then line and column), and it is preserved as it arrives.
 pub(super) fn parse_shellcheck(
     spec: &ToolSpec,
     output: &str,
+    root_name: &str,
 ) -> Result<Vec<Finding>, ToolOutputError> {
     let Some(payload) = json_payload(spec, output)? else {
         return Ok(Vec::new());
@@ -30,11 +31,7 @@ pub(super) fn parse_shellcheck(
             code.map(|n| format!("SC{n}"))
                 .unwrap_or_else(|| spec.name.to_owned()),
             shellcheck_severity(entry.get("level").and_then(Value::as_str)),
-            entry
-                .get("file")
-                .and_then(Value::as_str)
-                .unwrap_or("")
-                .to_owned(),
+            path_or_root(entry.get("file"), root_name),
             entry
                 .get("line")
                 .and_then(Value::as_u64)

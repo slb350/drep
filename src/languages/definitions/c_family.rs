@@ -4,7 +4,9 @@
 //! semantic reviewer's conventions differ - while sharing the one checker:
 //! cppcheck analyzes both, and a project's build files decide how it runs.
 
-use crate::languages::spec::{DEFAULT_TOOL_TIMEOUT_SECS, LanguageSupport, ToolSpec};
+use crate::languages::spec::{
+    DEFAULT_TOOL_TIMEOUT_SECS, DiagnosticsStream, LanguageSupport, OutputFormat, ToolSpec,
+};
 
 /// C and C++ deterministic checker.
 ///
@@ -15,12 +17,20 @@ use crate::languages::spec::{DEFAULT_TOOL_TIMEOUT_SECS, LanguageSupport, ToolSpe
 ///
 /// SARIF goes to **stderr**: cppcheck leaves stdout nearly empty (progress
 /// chatter only), so reading stdout reports every C file clean.
+///
+/// `--error-exitcode=2` is load-bearing in the other direction: without it
+/// cppcheck exits 0 *with* findings, so the runner's exit-status guard never
+/// fires for it at all. With it, a finding run exits 2 (which parses fine
+/// and stays `Ok`), and a cppcheck build that broke the SARIF stream -
+/// moved it, renamed the format - exits 2 saying nothing parseable, which
+/// is `Unavailable` instead of a permanent silent clean pass.
 pub static CPPCHECK: ToolSpec = ToolSpec {
     name: "cppcheck",
     command: &[
         "cppcheck",
         "--output-format=sarif",
         "--enable=warning,style",
+        "--error-exitcode=2",
     ],
     local_paths: &[],
     config_files: &[
@@ -30,8 +40,8 @@ pub static CPPCHECK: ToolSpec = ToolSpec {
         "compile_commands.json",
     ],
     config_flag: None,
-    output_format: "sarif",
-    diagnostics_stream: "stderr",
+    output_format: OutputFormat::Sarif,
+    diagnostics_stream: DiagnosticsStream::Stderr,
     timeout_secs: DEFAULT_TOOL_TIMEOUT_SECS,
     timeout_context: None,
     establishes_compilation: false,
@@ -56,8 +66,8 @@ pub static DOTNET_FORMAT: ToolSpec = ToolSpec {
     // project has one, and .NET's own defaults when it does not.
     config_files: &["*.sln", "*.csproj"],
     config_flag: None,
-    output_format: "msbuild",
-    diagnostics_stream: "stdout",
+    output_format: OutputFormat::Msbuild,
+    diagnostics_stream: DiagnosticsStream::Stdout,
     timeout_secs: 600,
     timeout_context: Some(", including its MSBuild project load"),
     establishes_compilation: false,
@@ -71,6 +81,7 @@ pub static C: LanguageSupport = LanguageSupport {
     display_name: "C",
     extensions: &[".c", ".h"],
     filenames: &[],
+    filename_prefixes: &[],
     tools: &[&CPPCHECK],
     conventions: &[
         "Buffer overruns and off-by-one indexing into fixed arrays",
@@ -92,6 +103,7 @@ pub static CPP: LanguageSupport = LanguageSupport {
     display_name: "C++",
     extensions: &[".cpp", ".hpp", ".cc", ".hh", ".cxx", ".hxx"],
     filenames: &[],
+    filename_prefixes: &[],
     tools: &[&CPPCHECK],
     conventions: &[
         "Dangling references and iterators into reallocated containers",
@@ -119,6 +131,7 @@ pub static CSHARP: LanguageSupport = LanguageSupport {
     display_name: "C#",
     extensions: &[".cs"],
     filenames: &[],
+    filename_prefixes: &[],
     tools: &[&DOTNET_FORMAT],
     conventions: &[
         "async void, and tasks that are never awaited",
@@ -129,3 +142,6 @@ pub static CSHARP: LanguageSupport = LanguageSupport {
     ],
     vendored_dirs: &[],
 };
+
+/// The family's entries in registration order. See `ALL_LANGUAGES`.
+pub(crate) static FAMILY: &[&LanguageSupport] = &[&C, &CPP, &CSHARP];

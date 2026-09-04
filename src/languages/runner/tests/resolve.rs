@@ -9,7 +9,7 @@ use tempfile::TempDir;
 
 use super::support::*;
 use crate::languages::runner::*;
-use crate::languages::spec::ToolSpec;
+use crate::languages::spec::{DiagnosticsStream, OutputFormat, ToolSpec};
 
 // ---- resolve_tool ----
 
@@ -105,8 +105,8 @@ fn tool_status_unavailable_when_configured_but_binary_missing() {
         local_paths: &["no/such/ruff"],
         command: &["definitely-not-installed-ruff-abc"],
         config_files: &["pyproject.toml"],
-        output_format: "json",
-        diagnostics_stream: "stdout",
+        output_format: OutputFormat::Json,
+        diagnostics_stream: DiagnosticsStream::Stdout,
         ..ToolSpec::default()
     };
     let outcome = tool_status(&spec, dir.path());
@@ -219,24 +219,22 @@ fn only_a_leading_star_dot_is_treated_as_a_glob() {
     assert!(is_configured(&spec, root));
 }
 
-/// No shipped tool combines a glob marker with `config_flag`.
-///
-/// `run_tool_at` hands the flag the first `config_files` entry that exists as
-/// a literal path, which a glob never does - so such a tool would run without
-/// the config it cannot start without. checkstyle is the only tool with a
-/// flag and all four of its markers are literal names; this fails if that
-/// stops being true.
+/// A directory named `Widget.csproj` is not a project marker: MSBuild runs
+/// from the directory *holding* the project file, and counting a directory
+/// would run `dotnet format` one level too high, where it finds no project.
 #[test]
-fn no_tool_pairs_a_glob_marker_with_a_config_flag() {
-    for language in crate::languages::definitions::ALL_LANGUAGES {
-        for spec in language.tools {
-            if spec.config_flag.is_some() {
-                assert!(
-                    spec.config_files.iter().all(|name| !name.starts_with("*.")),
-                    "{} passes its config by flag, so its markers must be literal",
-                    spec.name
-                );
-            }
-        }
-    }
+fn a_glob_config_marker_matches_files_not_directories() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path();
+    std::fs::create_dir(root.join("Widget.csproj")).unwrap();
+
+    let spec = ToolSpec {
+        name: "globbed",
+        config_files: &["*.csproj"],
+        ..ToolSpec::default()
+    };
+    assert!(
+        !is_configured(&spec, root),
+        "a directory carrying the extension is not a project file"
+    );
 }

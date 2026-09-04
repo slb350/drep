@@ -49,13 +49,14 @@ static TSC: LazyLock<Regex> = LazyLock::new(|| {
 /// identifier (`WHITESPACE`, `CS0168`, `IDE0059`) rather than `TS\d+`, so
 /// neither regex can serve the other's tool.
 ///
-/// The trailing ` [project]` group is optional and anchored to `$`, so it
-/// strips exactly the last bracketed suffix - the project name MSBuild
-/// appends to every diagnostic - and leaves bracketed text inside the
-/// message alone.
+/// The trailing ` [project]` group is optional and anchored to `$`, and it
+/// only strips a bracketed token that names a project file. MSBuild appends
+/// the project it was building to every diagnostic - always a `.*proj` or
+/// `.sln` path - so a message that legitimately ends in other bracketed
+/// text keeps it.
 static MSBUILD: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
-        r"^(?P<file>.+?)\((?P<line>\d+),(?P<col>\d+)\):\s*(?P<severity>error|warning|info)\s+(?P<code>[A-Za-z0-9_]+):\s*(?P<message>.*?)(?:\s+\[[^\]]*\])?$",
+        r"^(?P<file>.+?)\((?P<line>\d+),(?P<col>\d+)\):\s*(?P<severity>error|warning|info)\s+(?P<code>[A-Za-z0-9_]+):\s*(?P<message>.*?)(?:\s+\[[^\]]*(?i)\.(?:csproj|vbproj|fsproj|sln|sqlproj|wixproj|shproj)\])?$",
     )
     .expect("MSBUILD regex compiles")
 });
@@ -135,11 +136,12 @@ fn parse_captured(
 
 /// `file(line,col): error TS1234: message`.
 ///
-/// The severity word is read rather than assumed. The regex has always
-/// matched `warning` as well as `error`, and every match was reported as an
-/// error - so a tsc warning blocked a commit under `--fail-on error` while
-/// claiming to be something it was not. On a scale where a warning blocks,
-/// the gate gets switched off.
+/// The severity word is read rather than assumed. The regex always matched
+/// `warning` as well as `error`, and every match was reported as an error.
+/// The gate was unaffected - a tool finding blocks whatever its severity -
+/// but the rendered line called a warning an error, which the compiler never
+/// said; the user calibrates the tool's config from what drep shows, so the
+/// line must say what the compiler said.
 pub(super) fn parse_tsc(output: &str) -> Vec<Finding> {
     parse_captured(output, &TSC, |caps| {
         if &caps["severity"] == "warning" {
@@ -162,8 +164,9 @@ pub(super) fn parse_msbuild(output: &str) -> Vec<Finding> {
 /// MSBuild's severity word to drep severity.
 ///
 /// The regex admits only `error`, `warning` and `info`, so the catch-all is
-/// reached for `info` - kept as a match arm rather than falling through so
-/// each of the three words stays separately observable.
+/// reached for `info` alone - and for anything the regex one day admits
+/// beyond those three, which lands on Info rather than blocking a gate on a
+/// word nobody audited.
 fn msbuild_severity(word: &str) -> Severity {
     match word {
         "error" => Severity::Error,

@@ -377,3 +377,42 @@ fn each_suggestion_follows_its_own_finding() {
         "each suggestion must directly follow its own finding, got:\n{text}"
     );
 }
+
+/// A tool's message is untrusted text: it renders bounded and free of
+/// control characters.
+///
+/// The JSON reporters decode `\u001b` escapes faithfully, so a crafted
+/// diagnostic carries a working terminal escape into the report; and a
+/// multi-kilobyte message pushes the actionable findings off the screen.
+/// `text::excerpt` is the one bounding drep applies to text it did not
+/// write, so the finding line routes through it.
+#[test]
+fn a_finding_message_is_excerpted_not_printed_raw() {
+    use crate::analysis::findings::{Finding, Severity};
+    use crate::cli::OutputFormat;
+
+    let long = "x".repeat(500);
+    let outcome = super::support::outcome_with_tool_findings(vec![Finding {
+        kind: "bug".to_owned(),
+        severity: Severity::Error,
+        file_path: "src/lib.rs".to_owned(),
+        line: 1,
+        column: None,
+        message: format!("before\u{1b}[2J{long}"),
+        suggestion: None,
+        asserts_compile_failure: false,
+        fingerprint: None,
+    }]);
+    let text = super::support::rendered(&outcome, OutputFormat::Text);
+
+    assert!(
+        !text.chars().any(|c| c.is_control() && c != '\n'),
+        "an escape in the message must not reach the terminal: {text:?}"
+    );
+    let line = text.lines().next().unwrap_or_default();
+    assert!(
+        line.chars().count() < 300,
+        "the message is bounded, got {} chars",
+        line.chars().count()
+    );
+}

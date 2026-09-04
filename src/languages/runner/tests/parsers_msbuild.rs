@@ -1,10 +1,4 @@
 //! MSBuild (`dotnet format`) output parser.
-//!
-//! Wired in via `#[cfg(test)] mod tests;` in the parent module. These files
-//! were orphaned once - present on disk but reachable by no `mod`
-//! declaration, so cargo never compiled them and appending invalid Rust did
-//! not fail the build. If you add a file here, declare it in this
-//! directory's `mod.rs`.
 
 use super::support::*;
 use crate::analysis::findings::Severity;
@@ -131,4 +125,34 @@ fn msbuild_parser_accepts_a_diagnostic_without_the_project_suffix() {
     .unwrap();
     assert_eq!(findings.len(), 1);
     assert_eq!(findings[0].message, "declared but never used");
+}
+
+/// Diagnostics in two files both land: a "first entry only" regression must
+/// not pass.
+#[test]
+fn msbuild_parser_reads_findings_in_every_file() {
+    let spec = dotnet_format_like_spec();
+    let input = "/cs/A.cs(1,1): error WHITESPACE: m1 [/cs/cs.csproj]\n/cs/B.cs(2,3): warning CS0168: m2 [/cs/cs.csproj]\n";
+    let findings = parse_output(&spec, input, "root").unwrap();
+    assert_eq!(findings.len(), 2);
+    assert_eq!(findings[0].file_path, "/cs/A.cs");
+    assert_eq!(findings[1].file_path, "/cs/B.cs");
+    assert_eq!(findings[1].line, 2);
+}
+
+/// The suffix strip only eats a *project* path. A message that legitimately
+/// ends in bracketed text keeps it: MSBuild appends the project file it was
+/// building, always a `.csproj`/`.sln` path, and anything else in brackets
+/// belongs to the message.
+#[test]
+fn msbuild_parser_strips_only_a_project_suffix() {
+    let spec = dotnet_format_like_spec();
+    let input = "/cs/A.cs(3,5): error IDE0059: Unnecessary assignment to [field] [/cs/cs.csproj]\n/cs/A.cs(4,5): error IDE0059: Unnecessary assignment to [field]\n";
+    let findings = parse_output(&spec, input, "root").unwrap();
+    assert_eq!(findings.len(), 2);
+    assert_eq!(findings[0].message, "Unnecessary assignment to [field]");
+    assert_eq!(
+        findings[1].message, "Unnecessary assignment to [field]",
+        "a trailing bracket that is not a project file stays"
+    );
 }

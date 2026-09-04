@@ -1,6 +1,8 @@
 //! Ruby: RuboCop over `.rb` and the extensionless `Gemfile`/`Rakefile`.
 
-use crate::languages::spec::{DEFAULT_TOOL_TIMEOUT_SECS, LanguageSupport, ToolSpec};
+use crate::languages::spec::{
+    DEFAULT_TOOL_TIMEOUT_SECS, DiagnosticsStream, LanguageSupport, OutputFormat, ToolSpec,
+};
 
 /// Ruby deterministic checker.
 ///
@@ -14,8 +16,8 @@ pub static RUBOCOP: ToolSpec = ToolSpec {
     local_paths: &["bin/rubocop"],
     config_files: &[".rubocop.yml"],
     config_flag: None,
-    output_format: "rubocop",
-    diagnostics_stream: "stdout",
+    output_format: OutputFormat::Rubocop,
+    diagnostics_stream: DiagnosticsStream::Stdout,
     timeout_secs: DEFAULT_TOOL_TIMEOUT_SECS,
     timeout_context: None,
     establishes_compilation: false,
@@ -33,6 +35,7 @@ pub static RUBY: LanguageSupport = LanguageSupport {
     display_name: "Ruby",
     extensions: &[".rb", ".rake", ".gemspec"],
     filenames: &["Gemfile", "Rakefile"],
+    filename_prefixes: &[],
     tools: &[&RUBOCOP],
     conventions: &[
         "Monkey patches and reopenings of core classes",
@@ -41,5 +44,8 @@ pub static RUBY: LanguageSupport = LanguageSupport {
         "Exceptions swallowed by a rescue that only logs",
         "Blocks whose break/next semantics skip cleanup",
     ],
-    vendored_dirs: &["vendor/bundle", ".bundle"],
+    vendored_dirs: &[".bundle"],
 };
+
+/// The family's entries in registration order. See `ALL_LANGUAGES`.
+pub(crate) static FAMILY: &[&LanguageSupport] = &[&RUBY];

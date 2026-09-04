@@ -1,6 +1,8 @@
 //! The Go ecosystem: gofmt and go vet over `.go`.
 
-use crate::languages::spec::{DEFAULT_TOOL_TIMEOUT_SECS, LanguageSupport, ToolSpec};
+use crate::languages::spec::{
+    DEFAULT_TOOL_TIMEOUT_SECS, DiagnosticsStream, LanguageSupport, OutputFormat, ToolSpec,
+};
 
 /// Go formatting checker - lists files whose formatting drifts from `gofmt`'s.
 ///
@@ -12,8 +14,8 @@ pub static GOFMT: ToolSpec = ToolSpec {
     local_paths: &[],
     config_files: &["go.mod"],
     config_flag: None,
-    output_format: "lines",
-    diagnostics_stream: "stdout",
+    output_format: OutputFormat::Lines,
+    diagnostics_stream: DiagnosticsStream::Stdout,
     timeout_secs: DEFAULT_TOOL_TIMEOUT_SECS,
     timeout_context: None,
     establishes_compilation: false,
@@ -31,8 +33,8 @@ pub static GO_VET: ToolSpec = ToolSpec {
     local_paths: &[],
     config_files: &["go.mod"],
     config_flag: None,
-    output_format: "position",
-    diagnostics_stream: "stderr",
+    output_format: OutputFormat::Position,
+    diagnostics_stream: DiagnosticsStream::Stderr,
     timeout_secs: DEFAULT_TOOL_TIMEOUT_SECS,
     timeout_context: None,
     establishes_compilation: true,
@@ -46,6 +48,7 @@ pub static GO: LanguageSupport = LanguageSupport {
     display_name: "Go",
     extensions: &[".go"],
     filenames: &[],
+    filename_prefixes: &[],
     tools: &[&GOFMT, &GO_VET],
     conventions: &[
         "Errors ignored rather than checked and wrapped",
@@ -55,3 +58,6 @@ pub static GO: LanguageSupport = LanguageSupport {
     ],
     vendored_dirs: &["vendor"],
 };
+
+/// The family's entries in registration order. See `ALL_LANGUAGES`.
+pub(crate) static FAMILY: &[&LanguageSupport] = &[&GO];

@@ -6,12 +6,13 @@ use crate::analysis::findings::{Finding, Severity};
 use crate::languages::runner::ToolOutputError;
 use crate::languages::spec::ToolSpec;
 
-use super::{expect_array, json_payload};
+use super::{expect_array, json_payload, path_or_root};
 
 /// `sqlfluff lint --format json`: `[{filepath, violations: [...]}]`.
 pub(super) fn parse_sqlfluff(
     spec: &ToolSpec,
     output: &str,
+    root_name: &str,
 ) -> Result<Vec<Finding>, ToolOutputError> {
     let Some(payload) = json_payload(spec, output)? else {
         return Ok(Vec::new());
@@ -20,11 +21,7 @@ pub(super) fn parse_sqlfluff(
 
     let mut findings = Vec::new();
     for entry in entries {
-        let file_path = entry
-            .get("filepath")
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .to_owned();
+        let file_path = path_or_root(entry.get("filepath"), root_name);
         for violation in entry
             .get("violations")
             .and_then(Value::as_array)

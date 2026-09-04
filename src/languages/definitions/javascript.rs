@@ -1,9 +1,13 @@
 //! The JavaScript/TypeScript ecosystem, plus the component frameworks that
-//! reuse eslint: Vue and Svelte ship no linter of their own, so their single
-//! files are `.vue`/`.svelte` templates and script inside them, checked by
-//! the project's eslint config when it has the parser plugins.
+//! reuse eslint. Vue and Svelte ship checkers of their own (vue-tsc,
+//! svelte-check), but those are type and language tooling rather than a lint
+//! CLI a project configures the way it configures eslint - so drep checks
+//! `.vue`/`.svelte` files through the project's eslint config, which is where
+//! the parser plugins live when the project has them.
 
-use crate::languages::spec::{DEFAULT_TOOL_TIMEOUT_SECS, LanguageSupport, ToolSpec};
+use crate::languages::spec::{
+    DEFAULT_TOOL_TIMEOUT_SECS, DiagnosticsStream, LanguageSupport, OutputFormat, ToolSpec,
+};
 
 /// Package installs and build outputs shared by the JavaScript ecosystem.
 /// npm and its rivals install into `node_modules`; Next.js and Nuxt write
@@ -28,8 +32,8 @@ pub static ESLINT: ToolSpec = ToolSpec {
         ".eslintrc.yaml",
     ],
     config_flag: None,
-    output_format: "json",
-    diagnostics_stream: "stdout",
+    output_format: OutputFormat::Json,
+    diagnostics_stream: DiagnosticsStream::Stdout,
     timeout_secs: DEFAULT_TOOL_TIMEOUT_SECS,
     timeout_context: None,
     establishes_compilation: false,
@@ -44,8 +48,8 @@ pub static TSC: ToolSpec = ToolSpec {
     local_paths: &["node_modules/.bin/tsc"],
     config_files: &["tsconfig.json"],
     config_flag: None,
-    output_format: "tsc",
-    diagnostics_stream: "stdout",
+    output_format: OutputFormat::Tsc,
+    diagnostics_stream: DiagnosticsStream::Stdout,
     timeout_secs: DEFAULT_TOOL_TIMEOUT_SECS,
     timeout_context: None,
     establishes_compilation: true,
@@ -61,6 +65,7 @@ pub static JAVASCRIPT: LanguageSupport = LanguageSupport {
     display_name: "JavaScript",
     extensions: &[".js", ".jsx", ".mjs", ".cjs"],
     filenames: &[],
+    filename_prefixes: &[],
     tools: &[&ESLINT],
     conventions: &[
         "Unhandled promise rejections and missing await",
@@ -77,6 +82,7 @@ pub static TYPESCRIPT: LanguageSupport = LanguageSupport {
     display_name: "TypeScript",
     extensions: &[".ts", ".tsx", ".mts", ".cts"],
     filenames: &[],
+    filename_prefixes: &[],
     tools: &[&ESLINT, &TSC],
     conventions: &[
         "`any` where a real type is available, and unsafe casts",
@@ -90,13 +96,17 @@ pub static TYPESCRIPT: LanguageSupport = LanguageSupport {
 /// Vue language entry.
 ///
 /// Reuses the project's eslint: a `.vue` file is script plus template, and
-/// eslint with the Vue plugin is the checker a Vue project configures.
-/// There is no separate Vue tool to declare.
+/// eslint with the Vue plugin is the lint setup a Vue project configures.
+/// Without the plugin, eslint reports a parse error on the template - a
+/// finding that is drep's invocation's fault rather than the file's, which
+/// is the price of checking through a config the project may not have
+/// extended to these files.
 pub static VUE: LanguageSupport = LanguageSupport {
     name: "vue",
     display_name: "Vue",
     extensions: &[".vue"],
     filenames: &[],
+    filename_prefixes: &[],
     tools: &[&ESLINT],
     conventions: &[
         "Reactive state mutated from outside the component that owns it",
@@ -111,12 +121,15 @@ pub static VUE: LanguageSupport = LanguageSupport {
 /// Svelte language entry.
 ///
 /// Same arrangement as Vue: eslint with the Svelte plugin is the
-/// project-configured checker, so Svelte shares its entry.
+/// project-configured lint setup, and without the plugin eslint's parse
+/// error on the template blocks the gate for an invocation reason, not a
+/// code one.
 pub static SVELTE: LanguageSupport = LanguageSupport {
     name: "svelte",
     display_name: "Svelte",
     extensions: &[".svelte"],
     filenames: &[],
+    filename_prefixes: &[],
     tools: &[&ESLINT],
     conventions: &[
         "Reactive statements with dependencies they do not declare",
@@ -126,3 +139,6 @@ pub static SVELTE: LanguageSupport = LanguageSupport {
     ],
     vendored_dirs: JS_VENDORED_DIRS,
 };
+
+/// The family's entries in registration order. See `ALL_LANGUAGES`.
+pub(crate) static FAMILY: &[&LanguageSupport] = &[&JAVASCRIPT, &TYPESCRIPT, &VUE, &SVELTE];

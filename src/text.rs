@@ -12,14 +12,25 @@
 /// messages, truncated but did not strip control characters - the one thing
 /// this function exists for.
 pub fn excerpt(body: &str, max_chars: usize) -> String {
-    let cleaned: String = body
+    // Trimmed before cleaning rather than after, and the kept length is
+    // carried rather than recounted. This runs once per rendered finding, and
+    // the previous form built a full cleaned copy of the whole body - of which
+    // `max_chars` survive - then called `out.chars().count()` on every
+    // iteration, rescanning everything kept so far.
+    //
+    // Trimming first is equivalent because cleaning only ever maps a control
+    // character to a space: an edge character that `trim` would have removed
+    // after cleaning is whitespace or a control character before it, and an
+    // interior one still becomes a space below.
+    let trimmed = body.trim_matches(|c: char| c.is_whitespace() || c.is_control());
+    let mut out = String::with_capacity(max_chars);
+    let mut kept = 0usize;
+    let mut last_was_space = false;
+    for c in trimmed
         .chars()
         .map(|c| if c.is_control() { ' ' } else { c })
-        .collect();
-    let mut out = String::with_capacity(max_chars);
-    let mut last_was_space = false;
-    for c in cleaned.trim().chars() {
-        if out.chars().count() >= max_chars {
+    {
+        if kept >= max_chars {
             out.push('…');
             break;
         }
@@ -32,6 +43,7 @@ pub fn excerpt(body: &str, max_chars: usize) -> String {
             last_was_space = false;
         }
         out.push(c);
+        kept += 1;
     }
     if out.is_empty() {
         // Unreachable in practice for a model response - an empty body is a

@@ -1,8 +1,8 @@
 //! The parsers, against output captured from the real tools.
 //!
-//! The unit tests in `runner.rs` use hand-written fixtures, which prove the
-//! parser matches its spec but not that the spec matches reality. These
-//! samples were captured by running ruff 0.16, gofmt and go vet 1.21 against
+//! The unit tests under `src/languages/runner/tests/` use hand-written
+//! fixtures, which prove the parser matches its spec but not that the spec
+//! matches reality. These samples were captured by running the tools against
 //! deliberately broken files, so a tool changing its output shape fails here
 //! rather than silently reporting every file clean.
 
@@ -12,7 +12,7 @@ use drep::languages::definitions::{
     SQLFLUFF, SWIFTLINT, TFLINT,
 };
 use drep::languages::runner::parse_output;
-use drep::languages::spec::ToolSpec;
+use drep::languages::spec::{DiagnosticsStream, ToolSpec};
 
 /// Captured from `ruff check --output-format json` on a file with two unused
 /// imports and one unused local. Trimmed to the fields the parser reads.
@@ -125,13 +125,14 @@ fn a_clean_run_produces_no_findings() {
 }
 
 // ---------------------------------------------------------------------------
-// The languages registered in 2.10, against output captured from each tool.
+// The languages added by the coverage expansion, against output captured
+// from each tool.
 //
-// These go through the REAL `ToolSpec` statics rather than the test doubles the
-// unit suite uses. That is the whole point of them: a double hardcodes its own
-// `output_format`, so a typo in the real static - `"shell"` for `"shellcheck"` -
-// passes every unit test and fails in production with "no parser for output
-// format". Only a test holding the shipped spec can see that.
+// These go through the REAL `ToolSpec` statics rather than the test doubles
+// the unit suite uses. That is the whole point of them: a double hardcodes
+// its own `output_format`, so a mistake in the real static passes every
+// unit test and fails in production. Only a test holding the shipped spec
+// can see that.
 // ---------------------------------------------------------------------------
 
 /// Captured from `shellcheck -f json` on a four-line script.
@@ -185,16 +186,21 @@ const HADOLINT_SARIF: &str = r#"{"runs":[{"results":[
 "message":{"text":"Using latest is prone to errors if the image will ever update. Pin the version explicitly to a release tag"},"ruleId":"DL3007"}]}]}"#;
 
 /// One row of the per-tool table below: the shipped spec, the output
-/// captured from the real tool, and the finding that output must produce.
-type RealOutputCase<'a> = (
-    &'a ToolSpec,
-    &'a str,
-    &'a str,
-    u32,
-    Option<u32>,
-    &'a str,
-    Severity,
-);
+/// captured from the real tool, the number of findings that output must
+/// produce, and the finding the first one must be. The count is asserted as
+/// well as the first finding: a parser that read only the first entry of a
+/// multi-finding document would pass a `first()` check while dropping the
+/// rest.
+struct RealOutputCase {
+    spec: &'static ToolSpec,
+    output: &'static str,
+    findings: usize,
+    file: &'static str,
+    line: u32,
+    column: Option<u32>,
+    kind: &'static str,
+    severity: Severity,
+}
 
 /// Every newly registered tool parses its own real output through its shipped
 /// spec, and lands the finding on the file, line and rule the tool named.
@@ -204,109 +210,125 @@ type RealOutputCase<'a> = (
 #[test]
 fn every_registered_tool_parses_its_real_output() {
     let cases: &[RealOutputCase] = &[
-        (
-            &SHELLCHECK,
-            SHELLCHECK_JSON,
-            "t.sh",
-            2,
-            Some(1),
-            "SC2034",
-            Severity::Warning,
-        ),
-        (
-            &RUBOCOP,
-            RUBOCOP_JSON,
-            "Sample.rb",
-            2,
-            Some(3),
-            "Lint/UselessAssignment",
-            Severity::Warning,
-        ),
-        (
-            &PHPCS,
-            PHPCS_JSON,
-            "/w/Sample.php",
-            2,
-            Some(18),
-            "Squiz.Functions.MultiLineFunctionDeclaration.BraceOnSameLine",
-            Severity::Error,
-        ),
-        (
-            &CREDO,
-            CREDO_JSON,
-            "lib/demo.ex",
-            2,
-            None,
-            "Credo.Check.Design.TagTODO",
-            Severity::Warning,
-        ),
-        (
-            &SQLFLUFF,
-            SQLFLUFF_JSON,
-            "migration.sql",
-            3,
-            Some(1),
-            "CP02",
-            Severity::Error,
-        ),
-        (
-            &DOTNET_FORMAT,
-            DOTNET_FORMAT_STDOUT,
-            "/tmp/cs/Program.cs",
-            4,
-            Some(9),
-            "WHITESPACE",
-            Severity::Error,
-        ),
-        (
-            &CPPCHECK,
-            CPPCHECK_SARIF,
-            "sample.c",
-            5,
-            Some(6),
-            "arrayIndexOutOfBounds",
-            Severity::Error,
-        ),
-        (
-            &SWIFTLINT,
-            SWIFTLINT_SARIF,
-            "Sources/Sample.swift",
-            4,
-            Some(9),
-            "identifier_name",
-            Severity::Error,
-        ),
-        (
-            &TFLINT,
-            TFLINT_SARIF,
-            "main.tf",
-            1,
-            Some(1),
-            "terraform_required_providers",
-            Severity::Warning,
-        ),
-        (
-            &HADOLINT,
-            HADOLINT_SARIF,
-            "Dockerfile",
-            1,
-            Some(1),
-            "DL3007",
-            Severity::Warning,
-        ),
+        RealOutputCase {
+            spec: &SHELLCHECK,
+            output: SHELLCHECK_JSON,
+            findings: 2,
+            file: "t.sh",
+            line: 2,
+            column: Some(1),
+            kind: "SC2034",
+            severity: Severity::Warning,
+        },
+        RealOutputCase {
+            spec: &RUBOCOP,
+            output: RUBOCOP_JSON,
+            findings: 1,
+            file: "Sample.rb",
+            line: 2,
+            column: Some(3),
+            kind: "Lint/UselessAssignment",
+            severity: Severity::Warning,
+        },
+        RealOutputCase {
+            spec: &PHPCS,
+            output: PHPCS_JSON,
+            findings: 1,
+            file: "/w/Sample.php",
+            line: 2,
+            column: Some(18),
+            kind: "Squiz.Functions.MultiLineFunctionDeclaration.BraceOnSameLine",
+            severity: Severity::Error,
+        },
+        RealOutputCase {
+            spec: &CREDO,
+            output: CREDO_JSON,
+            findings: 1,
+            file: "lib/demo.ex",
+            line: 2,
+            column: None,
+            kind: "Credo.Check.Design.TagTODO",
+            severity: Severity::Warning,
+        },
+        RealOutputCase {
+            spec: &SQLFLUFF,
+            output: SQLFLUFF_JSON,
+            findings: 1,
+            file: "migration.sql",
+            line: 3,
+            column: Some(1),
+            kind: "CP02",
+            severity: Severity::Error,
+        },
+        RealOutputCase {
+            spec: &DOTNET_FORMAT,
+            output: DOTNET_FORMAT_STDOUT,
+            findings: 1,
+            file: "/tmp/cs/Program.cs",
+            line: 4,
+            column: Some(9),
+            kind: "WHITESPACE",
+            severity: Severity::Error,
+        },
+        RealOutputCase {
+            spec: &CPPCHECK,
+            output: CPPCHECK_SARIF,
+            findings: 1,
+            file: "sample.c",
+            line: 5,
+            column: Some(6),
+            kind: "arrayIndexOutOfBounds",
+            severity: Severity::Error,
+        },
+        RealOutputCase {
+            spec: &SWIFTLINT,
+            output: SWIFTLINT_SARIF,
+            findings: 1,
+            file: "Sources/Sample.swift",
+            line: 4,
+            column: Some(9),
+            kind: "identifier_name",
+            severity: Severity::Error,
+        },
+        RealOutputCase {
+            spec: &TFLINT,
+            output: TFLINT_SARIF,
+            findings: 1,
+            file: "main.tf",
+            line: 1,
+            column: Some(1),
+            kind: "terraform_required_providers",
+            severity: Severity::Warning,
+        },
+        RealOutputCase {
+            spec: &HADOLINT,
+            output: HADOLINT_SARIF,
+            findings: 1,
+            file: "Dockerfile",
+            line: 1,
+            column: Some(1),
+            kind: "DL3007",
+            severity: Severity::Warning,
+        },
     ];
 
-    for (spec, output, file, line, column, kind, severity) in cases {
-        let findings = parse_output(spec, output, "fallback")
-            .unwrap_or_else(|err| panic!("{} should parse its own output: {err}", spec.name));
+    for case in cases {
+        let name = case.spec.name;
+        let findings = parse_output(case.spec, case.output, "fallback")
+            .unwrap_or_else(|err| panic!("{name} should parse its own output: {err}"));
+        assert_eq!(
+            findings.len(),
+            case.findings,
+            "{name} must read every finding in its document, not just the first"
+        );
         let first = findings
             .first()
-            .unwrap_or_else(|| panic!("{} produced no finding from real output", spec.name));
-        assert_eq!(&first.file_path, file, "{} file path", spec.name);
-        assert_eq!(first.line, *line, "{} line", spec.name);
-        assert_eq!(first.column, *column, "{} column", spec.name);
-        assert_eq!(&first.kind, kind, "{} rule id", spec.name);
-        assert_eq!(first.severity, *severity, "{} severity", spec.name);
+            .unwrap_or_else(|| panic!("{name} produced no finding from real output"));
+        assert_eq!(first.file_path, case.file, "{name} file path");
+        assert_eq!(first.line, case.line, "{name} line");
+        assert_eq!(first.column, case.column, "{name} column");
+        assert_eq!(first.kind, case.kind, "{name} rule id");
+        assert_eq!(first.severity, case.severity, "{name} severity");
     }
 }
 
@@ -351,10 +373,10 @@ fn every_registered_tool_reads_its_own_clean_run() {
 /// with the wrong stream would make drep pass every file in that language.
 #[test]
 fn only_the_verified_tools_read_stderr() {
-    let mut stderr_tools: Vec<&str> = drep::languages::definitions::ALL_LANGUAGES
+    let mut stderr_tools: Vec<&str> = drep::languages::all_languages()
         .iter()
         .flat_map(|lang| lang.tools.iter())
-        .filter(|spec| spec.diagnostics_stream == "stderr")
+        .filter(|spec| spec.diagnostics_stream == DiagnosticsStream::Stderr)
         .map(|spec| spec.name)
         .collect();
     // Sorted: registration order is `doctor`'s reporting order and is allowed
@@ -366,32 +388,4 @@ fn only_the_verified_tools_read_stderr() {
         vec!["cppcheck", "cppcheck", "go vet"],
         "cppcheck is listed twice because C and C++ share the one spec"
     );
-}
-
-/// Every shipped tool names a stream the runner actually reads, and an output
-/// format `parse_output` actually dispatches on.
-///
-/// `diagnostics_stream` is compared against a literal in `run_tool_at`, so a
-/// typo silently selects stdout; `output_format` falls through to an error
-/// that reports the file unanalyzable. Neither is caught by a parser test,
-/// which supplies its own spec.
-#[test]
-fn every_shipped_tool_names_a_real_stream_and_format() {
-    for lang in drep::languages::definitions::ALL_LANGUAGES {
-        for spec in lang.tools {
-            assert!(
-                matches!(spec.diagnostics_stream, "stdout" | "stderr"),
-                "{} names stream {:?}",
-                spec.name,
-                spec.diagnostics_stream
-            );
-            let err = parse_output(spec, "", "fallback");
-            assert!(
-                err.is_ok(),
-                "{} format {:?} has no parser",
-                spec.name,
-                spec.output_format
-            );
-        }
-    }
 }

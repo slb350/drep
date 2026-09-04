@@ -6,7 +6,7 @@ use crate::analysis::findings::{Finding, Severity};
 use crate::languages::runner::ToolOutputError;
 use crate::languages::spec::ToolSpec;
 
-use super::{expect_array, json_payload};
+use super::{expect_array, json_payload, path_or_root};
 
 /// Normalise ruff/eslint-shaped JSON into Findings.
 pub(super) fn parse_json(
@@ -37,11 +37,7 @@ pub(super) fn parse_json(
                 .and_then(|l| l.get("column"))
                 .and_then(Value::as_u64)
                 .map(|n| n as u32);
-            let file_path = obj
-                .get("filename")
-                .and_then(Value::as_str)
-                .map(str::to_owned)
-                .unwrap_or_else(|| root_name.to_owned());
+            let file_path = path_or_root(obj.get("filename"), root_name);
             let message = obj
                 .get("message")
                 .and_then(Value::as_str)
@@ -70,11 +66,7 @@ pub(super) fn parse_json(
         }
 
         // eslint shape: one record per file with a nested `messages` array.
-        let file_path = obj
-            .get("filePath")
-            .and_then(Value::as_str)
-            .map(str::to_owned)
-            .unwrap_or_else(|| root_name.to_owned());
+        let file_path = path_or_root(obj.get("filePath"), root_name);
         for message in obj
             .get("messages")
             .and_then(Value::as_array)
@@ -103,7 +95,13 @@ pub(super) fn parse_json(
                 .unwrap_or_else(|| spec.name.to_owned());
             findings.push(Finding::deterministic(
                 kind,
-                Severity::Error,
+                // eslint carries 1 (warning) and 2 (error) per message. An
+                // absent field keeps the historical Error default rather
+                // than guessing down.
+                match obj.and_then(|m| m.get("severity")).and_then(Value::as_u64) {
+                    Some(1) => Severity::Warning,
+                    _ => Severity::Error,
+                },
                 file_path.clone(),
                 line,
                 column,
@@ -126,7 +124,11 @@ pub(super) fn parse_json(
 /// `uriBaseId: "%SRCROOT%"` bound to the process *home*, not the working
 /// directory, so a finding's path resolves to nothing drep was asked to
 /// check. The JSON reporter emits plain absolute paths instead.
-pub(super) fn parse_ktlint(spec: &ToolSpec, output: &str) -> Result<Vec<Finding>, ToolOutputError> {
+pub(super) fn parse_ktlint(
+    spec: &ToolSpec,
+    output: &str,
+    root_name: &str,
+) -> Result<Vec<Finding>, ToolOutputError> {
     let Some(payload) = json_payload(spec, output)? else {
         return Ok(Vec::new());
     };
@@ -134,11 +136,7 @@ pub(super) fn parse_ktlint(spec: &ToolSpec, output: &str) -> Result<Vec<Finding>
 
     let mut findings = Vec::new();
     for entry in entries {
-        let file_path = entry
-            .get("file")
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .to_owned();
+        let file_path = path_or_root(entry.get("file"), root_name);
         for error in entry
             .get("errors")
             .and_then(Value::as_array)

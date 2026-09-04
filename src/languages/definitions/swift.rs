@@ -1,21 +1,23 @@
 //! Swift: SwiftLint over `.swift`.
 
-use crate::languages::spec::{DEFAULT_TOOL_TIMEOUT_SECS, LanguageSupport, ToolSpec};
+use crate::languages::spec::{
+    DEFAULT_TOOL_TIMEOUT_SECS, DiagnosticsStream, LanguageSupport, OutputFormat, ToolSpec,
+};
 
 /// Swift deterministic checker.
 ///
 /// `--quiet` suppresses the "Linting Swift files" banner so stdout is the
 /// SARIF document alone. SwiftLint's SARIF `uri` is repo-relative, verified
-/// against 0.65.1, so it needs none of the `file:` URI handling checkstyle's
-/// does.
+/// against the real binary, so it needs none of the `file:` URI handling
+/// checkstyle's does.
 pub static SWIFTLINT: ToolSpec = ToolSpec {
     name: "swiftlint",
     command: &["swiftlint", "lint", "--reporter", "sarif", "--quiet"],
     local_paths: &[],
     config_files: &[".swiftlint.yml"],
     config_flag: None,
-    output_format: "sarif",
-    diagnostics_stream: "stdout",
+    output_format: OutputFormat::Sarif,
+    diagnostics_stream: DiagnosticsStream::Stdout,
     timeout_secs: DEFAULT_TOOL_TIMEOUT_SECS,
     timeout_context: None,
     establishes_compilation: false,
@@ -29,6 +31,7 @@ pub static SWIFT: LanguageSupport = LanguageSupport {
     display_name: "Swift",
     extensions: &[".swift"],
     filenames: &[],
+    filename_prefixes: &[],
     tools: &[&SWIFTLINT],
     conventions: &[
         "Force unwraps and force tries on values that can be nil or throw",
@@ -38,3 +41,6 @@ pub static SWIFT: LanguageSupport = LanguageSupport {
     ],
     vendored_dirs: &[".build", "Pods", "DerivedData"],
 };
+
+/// The family's entries in registration order. See `ALL_LANGUAGES`.
+pub(crate) static FAMILY: &[&LanguageSupport] = &[&SWIFT];

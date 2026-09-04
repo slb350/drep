@@ -1,0 +1,2 @@
+# ShellCheck runs on this repository's scripts through drep's own gate.
+# This file is the opt-in; no rules are disabled.

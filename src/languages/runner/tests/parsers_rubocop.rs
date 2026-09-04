@@ -1,10 +1,4 @@
 //! RuboCop output parser.
-//!
-//! Wired in via `#[cfg(test)] mod tests;` in the parent module. These files
-//! were orphaned once - present on disk but reachable by no `mod`
-//! declaration, so cargo never compiled them and appending invalid Rust did
-//! not fail the build. If you add a file here, declare it in this
-//! directory's `mod.rs`.
 
 use super::support::*;
 use crate::analysis::findings::Severity;
@@ -19,7 +13,7 @@ fn rubocop_json() -> &'static str {
     "location":{"start_line":1,"start_column":9,"last_line":1,"last_column":9,"length":1,"line":1,"column":9}},
    {"severity":"warning","message":"Useless assignment to variable - `y`.","cop_name":"Lint/UselessAssignment","corrected":false,"correctable":true,
     "location":{"start_line":2,"start_column":3,"last_line":2,"last_column":3,"length":1,"line":2,"column":3}}]}],
- "summary":{"offense_count":11,"target_file_count":1,"inspected_file_count":1}}"#
+ "summary":{"offense_count":2,"target_file_count":1,"inspected_file_count":1}}"#
 }
 
 #[test]
@@ -122,4 +116,30 @@ fn rubocop_parser_prefers_start_line_when_both_keys_are_present() {
     let findings = parse_output(&spec, input, "root").unwrap();
     assert_eq!(findings[0].line, 10);
     assert_eq!(findings[0].column, Some(4));
+}
+
+/// A file entry with no `path` falls back to the root name, exactly as the
+/// ruff/eslint parser does.
+#[test]
+fn rubocop_parser_missing_path_falls_back_to_root_name() {
+    let spec = rubocop_like_spec();
+    let input = r#"{"files":[{"offenses":[{"severity":"warning","message":"m","cop_name":"C","location":{"line":1,"column":2}}]}]}"#;
+    let findings = parse_output(&spec, input, "fallback.rb").unwrap();
+    assert_eq!(findings[0].file_path, "fallback.rb");
+}
+
+/// Offenses in two files both land: a "first entry only" regression must
+/// not pass.
+#[test]
+fn rubocop_parser_reads_findings_in_every_file() {
+    let spec = rubocop_like_spec();
+    let input = r#"{"files":[
+        {"path":"a.rb","offenses":[{"severity":"warning","message":"m1","cop_name":"C1","location":{"line":1,"column":1}}]},
+        {"path":"b.rb","offenses":[{"severity":"error","message":"m2","cop_name":"C2","location":{"line":2,"column":2}}]}
+    ]}"#;
+    let findings = parse_output(&spec, input, "root").unwrap();
+    assert_eq!(findings.len(), 2);
+    assert_eq!(findings[0].file_path, "a.rb");
+    assert_eq!(findings[1].file_path, "b.rb");
+    assert_eq!(findings[1].line, 2);
 }

@@ -1,10 +1,4 @@
 //! sqlfluff output parser.
-//!
-//! Wired in via `#[cfg(test)] mod tests;` in the parent module. These files
-//! were orphaned once - present on disk but reachable by no `mod`
-//! declaration, so cargo never compiled them and appending invalid Rust did
-//! not fail the build. If you add a file here, declare it in this
-//! directory's `mod.rs`.
 
 use super::support::*;
 use crate::analysis::findings::Severity;
@@ -82,4 +76,30 @@ fn sqlfluff_warning_flag_mapping_covers_every_branch() {
         let findings = parse_output(&spec, &input, "root").unwrap();
         assert_eq!(findings[0].severity, expected, "with {warning}");
     }
+}
+
+/// A violations entry with no `filepath` falls back to the root name,
+/// exactly as the ruff/eslint parser does.
+#[test]
+fn sqlfluff_parser_missing_filepath_falls_back_to_root_name() {
+    let spec = sqlfluff_like_spec();
+    let input = r#"[{"violations":[{"start_line_no":1,"start_line_pos":1,"code":"LT01","description":"m"}]}]"#;
+    let findings = parse_output(&spec, input, "fallback.sql").unwrap();
+    assert_eq!(findings[0].file_path, "fallback.sql");
+}
+
+/// Violations in two files both land: a "first entry only" regression must
+/// not pass.
+#[test]
+fn sqlfluff_parser_reads_findings_in_every_file() {
+    let spec = sqlfluff_like_spec();
+    let input = r#"[
+        {"filepath":"a.sql","violations":[{"start_line_no":1,"start_line_pos":1,"code":"LT01","description":"m1"}]},
+        {"filepath":"b.sql","violations":[{"start_line_no":2,"start_line_pos":3,"code":"CP02","description":"m2"}]}
+    ]"#;
+    let findings = parse_output(&spec, input, "root").unwrap();
+    assert_eq!(findings.len(), 2);
+    assert_eq!(findings[0].file_path, "a.sql");
+    assert_eq!(findings[1].file_path, "b.sql");
+    assert_eq!(findings[1].line, 2);
 }

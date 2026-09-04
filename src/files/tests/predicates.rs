@@ -88,6 +88,35 @@ fn the_hand_written_list_matches_the_language_registry() {
     assert_eq!(ours, registered);
 }
 
+/// Whole names and name stems are claims too: an extension-only cross-check
+/// never sees them, and a `Dockerfile` that is not a scan target is omitted
+/// from every discovery path the same way an unclaimed extension is.
+#[test]
+fn every_registered_filename_and_stem_variant_is_a_scan_target() {
+    for lang in crate::languages::all_languages() {
+        for name in lang.filenames {
+            let path = Path::new(name);
+            assert!(
+                is_scan_target(path),
+                "registered filename `{name}` ({}) is not a scan target",
+                lang.name
+            );
+            assert!(
+                !is_markdown(path),
+                "registered filename `{name}` must not be markdown"
+            );
+        }
+        for stem in lang.filename_prefixes {
+            let variant = format!("{stem}.variant");
+            assert!(
+                is_scan_target(Path::new(&variant)),
+                "stem variant `{variant}` ({}) is not a scan target",
+                lang.name
+            );
+        }
+    }
+}
+
 #[test]
 fn the_two_file_classes_are_disjoint() {
     // `check` reads `is_scan_target`, `lint-docs` reads `is_markdown`. If a

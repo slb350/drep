@@ -105,16 +105,31 @@ async fn run_one(task: PlannedTask, root: &Path) -> (runner::ToolOutcome, Vec<Pa
         original_by_absolute.insert(file.absolute, file.original);
     }
     let mut outcome = runner::run_tool_at(spec, root, &workspace_root, &arguments).await;
+    // The canonical index is the second spelling `retain_requested` also
+    // compares: a tool deriving paths from its own resolved cwd answers
+    // through symlinks drep left alone. It is built on the first finding that
+    // misses in exact form, because under an ordinary checkout none ever does
+    // and resolving every planned file up front spends a `realpath` each to
+    // answer a question nothing asks.
+    let mut original_by_canonical: Option<BTreeMap<PathBuf, PathBuf>> = None;
     for finding in &mut outcome.findings {
-        let reported = Path::new(&finding.file_path)
-            .strip_prefix(".")
-            .unwrap_or_else(|_| Path::new(&finding.file_path));
-        let absolute = if reported.is_absolute() {
-            reported.to_path_buf()
-        } else {
-            workspace_root.join(reported)
+        let joined = runner::joined_reported(&workspace_root, &finding.file_path);
+        let original = match original_by_absolute.get(&joined) {
+            Some(original) => Some(original),
+            None => joined.canonicalize().ok().and_then(|resolved| {
+                original_by_canonical
+                    .get_or_insert_with(|| {
+                        original_by_absolute
+                            .iter()
+                            .filter_map(|(absolute, original)| {
+                                Some((absolute.canonicalize().ok()?, original.clone()))
+                            })
+                            .collect()
+                    })
+                    .get(&resolved)
+            }),
         };
-        if let Some(original) = original_by_absolute.get(&absolute) {
+        if let Some(original) = original {
             finding.file_path = original.to_string_lossy().into_owned();
         }
     }
