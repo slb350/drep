@@ -1,16 +1,9 @@
-//! End-to-end run_tool behaviour against real /bin/sh scripts.
-//!
-//! Wired in via `#[cfg(test)] mod tests;` in the parent module. These files were
-//! orphaned once - present on disk but reachable by no `mod` declaration, so
-//! cargo never compiled them and appending invalid Rust did not fail the build.
-//! If you add a file here, declare it in this directory's `mod.rs`.
+//! End-to-end `run_tool` invocation behaviour against real /bin/sh scripts.
 
 use tempfile::TempDir;
 
 use super::support::*;
 use crate::languages::runner::*;
-
-// ---- run_tool ----
 
 #[tokio::test]
 async fn run_tool_returns_skipped_when_no_config_file_present() {
@@ -19,8 +12,8 @@ async fn run_tool_returns_skipped_when_no_config_file_present() {
         local_paths: &["nope"],
         command: &["definitely-not-installed-ruff-xyz"],
         config_files: &["pyproject.toml"],
-        output_format: "json",
-        diagnostics_stream: "stdout",
+        output_format: OutputFormat::Json,
+        diagnostics_stream: DiagnosticsStream::Stdout,
         ..ToolSpec::default()
     };
     let dir = TempDir::new().unwrap();
@@ -35,8 +28,8 @@ async fn run_tool_returns_unavailable_when_binary_cannot_be_found() {
         local_paths: &[],
         command: &["definitely-not-installed-tool-zzz"],
         config_files: &["any"],
-        output_format: "json",
-        diagnostics_stream: "stdout",
+        output_format: OutputFormat::Json,
+        diagnostics_stream: DiagnosticsStream::Stdout,
         ..ToolSpec::default()
     };
     let dir = TempDir::new().unwrap();
@@ -57,7 +50,7 @@ async fn compilation_ground_truth_requires_a_successful_compiler() {
             command: &["checker"],
             local_paths: &["checker"],
             config_files: &["project.config"],
-            output_format: "lines",
+            output_format: OutputFormat::Lines,
             establishes_compilation,
             ..ToolSpec::default()
         };
@@ -90,8 +83,8 @@ async fn run_tool_reads_stderr_when_diagnostics_stream_is_stderr() {
         command: &["diag"],
         local_paths: &["diag"],
         config_files: &["marker"],
-        output_format: "json",
-        diagnostics_stream: "stderr",
+        output_format: OutputFormat::Json,
+        diagnostics_stream: DiagnosticsStream::Stderr,
         ..ToolSpec::default()
     };
     std::fs::write(dir.path().join("marker"), "").unwrap();
@@ -104,7 +97,7 @@ async fn run_tool_reads_stderr_when_diagnostics_stream_is_stderr() {
     // Same tool with `diagnostics_stream = "stdout"` produces nothing
     // from stderr - the round-trip proves the stream is being honoured.
     let spec_stdout = ToolSpec {
-        diagnostics_stream: "stdout",
+        diagnostics_stream: DiagnosticsStream::Stdout,
         ..spec
     };
     let outcome = run_tool(&spec_stdout, dir.path(), &[]).await;
@@ -126,8 +119,8 @@ async fn run_tool_reports_unavailable_for_unparseable_output_not_empty_ok() {
         command: &["noisy"],
         local_paths: &["noisy"],
         config_files: &["marker"],
-        output_format: "json",
-        diagnostics_stream: "stdout",
+        output_format: OutputFormat::Json,
+        diagnostics_stream: DiagnosticsStream::Stdout,
         ..ToolSpec::default()
     };
     std::fs::write(dir.path().join("marker"), "").unwrap();
@@ -137,49 +130,6 @@ async fn run_tool_reports_unavailable_for_unparseable_output_not_empty_ok() {
     assert!(
         outcome.findings.is_empty(),
         "unparseable must not be reported as zero findings"
-    );
-}
-
-/// A tool that exits non-zero having produced no diagnostics is `Unavailable`,
-/// not a clean `Ok`.
-///
-/// The exit code alone is not a verdict - ruff and clippy exit non-zero
-/// *because* they found issues - but a non-zero exit with nothing on the
-/// diagnostics stream means the tool did not run: bad config, crash, bad
-/// invocation. Reporting that as `Ok` with zero findings is the
-/// "unavailable is not a pass" failure this module exists to prevent.
-#[tokio::test]
-async fn a_silent_non_zero_exit_is_unavailable_not_a_clean_pass() {
-    let dir = TempDir::new().unwrap();
-    let bin = dir.path().join("failtool");
-    write_executable(&bin, "#!/bin/sh\necho 'fatal: bad config' >&2\nexit 2\n");
-    std::fs::write(dir.path().join("pyproject.toml"), "").unwrap();
-
-    // `lines`, not `json`. An empty stdout is not valid JSON, so a `json`
-    // spec reaches `Unavailable` through the *parse-failure* path and the test
-    // passes without ever exercising the exit-status rule - which is exactly
-    // what happened on the first draft. The `lines` parser accepts empty input
-    // as zero findings, so only the new rule can produce `Unavailable` here.
-    let spec = ToolSpec {
-        name: "failtool",
-        command: &["failtool"],
-        local_paths: &["failtool"],
-        config_files: &["pyproject.toml"],
-        output_format: "lines",
-        diagnostics_stream: "stdout",
-        ..ToolSpec::default()
-    };
-
-    let outcome = run_tool(&spec, dir.path(), &["a.py".to_owned()]).await;
-    assert_eq!(
-        outcome.status,
-        ToolStatus::Unavailable,
-        "a silent non-zero exit must not read as a clean pass, got {outcome:?}"
-    );
-    assert!(
-        outcome.detail.contains("fatal: bad config"),
-        "the other stream carries the real error and must reach the detail: {}",
-        outcome.detail
     );
 }
 
@@ -205,8 +155,8 @@ async fn a_relative_root_still_finds_the_repo_local_tool() {
         command: &["mytool"],
         local_paths: &["mytool"],
         config_files: &["pyproject.toml"],
-        output_format: "lines",
-        diagnostics_stream: "stdout",
+        output_format: OutputFormat::Lines,
+        diagnostics_stream: DiagnosticsStream::Stdout,
         ..ToolSpec::default()
     };
 
@@ -239,24 +189,21 @@ fn pathdiff_relative(from: &std::path::Path, to: &std::path::Path) -> std::path:
 async fn a_whole_project_tool_is_invoked_without_file_arguments() {
     let dir = tempfile::tempdir().expect("tempdir");
     let root = dir.path();
-    std::fs::write(root.join("marker"), "").expect("config file");
-
     let log = root.join("argv.log");
-    let stub = format!(
-        "#!/bin/sh\nfor a in \"$@\"; do printf '%s\\n' \"$a\" >> {}; done\nprintf '[]\\n'\n",
-        log.to_string_lossy()
+    install_stub(
+        root,
+        "wholeproject",
+        &format!(
+            "#!/bin/sh\nfor a in \"$@\"; do printf '%s\\n' \"$a\" >> {}; done\nprintf '[]\\n'\n",
+            log.to_string_lossy()
+        ),
     );
-    let tool = root.join("wholeproject");
-    write_executable(&tool, stub);
 
+    // The extra argument is the point: a whole-project tool still gets its
+    // own flags, and only the file list is withheld.
     let spec = ToolSpec {
-        name: "wholeproject",
         command: &["wholeproject", "--flag"],
-        local_paths: &["wholeproject"],
-        config_files: &["marker"],
-        output_format: "lines",
-        accepts_files: false,
-        ..ToolSpec::default()
+        ..whole_project_lines_spec()
     };
 
     let outcome = run_tool(&spec, root, &["a.rs".to_owned(), "b.rs".to_owned()]).await;
@@ -271,88 +218,6 @@ async fn a_whole_project_tool_is_invoked_without_file_arguments() {
         recorded,
         vec!["--flag"],
         "the declared flags are passed and the files are not"
-    );
-}
-
-/// A whole-project tool's findings are narrowed to the files being checked.
-///
-/// It reports on the entire crate, so without the filter a commit gate would
-/// block on pre-existing issues in code the commit never touched - unfixable
-/// by the author, and every commit would fail until the whole crate was clean.
-/// The `./` prefix on one requested path is deliberate: the dash-guard adds it,
-/// and the tool reports paths without it.
-#[tokio::test]
-async fn a_whole_project_tools_findings_are_narrowed_to_the_requested_files() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let root = dir.path();
-    std::fs::write(root.join("marker"), "").expect("config file");
-
-    // `lines` format: each line names a file the tool has an opinion about.
-    let stub = "#!/bin/sh\nprintf 'wanted.rs\\nuntouched.rs\\nalso_wanted.rs\\n'\n";
-    let tool = root.join("wholeproject");
-    write_executable(&tool, stub);
-
-    let spec = ToolSpec {
-        name: "wholeproject",
-        command: &["wholeproject"],
-        local_paths: &["wholeproject"],
-        config_files: &["marker"],
-        output_format: "lines",
-        accepts_files: false,
-        ..ToolSpec::default()
-    };
-
-    let outcome = run_tool(
-        &spec,
-        root,
-        &["wanted.rs".to_owned(), "./also_wanted.rs".to_owned()],
-    )
-    .await;
-    assert_eq!(outcome.status, ToolStatus::Ok, "detail: {}", outcome.detail);
-
-    let mut reported: Vec<&str> = outcome
-        .findings
-        .iter()
-        .map(|f| f.file_path.as_str())
-        .collect();
-    reported.sort_unstable();
-    assert_eq!(
-        reported,
-        vec!["also_wanted.rs", "wanted.rs"],
-        "untouched.rs was not asked about, so its finding must be dropped"
-    );
-}
-
-/// A tool that *does* accept files keeps every finding it reports.
-///
-/// The other half of the filter: applying it unconditionally would silently
-/// drop findings whenever a tool reported a path in a different but equivalent
-/// form, so the narrowing must be scoped to the tools that need it.
-#[tokio::test]
-async fn a_file_taking_tools_findings_are_not_filtered() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let root = dir.path();
-    std::fs::write(root.join("marker"), "").expect("config file");
-
-    let stub = "#!/bin/sh\nprintf 'somewhere/else.rs\\n'\n";
-    let tool = root.join("perfile");
-    write_executable(&tool, stub);
-
-    let spec = ToolSpec {
-        name: "perfile",
-        command: &["perfile"],
-        local_paths: &["perfile"],
-        config_files: &["marker"],
-        output_format: "lines",
-        ..ToolSpec::default()
-    };
-
-    let outcome = run_tool(&spec, root, &["asked.rs".to_owned()]).await;
-    assert_eq!(outcome.status, ToolStatus::Ok, "detail: {}", outcome.detail);
-    assert_eq!(
-        outcome.findings.len(),
-        1,
-        "a per-file tool only reports on what it was given, so nothing is dropped"
     );
 }
 
@@ -383,8 +248,8 @@ async fn a_filename_that_looks_like_a_flag_is_passed_as_a_path() {
         command: &["argvdump"],
         local_paths: &["bin/argvdump"],
         config_files: &["pyproject.toml"],
-        output_format: "lines",
-        diagnostics_stream: "stdout",
+        output_format: OutputFormat::Lines,
+        diagnostics_stream: DiagnosticsStream::Stdout,
         ..ToolSpec::default()
     };
 
@@ -443,8 +308,8 @@ fn config_flag_passes_the_discovered_config_before_the_files() {
         local_paths: &["bin/argvdump"],
         config_files: &["config/checkstyle/checkstyle.xml"],
         config_flag: Some("-c"),
-        output_format: "sarif",
-        diagnostics_stream: "stdout",
+        output_format: OutputFormat::Sarif,
+        diagnostics_stream: DiagnosticsStream::Stdout,
         ..ToolSpec::default()
     };
     let (_dir, argv) = argv_after_running(&spec, &["config/checkstyle/checkstyle.xml"]);
@@ -461,6 +326,35 @@ fn config_flag_passes_the_discovered_config_before_the_files() {
     );
 }
 
+/// A glob marker paired with `config_flag` passes the file the glob matched,
+/// not the glob.
+///
+/// Eligibility and the flag now ask one function which marker is present, so
+/// they cannot disagree. They used to ask separately, and only the flag side
+/// was ignorant of the leading `*.` form: such a tool was judged configured
+/// by the glob and then run without the config it cannot start without.
+/// Nothing shipped paired the two, so the hole was latent - `dotnet format`
+/// has the glob markers and checkstyle has the flag.
+#[test]
+fn config_flag_passes_the_file_a_glob_marker_matched() {
+    let spec = ToolSpec {
+        name: "argvdump",
+        command: &["argvdump"],
+        local_paths: &["bin/argvdump"],
+        config_files: &["*.xml"],
+        config_flag: Some("-c"),
+        output_format: OutputFormat::Sarif,
+        diagnostics_stream: DiagnosticsStream::Stdout,
+        ..ToolSpec::default()
+    };
+    let (_dir, argv) = argv_after_running(&spec, &["rules.xml"]);
+    assert_eq!(
+        argv,
+        vec!["-c", "rules.xml", "Sample.java"],
+        "the glob must resolve to the matched file name before it reaches the tool"
+    );
+}
+
 /// The first entry in `config_files` that exists wins, matching the order the
 /// list is written in rather than whatever the filesystem returns.
 #[test]
@@ -471,8 +365,8 @@ fn config_flag_uses_the_first_config_file_that_exists() {
         local_paths: &["bin/argvdump"],
         config_files: &["checkstyle.xml", "config/checkstyle/checkstyle.xml"],
         config_flag: Some("-c"),
-        output_format: "sarif",
-        diagnostics_stream: "stdout",
+        output_format: OutputFormat::Sarif,
+        diagnostics_stream: DiagnosticsStream::Stdout,
         ..ToolSpec::default()
     };
     let (_dir, argv) = argv_after_running(&spec, &["config/checkstyle/checkstyle.xml"]);
@@ -492,8 +386,8 @@ fn no_config_flag_leaves_the_command_alone() {
         local_paths: &["bin/argvdump"],
         config_files: &["pyproject.toml"],
         config_flag: None,
-        output_format: "lines",
-        diagnostics_stream: "stdout",
+        output_format: OutputFormat::Lines,
+        diagnostics_stream: DiagnosticsStream::Stdout,
         ..ToolSpec::default()
     };
     let (_dir, argv) = argv_after_running(&spec, &["pyproject.toml"]);

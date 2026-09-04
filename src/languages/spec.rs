@@ -15,6 +15,58 @@
 
 pub const DEFAULT_TOOL_TIMEOUT_SECS: u64 = 120;
 
+/// How to parse the tool's diagnostics into findings.
+///
+/// A fieldless enum rather than a string: `parse_output` dispatches on it, so
+/// a misspelling is a compile error at the definition site instead of a
+/// runtime "no parser for output format" surfacing only when the tool runs.
+/// No `#[non_exhaustive]` - this crate is the only consumer, and the
+/// wildcard arm it forces is exactly the silent-fallback hole the enum
+/// exists to close.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OutputFormat {
+    Lines,
+    Json,
+    Position,
+    Tsc,
+    Cargo,
+    Sarif,
+    Ktlint,
+    Shellcheck,
+    Rubocop,
+    Phpcs,
+    Credo,
+    Sqlfluff,
+    Msbuild,
+}
+
+impl OutputFormat {
+    /// Whether this format's parser *skips* input it does not recognise
+    /// instead of erroring on it.
+    ///
+    /// The skip parsers exist because their tools interleave chatter among
+    /// the diagnostics (Go's `# pkg` headers, MSBuild's restore noise). The
+    /// price is that a run whose every line is chatter of a new shape - an
+    /// SDK error, a rejected invocation - parses as zero findings on a
+    /// non-empty stream, which is why the runner treats that combination as
+    /// `Unavailable` for these formats and no others. Every other format
+    /// errors on input it cannot parse, so the hole cannot open there.
+    pub fn skips_unmatched_input(self) -> bool {
+        matches!(self, Self::Position | Self::Tsc | Self::Msbuild)
+    }
+}
+
+/// Which process stream carries a tool's diagnostics.
+///
+/// `go vet` writes to stderr, so reading only stdout would report every Go
+/// file clean. An enum because the runner compares it exactly once: a typo'd
+/// string silently selected stdout, which is that same failure.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DiagnosticsStream {
+    Stdout,
+    Stderr,
+}
+
 /// A deterministic checker for one language.
 ///
 /// Attributes:
@@ -58,10 +110,9 @@ pub struct ToolSpec {
     /// `[config_flag, <path>]` ahead of the file arguments.
     pub config_flag: Option<&'static str>,
     /// How to parse the tool's diagnostics into findings.
-    pub output_format: &'static str,
-    /// Which stream carries them. `go vet` writes to stderr, so reading only
-    /// stdout would report every Go file clean.
-    pub diagnostics_stream: &'static str,
+    pub output_format: OutputFormat,
+    /// Which stream carries them.
+    pub diagnostics_stream: DiagnosticsStream,
     /// Wall-clock ceiling for the process. This includes any tool-owned lock
     /// wait before analysis starts.
     pub timeout_secs: u64,
@@ -94,8 +145,8 @@ impl Default for ToolSpec {
             local_paths: &[],
             config_files: &[],
             config_flag: None,
-            output_format: "json",
-            diagnostics_stream: "stdout",
+            output_format: OutputFormat::Json,
+            diagnostics_stream: DiagnosticsStream::Stdout,
             timeout_secs: DEFAULT_TOOL_TIMEOUT_SECS,
             timeout_context: None,
             establishes_compilation: false,
@@ -111,6 +162,8 @@ impl Default for ToolSpec {
 ///     name: Registry key (lowercase, e.g. "typescript").
 ///     display_name: How the language is named to the LLM and to users.
 ///     extensions: Lowercased suffixes this language owns, including the dot.
+///     filenames: Whole file names this language owns, for extensionless files
+///         such as `Dockerfile` and `Gemfile`.
 ///     tools: Deterministic checkers, in the order they should run.
 ///     conventions: Language-specific guidance appended to the analysis
 ///         prompt - the part that used to be hardcoded as PEP 8.
@@ -125,6 +178,31 @@ pub struct LanguageSupport {
     pub display_name: &'static str,
     /// Lowercased suffixes this language owns, including the dot.
     pub extensions: &'static [&'static str],
+    /// Whole file names this language owns, for files that carry no extension
+    /// at all.
+    ///
+    /// `Path::extension` returns `None` for `Dockerfile`, `Gemfile` and
+    /// `Rakefile`, so an extension-only registry drops them before either
+    /// analysis layer sees them - the same silent pass that unregistered
+    /// `.java` produced, on files most repositories have. Only names a
+    /// registered language actually claims belong here: `Makefile` and
+    /// `Jenkinsfile` are deliberately absent, because no language claims them
+    /// and a name with no owner would still resolve to nothing.
+    /// Matched only when the extension lookup finds nothing, so a name here
+    /// can never shadow a language that claims the suffix.
+    pub filenames: &'static [&'static str],
+    /// Stems that additionally claim their dotted variants, for families like
+    /// `Dockerfile.dev`.
+    ///
+    /// `filenames` claims the exact canonical name; a stem here claims
+    /// `<stem>.<anything>` as well. Multi-image layouts name per-environment
+    /// Dockerfiles `Dockerfile.dev`, `Dockerfile.prod`, `Dockerfile.web` - an
+    /// unbounded family an exact list cannot cover, and hadolint lints the
+    /// variants the same as the canonical file. The extension lookup runs
+    /// first, so `Dockerfile.ts` remains TypeScript, and the variant must
+    /// carry a non-empty suffix after the dot, so `Dockerfile.` itself is
+    /// not claimed.
+    pub filename_prefixes: &'static [&'static str],
     /// Deterministic checkers, in the order they should run.
     pub tools: &'static [&'static ToolSpec],
     /// Language-specific guidance appended to the analysis prompt - the part

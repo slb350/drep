@@ -28,6 +28,11 @@ use crate::analysis::result::FailureReason;
 /// prefix inside the brackets. `check` passes one because two layers write into
 /// one list and they gate differently; `lint-docs` passes `None`, because it
 /// has a single source and a constant tag on every line says nothing.
+///
+/// The message is excerpted: a tool's diagnostics are text drep did not
+/// write, and the JSON reporters decode `\u001b` escapes faithfully, so a raw
+/// print hands the terminal an escape sequence and a multi-kilobyte message
+/// hands it a flood.
 pub fn finding_line(source: Option<&str>, f: &Finding) -> String {
     let column = f.column.map(|c| format!(":{c}")).unwrap_or_default();
     let tag = match source {
@@ -41,7 +46,7 @@ pub fn finding_line(source: Option<&str>, f: &Finding) -> String {
         column,
         f.severity.as_str(),
         tag,
-        f.message
+        crate::text::excerpt(&f.message, 200)
     )
 }
 

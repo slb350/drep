@@ -11,7 +11,7 @@
 //! pins the rendering directly via `missing_tools_line`.
 
 use crate::cli::doctor::{DoctorArgs, missing_tools_line};
-use crate::languages::spec::{LanguageSupport, ToolSpec};
+use crate::languages::spec::{DiagnosticsStream, LanguageSupport, OutputFormat, ToolSpec};
 use crate::test_support::write_executable;
 
 fn args(path: &std::path::Path) -> DoctorArgs {
@@ -134,8 +134,8 @@ static GHOST_TOOL: ToolSpec = ToolSpec {
     local_paths: &[],
     config_files: &["ghost.config"],
     config_flag: None,
-    output_format: "json",
-    diagnostics_stream: "stdout",
+    output_format: OutputFormat::Json,
+    diagnostics_stream: DiagnosticsStream::Stdout,
     timeout_secs: 120,
     timeout_context: None,
     establishes_compilation: false,
@@ -147,6 +147,8 @@ static GHOST_LANG: LanguageSupport = LanguageSupport {
     name: "ghost",
     display_name: "Ghost",
     extensions: &[".ghost"],
+    filenames: &[],
+    filename_prefixes: &[],
     tools: &[&GHOST_TOOL],
     conventions: &[],
     vendored_dirs: &[],
@@ -157,6 +159,8 @@ static SPECTRE_LANG: LanguageSupport = LanguageSupport {
     name: "spectre",
     display_name: "Spectre",
     extensions: &[".spectre"],
+    filenames: &[],
+    filename_prefixes: &[],
     tools: &[&GHOST_TOOL],
     conventions: &[],
     vendored_dirs: &[],

@@ -14,8 +14,48 @@ use crate::files::{is_markdown, is_scan_target};
 /// unsupported - never accepted and silently dropped. See
 /// `the_two_file_classes_are_disjoint` below.
 const REGISTERED_EXTENSIONS: &[&str] = &[
-    ".py", ".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts", ".go", ".rs", ".java",
-    ".kt", ".kts", ".scala", ".sc", ".groovy", ".gradle",
+    ".py",
+    ".js",
+    ".jsx",
+    ".mjs",
+    ".cjs",
+    ".ts",
+    ".tsx",
+    ".mts",
+    ".cts",
+    ".go",
+    ".rs",
+    ".java",
+    ".kt",
+    ".kts",
+    ".scala",
+    ".sc",
+    ".groovy",
+    ".gradle",
+    ".sh",
+    ".bash",
+    ".swift",
+    ".c",
+    ".h",
+    ".cpp",
+    ".hpp",
+    ".cc",
+    ".hh",
+    ".cxx",
+    ".hxx",
+    ".cs",
+    ".rb",
+    ".rake",
+    ".gemspec",
+    ".php",
+    ".vue",
+    ".svelte",
+    ".tf",
+    ".tfvars",
+    ".ex",
+    ".exs",
+    ".sql",
+    ".dockerfile",
 ];
 
 #[test]
@@ -46,6 +86,35 @@ fn the_hand_written_list_matches_the_language_registry() {
         .collect();
     ours.sort();
     assert_eq!(ours, registered);
+}
+
+/// Whole names and name stems are claims too: an extension-only cross-check
+/// never sees them, and a `Dockerfile` that is not a scan target is omitted
+/// from every discovery path the same way an unclaimed extension is.
+#[test]
+fn every_registered_filename_and_stem_variant_is_a_scan_target() {
+    for lang in crate::languages::all_languages() {
+        for name in lang.filenames {
+            let path = Path::new(name);
+            assert!(
+                is_scan_target(path),
+                "registered filename `{name}` ({}) is not a scan target",
+                lang.name
+            );
+            assert!(
+                !is_markdown(path),
+                "registered filename `{name}` must not be markdown"
+            );
+        }
+        for stem in lang.filename_prefixes {
+            let variant = format!("{stem}.variant");
+            assert!(
+                is_scan_target(Path::new(&variant)),
+                "stem variant `{variant}` ({}) is not a scan target",
+                lang.name
+            );
+        }
+    }
 }
 
 #[test]

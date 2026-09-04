@@ -9,7 +9,7 @@ use tempfile::TempDir;
 
 use super::support::*;
 use crate::languages::runner::*;
-use crate::languages::spec::ToolSpec;
+use crate::languages::spec::{DiagnosticsStream, OutputFormat, ToolSpec};
 
 // ---- resolve_tool ----
 
@@ -105,8 +105,8 @@ fn tool_status_unavailable_when_configured_but_binary_missing() {
         local_paths: &["no/such/ruff"],
         command: &["definitely-not-installed-ruff-abc"],
         config_files: &["pyproject.toml"],
-        output_format: "json",
-        diagnostics_stream: "stdout",
+        output_format: OutputFormat::Json,
+        diagnostics_stream: DiagnosticsStream::Stdout,
         ..ToolSpec::default()
     };
     let outcome = tool_status(&spec, dir.path());
@@ -139,5 +139,102 @@ fn missing_nested_tool_detail_names_the_workspace_search_boundary() {
         outcome.detail.contains(&dir.path().display().to_string()),
         "the diagnostic must name the repository boundary: {}",
         outcome.detail
+    );
+}
+
+/// A `*.ext` config entry matches any file in the directory with that
+/// extension, and nothing outside it.
+///
+/// C# is why this exists: `dotnet format` must run from the directory holding
+/// the `.csproj` or `.sln`, and those are named after the project, so no fixed
+/// name can find them.
+#[test]
+fn a_glob_config_marker_matches_by_extension() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path();
+    let spec = ToolSpec {
+        name: "globbed",
+        config_files: &["*.csproj"],
+        ..ToolSpec::default()
+    };
+
+    assert!(
+        !is_configured(&spec, root),
+        "an empty directory has no marker"
+    );
+
+    std::fs::write(root.join("notes.txt"), "").unwrap();
+    assert!(
+        !is_configured(&spec, root),
+        "another extension is not the marker"
+    );
+
+    std::fs::write(root.join("Widget.csproj"), "").unwrap();
+    assert!(
+        is_configured(&spec, root),
+        "any name with the extension counts"
+    );
+}
+
+/// The glob is anchored to the directory, not applied recursively.
+///
+/// `configuration_root` already walks ancestors to find the workspace; a
+/// recursive marker would make every ancestor of a project its workspace too,
+/// and the tool would run from the repository root.
+#[test]
+fn a_glob_config_marker_does_not_look_in_subdirectories() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path();
+    std::fs::create_dir(root.join("src")).unwrap();
+    std::fs::write(root.join("src").join("Widget.csproj"), "").unwrap();
+
+    let spec = ToolSpec {
+        name: "globbed",
+        config_files: &["*.csproj"],
+        ..ToolSpec::default()
+    };
+    assert!(
+        !is_configured(&spec, root),
+        "the project lives in src/, so src/ is the workspace and not the root"
+    );
+    assert!(is_configured(&spec, &root.join("src")));
+}
+
+/// A literal name that happens to contain `*` is still literal.
+#[test]
+fn only_a_leading_star_dot_is_treated_as_a_glob() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path();
+    let spec = ToolSpec {
+        name: "literal",
+        config_files: &["eslint.config.js"],
+        ..ToolSpec::default()
+    };
+    std::fs::write(root.join("other.js"), "").unwrap();
+    assert!(
+        !is_configured(&spec, root),
+        "a literal entry must not match by extension"
+    );
+    std::fs::write(root.join("eslint.config.js"), "").unwrap();
+    assert!(is_configured(&spec, root));
+}
+
+/// A directory named `Widget.csproj` is not a project marker: MSBuild runs
+/// from the directory *holding* the project file, and counting a directory
+/// would run `dotnet format` one level too high, where it finds no project.
+#[test]
+fn a_glob_config_marker_matches_files_not_directories() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path();
+    std::fs::create_dir(root.join("Widget.csproj")).unwrap();
+
+    let spec = ToolSpec {
+        name: "globbed",
+        config_files: &["*.csproj"],
+        ..ToolSpec::default()
+    };
+    assert!(
+        !is_configured(&spec, root),
+        "a directory carrying the extension is not a project file"
     );
 }

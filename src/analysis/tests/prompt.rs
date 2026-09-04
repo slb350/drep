@@ -62,6 +62,8 @@ fn language_with_no_conventions_omits_the_concerns_block() {
         name: "anon",
         display_name: "Anon",
         extensions: &[".anon"],
+        filenames: &[],
+        filename_prefixes: &[],
         tools: &[],
         conventions: &[],
         vendored_dirs: &[],

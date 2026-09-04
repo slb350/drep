@@ -236,3 +236,49 @@ async fn separate_workspace_configs_produce_separate_invocations() {
         2
     );
 }
+
+/// A finding reported through a resolved symlink is rewritten back to the
+/// path the user asked about, not left in the tool's spelling.
+///
+/// `run_one` maps a whole-project tool's absolute reported paths back to the
+/// caller's originals byte-exact, but the tool derives its paths from a cwd
+/// the OS resolved - on a symlinked checkout its spelling and drep's differ,
+/// the rewrite missed, and the finding kept a path that names a file the
+/// user never typed (and that acknowledgement fingerprints, cache keys and
+/// the report all then disagree about).
+#[cfg(unix)]
+#[tokio::test]
+async fn findings_rewrite_through_a_symlinked_checkout() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let real = dir.path().join("real");
+    std::fs::create_dir(&real).expect("real dir");
+    let link = dir.path().join("link");
+    std::os::unix::fs::symlink(&real, &link).expect("symlink");
+
+    let bin = real.join("venv/bin/ruff");
+    std::fs::create_dir_all(bin.parent().unwrap()).expect("bin dir");
+    std::fs::write(real.join("asked.py"), "x = 1\n").expect("source");
+    // The stub answers with the canonical spelling of the file, as a tool
+    // deriving paths from its own resolved cwd does.
+    let canonical = real.join("asked.py").canonicalize().expect("canonical");
+    write_executable(
+        &bin,
+        format!(
+            "#!/bin/sh\nprintf '%s' '[{{\"code\":\"E1\",\"filename\":\"{}\",\"location\":{{\"row\":1,\"column\":1}},\"message\":\"m\"}}]'\n",
+            canonical.to_string_lossy()
+        ),
+    );
+    std::fs::write(real.join("pyproject.toml"), "").expect("pyproject");
+
+    let asked = link.join("asked.py");
+    let work = work_for(std::slice::from_ref(&asked));
+    let (findings, failures, _compiled) = deterministic::run(&work, &link).await;
+
+    assert!(failures.is_empty(), "tool failed: {failures:?}");
+    assert_eq!(findings.len(), 1, "the finding must survive the rewrite");
+    assert_eq!(
+        findings[0].file_path,
+        asked.to_string_lossy(),
+        "the finding must come back in the spelling the user asked about"
+    );
+}

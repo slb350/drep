@@ -52,3 +52,23 @@ fn egg_info_dirs_are_ignored_but_other_extensions_with_egg_are_not() {
     // they live in the registry under a different key.
     let _ = source_extensions();
 }
+
+/// A directory that another ecosystem uses for real, checked-in source is
+/// never added to `vendored_dirs`, however build-generated it is in its own.
+///
+/// `is_ignored_dir` consults the union across every registered language, so a
+/// name listed once is skipped in every repository. `bin` and `obj` were
+/// briefly listed for C#, which hid `bin/deploy.sh` from Shell in a repo with
+/// no C# in it - and `bin/rubocop` is a path the registry's own RuboCop spec
+/// looks for. `JVM_VENDORED_DIRS` left `out` out for the same reason; these
+/// are machine-generated and therefore gitignored in practice, which the
+/// walker already honors without help from the registry.
+#[test]
+fn dirs_other_ecosystems_fill_with_real_source_are_not_ignored() {
+    for name in ["bin", "obj", "out", "src", "lib", "app", "scripts", "cmd"] {
+        assert!(
+            !is_ignored_dir(name),
+            "`{name}` holds real source somewhere and must stay walkable"
+        );
+    }
+}

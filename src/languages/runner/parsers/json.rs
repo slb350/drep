@@ -1,0 +1,173 @@
+//! eslint- and ruff-shaped JSON, plus ktlint's near-miss of the same shape.
+
+use serde_json::Value;
+
+use crate::analysis::findings::{Finding, Severity};
+use crate::languages::runner::ToolOutputError;
+use crate::languages::spec::ToolSpec;
+
+use super::{expect_array, json_payload, path_or_root};
+
+/// Normalise ruff/eslint-shaped JSON into Findings.
+pub(super) fn parse_json(
+    spec: &ToolSpec,
+    output: &str,
+    root_name: &str,
+) -> Result<Vec<Finding>, ToolOutputError> {
+    let Some(payload) = json_payload(spec, output)? else {
+        return Ok(Vec::new());
+    };
+    let entries = expect_array(spec, &payload)?;
+
+    let mut findings = Vec::new();
+    for entry in entries {
+        let obj = entry.as_object().ok_or_else(|| {
+            ToolOutputError(format!("{}: expected objects in the array", spec.name))
+        })?;
+
+        // ruff shape: flat record with a `location`.
+        if let Some(location) = obj.get("location") {
+            let location = location.as_object();
+            let row = location
+                .and_then(|l| l.get("row"))
+                .and_then(Value::as_u64)
+                .map(|n| n as u32)
+                .unwrap_or(1);
+            let column = location
+                .and_then(|l| l.get("column"))
+                .and_then(Value::as_u64)
+                .map(|n| n as u32);
+            let file_path = path_or_root(obj.get("filename"), root_name);
+            let message = obj
+                .get("message")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_owned();
+            let kind = obj
+                .get("code")
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+                .unwrap_or_else(|| spec.name.to_owned());
+            let suggestion = obj
+                .get("fix")
+                .and_then(|f| f.get("message"))
+                .and_then(Value::as_str)
+                .map(str::to_owned);
+            findings.push(Finding::deterministic(
+                kind,
+                Severity::Error,
+                file_path,
+                row,
+                column,
+                message,
+                suggestion,
+            ));
+            continue;
+        }
+
+        // eslint shape: one record per file with a nested `messages` array.
+        let file_path = path_or_root(obj.get("filePath"), root_name);
+        for message in obj
+            .get("messages")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            let obj = message.as_object();
+            let line = obj
+                .and_then(|m| m.get("line"))
+                .and_then(Value::as_u64)
+                .map(|n| n as u32)
+                .unwrap_or(1);
+            let column = obj
+                .and_then(|m| m.get("column"))
+                .and_then(Value::as_u64)
+                .map(|n| n as u32);
+            let message_text = obj
+                .and_then(|m| m.get("message"))
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_owned();
+            let kind = obj
+                .and_then(|m| m.get("ruleId"))
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+                .unwrap_or_else(|| spec.name.to_owned());
+            findings.push(Finding::deterministic(
+                kind,
+                // eslint carries 1 (warning) and 2 (error) per message. An
+                // absent field keeps the historical Error default rather
+                // than guessing down.
+                match obj.and_then(|m| m.get("severity")).and_then(Value::as_u64) {
+                    Some(1) => Severity::Warning,
+                    _ => Severity::Error,
+                },
+                file_path.clone(),
+                line,
+                column,
+                message_text,
+                None,
+            ));
+        }
+    }
+    Ok(findings)
+}
+
+/// ktlint's JSON reporter: one record per file with a nested `errors` array.
+///
+/// Shaped like eslint's but with different keys throughout - `file` for
+/// `filePath`, `errors` for `messages`, `rule` for `ruleId` - so it gets its
+/// own format rather than teaching `parse_json` to guess between them.
+///
+/// Why not ktlint's own `sarif` reporter, given `parse_sarif` exists: that
+/// reporter files every result under a relative URI with
+/// `uriBaseId: "%SRCROOT%"` bound to the process *home*, not the working
+/// directory, so a finding's path resolves to nothing drep was asked to
+/// check. The JSON reporter emits plain absolute paths instead.
+pub(super) fn parse_ktlint(
+    spec: &ToolSpec,
+    output: &str,
+    root_name: &str,
+) -> Result<Vec<Finding>, ToolOutputError> {
+    let Some(payload) = json_payload(spec, output)? else {
+        return Ok(Vec::new());
+    };
+    let entries = expect_array(spec, &payload)?;
+
+    let mut findings = Vec::new();
+    for entry in entries {
+        let file_path = path_or_root(entry.get("file"), root_name);
+        for error in entry
+            .get("errors")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            findings.push(Finding::deterministic(
+                error
+                    .get("rule")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned)
+                    .unwrap_or_else(|| spec.name.to_owned()),
+                Severity::Error,
+                file_path.clone(),
+                error
+                    .get("line")
+                    .and_then(Value::as_u64)
+                    .map(|n| n as u32)
+                    .unwrap_or(1),
+                error
+                    .get("column")
+                    .and_then(Value::as_u64)
+                    .map(|n| n as u32),
+                error
+                    .get("message")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_owned(),
+                None,
+            ));
+        }
+    }
+    Ok(findings)
+}
