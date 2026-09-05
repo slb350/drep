@@ -256,14 +256,6 @@ mod tests {
     }
 
     #[test]
-    fn gating_at_error_admits_only_error() {
-        let threshold = Severity::Error;
-        assert!(Severity::Error >= threshold);
-        assert!(Severity::Warning < threshold);
-        assert!(Severity::Info < threshold);
-    }
-
-    #[test]
     fn wire_names_round_trip() {
         for sev in Severity::ALL {
             assert_eq!(sev.as_str().parse::<Severity>(), Ok(sev));

@@ -127,12 +127,19 @@ fn duplicate_or_post_completion_events_are_rejected() {
         Err(EventError::DuplicateFinalMessage)
     ));
 
-    let post_completion =
-        format!("{CLEAN_FINAL_MESSAGE}{TURN_COMPLETED}{{\"type\":\"thread.started\"}}\n");
-    assert!(matches!(
-        parse_jsonl(post_completion.as_bytes()),
-        Err(EventError::EventAfterCompletion)
-    ));
+    for (tail, expected) in [
+        (TURN_COMPLETED, EventError::DuplicateTurnCompletion),
+        (
+            "{\"type\":\"thread.started\"}\n",
+            EventError::EventAfterCompletion,
+        ),
+    ] {
+        let output = format!("{}{tail}", clean_lifecycle(""));
+        assert_eq!(
+            parse_jsonl(output.as_bytes()).expect_err("event after completion"),
+            expected
+        );
+    }
 }
 
 #[test]

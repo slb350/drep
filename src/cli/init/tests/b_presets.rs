@@ -1,4 +1,4 @@
-//! B1, B2: the preset table.
+//! Provider presets and their rendered configuration.
 
 use crate::cli::init::presets;
 
@@ -119,27 +119,7 @@ fn the_registry_can_replace_the_required_value_but_not_the_requirement() {
     }
 }
 
-#[test]
-fn openrouter_has_api_key_and_timeout_secs() {
-    let preset = presets::preset("openrouter").expect("openrouter");
-    assert_eq!(preset.api_key_env(), Some("OPENROUTER_API_KEY"));
-    assert_eq!(preset.timeout_secs, Some(1800));
-}
-
-#[test]
-fn local_has_neither_api_key_nor_timeout_secs() {
-    let preset = presets::preset("local").expect("local");
-    assert_eq!(preset.api_key_env(), None);
-    assert_eq!(preset.timeout_secs, None);
-}
-
-/// Every preset's fields are pinned, not just the two the other tests happen
-/// to render.
-///
-/// `openai` and `custom` were unpinned entirely, so a typo in an endpoint, a
-/// default model or an api-key variable name shipped silently - and those are
-/// exactly the values a user cannot debug, because a wrong endpoint looks like
-/// a network problem and a wrong key variable looks like an unset key.
+/// Pin endpoint, model, key-variable, and timeout defaults independently of the renderer.
 #[test]
 fn every_preset_pins_its_endpoint_model_and_key_variable() {
     /// key, endpoint, default model, api-key variable, timeout.

@@ -10,12 +10,32 @@
 use std::collections::BTreeMap;
 
 use serde_json::json;
+use wiremock::ResponseTemplate;
 
 use super::support::{CONTENT, GOOD_JSON, SYSTEM, server_returning_json};
+use crate::config::LlmConfig;
+use crate::llm::cache::{Cache, CacheKey};
+use crate::llm::chain::ProviderChain;
 use crate::llm::json_parsing::Extracted;
 use crate::test_support::{
-    cfg_for, fast_retry_chain, request_count, server_failing_with, temp_cache,
+    cfg_for, fast_retry_chain, mount_sse, request_count, server_failing_with, sse, temp_cache,
 };
+
+fn key_config() -> LlmConfig {
+    LlmConfig {
+        enabled: true,
+        endpoint: Some("http://example.invalid/v1".into()),
+        model: Some("same-model".into()),
+        ..LlmConfig::default()
+    }
+}
+
+fn provider_key(config: &LlmConfig) -> CacheKey {
+    // Construction and key derivation perform no filesystem or network I/O.
+    let cache = Cache::new("unused-key-cache".into(), 30, 1024);
+    let chain = ProviderChain::new(&[config]).expect("valid provider config");
+    chain.providers()[0].cache_key(&cache, SYSTEM, CONTENT)
+}
 
 /// The key handed back names the model that answered, not the model that was
 /// asked first.
@@ -49,22 +69,20 @@ async fn the_returned_key_belongs_to_the_provider_that_answered() {
 /// The full round trip: B's answer is stored, then A comes back up and is
 /// asked again rather than served B's cached answer.
 ///
-/// The assertion that matters is `request_count(&revived) == 1`. A chain that
+/// The assertion that matters is `request_count(&head) == 1`. A chain that
 /// keyed on the head would find a hit here and never contact A at all - and
 /// the user would be told their local model reviewed the file when a paid
 /// endpoint had.
 #[tokio::test]
 async fn a_later_run_with_the_head_restored_does_not_get_the_fallback_s_cached_answer() {
     let (cache, _dir) = temp_cache();
+    let head = server_failing_with(500).await;
+    let tail = server_returning_json().await;
+    let configs = [cfg_for(&head, "model-a", 1), cfg_for(&tail, "model-b", 1)];
 
     // Run one: the head is down, the tail answers, the caller stores it.
     {
-        let dead = server_failing_with(500).await;
-        let healthy = server_returning_json().await;
-        let chain = fast_retry_chain(&[
-            cfg_for(&dead, "model-a", 1),
-            cfg_for(&healthy, "model-b", 1),
-        ]);
+        let chain = fast_retry_chain(&configs);
         let served = chain
             .complete_json(SYSTEM, CONTENT, &cache)
             .await
@@ -75,13 +93,15 @@ async fn a_later_run_with_the_head_restored_does_not_get_the_fallback_s_cached_a
             .expect("cache write");
     }
 
-    // Run two: a fresh chain, the head restored. It must be asked.
-    let revived = server_returning_json().await;
-    let spare = server_returning_json().await;
-    let chain = fast_retry_chain(&[
-        cfg_for(&revived, "model-a", 1),
-        cfg_for(&spare, "model-b", 1),
-    ]);
+    // Keep both endpoint identities. A new server URI would miss even if run
+    // one had incorrectly stored the fallback response under the head's key.
+    head.reset().await;
+    mount_sse(
+        &head,
+        ResponseTemplate::new(200).set_body_raw(sse(&[GOOD_JSON]), "text/event-stream"),
+    )
+    .await;
+    let chain = fast_retry_chain(&configs);
     let served = chain
         .complete_json(SYSTEM, CONTENT, &cache)
         .await
@@ -93,7 +113,7 @@ async fn a_later_run_with_the_head_restored_does_not_get_the_fallback_s_cached_a
         "the head has no cached answer of its own - the stored entry was the fallback's"
     );
     assert_eq!(
-        request_count(&revived).await,
+        request_count(&head).await,
         1,
         "the restored head must actually be contacted"
     );
@@ -241,22 +261,16 @@ async fn two_endpoints_serving_the_same_model_do_not_share_a_cache_entry() {
 /// key naming a different one. That is the same shape as the missing endpoint:
 /// the request goes one place and the key names another, and every
 /// varies-the-model test passes throughout.
-#[tokio::test]
-async fn two_providers_differing_only_in_temperature_key_differently() {
-    let server = server_returning_json().await;
-    let (cache, _dir) = temp_cache();
-
-    let mut cool = cfg_for(&server, "same-model", 1);
+#[test]
+fn two_providers_differing_only_in_temperature_key_differently() {
+    let mut cool = key_config();
     cool.temperature = Some(0.0);
-    let mut warm = cfg_for(&server, "same-model", 1);
+    let mut warm = key_config();
     warm.temperature = Some(1.0);
 
-    let chain = fast_retry_chain(&[cool, warm]);
-    let key_cool = chain.providers()[0].cache_key(&cache, SYSTEM, CONTENT);
-    let key_warm = chain.providers()[1].cache_key(&cache, SYSTEM, CONTENT);
-
     assert_ne!(
-        key_cool, key_warm,
+        provider_key(&cool),
+        provider_key(&warm),
         "temperature changes the answer, so it must change the key"
     );
 }
@@ -264,24 +278,16 @@ async fn two_providers_differing_only_in_temperature_key_differently() {
 /// A configured output ceiling changes the request and therefore the answer
 /// eligible for reuse. A complete response under a small ceiling can still be
 /// valid JSON, so completeness alone cannot keep it out of the cache.
-#[tokio::test]
-async fn two_providers_differing_only_in_max_tokens_key_differently() {
-    let server = server_returning_json().await;
-    let (cache, _dir) = temp_cache();
-
-    let mut unset = cfg_for(&server, "same-model", 1);
+#[test]
+fn two_providers_differing_only_in_max_tokens_key_differently() {
+    let mut unset = key_config();
     unset.max_tokens = None;
-    let mut short = cfg_for(&server, "same-model", 1);
+    let mut short = key_config();
     short.max_tokens = Some(1_024);
-    let mut long = cfg_for(&server, "same-model", 1);
+    let mut long = key_config();
     long.max_tokens = Some(32_768);
 
-    let chain = fast_retry_chain(&[unset, short, long]);
-    let keys = chain
-        .providers()
-        .iter()
-        .map(|provider| provider.cache_key(&cache, SYSTEM, CONTENT))
-        .collect::<Vec<_>>();
+    let keys = [&unset, &short, &long].map(provider_key);
 
     assert!(
         keys[0] != keys[1] && keys[0] != keys[2] && keys[1] != keys[2],
@@ -292,42 +298,32 @@ async fn two_providers_differing_only_in_max_tokens_key_differently() {
 /// Arbitrary caller headers can select a route, tenant or feature variant.
 /// The cache cannot know which names are answer-affecting, so their effective
 /// values are part of request identity by default.
-#[tokio::test]
-async fn two_providers_differing_only_in_a_header_value_key_differently() {
-    let server = server_returning_json().await;
-    let (cache, _dir) = temp_cache();
-
-    let mut blue = cfg_for(&server, "same-model", 1);
+#[test]
+fn two_providers_differing_only_in_a_header_value_key_differently() {
+    let mut blue = key_config();
     blue.headers = BTreeMap::from([("X-Model-Route".to_owned(), "blue".to_owned())]);
-    let mut green = cfg_for(&server, "same-model", 1);
+    let mut green = key_config();
     green.headers = BTreeMap::from([("X-Model-Route".to_owned(), "green".to_owned())]);
 
-    let chain = fast_retry_chain(&[blue, green]);
-
     assert_ne!(
-        chain.providers()[0].cache_key(&cache, SYSTEM, CONTENT),
-        chain.providers()[1].cache_key(&cache, SYSTEM, CONTENT),
+        provider_key(&blue),
+        provider_key(&green),
         "a different route must not reuse the previous route's answer"
     );
 }
 
 /// HTTP header names are case-insensitive on the wire, so spelling alone must
 /// not discard a warm cache when the effective request is otherwise identical.
-#[tokio::test]
-async fn equivalent_header_name_casing_has_one_cache_identity() {
-    let server = server_returning_json().await;
-    let (cache, _dir) = temp_cache();
-
-    let mut title_case = cfg_for(&server, "same-model", 1);
+#[test]
+fn equivalent_header_name_casing_has_one_cache_identity() {
+    let mut title_case = key_config();
     title_case.headers = BTreeMap::from([("X-Model-Route".to_owned(), "blue".to_owned())]);
-    let mut lower_case = cfg_for(&server, "same-model", 1);
+    let mut lower_case = key_config();
     lower_case.headers = BTreeMap::from([("x-model-route".to_owned(), "blue".to_owned())]);
 
-    let chain = fast_retry_chain(&[title_case, lower_case]);
-
     assert_eq!(
-        chain.providers()[0].cache_key(&cache, SYSTEM, CONTENT),
-        chain.providers()[1].cache_key(&cache, SYSTEM, CONTENT),
+        provider_key(&title_case),
+        provider_key(&lower_case),
         "header spelling does not change the HTTP request"
     );
 }
@@ -335,42 +331,31 @@ async fn equivalent_header_name_casing_has_one_cache_identity() {
 /// Same endpoint, same model, two protocols. `api.minimax.io` genuinely serves
 /// `MiniMax-M3` over both `/v1` and `/anthropic/v1`, so this is the shape the
 /// key has to separate - and neither the endpoint nor the model does it.
-#[tokio::test]
-async fn two_providers_differing_only_in_protocol_key_differently() {
-    let server = server_returning_json().await;
-    let (cache, _dir) = temp_cache();
-
-    let openai = cfg_for(&server, "same-model", 1);
-    let mut anthropic = cfg_for(&server, "same-model", 1);
+#[test]
+fn two_providers_differing_only_in_protocol_key_differently() {
+    let openai = key_config();
+    let mut anthropic = key_config();
     anthropic.protocol = Some("anthropic".into());
 
-    let chain = fast_retry_chain(&[openai, anthropic]);
-    let key_openai = chain.providers()[0].cache_key(&cache, SYSTEM, CONTENT);
-    let key_anthropic = chain.providers()[1].cache_key(&cache, SYSTEM, CONTENT);
-
     assert_ne!(
-        key_openai, key_anthropic,
+        provider_key(&openai),
+        provider_key(&anthropic),
         "two protocols are two requests, so they must be two keys"
     );
 }
 
 /// An unset temperature is a different request from any set one, and
 /// `Provider::cache_key` is the single definition that has to say so.
-#[tokio::test]
-async fn an_unset_temperature_keys_differently_through_the_provider() {
-    let server = server_returning_json().await;
-    let (cache, _dir) = temp_cache();
-
-    let mut unset = cfg_for(&server, "same-model", 1);
+#[test]
+fn an_unset_temperature_keys_differently_through_the_provider() {
+    let mut unset = key_config();
     unset.temperature = None;
-    let mut set = cfg_for(&server, "same-model", 1);
+    let mut set = key_config();
     set.temperature = Some(0.2);
 
-    let chain = fast_retry_chain(&[unset, set]);
-
     assert_ne!(
-        chain.providers()[0].cache_key(&cache, SYSTEM, CONTENT),
-        chain.providers()[1].cache_key(&cache, SYSTEM, CONTENT),
+        provider_key(&unset),
+        provider_key(&set),
         "omitting the parameter lets the server pick, so the answers differ"
     );
 }

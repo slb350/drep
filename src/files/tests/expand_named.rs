@@ -112,6 +112,14 @@ fn a_named_path_that_is_neither_a_file_nor_a_directory_is_rejected() {
 
 #[test]
 fn every_named_path_is_judged_not_just_the_first() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    static CLASSIFICATIONS: AtomicUsize = AtomicUsize::new(0);
+    fn counted_markdown(path: &Path) -> bool {
+        CLASSIFICATIONS.fetch_add(1, Ordering::Relaxed);
+        is_markdown(path)
+    }
+
     let temp = tempfile::TempDir::new().expect("tempdir");
     build(temp.path(), &[("a.md", ""), ("b.rs", "")]);
     let good = temp.path().join("a.md");
@@ -121,11 +129,16 @@ fn every_named_path_is_judged_not_just_the_first() {
     let found = expand_named(
         &[good.clone(), bad.clone(), gone.clone()],
         temp.path(),
-        is_markdown,
+        counted_markdown,
     );
     assert_eq!(found.targets, vec![good]);
     assert_eq!(found.rejected.get(&bad), Some(&Rejected::Unanalyzable));
     assert_eq!(found.rejected.get(&gone), Some(&Rejected::Missing));
+    assert_eq!(
+        CLASSIFICATIONS.load(Ordering::Relaxed),
+        2,
+        "classify each regular file once for both targets and rejections"
+    );
 }
 
 #[test]

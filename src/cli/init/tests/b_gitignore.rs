@@ -24,7 +24,7 @@ fn block() -> String {
 }
 
 #[tokio::test]
-async fn a_repository_with_no_gitignore_gets_one() {
+async fn a_missing_gitignore_is_created_but_an_unreadable_one_is_preserved() {
     let dir = repo(None);
 
     let outcome = ensure(dir.path()).await.expect("ensure");
@@ -33,6 +33,22 @@ async fn a_repository_with_no_gitignore_gets_one() {
     // Exact, not `contains`: a leading blank line is invisible to a substring
     // check and is what an off-by-one in the separator logic produces.
     assert_eq!(read(&dir).expect("a .gitignore now exists"), block());
+
+    let path = dir.path().join(".gitignore");
+    let invalid_utf8 = [0xff];
+    std::fs::write(&path, invalid_utf8).expect("unreadable gitignore");
+    let err = ensure(dir.path())
+        .await
+        .expect_err("unreadable must not be treated as missing");
+    assert!(
+        err.to_string()
+            .contains(&format!("could not read {}:", path.display())),
+        "unexpected error: {err:#}"
+    );
+    assert_eq!(
+        std::fs::read(path).expect("gitignore survives"),
+        invalid_utf8
+    );
 }
 
 #[tokio::test]
@@ -61,22 +77,6 @@ async fn a_file_with_no_trailing_newline_is_repaired_before_appending() {
         read(&dir).expect("still exists"),
         format!("target/\n\n{}", block()),
         "the missing newline is supplied, then the separator"
-    );
-}
-
-#[tokio::test]
-async fn the_entry_is_annotated_with_what_put_it_there() {
-    // A bare line in someone's .gitignore with no attribution is a small mystery
-    // six months later.
-    let dir = repo(None);
-
-    ensure(dir.path()).await.expect("ensure");
-
-    let body = read(&dir).expect("exists");
-    assert!(
-        body.lines()
-            .any(|line| line.starts_with('#') && line.contains("drep")),
-        "got {body:?}"
     );
 }
 
@@ -124,8 +124,8 @@ async fn a_tracked_file_is_reported_rather_than_ignored() {
     );
 }
 
-#[tokio::test]
-async fn the_tracked_message_says_how_to_fix_it() {
+#[test]
+fn the_tracked_message_says_how_to_fix_it() {
     let message = Outcome::Tracked.message();
 
     assert!(

@@ -6,9 +6,8 @@
 # if the code were wrong. cargo-mutants perturbs the implementation and reports
 # mutations no test catches - a surviving mutant IS a non-discriminating test.
 #
-# Scoped with --in-diff rather than running the whole tree, so the cost is
-# proportional to the change. CI runs the full sweep through the same
-# scripts/mutants-run.sh, which is where the pass/fail rule lives.
+# The hook tests the staged diff; CI tests the complete pushed diff on main.
+# Full sweeps run separately. scripts/mutants-run.sh owns every verdict.
 
 set -euo pipefail
 

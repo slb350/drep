@@ -1,14 +1,8 @@
-//! B8, B9, B10-B16: hooks.rs.
-//!
-//! The git-touching criteria need a real `git init` repository; the helper
-//! at the bottom builds one with `user.email`/`user.name` set so git can
-//! answer queries.
+//! Repository hook installation and shared hook forwarding.
 
 use std::path::Path;
 
-use crate::cli::init::hooks::{
-    HookKind, chainer_body, hook_body, hook_names, install, is_drep_managed,
-};
+use crate::cli::init::hooks::{HookKind, chainer_body, hook_body, hook_names, install};
 
 #[test]
 fn hook_names_match_spec_for_every_kind() {
@@ -16,17 +10,6 @@ fn hook_names_match_spec_for_every_kind() {
     assert_eq!(hook_names(HookKind::PrePush), &["pre-push"]);
     assert_eq!(hook_names(HookKind::PreCommit), &["pre-commit"]);
     assert_eq!(hook_names(HookKind::Both), &["pre-commit", "pre-push"]);
-}
-
-#[test]
-fn is_drep_managed_recognises_own_bodies_only() {
-    assert!(is_drep_managed(hook_body("pre-commit").unwrap()));
-    assert!(is_drep_managed(hook_body("pre-push").unwrap()));
-    assert!(is_drep_managed(&chainer_body("pre-push")));
-    assert!(!is_drep_managed("#!/bin/sh\necho hi\n"));
-    assert!(!is_drep_managed(
-        "#!/bin/sh\n# This foreign hook mentions # Managed by `drep init`. in documentation.\n"
-    ));
 }
 
 fn hooks_dir(root: &Path) -> std::path::PathBuf {
@@ -47,7 +30,7 @@ fn configured_chainer_dir(root: &Path) -> std::path::PathBuf {
 }
 
 #[tokio::test]
-async fn install_writes_executable_repo_local_pre_push_hook() {
+async fn install_creates_missing_hooks_and_reports_unreadable_ones() {
     let dir = tempfile::tempdir().expect("tempdir");
     crate::test_support::git_init(dir.path());
 
@@ -64,6 +47,25 @@ async fn install_writes_executable_repo_local_pre_push_hook() {
     );
 
     crate::test_support::assert_executable(&hook_path);
+
+    let unreadable = hooks_dir(dir.path()).join("pre-commit");
+    std::fs::create_dir(&unreadable).expect("directory occupying the hook path");
+    let sentinel = unreadable.join("keep.txt");
+    std::fs::write(&sentinel, "keep").expect("sentinel");
+    let err = install(&mut Vec::new(), dir.path(), HookKind::PreCommit, false)
+        .await
+        .expect_err("an unreadable hook must not be treated as missing");
+    assert!(
+        err.to_string().contains(&format!(
+            "could not read existing hook {}",
+            unreadable.display()
+        )),
+        "unexpected error: {err:#}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(sentinel).expect("sentinel survives"),
+        "keep"
+    );
 }
 
 #[tokio::test]
@@ -185,7 +187,7 @@ fn resolve_hooks_dir_handles_relative_and_absolute() {
 }
 
 #[tokio::test]
-async fn install_writes_chainer_when_core_hooks_path_is_set() {
+async fn install_creates_missing_chainers_and_reports_unreadable_ones() {
     let dir = tempfile::tempdir().expect("tempdir");
     crate::test_support::git_init(dir.path());
     let chainer_dir = configured_chainer_dir(dir.path());
@@ -203,7 +205,6 @@ async fn install_writes_chainer_when_core_hooks_path_is_set() {
 
     // Repo-local hook was written too.
     let local = hooks_dir(dir.path()).join("pre-push");
-    assert!(local.exists(), "repo-local pre-push must exist");
     assert_eq!(
         std::fs::read_to_string(&local).expect("read local"),
         hook_body("pre-push").expect("known")
@@ -211,13 +212,31 @@ async fn install_writes_chainer_when_core_hooks_path_is_set() {
 
     // Chainer was written in the resolved hooks dir.
     let chainer = chainer_dir.join("pre-push");
-    assert!(chainer.exists(), "chainer must exist at {chainer:?}");
     let body = std::fs::read_to_string(&chainer).expect("read chainer");
     assert!(
         body.contains("hooks/pre-push"),
         "chainer forwards to the repo-local hook: {body}"
     );
     crate::test_support::assert_executable(&chainer);
+
+    let unreadable = chainer_dir.join("pre-commit");
+    std::fs::create_dir(&unreadable).expect("directory occupying the chainer path");
+    let sentinel = unreadable.join("keep.txt");
+    std::fs::write(&sentinel, "keep").expect("sentinel");
+    let err = install(&mut Vec::new(), dir.path(), HookKind::PreCommit, false)
+        .await
+        .expect_err("an unreadable chainer must not be treated as missing");
+    assert!(
+        err.to_string().contains(&format!(
+            "could not read existing chainer {}",
+            unreadable.display()
+        )),
+        "unexpected error: {err:#}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(sentinel).expect("sentinel survives"),
+        "keep"
+    );
 }
 
 #[tokio::test]

@@ -99,16 +99,9 @@ impl ToolOutcome {
 /// Raised rather than swallowed: unparseable output means we do not know
 /// whether the file is clean, and guessing "clean" is the failure this module
 /// exists to prevent.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("{0}")]
 pub struct ToolOutputError(pub String);
-
-impl std::fmt::Display for ToolOutputError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.0)
-    }
-}
-
-impl std::error::Error for ToolOutputError {}
 
 /// Whether a path is a regular file that the OS will execute.
 ///

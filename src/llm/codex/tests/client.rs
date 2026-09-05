@@ -1,4 +1,4 @@
-//! A fake executable proves the real process receives only the intended surface.
+//! Client identity, diagnostics, and process-boundary behavior.
 
 use std::ffi::OsString;
 use std::time::Duration;
@@ -13,14 +13,30 @@ use crate::llm::error::{BackendErrorKind, LlmError};
 use crate::llm::json_parsing::Extracted;
 
 #[test]
-fn client_accessors_and_identity_preserve_the_configured_contract() {
-    let (dir, client) = fake_client("#!/bin/sh\nexit 0\n", 5);
+fn client_diagnostics_and_identity_preserve_the_configured_contract() {
+    let cfg = LlmConfig {
+        backend: BackendKind::Codex,
+        model: Some("gpt-5.6-sol".to_owned()),
+        reasoning_effort: Some(ReasoningEffort::High),
+        timeout_secs: 5,
+        ..LlmConfig::default()
+    };
+    let client = CodexClient::for_test(
+        &cfg,
+        "/private/account/bin/codex",
+        [(OsString::from("HOME"), OsString::from("/private/account"))],
+        "0.148.0",
+    )
+    .expect("valid client");
 
     assert_eq!(client.model(), "gpt-5.6-sol");
     assert_eq!(client.cli_version(), "0.148.0");
     assert_eq!(client.reasoning_effort(), Some(&ReasoningEffort::High));
     assert_eq!(client.identity(), "codex:chatgpt:cli=0.148.0:effort=high");
-    drop(dir);
+    assert_eq!(
+        format!("{client:?}"),
+        "CodexClient { model: \"gpt-5.6-sol\", reasoning_effort: Some(High), timeout_secs: 5, cli_version: \"0.148.0\" }"
+    );
 }
 
 #[tokio::test]
@@ -179,12 +195,10 @@ async fn a_large_stderr_is_drained_but_only_a_bounded_excerpt_is_reported() {
             kind: BackendErrorKind::UnknownExit,
             message,
         } => {
-            assert!(
-                message.len() < 600,
-                "stderr was not bounded: {}",
-                message.len()
+            assert_eq!(
+                message,
+                format!("Codex CLI exited with status 19: {}…", "x".repeat(400))
             );
-            assert!(!message.contains("tail-marker"), "got {message}");
         }
         other => panic!("unexpected classification: {other:?}"),
     }
@@ -214,7 +228,7 @@ async fn malformed_final_json_stays_an_unparseable_model_response() {
 #[tokio::test]
 async fn stdout_overflow_is_a_bounded_transport_failure() {
     let (dir, client) = fake_client(
-        "#!/bin/sh\ndd if=/dev/zero bs=1048576 count=17 2>/dev/null\n",
+        "#!/bin/sh\ndd if=/dev/zero bs=1048576 count=17 2>/dev/null\nexec /bin/sleep 30\n",
         5,
     );
     let err = client
@@ -383,19 +397,30 @@ async fn a_signal_terminated_child_is_a_transport_failure() {
 }
 
 #[tokio::test]
-async fn timeout_kills_the_child_before_it_can_continue() {
-    let (dir, client) = fake_client(
-        "#!/bin/sh\ncapture=$(dirname \"$0\")\nsleep 5\nprintf late > \"$capture/late\"\n",
-        1,
+async fn timeout_stops_a_running_child_and_reports_the_deadline() {
+    let mut child = tokio::process::Command::new("/bin/sleep")
+        .arg("30")
+        .spawn()
+        .expect("sleep child");
+    process::stop(&mut child).await;
+    let stopped = child.try_wait();
+    // Clean up before asserting, including when stop is broken.
+    let _ = child.kill().await;
+    let _ = child.wait().await;
+    assert!(
+        matches!(stopped, Ok(Some(status)) if !status.success()),
+        "stop must terminate the child"
     );
+
+    let (_dir, client) = fake_client("#!/bin/sh\nexec /bin/sleep 30\n", 0);
     let err = client
         .complete_json("review", "payload")
         .await
         .expect_err("child times out");
-    assert!(matches!(err, LlmError::Transport { status: None, .. }));
     assert!(
-        !dir.path().join("late").exists(),
-        "timed-out child continued"
+        matches!(err, LlmError::Transport { status: None, ref message }
+            if message == "Codex CLI timed out after 0 seconds"),
+        "got {err:?}"
     );
 }
 

@@ -2,10 +2,8 @@
 #
 # Run cargo-mutants and decide the verdict from the results.
 #
-# Shared by the pre-commit hook (scoped to the staged diff) and by CI (full
-# sweep), so the two cannot disagree about what counts as a failure. Any
-# arguments given are passed through to cargo-mutants; the scope is the
-# caller's business, the verdict is this script's.
+# Shared verdict for staged-diff, pushed-diff and full mutation runs.
+# Arguments pass through to cargo-mutants; the caller chooses the scope.
 
 set -euo pipefail
 

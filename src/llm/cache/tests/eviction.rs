@@ -8,14 +8,12 @@ use std::time::SystemTime;
 
 use serde_json::json;
 
-use crate::llm::cache::Cache;
+use crate::llm::cache::{Cache, CacheError};
+use crate::test_support::set_mtime;
 
-/// A side-effect-free cache constructor leaves eviction with no tree to walk.
-///
-/// Missing is the ordinary empty-cache state, not a walk failure, and eviction
-/// must not create the root merely to report that it freed nothing.
+/// An absent cache is empty; an invalid root is a walk failure.
 #[test]
-fn eviction_on_an_absent_cache_is_a_side_effect_free_no_op() {
+fn eviction_distinguishes_an_absent_cache_from_an_invalid_root() {
     let temp = tempfile::tempdir().expect("tempdir");
     let root = temp.path().join("absent-cache");
     let cache = Cache::new(root.clone(), 30, 60);
@@ -25,16 +23,12 @@ fn eviction_on_an_absent_cache_is_a_side_effect_free_no_op() {
         !root.exists(),
         "eviction must not create an empty cache root"
     );
-}
 
-/// Backdate `path`'s mtime so we can write two entries with distinct ages
-/// for the "oldest first" test.
-fn set_mtime(path: &std::path::Path, mtime: SystemTime) {
-    let file = std::fs::OpenOptions::new()
-        .write(true)
-        .open(path)
-        .expect("open for mtime set");
-    file.set_modified(mtime).expect("set_modified");
+    std::fs::write(&root, b"not a directory").expect("invalid cache root");
+    assert!(matches!(
+        cache.evict_if_needed(),
+        Err(CacheError::Walk(err)) if err.kind() == std::io::ErrorKind::NotADirectory
+    ));
 }
 
 /// Criterion 18: with `max_bytes` smaller than the tree,
@@ -179,14 +173,8 @@ fn evict_if_needed_is_a_no_op_when_already_under_limit() {
     );
 }
 
-/// Eviction never touches a directory that is not one of ours.
-///
-/// `evict_if_needed` is the only destructive path in this module, and it walks
-/// whatever sits under the cache root. Checking `is_dir()` alone - while the
-/// comment claimed the walk was restricted to two-hex-char shards - meant a
-/// directory a user had placed under the root had its files deleted to make
-/// room. The size accounting must ignore it too, or a foreign directory's bytes
-/// push real entries out.
+/// Valid-looking entries in directories outside the two-character shard
+/// layout must survive eviction, along with stray files in the root.
 #[test]
 fn eviction_ignores_directories_that_are_not_shards() {
     let temp = tempfile::tempdir().expect("tempdir");
@@ -205,21 +193,21 @@ fn eviction_ignores_directories_that_are_not_shards() {
     );
     cache.put(&key, &serde_json::json!({"a": 1})).expect("put");
 
-    // Two things that are not shards: a stray file in the root, and a
-    // directory whose name is not two hex characters.
     let stray_file = root.join("notes.txt");
     std::fs::write(&stray_file, b"do not delete me").expect("stray file");
-    let foreign_dir = root.join("zz");
-    std::fs::create_dir_all(&foreign_dir).expect("foreign dir");
-    let foreign_file = foreign_dir.join("important.bin");
-    std::fs::write(&foreign_file, vec![0u8; 4096]).expect("foreign file");
+    let foreign_files = ["a", "aaa"].map(|name| {
+        let directory = root.join(name);
+        std::fs::create_dir_all(&directory).expect("foreign directory");
+        let file = directory.join(format!("{}.json", "a".repeat(64)));
+        std::fs::write(&file, vec![0u8; 4096]).expect("foreign file");
+        file
+    });
 
     cache.evict_if_needed().expect("eviction runs");
 
-    assert!(
-        foreign_file.exists(),
-        "a directory that is not a shard must not be walked, let alone emptied"
-    );
+    for file in foreign_files {
+        assert!(file.exists(), "eviction removed a foreign entry: {file:?}");
+    }
     assert!(
         stray_file.exists(),
         "a stray file in the root is not an entry"

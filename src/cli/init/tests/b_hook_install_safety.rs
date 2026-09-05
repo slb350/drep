@@ -1,15 +1,19 @@
 //! Hook installation safety and idempotence.
 
-use crate::cli::init::hooks::{HookKind, hook_body, install};
+use crate::cli::init::hooks::{HookKind, hook_body, install, is_drep_managed};
+use std::collections::BTreeSet;
 
-/// `--hooks none` does no filesystem or git work at all.
-///
-/// Asserting only "no hook file exists" cannot see this: with an empty name
-/// list the write loop never runs either way, so deleting the early return
-/// passes. The observable difference is everything *around* the loop -
-/// locating the git dir, creating the hooks directory, and querying
-/// `core.hooksPath`, which reports itself. So the fixture sets a hooks path
-/// and asserts total silence: an escape hatch with side effects is not one.
+#[test]
+fn a_mentioned_marker_does_not_grant_hook_ownership() {
+    assert!(!is_drep_managed(
+        "#!/bin/sh\n# This foreign hook mentions # Managed by `drep init`. in documentation.\n"
+    ));
+    assert!(!is_drep_managed(
+        "# foreign hook\n# Managed by `drep init`.\n"
+    ));
+}
+
+/// No hook request must skip git lookup, filesystem writes and status output.
 #[tokio::test]
 async fn hooks_none_does_no_work_at_all() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -72,30 +76,21 @@ async fn forcing_over_a_foreign_hook_backs_it_up_first() {
     );
 }
 
-/// A hook drep wrote is replaced with no backup, because there is nothing to preserve.
+/// Installing or refreshing our own hook needs no backup or leftover temporary.
 #[tokio::test]
-async fn refreshing_dreps_own_hook_leaves_no_backup() {
+async fn installing_twice_leaves_only_an_executable_hook() {
     let dir = tempfile::tempdir().expect("tempdir");
     crate::test_support::git_init(dir.path());
-
-    install(&mut Vec::new(), dir.path(), HookKind::PrePush, false)
-        .await
-        .expect("first install");
-    install(&mut Vec::new(), dir.path(), HookKind::PrePush, false)
-        .await
-        .expect("second install");
-
     let hooks = dir.path().join(".git/hooks");
-    assert!(!hooks.join("pre-push.drep-backup").exists());
-    assert!(!hooks.join("pre-push.drep-tmp").exists());
-}
-
-/// Installing twice leaves the hook executable.
-#[tokio::test]
-async fn installing_twice_leaves_the_hook_executable() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    crate::test_support::git_init(dir.path());
-    let hook = dir.path().join(".git/hooks/pre-push");
+    let hook = hooks.join("pre-push");
+    let entries = || {
+        std::fs::read_dir(&hooks)
+            .expect("hooks directory")
+            .map(|entry| entry.expect("hook entry").file_name())
+            .collect::<BTreeSet<_>>()
+    };
+    let mut expected = entries();
+    expected.insert("pre-push".into());
 
     for pass in 1..=2 {
         install(&mut Vec::new(), dir.path(), HookKind::PrePush, false)
@@ -105,5 +100,6 @@ async fn installing_twice_leaves_the_hook_executable() {
             crate::languages::runner::is_executable(&hook),
             "the hook must be executable after pass {pass}"
         );
+        assert_eq!(entries(), expected, "no backups or temporary files remain");
     }
 }

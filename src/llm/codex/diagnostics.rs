@@ -10,7 +10,7 @@ use thiserror::Error;
 use super::{CodexStatus, capture::BoundedCapture, command::ChildEnvironment};
 
 const DIAGNOSTIC_MAX_BYTES: usize = 1024 * 1024;
-const DIAGNOSTIC_TIMEOUT: Duration = Duration::from_secs(30);
+pub(crate) const DIAGNOSTIC_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Debug, Error, PartialEq, Eq)]
 pub(crate) enum DiagnosticError {
@@ -36,6 +36,7 @@ pub(crate) enum DiagnosticError {
 pub(crate) fn probe(
     executable: &Path,
     environment: &ChildEnvironment,
+    timeout: Duration,
 ) -> Result<CodexStatus, DiagnosticError> {
     let cwd = tempfile::tempdir().map_err(|_| DiagnosticError::Workspace)?;
     let mut output = BoundedCapture::new().map_err(|_| DiagnosticError::Workspace)?;
@@ -58,7 +59,7 @@ pub(crate) fn probe(
     let status = loop {
         match child.try_wait() {
             Ok(Some(status)) => break status,
-            Ok(None) if poll_before_deadline(started.elapsed(), DIAGNOSTIC_TIMEOUT) => {
+            Ok(None) if poll_before_deadline(started.elapsed(), timeout) => {
                 if output.exceeds(DIAGNOSTIC_MAX_BYTES).unwrap_or(true) {
                     stop(&mut child);
                     return Err(DiagnosticError::OutputTooLarge);
@@ -94,7 +95,7 @@ pub(crate) fn probe(
     parse(bytes.as_slice())
 }
 
-fn stop(child: &mut std::process::Child) {
+pub(super) fn stop(child: &mut std::process::Child) {
     let _ = child.kill();
     let _ = child.wait();
 }

@@ -164,6 +164,22 @@ fn child_environment_is_an_allowlist_and_never_forwards_api_keys() {
     ] {
         assert_eq!(environment.get(forbidden), None, "forwarded {forbidden}");
     }
+
+    let expected_path = std::env::var_os("PATH").expect("test runner must provide PATH");
+    let mut command = std::process::Command::new("not-spawned");
+    ChildEnvironment::current().apply_to_std(&mut command);
+    assert!(
+        command.get_envs().any(|(name, value)| {
+            let is_path = if cfg!(windows) {
+                name.to_str()
+                    .is_some_and(|name| name.eq_ignore_ascii_case("PATH"))
+            } else {
+                name == std::ffi::OsStr::new("PATH")
+            };
+            is_path && value == Some(expected_path.as_os_str())
+        }),
+        "the captured child environment must preserve PATH"
+    );
 }
 
 #[test]

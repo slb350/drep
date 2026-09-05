@@ -104,10 +104,7 @@ impl GitRepo {
     }
 }
 
-/// Run `git <args>` in `root`, swallowing non-zero exits.
-///
-/// Tests use this only for setup; assertion failures are surface as `Err`
-/// from the API under test, not as panics from the setup command.
+/// Run a Git setup command, panicking with its stderr on failure.
 pub(crate) async fn run_in(root: &Path, args: &[&str]) {
     let mut command = Command::new("git");
     command.args(args).current_dir(root);

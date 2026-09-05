@@ -1,22 +1,9 @@
-//! Shared test fixtures for everything that talks to a mock LLM endpoint.
+//! Shared mock endpoints, filesystem fixtures and Git helpers.
 //!
-//! Crate-level rather than per-module because the LLM client tests and the
-//! analysis tests need exactly the same four helpers. They were duplicated
-//! once - byte-identical except that the copy dropped the doc paragraph
-//! explaining why `fast_retry_client` must not override `max_attempts`, which
-//! is the paragraph recording a real bug. Two copies of the SSE builder in
-//! particular is a trap: it encodes an SDK behaviour that fails silently.
-//!
-//! The SSE builders here are the one piece that cannot be guessed, because
-//! what they encode is an SDK behaviour rather than the wire format. Since
-//! open-agent-sdk 0.10.0 each delta reaches the caller as its own
-//! `StreamEvent` as it arrives, and the terminating `Finish` is emitted when
-//! the transport ends whether or not a chunk ever carried a `finish_reason` -
-//! so a stream that never reports one yields its text and finishes as
-//! `Unspecified`. Under 0.9.x the same stream yielded ZERO blocks, silently:
-//! text was held until a non-null `finish_reason` arrived and dropped if none
-//! ever did, which is why [`sse`] sets one on its last chunk and why
-//! [`sse_without_finish_reason`] could not be written at all.
+//! Since open-agent-sdk 0.10.0, each SSE delta arrives as its own `StreamEvent`.
+//! Transport closure emits `Finish` even without a wire `finish_reason`, yielding
+//! `Unspecified`. [`sse`] explicitly finishes with `stop`; the other builders
+//! exercise that distinct unspecified outcome and provider-supplied reasons.
 
 use std::time::Duration;
 
@@ -73,11 +60,6 @@ pub(crate) fn sse_without_finish_reason(parts: &[&str]) -> String {
 /// One chunk per part, `last` being the raw JSON token for the final chunk's
 /// `finish_reason`. Every earlier chunk reports `null`, which is what the wire
 /// format says about a stream still in progress.
-///
-/// The three builders above differ in that token and in nothing else. Written
-/// out three times, the SDK behaviour recorded in this module's header would be
-/// encoded three times - and a stream that yields no text under an older SDK
-/// yields it silently, so a copy that drifts is not a copy that fails.
 fn sse_chunks(parts: &[&str], last: &str) -> String {
     assert!(
         !parts.is_empty(),
@@ -123,11 +105,8 @@ pub(crate) async fn request_count(server: &MockServer) -> usize {
 ///
 /// It deliberately does **not** override `max_attempts`. That value comes from
 /// `cfg.max_retries` through the production path, and it is the behaviour the
-/// retry tests exist to pin. An earlier version took `max_attempts` as a
-/// parameter and built `LlmClient` by struct literal, bypassing
-/// `LlmClient::new` entirely - forcing `max_attempts = 1` in production left
-/// every retry test still passing, including the one asserting the request was
-/// retried more than once.
+/// retry tests exist to pin. Constructing the client by literal or overriding
+/// attempts would hide regressions in that production configuration path.
 pub(crate) fn fast_retry_client(cfg: &LlmConfig) -> LlmClient {
     let mut client = LlmClient::new(cfg).expect("client builds");
     client.retry_config.initial_delay = Duration::from_millis(10);
@@ -137,20 +116,12 @@ pub(crate) fn fast_retry_client(cfg: &LlmConfig) -> LlmClient {
 }
 
 /// Mount a 200 SSE response returning `parts`, and hand back the server.
-///
-/// Every mock in these suites wants the same six lines; stating them once
-/// keeps the endpoint path and the content type from drifting between
-/// suites.
 pub(crate) async fn server_returning(parts: &[&str]) -> MockServer {
     sse_server(sse(parts)).await
 }
 
 /// A server answering 200 at the chat-completions endpoint with `body` as an
 /// event stream.
-///
-/// The three builders above differ only in which SSE body they pass; stating
-/// the status and the content type once is what keeps them from drifting
-/// apart.
 async fn sse_server(body: String) -> MockServer {
     let server = MockServer::start().await;
     mount_sse(
@@ -162,11 +133,6 @@ async fn sse_server(body: String) -> MockServer {
 }
 
 /// Mount a response with `status` and an empty body, and hand back the server.
-///
-/// The counterpart to [`server_returning`], beside it rather than in each
-/// suite: it was written out twice, in the chain suite and the analysis suite,
-/// and the second copy had already lost the paragraph explaining what an empty
-/// body means to the SDK.
 pub(crate) async fn server_failing_with(status: u16) -> MockServer {
     let server = MockServer::start().await;
     mount_sse(&server, ResponseTemplate::new(status)).await;
@@ -183,11 +149,6 @@ pub(crate) async fn mount_sse(server: &MockServer, template: ResponseTemplate) {
 }
 
 /// A server answering `GET route` with `status` and `body` as JSON.
-///
-/// The plain-GET counterpart to [`server_returning`], for the two suites that
-/// exercise drep's own fetchers rather than the SDK's: the model listing and
-/// the quirks registry. Both had written this out, identical but for the
-/// route, and the two copies had already diverged in where they sat.
 pub(crate) async fn json_server(route: &str, status: u16, body: &str) -> MockServer {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
@@ -296,6 +257,15 @@ pub(crate) fn probe_and_stop_process(pid: &str) -> bool {
         .success()
 }
 
+/// Set a fixture's age without sleeping or depending on the wall clock.
+pub(crate) fn set_mtime(path: &std::path::Path, mtime: std::time::SystemTime) {
+    let file = std::fs::OpenOptions::new()
+        .write(true)
+        .open(path)
+        .expect("open for mtime set");
+    file.set_modified(mtime).expect("set_modified");
+}
+
 /// Sum regular-file bytes one directory level beneath `root`.
 pub(crate) fn two_level_tree_size(root: &std::path::Path) -> u64 {
     std::fs::read_dir(root)
@@ -313,10 +283,7 @@ pub(crate) fn two_level_tree_size(root: &std::path::Path) -> u64 {
 
 /// Mark a file executable on unix; a no-op elsewhere.
 ///
-/// Crate-wide because five copies of this existed across four test modules,
-/// each a `#[cfg(unix)]`/`#[cfg(not(unix))]` pair. `expect`, not `unwrap`, so
-/// a failure names what went wrong rather than pointing at a line number in a
-/// helper.
+/// Preserve the file's other permission bits.
 pub(crate) fn make_executable(path: &std::path::Path) {
     #[cfg(unix)]
     {
@@ -332,12 +299,6 @@ pub(crate) fn make_executable(path: &std::path::Path) {
 }
 
 /// Write a `drep.toml` under `dir` pointing at `endpoint`.
-///
-/// The on-disk config shape stated once. It was written out longhand in three
-/// places across two test modules, so the `[llm]` → `[[llm]]` array-of-tables
-/// change had to be made three times — and a missed one surfaces not as a
-/// failed assertion but as an opaque `ConfigError::Parse` from a test that
-/// looks unrelated.
 ///
 /// `max_retries = 1` so a test pointed at a dead endpoint fails on the first
 /// attempt rather than paying the SDK's backoff schedule.
@@ -398,9 +359,6 @@ pub(crate) fn git(dir: &std::path::Path) -> std::process::Command {
 
 /// Initialise a git repository under `dir`, isolated from the developer's
 /// global git configuration.
-///
-/// Three copies of this existed across the `init` test files, already diverging
-/// (one asserted the `git config` calls succeeded, two discarded the result).
 ///
 /// `core.hooksPath` is the load-bearing one. Without neutralising it, a
 /// globally-set value - which this machine has - leaks into every test, so
@@ -469,9 +427,6 @@ pub(crate) fn git_output(dir: &std::path::Path, args: &[&str]) -> String {
 }
 
 /// Run a git command that must succeed, failing the test with its stderr.
-///
-/// Shared so a new fixture command cannot quietly discard the status, which is
-/// how the three `git_init` copies this replaced had already diverged.
 fn git_must(dir: &std::path::Path, args: &[&str]) {
     git_output(dir, args);
 }
@@ -516,11 +471,8 @@ pub(crate) fn clear_executable(path: &std::path::Path) {
 /// `api` URL that may be null, and models keyed by id carrying `temperature`
 /// and `limit.output` among many fields drep ignores.
 ///
-/// One document, not one per suite. The registry tests and the wizard tests
-/// both need one, and written twice the two disagreed about whether `glm-5.3`
-/// accepts a temperature - so a reader could not tell which was the fixture's
-/// claim and which was a typo. `glm-5.3` refuses it and `glm-5.2` accepts, so
-/// both directions are reachable from the same endpoint.
+/// The registry and wizard tests share it. `glm-5.3` refuses temperature and
+/// `glm-5.2` accepts it, so both outcomes are reachable from the same endpoint.
 pub(crate) const MODELS_DEV_DOCUMENT: &str = r#"{
   "kimi-for-coding": {
     "id": "kimi-for-coding",

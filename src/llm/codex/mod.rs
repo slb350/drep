@@ -64,7 +64,8 @@ impl CodexRuntime {
     fn probe_current() -> Result<Self, diagnostics::DiagnosticError> {
         let executable = PathBuf::from("codex");
         let environment = ChildEnvironment::current();
-        let status = diagnostics::probe(&executable, &environment)?;
+        let status =
+            diagnostics::probe(&executable, &environment, diagnostics::DIAGNOSTIC_TIMEOUT)?;
         Ok(Self {
             executable,
             environment,
@@ -130,6 +131,7 @@ pub struct CodexClient {
     environment: ChildEnvironment,
 }
 
+// Executable and environment may contain private account paths.
 impl std::fmt::Debug for CodexClient {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("CodexClient")

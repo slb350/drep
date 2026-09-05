@@ -32,7 +32,7 @@ pub(super) async fn report_for(dir: &Path) -> String {
 }
 
 #[tokio::test]
-async fn no_config_file_prints_the_unconfigured_message_and_still_prints_tools() {
+async fn missing_and_unreadable_configs_are_distinguished_without_suppressing_tools() {
     let dir = tempfile::tempdir().expect("tempdir");
     write_py(dir.path());
 
@@ -60,6 +60,22 @@ async fn no_config_file_prints_the_unconfigured_message_and_still_prints_tools()
     assert!(
         rendered.contains("Deterministic checks"),
         "LLM section must not suppress the rest of the report; rendered:\n{rendered}"
+    );
+
+    std::fs::write(&expected_path, [0xff]).expect("invalid UTF-8 config");
+    let mut out = Vec::new();
+    let exit = super::run_scoped(&mut out, &args(dir.path()), dir.path())
+        .await
+        .expect("run_to");
+    assert_eq!(exit, crate::Exit::Clean);
+    let rendered = String::from_utf8(out).expect("utf8");
+    assert!(
+        rendered.contains(&format!("{} could not be read:", expected_path.display())),
+        "rendered:\n{rendered}"
+    );
+    assert!(
+        rendered.contains("Deterministic checks"),
+        "rendered:\n{rendered}"
     );
 }
 

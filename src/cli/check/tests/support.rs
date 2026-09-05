@@ -1,11 +1,4 @@
 //! Shared fixtures for the `check` suite.
-//!
-//! The `CheckOutcome` literal was written out in three files - the text-output
-//! test, the `unanalyzed` JSON test, and the failover report test. Adding
-//! `provider_uses` to the struct meant editing all three, which is the tax
-//! `test_support::write_drep_toml`'s doc records as a past bug: a missed copy
-//! surfaces not as a failed assertion but as a compile error in a test that
-//! looks unrelated.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -38,20 +31,9 @@ pub(super) fn check_args(paths: Vec<PathBuf>, fail_on: Option<Severity>) -> Chec
 
 /// Run the drep test binary with an isolated cache and bounded network access.
 ///
-/// The policy file is pointed at a path inside `dir`, which nothing writes. A
-/// developer whose machine carries a real fleet policy would otherwise see this
-/// whole suite behave differently from CI - and a policy naming `refuse_markers`
-/// would refuse every one of these runs. Same isolation `HOME` and
-/// `XDG_CACHE_HOME` already provide, for the same reason.
-///
-/// The isolation holds only while no policy is *installed* at the machine path,
-/// because `site::path_from` deliberately refuses to let the environment displace
-/// one that is - a process that could would be a policy the policed developer can
-/// switch off. So on a machine with `/etc/drep/site.toml` (or its macOS sibling)
-/// in place, these subprocess tests read that file. That is the layer working as
-/// designed rather than a fixture to repair: the in-process tests, which are the
-/// ones asserting policy behaviour, pass the path as an argument and never consult
-/// the environment at all.
+/// The policy override names an absent file in `dir`. An installed machine policy
+/// still takes precedence; subprocesses cannot displace it. In-process policy
+/// tests instead inject the policy path directly.
 pub(super) fn run_drep(dir: &Path, args: &[&str]) -> std::process::Output {
     run_drep_with_site(dir, &dir.join("absent-site.toml"), args)
 }
@@ -113,9 +95,6 @@ fn spawn_drep(
 }
 
 /// A `CheckOutcome` with everything empty and the gate clean.
-///
-/// Callers fill in only the field their test is about, so a new field on
-/// `CheckOutcome` costs one default here rather than an edit per test.
 pub(super) fn outcome() -> CheckOutcome {
     CheckOutcome {
         tool_findings: Vec::new(),

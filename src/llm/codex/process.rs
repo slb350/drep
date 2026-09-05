@@ -130,7 +130,7 @@ pub(crate) async fn run(
     })
 }
 
-async fn stop(child: &mut tokio::process::Child) {
+pub(super) async fn stop(child: &mut tokio::process::Child) {
     let _ = child.kill().await;
     let _ = child.wait().await;
 }

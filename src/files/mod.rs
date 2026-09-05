@@ -107,28 +107,10 @@ pub fn walk_targets(root: &Path, predicate: fn(&Path) -> bool) -> Vec<PathBuf> {
 /// Expand a list of explicit paths (files and/or directories) into a sorted,
 /// deduplicated set of files matching `predicate`.
 ///
-/// Dedup because `drep check a.rs .` would otherwise pay a whole LLM
-/// round-trip twice. An explicit file is filtered by the same predicate as
-/// directory walks, so naming `notes.txt` cannot smuggle in a type drep does
-/// not read; conversely, gitignore is *not* consulted for explicit files —
-/// the user naming a path is a stronger signal than the repo's ignore file.
-/// Paths that do not exist are skipped silently.
+/// Explicit files bypass gitignore. Missing and unsupported paths are skipped;
+/// callers needing those rejections use [`expand_named`]. Empty input is empty.
 pub fn expand_paths(paths: &[PathBuf], predicate: fn(&Path) -> bool) -> Vec<PathBuf> {
-    let mut found = BTreeSet::new();
-    for path in paths {
-        if path.is_dir() {
-            for file in walk_targets(path, predicate) {
-                found.insert(file);
-            }
-        } else if path.is_file() && predicate(path) {
-            found.insert(path.clone());
-        }
-        // Non-existent paths fall through: the user typed something the
-        // filesystem does not have, and the contract is to skip without
-        // erroring. Distinguishing "exists but is neither file nor dir"
-        // (broken symlink, /dev/null-style specials) is not worth a branch.
-    }
-    found.into_iter().collect()
+    expand(paths, predicate).targets
 }
 
 /// Why an explicitly named path produced no target.
@@ -158,20 +140,8 @@ pub struct Expansion {
 
 /// Resolve a command's path arguments against `root`.
 ///
-/// The single answer to "what did the user ask for, and what could I not do
-/// with it". [`expand_paths`] reports only the targets, which meant every
-/// caller re-walked the same argument list with its own `exists()` /
-/// `is_file()` tests to reconstruct what the expander had already decided and
-/// thrown away. Two commands did that, and the reconstruction was lossy in the
-/// same way in both: a named fifo satisfies neither `is_file` nor `is_dir`, so
-/// it was dropped by the expander, missed by the reconstruction, and reported
-/// as a clean run.
-///
-/// No arguments means `root`, which is how bare `drep check` means "the whole
-/// tree". `root` goes through the expander like any other directory - an
-/// earlier version returned it unexpanded, so `read_to_string` was handed a
-/// *directory* and the plainest invocation of the primary command exited 2
-/// without analyzing anything.
+/// Classify each explicit path once, collecting both targets and rejections.
+/// No arguments expands `root` without treating it as an explicitly named path.
 pub fn expand_named(paths: &[PathBuf], root: &Path, predicate: fn(&Path) -> bool) -> Expansion {
     if paths.is_empty() {
         return Expansion {
@@ -179,17 +149,23 @@ pub fn expand_named(paths: &[PathBuf], root: &Path, predicate: fn(&Path) -> bool
             rejected: BTreeMap::new(),
         };
     }
+    expand(paths, predicate)
+}
+
+fn expand(paths: &[PathBuf], predicate: fn(&Path) -> bool) -> Expansion {
+    let mut targets = BTreeSet::new();
     let mut rejected = BTreeMap::new();
     for named in paths {
-        // One `metadata` call answers file/dir/missing together. The three
-        // separate `exists()` / `is_dir()` / `is_file()` probes this replaced
-        // were three syscalls with a window between each, and expressed the
-        // "neither a regular file nor a directory" case as a negation chain
-        // rather than as the arm it is.
         let verdict = match std::fs::metadata(named) {
             Err(_) => Some(Rejected::Missing),
-            Ok(meta) if meta.is_dir() => None,
-            Ok(meta) if meta.is_file() && predicate(named) => None,
+            Ok(meta) if meta.is_dir() => {
+                targets.extend(walk_targets(named, predicate));
+                None
+            }
+            Ok(meta) if meta.is_file() && predicate(named) => {
+                targets.insert(named.clone());
+                None
+            }
             Ok(_) => Some(Rejected::Unanalyzable),
         };
         if let Some(verdict) = verdict {
@@ -197,7 +173,7 @@ pub fn expand_named(paths: &[PathBuf], root: &Path, predicate: fn(&Path) -> bool
         }
     }
     Expansion {
-        targets: expand_paths(paths, predicate),
+        targets: targets.into_iter().collect(),
         rejected,
     }
 }

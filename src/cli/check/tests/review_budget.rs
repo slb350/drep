@@ -2,7 +2,9 @@
 
 use std::collections::BTreeSet;
 use std::sync::{Arc, Barrier};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+use crate::test_support::set_mtime;
 
 use super::super::review_budget::{
     Budget, Claim, PENDING_LEASE_SECS, is_authoritative, is_completion_scope, lease_expired,
@@ -58,8 +60,20 @@ fn three_committed_rounds_exhaust_the_default_budget() {
     assert_eq!(committed_round(budget.claim().expect("round 1")), 1);
     assert_eq!(committed_round(budget.claim().expect("round 2")), 2);
     assert_eq!(committed_round(budget.claim().expect("round 3")), 3);
+    for round in 1..=3 {
+        set_mtime(
+            &budget.directory().join(format!("round-{round}.state")),
+            UNIX_EPOCH + Duration::from_secs(1_000),
+        );
+    }
+    let aged = Budget::at(
+        dir.path(),
+        "refs/heads/feature",
+        3,
+        1_001 + PENDING_LEASE_SECS,
+    );
     assert!(matches!(
-        budget.claim().expect("limit verdict"),
+        aged.claim().expect("committed rounds never expire"),
         Claim::LimitReached {
             completed: 3,
             limit: 3,
@@ -209,64 +223,78 @@ fn stale_pending_slot_is_reclaimed_but_a_fresh_one_is_respected() {
 }
 
 #[test]
-fn expired_owner_cannot_commit_or_refund_its_successors_reservation() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let original = Budget::at(dir.path(), "refs/heads/feature", 1, 1_000);
-    let Claim::Reserved(expired) = original.claim().expect("original reservation") else {
-        panic!("round must be available");
-    };
+fn displaced_owner_cannot_commit_or_refund_its_successors_reservation() {
+    for externally_displaced in [false, true] {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let original = Budget::at(dir.path(), "refs/heads/feature", 1, 1_000);
+        let Claim::Reserved(displaced) = original.claim().expect("original reservation") else {
+            panic!("round must be available");
+        };
 
-    let successor_budget = Budget::at(
-        dir.path(),
-        "refs/heads/feature",
-        1,
-        1_001 + PENDING_LEASE_SECS,
-    );
-    let Claim::Reserved(successor) = successor_budget.claim().expect("successor reservation")
-    else {
-        panic!("expired round must be reclaimed");
-    };
+        let successor_time = if externally_displaced {
+            std::fs::rename(
+                original.directory().join("round-1.state"),
+                original.directory().join("displaced.state"),
+            )
+            .expect("externally displace the original slot");
+            // A timestamp establishes age; the token distinguishes owners when
+            // an external replacement reuses the same slot within that second.
+            1_000
+        } else {
+            1_001 + PENDING_LEASE_SECS
+        };
+        let successor_budget = Budget::at(dir.path(), "refs/heads/feature", 1, successor_time);
+        let Claim::Reserved(successor) = successor_budget.claim().expect("successor reservation")
+        else {
+            panic!("displaced round must be available");
+        };
 
-    let err = expired
-        .commit()
-        .expect_err("expired owner must lose the slot");
-    assert!(
-        err.to_string().contains("is no longer owned"),
-        "unexpected error: {err:#}"
-    );
-    successor
-        .commit()
-        .expect("expired owner's Drop must preserve successor");
-    assert!(matches!(
-        successor_budget.claim().expect("limit verdict"),
-        Claim::LimitReached {
-            completed: 1,
-            limit: 1,
-        }
-    ));
+        let err = displaced
+            .commit()
+            .expect_err("displaced owner must lose the slot");
+        assert!(
+            err.to_string().contains("is no longer owned"),
+            "unexpected error: {err:#}"
+        );
+        successor
+            .commit()
+            .expect("displaced owner's Drop must preserve successor");
+        assert!(matches!(
+            successor_budget.claim().expect("limit verdict"),
+            Claim::LimitReached {
+                completed: 1,
+                limit: 1,
+            }
+        ));
+    }
 }
 
 #[test]
-fn stale_incomplete_slot_from_a_killed_writer_is_reclaimed() {
+fn incomplete_slots_are_respected_until_their_lease_expires() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("current time")
-        .as_secs();
+    let now = 1_000;
     let original = Budget::at(dir.path(), "refs/heads/feature", 1, now);
     std::fs::create_dir_all(original.directory()).expect("budget directory");
-    std::fs::write(original.directory().join("round-1.state"), "").expect("empty slot");
-
+    let slot = original.directory().join("round-1.state");
     let after_expiry = Budget::at(
         dir.path(),
         "refs/heads/feature",
         1,
         now + PENDING_LEASE_SECS + 1,
     );
-    let Claim::Reserved(reclaimed) = after_expiry.claim().expect("reclaimed slot") else {
-        panic!("a killed writer must not exhaust the budget forever");
-    };
-    assert_eq!(reclaimed.round(), 1);
+    for raw in [b"".as_slice(), b"\xff".as_slice()] {
+        std::fs::write(&slot, raw).expect("incomplete slot");
+        set_mtime(&slot, UNIX_EPOCH + Duration::from_secs(now));
+        assert!(
+            !matches!(original.claim(), Ok(Claim::Reserved(_))),
+            "a fresh incomplete slot must remain occupied"
+        );
+        assert_eq!(std::fs::read(&slot).expect("fresh slot survives"), raw);
+        let Claim::Reserved(reclaimed) = after_expiry.claim().expect("reclaimed slot") else {
+            panic!("a killed writer must not exhaust the budget forever");
+        };
+        assert_eq!(reclaimed.round(), 1);
+    }
 }
 
 #[test]
@@ -275,7 +303,8 @@ fn reset_removes_owned_slots_without_touching_foreign_files() {
     let budget = Budget::at(dir.path(), "refs/heads/feature", 3, 1_000);
     committed_round(budget.claim().expect("round"));
     let foreign = budget.directory().join("notes.txt");
-    std::fs::write(&foreign, "mine").expect("foreign file");
+    // Matching contents must not turn an unrelated filename into an owned slot.
+    std::fs::write(&foreign, "committed\n").expect("foreign file");
 
     assert!(budget.reset().expect("reset"));
 
@@ -285,7 +314,7 @@ fn reset_removes_owned_slots_without_touching_foreign_files() {
     );
     assert_eq!(
         std::fs::read_to_string(foreign).expect("foreign survives"),
-        "mine"
+        "committed\n"
     );
 }
 

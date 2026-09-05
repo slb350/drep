@@ -70,19 +70,6 @@ fn severity_follows_the_does_it_change_rendering_rule() {
 }
 
 #[test]
-fn exactly_one_check_blocks_at_error() {
-    // The rule says only a defect that changes how the *rest of the file*
-    // renders earns `Error`. If a second check ever reaches that tier it is a
-    // deliberate decision, and this test is where it gets made.
-    let errors: Vec<&str> = Check::ALL
-        .iter()
-        .filter(|c| c.severity() == Severity::Error)
-        .map(|c| c.as_str())
-        .collect();
-    assert_eq!(errors, vec!["unclosed_code_fence"]);
-}
-
-#[test]
 fn every_check_carries_a_distinct_non_empty_suggestion() {
     let suggestions: BTreeSet<&str> = Check::ALL.iter().map(|c| c.suggestion()).collect();
     assert_eq!(

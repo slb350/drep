@@ -25,6 +25,7 @@ pub(super) fn appears_to_forward(body: &str, name: &str) -> bool {
 }
 
 /// The first shell word, keeping whitespace inside quotes and `$()` together.
+/// The caller removes leading whitespace.
 fn shell_word(command: &str) -> Option<&str> {
     let mut quote = None;
     let mut substitution_depth = 0usize;
@@ -49,7 +50,7 @@ fn shell_word(command: &str) -> Option<&str> {
             None if character == '(' && previous == Some('$') => substitution_depth += 1,
             None if character == ')' && substitution_depth > 0 => substitution_depth -= 1,
             None if character.is_whitespace() && substitution_depth == 0 => {
-                return (index > 0).then_some(&command[..index]);
+                return Some(&command[..index]);
             }
             None => {}
         }
@@ -120,8 +121,9 @@ mod tests {
     }
 
     #[test]
-    fn a_literal_parenthesis_does_not_open_a_command_substitution() {
+    fn ordinary_parentheses_do_not_change_command_substitution_depth() {
         assert_eq!(shell_word("helper(arg hooks/pre-push"), Some("helper(arg"));
+        assert_eq!(shell_word("(helper) && hooks/pre-push"), Some("(helper)"));
     }
 
     #[test]

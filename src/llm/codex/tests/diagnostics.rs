@@ -1,7 +1,9 @@
 //! Only the version and ChatGPT-auth facts survive diagnostic parsing.
 
 use crate::llm::codex::command::ChildEnvironment;
-use crate::llm::codex::diagnostics::{DiagnosticError, parse, poll_before_deadline, probe};
+use crate::llm::codex::diagnostics::{
+    DIAGNOSTIC_TIMEOUT, DiagnosticError, parse, poll_before_deadline, probe,
+};
 
 const CHATGPT: &str = r#"{
   "schemaVersion": 1,
@@ -67,6 +69,7 @@ fn a_missing_binary_has_actionable_redacted_guidance() {
     let err = probe(
         std::path::Path::new("/definitely-not-a-real-drep-codex-binary"),
         &ChildEnvironment::default(),
+        DIAGNOSTIC_TIMEOUT,
     )
     .expect_err("binary is absent");
 
@@ -84,8 +87,12 @@ fn valid_auth_diagnostic_survives_an_unrelated_nonzero_doctor_status() {
         format!("#!/bin/sh\nprintf '%s' '{}'\nexit 1\n", CHATGPT),
     );
 
-    let diagnostic = probe(&executable, &ChildEnvironment::default())
-        .expect("known redacted auth facts are usable despite an unrelated doctor warning");
+    let diagnostic = probe(
+        &executable,
+        &ChildEnvironment::default(),
+        DIAGNOSTIC_TIMEOUT,
+    )
+    .expect("known redacted auth facts are usable despite an unrelated doctor warning");
     assert_eq!(diagnostic.cli_version(), "0.148.0");
 }
 
@@ -96,8 +103,12 @@ fn diagnostic_output_accepts_exactly_one_mebibyte() {
     let dir = tempfile::tempdir().expect("tempdir");
     let executable = diagnostic_executable(dir.path(), diagnostic_with_len(EXPECTED_LIMIT));
 
-    let diagnostic = probe(&executable, &ChildEnvironment::default())
-        .expect("the exact diagnostic ceiling is accepted");
+    let diagnostic = probe(
+        &executable,
+        &ChildEnvironment::default(),
+        DIAGNOSTIC_TIMEOUT,
+    )
+    .expect("the exact diagnostic ceiling is accepted");
     assert_eq!(diagnostic.cli_version(), "0.148.0");
 }
 
@@ -109,7 +120,11 @@ fn diagnostic_output_one_byte_over_the_limit_is_rejected_as_too_large() {
     let executable = diagnostic_executable(dir.path(), diagnostic_with_len(EXPECTED_LIMIT + 1));
 
     assert!(matches!(
-        probe(&executable, &ChildEnvironment::default()),
+        probe(
+            &executable,
+            &ChildEnvironment::default(),
+            DIAGNOSTIC_TIMEOUT
+        ),
         Err(DiagnosticError::OutputTooLarge)
     ));
 }
@@ -122,7 +137,11 @@ fn an_empty_nonzero_diagnostic_is_a_process_failure() {
     crate::test_support::write_executable(&executable, "#!/bin/sh\nexit 1\n");
 
     assert!(matches!(
-        probe(&executable, &ChildEnvironment::default()),
+        probe(
+            &executable,
+            &ChildEnvironment::default(),
+            DIAGNOSTIC_TIMEOUT
+        ),
         Err(DiagnosticError::Process)
     ));
 }
@@ -140,7 +159,12 @@ fn a_grandchild_inheriting_stdout_cannot_hold_the_diagnostic_open() {
         ),
     );
 
-    let status = probe(&executable, &ChildEnvironment::default()).expect("valid diagnostic");
+    let status = probe(
+        &executable,
+        &ChildEnvironment::default(),
+        DIAGNOSTIC_TIMEOUT,
+    )
+    .expect("valid diagnostic");
     let pid = std::fs::read_to_string(dir.path().join("grandchild.pid")).expect("grandchild pid");
     let running = crate::test_support::probe_and_stop_process(&pid);
 
@@ -168,13 +192,44 @@ fn chatgpt_tokens_and_chatgpt_mode_are_both_required() {
 }
 
 #[test]
-fn polling_stops_at_the_deadline_not_after_it() {
+fn diagnostic_deadlines_stop_polling_and_terminate_children() {
     let deadline = std::time::Duration::from_secs(30);
     assert!(poll_before_deadline(
         std::time::Duration::from_secs(29),
         deadline
     ));
     assert!(!poll_before_deadline(deadline, deadline));
+
+    #[cfg(unix)]
+    {
+        let mut child = std::process::Command::new("/bin/sleep")
+            .arg("30")
+            .spawn()
+            .expect("sleep child");
+        crate::llm::codex::diagnostics::stop(&mut child);
+        let stopped = child.try_wait();
+        // Clean up before asserting, including when stop is broken.
+        let _ = child.kill();
+        let _ = child.wait();
+        assert!(
+            matches!(stopped, Ok(Some(status)) if !status.success()),
+            "stop must terminate the child"
+        );
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let executable = dir.path().join("fake-codex");
+        // The healthy runner kills this child immediately; the finite sleep
+        // also bounds the test when the polling guard is broken.
+        crate::test_support::write_executable(&executable, "#!/bin/sh\nexec /bin/sleep 30\n");
+        assert!(matches!(
+            probe(
+                &executable,
+                &ChildEnvironment::default(),
+                std::time::Duration::ZERO
+            ),
+            Err(DiagnosticError::Timeout)
+        ));
+    }
 }
 
 #[test]

@@ -1,6 +1,5 @@
 //! `result::AnalysisResult` — criteria 5-7.
 
-use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use crate::analysis::findings::{Finding, Severity};
@@ -121,17 +120,6 @@ fn has_failures_reflects_failed_files() {
     );
 }
 
-/// The `failed_files` field is what makes merging safe; the type is
-/// declared as `BTreeMap<PathBuf, FailureReason>` so the merge test above
-/// is the contract. This pins that the field is not accidentally a `Vec`
-/// or a `HashSet` — a `Vec` would silently break the union semantics and a
-/// `HashSet` would survive but make test reproducibility harder.
-#[test]
-fn failed_files_is_a_btreemap() {
-    let result = AnalysisResult::default();
-    let _: BTreeMap<PathBuf, FailureReason> = result.failed_files;
-}
-
 #[test]
 fn a_typed_backend_failure_is_not_misreported_as_transport() {
     let reason = crate::analysis::code_quality::into_failure_reason(LlmError::Backend {
@@ -146,7 +134,10 @@ fn a_typed_backend_failure_is_not_misreported_as_transport() {
             ..
         }
     ));
-    assert!(!reason.one_line().contains("transport"));
+    assert_eq!(
+        reason.one_line(),
+        "LLM backend contract failure: Codex attempted a forbidden tool"
+    );
 }
 
 #[test]

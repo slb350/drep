@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Resolve explicit file targets and rejections in one pass, avoiding repeated
+  filesystem probes and file-type checks. Limiter guards release their permits
+  through normal field cleanup, and parser errors use derived formatting.
+- Simplify rendering, cache, init, and diff test fixtures; remove duplicate
+  assertions and stale commentary. Cache recovery tests retain the original
+  endpoint, and newline-only documentation has an explicit expected result.
+- Strengthen cache eviction, review-lease ownership and aging, diagnostic
+  output, and child-process limits using existing test cases. Timeout checks
+  exercise real polling and termination without a one-second fixture delay.
+
 ## [3.0.0] - 2026-09-03
 
 ### Added

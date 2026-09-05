@@ -47,6 +47,10 @@ async fn a_pasted_key_is_queued_for_the_store_and_kept_out_of_the_config() {
         plan.choices[0].key_in_store(),
         "so no api_key line is rendered: an explicit one would override the key just saved"
     );
+    let diagnostic = format!("{plan:?}");
+    assert!(diagnostic.starts_with("Plan {"));
+    assert!(diagnostic.contains("new_keys: [\"https://api.z.ai/api/coding/paas/v4\"]"));
+    assert!(!diagnostic.contains("sk-pasted"));
 }
 
 #[tokio::test]

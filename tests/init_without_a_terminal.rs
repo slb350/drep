@@ -104,7 +104,7 @@ fn custom() -> String {
 
 /// Run `drep init` in `dir` with the given extra arguments and a closed stdin.
 fn init_with_closed_stdin(dir: &tempfile::TempDir, extra: &[&str]) -> std::process::Output {
-    run_init(dir, extra, None)
+    run_init(dir, extra, None, None)
 }
 
 /// Run `drep init`, optionally writing `answers` to its stdin.
@@ -115,6 +115,7 @@ fn run_init(
     dir: &tempfile::TempDir,
     extra: &[&str],
     answers: Option<&str>,
+    custom_api_key: Option<&str>,
 ) -> std::process::Output {
     use std::io::Write;
 
@@ -136,6 +137,10 @@ fn run_init(
         // reason this file names a dead endpoint: a test issues no live
         // request to a third party.
         .env("DREP_QUIRKS_PATH", seed_quirks_cache(dir));
+    command.env_remove("LLM_API_KEY");
+    if let Some(value) = custom_api_key {
+        command.env("LLM_API_KEY", value);
+    }
 
     match answers {
         None => {
@@ -237,6 +242,7 @@ fn a_forced_wizard_accepts_every_default_from_a_pipe() {
         &dir,
         &["--interactive"],
         Some(&format!("\n{DEAD}\n\n\n\n\n")),
+        None,
     );
 
     assert!(
@@ -279,6 +285,7 @@ fn a_pasted_key_reaches_the_store_and_the_config_omits_it() {
             "{}\n{DEAD}\nsk-integration-test\nsome-model\n\n\n\n",
             custom()
         )),
+        None,
     );
 
     assert!(
@@ -303,6 +310,10 @@ fn a_pasted_key_reaches_the_store_and_the_config_omits_it() {
     assert!(
         !report.contains("sk-integration-test"),
         "and must never echo it: {report}"
+    );
+    assert!(
+        !report.contains("LLM_API_KEY is already set in this shell."),
+        "an unset variable must not be reported as ready: {report}"
     );
 
     let store = std::fs::read_to_string(dir.path().join("auth.toml")).expect("store written");
@@ -338,6 +349,7 @@ fn re_running_on_a_configured_repo_changes_nothing_when_declined() {
         &dir,
         &["--interactive"],
         Some(&format!("\n{DEAD}\n\n\n\n\n")),
+        None,
     );
     assert!(first.status.success(), "first init failed");
     let before = std::fs::read_to_string(dir.path().join("drep.toml")).expect("config");
@@ -351,6 +363,7 @@ fn re_running_on_a_configured_repo_changes_nothing_when_declined() {
             "n\n{}\n{DEAD}\nsk-should-not-be-stored\nsome-model\n\n\n\n",
             custom()
         )),
+        None,
     );
 
     assert!(second.status.success(), "declining is not a failure");
@@ -373,6 +386,7 @@ fn re_running_and_accepting_switches_the_provider_and_stores_the_key() {
         &dir,
         &["--interactive"],
         Some(&format!("\n{DEAD}\n\n\n\n\n")),
+        None,
     );
     assert!(first.status.success(), "first init failed");
 
@@ -384,6 +398,7 @@ fn re_running_and_accepting_switches_the_provider_and_stores_the_key() {
             "y\n{}\nhttp://127.0.0.1:9/switched\nsk-switched\nswitched-model\n\n\n\n",
             custom()
         )),
+        Some("unused-env-key"),
     );
 
     assert!(
@@ -391,6 +406,11 @@ fn re_running_and_accepting_switches_the_provider_and_stores_the_key() {
         "switch failed: {}{}",
         String::from_utf8_lossy(&second.stdout),
         String::from_utf8_lossy(&second.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&second.stdout)
+            .contains("LLM_API_KEY is already set in this shell."),
+        "the exported variable must be reported at the key prompt"
     );
 
     let config = std::fs::read_to_string(dir.path().join("drep.toml")).expect("config");

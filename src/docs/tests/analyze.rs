@@ -3,7 +3,6 @@
 use std::collections::BTreeSet;
 use std::path::Path;
 
-use crate::analysis::findings::Severity;
 use crate::docs::tests::{run, wide};
 use crate::docs::{Check, analyze};
 
@@ -59,9 +58,14 @@ fn a_clean_document_produces_nothing() {
 }
 
 #[test]
-fn an_empty_document_produces_nothing() {
+fn empty_and_blank_documents_are_distinguished() {
     assert_eq!(run(""), Vec::new());
-    assert_eq!(run("\n"), run("\n")); // and does not panic
+    let findings = run("\n");
+    let positions: Vec<_> = findings
+        .iter()
+        .map(|finding| (finding.kind.as_str(), finding.line, finding.column))
+        .collect();
+    assert_eq!(positions, vec![("trailing_blank_lines", 1, Some(1))]);
 }
 
 #[test]
@@ -108,19 +112,4 @@ fn a_line_number_is_never_zero() {
         assert!(finding.line >= 1, "{}", finding.kind);
         assert!(finding.column.is_some_and(|c| c >= 1), "{}", finding.kind);
     }
-}
-
-#[test]
-fn only_the_unclosed_fence_reaches_error() {
-    let findings = run(&kitchen_sink());
-    let errors: BTreeSet<String> = findings
-        .into_iter()
-        .filter(|f| f.severity == Severity::Error)
-        .map(|f| f.kind)
-        .collect();
-    assert_eq!(
-        errors,
-        BTreeSet::from(["unclosed_code_fence".to_owned()]),
-        "a document of ordinary hygiene problems must not gate at error"
-    );
 }

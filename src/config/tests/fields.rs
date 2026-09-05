@@ -133,18 +133,6 @@ fn missing_file_path_is_an_error() {
 }
 
 #[test]
-fn max_tokens_absent_yields_none_and_present_yields_some() {
-    let temp = tempfile::tempdir().expect("tempdir");
-    let absent = write_config(&temp, "[[llm]]\nmodel = \"x\"\n");
-    let config = load(&absent).expect("load");
-    assert_eq!(config.llm[0].max_tokens, None);
-
-    let present = write_config(&temp, "[[llm]]\nmax_tokens = 8192\n");
-    let config = load(&present).expect("load");
-    assert_eq!(config.llm[0].max_tokens, Some(8192));
-}
-
-#[test]
 fn zero_timeout_and_zero_output_budget_are_rejected() {
     for (field, expected) in [
         ("timeout_secs = 0", "timeout_secs"),
@@ -156,13 +144,6 @@ fn zero_timeout_and_zero_output_budget_are_rejected() {
         assert!(err.to_string().contains(expected), "got {err:?}");
     }
 }
-
-/// A file with no `[[llm]]` at all is rejected, not defaulted.
-///
-/// The LLM layer is mandatory in 2.x, so a config naming no provider can
-/// never produce a passing run. Tolerating it here would push the failure
-/// down to `LlmClient::new`, which reports "not configured" without saying
-/// which file is at fault.
 
 #[test]
 fn default_config_path_is_drep_toml_in_cwd() {

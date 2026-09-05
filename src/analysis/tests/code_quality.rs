@@ -7,12 +7,11 @@
 //! returned `AnalysisResult` and the mock's request count where the
 //! criterion depends on the call actually happening (or not).
 
-use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use wiremock::MockServer;
 
-use crate::analysis::result::{AnalysisResult, FailureReason};
+use crate::analysis::result::FailureReason;
 
 use crate::diff::hunks::{Hunk, HunkLine};
 
@@ -139,17 +138,6 @@ async fn clean_response_yields_no_findings_and_no_failures() {
         result.dropped_out_of_range, 0,
         "clean response has no out-of-range drops"
     );
-}
-
-/// The `failed_files` field is a `BTreeMap<PathBuf, FailureReason>` so the
-/// merge union is correct and the reason survives the boundary. Pinning the
-/// type here rules out a refactor that swaps it for a `Vec` and silently
-/// breaks the union semantics (or for a `BTreeSet<PathBuf>` and throws the
-/// reason away).
-#[test]
-fn failed_files_is_a_btreemap_in_the_returned_result() {
-    let result = AnalysisResult::default();
-    let _: BTreeMap<PathBuf, FailureReason> = result.failed_files;
 }
 
 /// An empty `suggestion` is `None`, not `Some("")`.

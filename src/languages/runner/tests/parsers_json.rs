@@ -47,7 +47,7 @@ fn json_parser_eslint_shape_two_messages_become_two_findings() {
 fn json_parser_rejects_object_payload() {
     let spec = ruff_like_spec();
     let err = parse_output(&spec, r#"{"not":"an array"}"#, "root").unwrap_err();
-    assert!(err.0.contains("array"));
+    assert_eq!(err.to_string(), "ruff: expected a JSON array, got object");
 }
 
 /// The error names the kind it actually got, not only the kind it wanted.
