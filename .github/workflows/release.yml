@@ -138,10 +138,10 @@ jobs:
         with:
           "version": "0.16.0"
       - name: "Install cargo-zigbuild for arm64 Linux cross-builds"
-        uses: "taiki-e/install-action@1ed6d7be6168f6c9046541087ff549b6bc581fdf"
+        uses: "taiki-e/install-action@84f5ac3124727fb3d284d4d22ee9ab3654fd09a6"
         if: "contains(matrix.targets, 'aarch64-unknown-linux-gnu')"
         with:
-          "tool": "cargo-zigbuild@0.23.3"
+          "tool": "cargo-zigbuild@0.23.4"
       - name: Install dist
         run: ${{ matrix.install_dist.run }}
       # Get the dist-manifest

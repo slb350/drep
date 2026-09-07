@@ -7,17 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.1.0] - 2026-09-06
+
+### Added
+
+- Register Lua (`.lua`) with luacheck, run as `luacheck --formatter plain --codes --no-color` and parsed by the existing compiler-style position parser. `.luacheckrc` is the opt-in gate, `lua_modules/bin/luacheck` is preferred over PATH, and `lua_modules` and `.luarocks` are treated as vendored. The `plain` formatter is what produces the `file:line:col:` shape the parser reads; `--codes` keeps the `(W212)` identifier a user needs to silence a rule. Verified against Luacheck 1.2.0: a warning run reports findings, a clean run is an empty stream, and a luacheck that could not read its config reports the file unanalyzable rather than clean.
+- Pin `serial_in_repository` and `establishes_compilation` across the whole registry rather than a hand-written list of five tools. The latter had no test at all, and it is the flag that suppresses an LLM compile-failure claim, so a linter wrongly marked as establishing compilation would silently discard real findings on every file it returned clean.
+
 ### Changed
 
-- Resolve explicit file targets and rejections in one pass, avoiding repeated
-  filesystem probes and file-type checks. Limiter guards release their permits
-  through normal field cleanup, and parser errors use derived formatting.
-- Simplify rendering, cache, init, and diff test fixtures; remove duplicate
-  assertions and stale commentary. Cache recovery tests retain the original
-  endpoint, and newline-only documentation has an explicit expected result.
-- Strengthen cache eviction, review-lease ownership and aging, diagnostic
-  output, and child-process limits using existing test cases. Timeout checks
-  exercise real polling and termination without a one-second fixture delay.
+- Refresh the Rust 1.88-compatible dependency graph, including `open-agent-sdk` 0.11.3, which removes unused runtime dependencies and fixes request-state cleanup. Provision cargo-zigbuild 0.23.4 for arm64 Linux releases and pin the current install Action used by validation, mutation and release jobs.
+- Resolve explicit file targets and rejections in one pass, avoiding repeated filesystem probes and file-type checks. Limiter guards release their permits through normal field cleanup, and parser errors use derived formatting.
+- Simplify rendering, cache, init, and diff test fixtures; remove duplicate assertions and stale commentary. Cache recovery tests retain the original endpoint, and newline-only documentation has an explicit expected result.
+- Strengthen cache eviction, review-lease ownership and aging, diagnostic output, and child-process limits using existing test cases. Timeout checks exercise real polling and termination without a one-second fixture delay.
 
 ## [3.0.0] - 2026-09-03
 
@@ -940,7 +942,8 @@ LLM for review, and gates commits and pushes on the result. That is all it does.
 - Python, JavaScript, TypeScript, Go and Rust are all first-class. Adding a
   language is an entry in one table.
 
-[Unreleased]: https://github.com/slb350/drep/compare/v3.0.0...HEAD
+[Unreleased]: https://github.com/slb350/drep/compare/v3.0.1...HEAD
+[3.0.1]: https://github.com/slb350/drep/compare/v3.0.0...v3.0.1
 [3.0.0]: https://github.com/slb350/drep/compare/v2.9.0...v3.0.0
 [2.9.0]: https://github.com/slb350/drep/compare/v2.8.0...v2.9.0
 [2.8.0]: https://github.com/slb350/drep/compare/v2.7.2...v2.8.0

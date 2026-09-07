@@ -1,6 +1,6 @@
 [package]
 name = "drep-ai"
-version = "3.0.0"
+version = "3.1.0"
 edition = "2024"
 # `ignore` 0.4.30 introduced let-chains that require Rust 1.88 without
 # declaring that floor. The current `ignore` now declares 1.88 itself;
@@ -62,8 +62,10 @@ ignore = "0.4"
 # reqwest client and the request builder were both private inside `query`, so no
 # header was expressible at all. 0.11.2 disables redirects on both public
 # request paths, so neither SDK auth nor a caller credential can be replayed to
-# a destination selected by an HTTP response.
-open-agent-sdk = "0.11.2"
+# a destination selected by an HTTP response. 0.11.3 removes unused runtime
+# dependencies and fixes request-state cleanup while preserving the API drep
+# uses.
+open-agent-sdk = "0.11.3"
 futures = "0.3"
 fs2 = "0.4.3"
 serde = { version = "1.0", features = ["derive"] }

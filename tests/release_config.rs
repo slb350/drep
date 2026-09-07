@@ -61,8 +61,8 @@ const SAME_REPOSITORY_PR_GUARD: &str = "github.event_name == 'push' || github.ev
 const RUST_TOOLCHAIN_ACTION: &str =
     "dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c";
 const SETUP_ZIG_ACTION: &str = "mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29";
-const INSTALL_ACTION: &str = "taiki-e/install-action@1ed6d7be6168f6c9046541087ff549b6bc581fdf";
-const CARGO_ZIGBUILD_TOOL: &str = "cargo-zigbuild@0.23.3";
+const INSTALL_ACTION: &str = "taiki-e/install-action@84f5ac3124727fb3d284d4d22ee9ab3654fd09a6";
+const CARGO_ZIGBUILD_TOOL: &str = "cargo-zigbuild@0.23.4";
 struct ReleaseTarget {
     triple: &'static str,
     runner: &'static str,
