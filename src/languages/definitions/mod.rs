@@ -4,6 +4,13 @@
 //! a new ecosystem) and, if it has one, a tool output parser. No control flow
 //! anywhere else in drep changes.
 //!
+//! Two test fixtures do have to be extended, and neither is derived from this
+//! registry on purpose: the name list in
+//! `languages::tests::registry::all_languages_returns_every_registered_language`,
+//! which makes a reorder visible, and `REGISTERED_EXTENSIONS` in
+//! `files::tests::predicates`, whose hand-written copy is what lets the scan
+//! predicate be checked against something other than the lookup it is testing.
+//!
 //! `config_files` is what makes a tool run at all: drep checks a project against
 //! the style that project has *chosen*, so a repo with no eslint config gets no
 //! eslint findings rather than a wall of default-preset complaints.
@@ -17,6 +24,7 @@ mod elixir;
 mod go;
 mod javascript;
 mod jvm;
+mod lua;
 mod php;
 mod python;
 mod ruby;
@@ -32,6 +40,7 @@ pub use elixir::{CREDO, ELIXIR};
 pub use go::{GO, GO_VET, GOFMT};
 pub use javascript::{ESLINT, JAVASCRIPT, SVELTE, TSC, TYPESCRIPT, VUE};
 pub use jvm::{CHECKSTYLE, GROOVY, JAVA, KOTLIN, KTLINT, SCALA};
+pub use lua::{LUA, LUACHECK};
 pub use php::{PHP, PHPCS};
 pub use python::{PYTHON, RUFF};
 pub use ruby::{RUBOCOP, RUBY};
@@ -82,6 +91,7 @@ pub(crate) static ALL_LANGUAGES: LazyLock<Vec<&'static LanguageSupport>> = LazyL
         elixir::FAMILY,
         sql::FAMILY,
         docker::FAMILY,
+        lua::FAMILY,
     ]
     .concat()
 });

@@ -73,24 +73,46 @@ fn whole_project_linters_do_not_take_file_arguments() {
     );
 }
 
+/// Clippy is serialized because parallel cargo processes contend for the
+/// same build lock. Asserted over the whole registry rather than a hand
+/// list of five: the test is named "only clippy", and a hand list can only
+/// say "not these five", which is silent about every tool added after it
+/// was written.
 #[test]
 fn only_clippy_is_serialized_within_a_repository() {
-    assert!(
-        definitions::CLIPPY.serial_in_repository,
-        "parallel cargo processes contend for the same build lock"
-    );
-    for spec in [
-        &definitions::RUFF,
-        &definitions::ESLINT,
-        &definitions::TSC,
-        &definitions::GOFMT,
-        &definitions::GO_VET,
-    ] {
-        assert!(
-            !spec.serial_in_repository,
-            "{} should remain eligible for bounded parallel execution",
-            spec.name
-        );
+    for lang in all_languages() {
+        for tool in lang.tools {
+            assert_eq!(
+                tool.serial_in_repository,
+                tool.name == "clippy",
+                "{} ({}) has the wrong serialization: only clippy contends \
+                 for a build lock, and everything else must remain eligible \
+                 for bounded parallel execution",
+                tool.name,
+                lang.name
+            );
+        }
+    }
+}
+
+/// Only a tool whose zero exit proves its inputs compiled may set
+/// `establishes_compilation`, because that flag is what suppresses an LLM
+/// compile-failure claim. A linter wrongly marked true silently discards
+/// real findings on every file it returns clean, which no other test in
+/// the suite would see - and there was no registry-wide pin on the field
+/// at all until Lua added a linter that must not set it.
+#[test]
+fn only_real_compilers_establish_compilation() {
+    for lang in all_languages() {
+        for tool in lang.tools {
+            assert_eq!(
+                tool.establishes_compilation,
+                matches!(tool.name, "clippy" | "tsc" | "go vet"),
+                "{} ({}) has the wrong establishes_compilation",
+                tool.name,
+                lang.name
+            );
+        }
     }
 }
 
@@ -122,7 +144,8 @@ fn all_languages_returns_every_registered_language() {
             "terraform",
             "elixir",
             "sql",
-            "docker"
+            "docker",
+            "lua"
         ]
     );
 }
@@ -378,5 +401,52 @@ fn tflint_inspects_nested_modules() {
     assert!(
         definitions::TFLINT.command.contains(&"--recursive"),
         "without --recursive, nested Terraform modules are never linted"
+    );
+}
+
+/// The Lua entry's single tool, pinned field for field.
+///
+/// `--formatter plain` is what makes luacheck's output the shape the
+/// position parser reads. Drop it and luacheck emits its decorated report
+/// instead, which the parser skips line by line - a non-empty stream with
+/// zero findings, which is `Unavailable`, so every Lua file stops being
+/// analyzed while the command still looks plausible. `--codes` keeps the
+/// `(W212)` identifier a user needs to silence a rule in `.luacheckrc`.
+///
+/// Written as one whole-struct comparison rather than a field list so the
+/// claim is true: a field added to `ToolSpec` fails here until someone
+/// decides what Lua's value for it should be.
+#[test]
+fn lua_tool_is_configured_exactly_as_specified() {
+    assert_eq!(
+        definitions::LUACHECK,
+        spec::ToolSpec {
+            name: "luacheck",
+            command: &["luacheck", "--formatter", "plain", "--codes", "--no-color"],
+            local_paths: &["lua_modules/bin/luacheck"],
+            config_files: &[".luacheckrc"],
+            config_flag: None,
+            output_format: spec::OutputFormat::Position,
+            diagnostics_stream: spec::DiagnosticsStream::Stdout,
+            timeout_secs: spec::DEFAULT_TOOL_TIMEOUT_SECS,
+            timeout_context: None,
+            establishes_compilation: false,
+            serial_in_repository: false,
+            accepts_files: true,
+        }
+    );
+}
+
+/// The Lua entry claims exactly `.lua`, and its vendored trees are the
+/// LuaRocks project-local installs whose contents are dependencies rather
+/// than source this repository asked to have reviewed.
+#[test]
+fn lua_entry_declares_its_extension_and_vendored_dirs() {
+    assert_eq!(definitions::LUA.extensions, &[".lua"]);
+    assert!(definitions::LUA.filenames.is_empty());
+    assert!(definitions::LUA.filename_prefixes.is_empty());
+    assert_eq!(
+        definitions::LUA.vendored_dirs,
+        &["lua_modules", ".luarocks"]
     );
 }

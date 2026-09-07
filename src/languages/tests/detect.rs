@@ -162,6 +162,7 @@ fn newly_registered_extensions_and_filenames_resolve_to_their_languages() {
         ("CI.dockerfile", "docker"),
         ("Gemfile", "ruby"),
         ("Rakefile", "ruby"),
+        ("main.lua", "lua"),
     ] {
         let detected = detect(Path::new(path));
         assert_eq!(

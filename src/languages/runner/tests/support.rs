@@ -161,6 +161,18 @@ pub(crate) fn sqlfluff_like_spec() -> ToolSpec {
     }
 }
 
+pub(crate) fn luacheck_like_spec() -> ToolSpec {
+    ToolSpec {
+        name: "luacheck",
+        command: &["luacheck", "--formatter", "plain", "--codes", "--no-color"],
+        local_paths: &["lua_modules/bin/luacheck"],
+        config_files: &[".luacheckrc"],
+        output_format: OutputFormat::Position,
+        diagnostics_stream: DiagnosticsStream::Stdout,
+        ..ToolSpec::default()
+    }
+}
+
 pub(crate) fn dotnet_format_like_spec() -> ToolSpec {
     ToolSpec {
         name: "dotnet format",

@@ -10,6 +10,7 @@ mod parsers_credo;
 mod parsers_json;
 mod parsers_ktlint;
 mod parsers_lines;
+mod parsers_luacheck;
 mod parsers_msbuild;
 mod parsers_phpcs;
 mod parsers_position;

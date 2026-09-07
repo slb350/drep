@@ -56,6 +56,7 @@ const REGISTERED_EXTENSIONS: &[&str] = &[
     ".exs",
     ".sql",
     ".dockerfile",
+    ".lua",
 ];
 
 #[test]

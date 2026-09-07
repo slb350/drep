@@ -212,6 +212,7 @@ Three rules decide what runs:
 | Elixir | `.ex` `.exs` | credo |
 | SQL | `.sql` | sqlfluff |
 | Docker | `Dockerfile`, `Containerfile`, `.dockerfile` | hadolint |
+| Lua | `.lua` | luacheck |
 
 A language is matched on file extension, and on the whole file name for the
 files that have no extension - `Dockerfile`, `Gemfile`, `Rakefile`. Extension
