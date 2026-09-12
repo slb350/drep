@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Refresh the Rust 1.88-compatible dependency graph. `encoding_rs` 0.8.41
+  brings its current decoder correctness, panic-safety and SIMD work to the
+  provider-error response path, while the remaining updates stay within their
+  existing compatible version ranges.
+
 ## [3.1.0] - 2026-09-06
 
 ### Added
