@@ -49,8 +49,8 @@
 //! used. The command sits above the store for the same reason: a file naming a
 //! command has not left the question unanswered.
 
-use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::collections::{BTreeMap, BTreeSet};
+use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -58,7 +58,11 @@ use thiserror::Error;
 use crate::config::Config;
 
 mod command;
+mod store_file;
 pub use command::KeyCommandError;
+pub(crate) use store_file::ensure_dir_private;
+#[cfg(test)]
+pub(crate) use store_file::{restrict, temporary_parent};
 
 /// Where a provider's key came from, for [`doctor`](crate::cli::doctor) to report.
 ///
@@ -113,6 +117,14 @@ pub struct AuthStore {
     /// and a re-save produces no spurious diff.
     #[serde(default)]
     keys: BTreeMap<String, String>,
+
+    /// Mutations made since this snapshot was loaded.
+    ///
+    /// Saving replays only these operations over the latest on-disk store, so
+    /// two drep processes changing different endpoints cannot overwrite one
+    /// another. The journal is process state, never part of the TOML file.
+    #[serde(skip)]
+    pending: std::sync::Mutex<BTreeSet<String>>,
 }
 
 /// Hand-written so a key cannot reach a log.
@@ -140,6 +152,9 @@ pub enum AuthError {
 
     #[error("could not write {0}: {1}")]
     Write(PathBuf, std::io::Error),
+
+    #[error("could not lock auth store {0}: {1}")]
+    Lock(PathBuf, std::io::Error),
 
     #[error("could not parse {0}: {1}")]
     Parse(PathBuf, String),
@@ -215,46 +230,6 @@ impl AuthStore {
         Self::default()
     }
 
-    /// Read the store at `path`.
-    ///
-    /// A **missing file is an empty store**, not an error: never having stored a
-    /// key is the normal first-run state, and making the caller distinguish it
-    /// from a real read failure would put that branch at every call site. A file
-    /// that exists but cannot be read or parsed *is* an error, because silently
-    /// treating a corrupt store as empty would send a user to re-paste keys they
-    /// already have.
-    pub fn load(path: &Path) -> Result<Self, AuthError> {
-        let content = match std::fs::read_to_string(path) {
-            Ok(content) => content,
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(Self::new()),
-            Err(err) => return Err(AuthError::Read(path.to_path_buf(), err)),
-        };
-        toml::from_str(&content)
-            .map_err(|err: toml::de::Error| AuthError::Parse(path.to_path_buf(), err.to_string()))
-    }
-
-    /// Write the store to `path`, creating the directory if needed.
-    ///
-    /// The file is created mode 0600 and the directory 0700 on Unix, and the
-    /// mode is applied to an *existing* file too - a store written before this
-    /// ran, or one whose mode a user widened, is narrowed on the next save
-    /// rather than left as found.
-    pub fn save(&self, path: &Path) -> Result<(), AuthError> {
-        // A bare filename has `Some("")` as its parent, which is not a
-        // directory anything can create.
-        if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
-            ensure_dir_private(parent)?;
-        }
-
-        let body =
-            toml::to_string_pretty(self).map_err(|err| AuthError::Serialize(err.to_string()))?;
-
-        // Created 0600 from the outset rather than written and then chmodded:
-        // between those two steps the key sits in a world-readable file, which
-        // is a window another process on a shared machine can read.
-        write_private(path, &body)
-    }
-
     /// The key held for `endpoint`, if any.
     pub fn get(&self, endpoint: &str) -> Option<&str> {
         self.keys.get(&normalise(endpoint)).map(String::as_str)
@@ -270,13 +245,26 @@ impl AuthStore {
             CredentialDefect::Empty => AuthError::EmptyKey(endpoint.to_string()),
             CredentialDefect::Unusable => AuthError::UnusableKey(endpoint.to_string()),
         })?;
-        self.keys.insert(normalise(endpoint), key);
+        let endpoint = normalise(endpoint);
+        self.keys.insert(endpoint.clone(), key);
+        self.pending
+            .get_mut()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(endpoint);
         Ok(())
     }
 
     /// Forget the key for `endpoint`. Returns whether one was held.
     pub fn remove(&mut self, endpoint: &str) -> bool {
-        self.keys.remove(&normalise(endpoint)).is_some()
+        let endpoint = normalise(endpoint);
+        let removed = self.keys.remove(&endpoint).is_some();
+        if removed {
+            self.pending
+                .get_mut()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .insert(endpoint);
+        }
+        removed
     }
 
     /// Every endpoint with a stored key, in sorted order. Never the keys.
@@ -494,101 +482,6 @@ pub fn source_of(declared: Declared<'_>, store: &AuthStore) -> KeySource {
         Some(endpoint) if store.get(endpoint).is_some() => KeySource::Store,
         _ => KeySource::Missing,
     }
-}
-
-/// Create `dir` if it is missing, narrowing it to 0700 only when drep made it.
-///
-/// Only a directory drep creates is narrowed. `DREP_AUTH_PATH` can name any
-/// path, so chmodding whatever happens to be its parent would let
-/// `/etc/drep.toml` turn `/etc` into 0700 - breaking the system to protect one
-/// file. An existing directory is the user's, and the store file's own 0600 is
-/// what actually guards the key.
-///
-/// Shared with the model-quirks cache, which sits in the same directory: a
-/// second copy of this rule that only called `create_dir_all` would leave the
-/// credential store's directory world-readable whenever the cache happened to
-/// be written first.
-pub(crate) fn ensure_dir_private(dir: &Path) -> Result<(), AuthError> {
-    let existed = dir.exists();
-    std::fs::create_dir_all(dir).map_err(|err| AuthError::Write(dir.to_path_buf(), err))?;
-    if !existed {
-        restrict(dir, 0o700)?;
-    }
-    Ok(())
-}
-
-/// Write `body` to `path`, creating it readable only by its owner.
-///
-/// `File::create` plus a later `chmod` leaves the key in a 0644 file for the
-/// duration of the write. `NamedTempFile` exclusively creates a random 0600
-/// sibling, so there is no readable window and no predictable name for a
-/// planted symlink. The mode is re-applied before publication as an explicit
-/// invariant rather than depending on the temporary-file crate's default.
-///
-/// One function with the `cfg` around the mode call, rather than two whole
-/// implementations: a `#[cfg(not(unix))]` twin is not compiled here, so
-/// mutating it changes nothing and the mutation gate reports an undetectable
-/// survivor on every run. Windows has no mode bits, and `directories` puts the
-/// file under the user's own roaming profile there.
-fn write_private(path: &Path, body: &str) -> Result<(), AuthError> {
-    use std::io::Write;
-
-    // Written beside the target and renamed over it, never into it. Opening the
-    // real path with `truncate` destroys the existing store before a byte of the
-    // replacement is written, so a crash, a full disk or a serialization failure
-    // in that window leaves the file empty or half-written - and this is the one
-    // file drep holds that cannot be regenerated. `rename` is atomic within a
-    // directory, so a reader sees either the whole old store or the whole new
-    // one, which is why the temporary is a sibling rather than in the system
-    // temp dir.
-    let parent = temporary_parent(path);
-    // A random, exclusively-created name prevents an attacker from planting a
-    // sibling symlink that receives the serialized credentials when opened.
-    let mut temporary = tempfile::NamedTempFile::new_in(parent)
-        .map_err(|err| AuthError::Write(path.to_path_buf(), err))?;
-    temporary
-        .write_all(body.as_bytes())
-        .map_err(|err| AuthError::Write(path.to_path_buf(), err))?;
-    // Before the rename, not after: a rename that publishes a file whose
-    // contents are still in the page cache can survive a crash as an empty one.
-    temporary
-        .as_file()
-        .sync_all()
-        .map_err(|err| AuthError::Write(path.to_path_buf(), err))?;
-
-    // The temporary carries the mode, and `rename` keeps it - so the published
-    // store is 0600 whatever the mode of the file it replaced, which is how a
-    // store a user widened is narrowed again.
-    restrict(temporary.path(), 0o600)?;
-
-    temporary
-        .persist(path)
-        .map(|_| ())
-        .map_err(|err| AuthError::Write(path.to_path_buf(), err.error))
-}
-
-/// Directory in which an atomic replacement must be created.
-fn temporary_parent(path: &Path) -> &Path {
-    path.parent()
-        .filter(|parent| !parent.as_os_str().is_empty())
-        .unwrap_or_else(|| Path::new("."))
-}
-
-/// Narrow `path` to `mode` on Unix. A no-op elsewhere.
-///
-/// Windows has no mode bits and `directories` puts the file under the user's
-/// roaming profile, which is already user-scoped; failing the save there would
-/// refuse to store a key for no gain.
-#[cfg(unix)]
-fn restrict(path: &Path, mode: u32) -> Result<(), AuthError> {
-    use std::os::unix::fs::PermissionsExt;
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode))
-        .map_err(|err| AuthError::Write(path.to_path_buf(), err))
-}
-
-#[cfg(not(unix))]
-fn restrict(_path: &Path, _mode: u32) -> Result<(), AuthError> {
-    Ok(())
 }
 
 #[cfg(test)]

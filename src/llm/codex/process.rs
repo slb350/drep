@@ -71,19 +71,36 @@ pub(crate) async fn run(
     // pipe EOF then waits for the unrelated grandchild too. Regular files have
     // no EOF handshake, while the size poll below keeps them bounded.
     let execution = async {
-        let mut completion = std::pin::pin!(async { tokio::join!(child.wait(), send_input) });
+        let mut child_wait = std::pin::pin!(child.wait());
+        let mut send_input = std::pin::pin!(send_input);
+        let mut stdin_result = None;
         let mut size_poll = tokio::time::interval(Duration::from_millis(10));
         size_poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
-        loop {
+        let status = loop {
             tokio::select! {
-                results = &mut completion => return Ok::<_, LlmError>(results),
+                biased;
+                result = &mut send_input, if stdin_result.is_none() => {
+                    stdin_result = Some(result);
+                }
+                result = &mut child_wait => break result,
                 _ = size_poll.tick() => {
                     check_capture_size("stdout", &stdout, STDOUT_MAX_BYTES)?;
                     check_capture_size("stderr", &stderr, CAPTURE_FILE_MAX_BYTES)?;
                 }
             }
-        }
+        };
+        // Only the direct Codex process is trusted to consume the review. If
+        // it exits first, letting an inherited descriptor drain in a grandchild
+        // would falsely claim Codex saw the payload; a grace period weakens the
+        // same fail-closed boundary this branch enforces.
+        let stdin_result = stdin_result.unwrap_or_else(|| {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::BrokenPipe,
+                "Codex exited before consuming the complete payload",
+            ))
+        });
+        Ok::<_, LlmError>((status, stdin_result))
     };
     let (status, stdin_result) = match tokio::time::timeout(timeout, execution).await {
         Ok(Ok(results)) => results,

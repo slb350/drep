@@ -238,6 +238,29 @@ fn eviction_ignores_foreign_files_inside_a_valid_shard() {
 }
 
 #[test]
+fn eviction_accounts_for_interrupted_cache_temporary_files() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let cache = Cache::new(temp.path().to_path_buf(), 30, 1);
+    let key = cache.key("sys", "content", "http://e/v1", "model", "openai", None);
+    let shard = cache
+        .entry_path(&key)
+        .parent()
+        .expect("shard")
+        .to_path_buf();
+    std::fs::create_dir_all(&shard).expect("create shard");
+    let interrupted = shard.join(".drep-cache-tmp-interrupted");
+    std::fs::write(&interrupted, vec![0_u8; 4096]).expect("interrupted temporary");
+
+    let freed = cache.evict_if_needed().expect("eviction");
+
+    assert_eq!(freed, 4096);
+    assert!(
+        !interrupted.exists(),
+        "an interrupted write must not escape the cache size ceiling"
+    );
+}
+
+#[test]
 fn eviction_requires_the_digest_to_be_lower_hex_and_match_its_shard() {
     let temp = tempfile::tempdir().expect("tempdir");
     let cache = Cache::new(temp.path().to_path_buf(), 30, 0);

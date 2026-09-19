@@ -4,6 +4,8 @@ use std::path::{Path, PathBuf};
 
 use super::super::{Cached, QuirksSource, Registry};
 use super::{Canned, DOCUMENT};
+#[cfg(unix)]
+use crate::test_support::assert_mode;
 
 const KIMI: &str = "https://api.kimi.com/coding/v1";
 const WEEK: u64 = 7 * 24 * 60 * 60;
@@ -331,8 +333,6 @@ fn a_directory_the_cache_creates_is_private() {
     // The cache shares a directory with `auth.toml`. Creating it here without
     // narrowing it would leave the credential store's own directory
     // world-readable whenever `drep init` happened to cache first.
-    use std::os::unix::fs::PermissionsExt;
-
     let dir = tempfile::tempdir().expect("tempdir");
     let nested = dir.path().join("drep");
     Registry::distil(DOCUMENT, 0)
@@ -340,11 +340,7 @@ fn a_directory_the_cache_creates_is_private() {
         .save(&nested.join("model-quirks.toml"))
         .expect("saves");
 
-    let mode = std::fs::metadata(&nested)
-        .expect("metadata")
-        .permissions()
-        .mode();
-    assert_eq!(mode & 0o777, 0o700, "got {:o}", mode & 0o777);
+    assert_mode(&nested, 0o700);
 }
 
 #[test]

@@ -17,6 +17,7 @@ pub mod cli;
 pub mod config;
 pub mod diff;
 pub mod docs;
+mod file_lock;
 pub mod files;
 pub mod http;
 pub mod languages;

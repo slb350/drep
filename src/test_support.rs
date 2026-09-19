@@ -196,6 +196,24 @@ pub(crate) fn temp_cache() -> (Cache, tempfile::TempDir) {
     (cache, dir)
 }
 
+/// Assert the owner/group/other permission bits for a Unix filesystem entry.
+#[cfg(unix)]
+pub(crate) fn assert_mode(path: &std::path::Path, expected: u32) {
+    use std::os::unix::fs::PermissionsExt;
+
+    let actual = std::fs::metadata(path)
+        .unwrap_or_else(|error| panic!("metadata for {}: {error}", path.display()))
+        .permissions()
+        .mode()
+        & 0o777;
+    assert_eq!(
+        actual,
+        expected,
+        "mode for {} was {actual:o}",
+        path.display()
+    );
+}
+
 /// Write `contents` to `path` and mark it executable, without ever holding a
 /// write descriptor for it in this process.
 ///

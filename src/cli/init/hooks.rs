@@ -310,13 +310,21 @@ pub async fn install<W: Write>(
     // ~user itself; hand-rolled expansion mangled `~alice/hooks`, and $HOME
     // is unset in some environments.
     if let Some(value) = configured {
+        let chainer_dir = resolve_hooks_dir(root, &value);
+        if same_directory(&hooks_dir, &chainer_dir) {
+            writeln!(
+                out,
+                "  core.hooksPath already resolves to {}; no chainer is needed.",
+                hooks_dir.display()
+            )?;
+            return Ok(());
+        }
         writeln!(out, "  core.hooksPath is set to {value}")?;
         writeln!(
             out,
             "  git looks there and not in .git/hooks, so a repo hook needs a chainer."
         )?;
 
-        let chainer_dir = resolve_hooks_dir(root, &value);
         for name in names {
             ensure_chainer(out, &chainer_dir, name)?;
         }
@@ -325,12 +333,24 @@ pub async fn install<W: Write>(
     Ok(())
 }
 
+fn same_directory(left: &Path, right: &Path) -> bool {
+    // Both inputs are already rooted at the repository: `diff::git_path`
+    // anchors Git's relative output, and `resolve_hooks_dir` anchors the
+    // configured value. Canonicalization therefore never depends on cwd.
+    left == right
+        || std::fs::canonicalize(left)
+            .and_then(|left| std::fs::canonicalize(right).map(|right| left == right))
+            .unwrap_or(false)
+}
+
 /// Resolve the hooks directory git would consult for repo-local hooks.
 ///
 /// `git rev-parse --git-common-dir` rather than `root/.git`: in a linked
 /// worktree or a submodule `.git` is a *file*, so the literal path does not
 /// exist and the hook silently never runs.
 async fn locate_hooks_dir(root: &Path) -> Result<PathBuf> {
+    // `git_path` joins a relative Git answer to `root`; callers receive a
+    // repository-rooted path whichever spelling Git emits.
     let common = diff::git_path(root, &["rev-parse", "--git-common-dir"])
         .await
         .with_context(|| format!("could not locate git common dir under {}", root.display()))?;

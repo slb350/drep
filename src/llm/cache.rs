@@ -58,6 +58,8 @@ use std::{fs, io::Write};
 use serde_json::Value;
 use thiserror::Error;
 
+const TEMPORARY_PREFIX: &str = ".drep-cache-tmp-";
+
 /// A cache key: the blake3 hex digest of the six key inputs.
 ///
 /// The inner `String` is exactly 64 lower-case ASCII hex characters because
@@ -235,7 +237,9 @@ impl Cache {
         fs::create_dir_all(parent).map_err(|e| CacheError::CreateShard(parent.to_path_buf(), e))?;
         let bytes = serde_json::to_vec(value)
             .map_err(|e| CacheError::Serialize(key.as_hex().to_owned(), e))?;
-        let mut temporary = tempfile::NamedTempFile::new_in(parent)
+        let mut temporary = tempfile::Builder::new()
+            .prefix(TEMPORARY_PREFIX)
+            .tempfile_in(parent)
             .map_err(|e| CacheError::Write(path.clone(), e))?;
         temporary
             .write_all(&bytes)
@@ -329,7 +333,8 @@ impl Cache {
                     Ok(e) => e,
                     Err(_) => continue,
                 };
-                if !is_entry_name(&shard_name, &entry.file_name()) {
+                let name = entry.file_name();
+                if !is_entry_name(&shard_name, &name) && !is_temporary_name(&name) {
                     continue;
                 }
                 let path = entry.path();
@@ -398,6 +403,11 @@ fn is_entry_name(shard: &std::ffi::OsStr, name: &std::ffi::OsStr) -> bool {
         return false;
     };
     digest.starts_with(shard) && is_lower_hex(digest, 64)
+}
+
+fn is_temporary_name(name: &std::ffi::OsStr) -> bool {
+    name.to_str()
+        .is_some_and(|name| name.starts_with(TEMPORARY_PREFIX))
 }
 
 fn is_lower_hex(value: &str, expected_len: usize) -> bool {

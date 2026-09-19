@@ -7,26 +7,73 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.1.1] - 2026-09-19
+
 ### Changed
 
 - Refresh the Rust 1.88-compatible dependency graph. `encoding_rs` 0.8.41
   brings its current decoder correctness, panic-safety and SIMD work to the
-  provider-error response path, while the remaining updates stay within their
-  existing compatible version ranges.
+  provider-error response path, `cc` 1.4.7 preserves configured compiler flags
+  during executable checks, and `rustls` 0.23.45 fixes TLS 1.3 handshake
+  messages being accepted across encryption-level boundaries
+  (`RUSTSEC-2026-0285`). The remaining updates stay within their existing
+  compatible version ranges, and self-hosted workflows pin the week-old
+  `taiki-e/install-action` 2.87.12 rather than the same-day 2.87.16 release.
+
+### Fixed
+
+- Serialize credential-store updates under a cross-process lock and merge each
+  login or logout over the latest on-disk state, preventing concurrent drep
+  commands from losing an unrelated key or resurrecting a removed one. Sync
+  the containing directory after atomic publication so a successful save also
+  survives a crash or power loss.
+- Keep `drep init` from replacing a repository hook with a self-recursing
+  chainer when `core.hooksPath` resolves to the repository's own hooks
+  directory.
+- Count interrupted response-cache temporary files toward the configured size
+  ceiling, while continuing to leave foreign files untouched.
+- Stop waiting on a background descendant that inherited Codex stdin after the
+  direct CLI process has exited. An incomplete payload remains a fail-closed
+  transport error, and a nonzero Codex exit retains its own diagnostic.
+- Keep platform-specific private-directory creation inside one compiled
+  function so the mutation gate can exercise the active behavior instead of
+  reporting the inactive platform twin as a survivor.
 
 ## [3.1.0] - 2026-09-06
 
 ### Added
 
-- Register Lua (`.lua`) with luacheck, run as `luacheck --formatter plain --codes --no-color` and parsed by the existing compiler-style position parser. `.luacheckrc` is the opt-in gate, `lua_modules/bin/luacheck` is preferred over PATH, and `lua_modules` and `.luarocks` are treated as vendored. The `plain` formatter is what produces the `file:line:col:` shape the parser reads; `--codes` keeps the `(W212)` identifier a user needs to silence a rule. Verified against Luacheck 1.2.0: a warning run reports findings, a clean run is an empty stream, and a luacheck that could not read its config reports the file unanalyzable rather than clean.
-- Pin `serial_in_repository` and `establishes_compilation` across the whole registry rather than a hand-written list of five tools. The latter had no test at all, and it is the flag that suppresses an LLM compile-failure claim, so a linter wrongly marked as establishing compilation would silently discard real findings on every file it returned clean.
+- Register Lua (`.lua`) with luacheck, run as
+  `luacheck --formatter plain --codes --no-color` and parsed by the existing
+  compiler-style position parser. `.luacheckrc` is the opt-in gate,
+  `lua_modules/bin/luacheck` is preferred over PATH, and `lua_modules` and
+  `.luarocks` are treated as vendored. The `plain` formatter produces the
+  `file:line:col:` shape the parser reads; `--codes` keeps the `(W212)`
+  identifier needed to silence a rule. Verified against Luacheck 1.2.0: a
+  warning run reports findings, a clean run is an empty stream, and a luacheck
+  that cannot read its config reports the file unanalyzable rather than clean.
+- Pin `serial_in_repository` and `establishes_compilation` across the whole
+  registry rather than a hand-written list of five tools. The latter had no
+  test, and it suppresses an LLM compile-failure claim, so a linter wrongly
+  marked as establishing compilation would silently discard real findings on
+  every file it returned clean.
 
 ### Changed
 
-- Refresh the Rust 1.88-compatible dependency graph, including `open-agent-sdk` 0.11.3, which removes unused runtime dependencies and fixes request-state cleanup. Provision cargo-zigbuild 0.23.4 for arm64 Linux releases and pin the current install Action used by validation, mutation and release jobs.
-- Resolve explicit file targets and rejections in one pass, avoiding repeated filesystem probes and file-type checks. Limiter guards release their permits through normal field cleanup, and parser errors use derived formatting.
-- Simplify rendering, cache, init, and diff test fixtures; remove duplicate assertions and stale commentary. Cache recovery tests retain the original endpoint, and newline-only documentation has an explicit expected result.
-- Strengthen cache eviction, review-lease ownership and aging, diagnostic output, and child-process limits using existing test cases. Timeout checks exercise real polling and termination without a one-second fixture delay.
+- Refresh the Rust 1.88-compatible dependency graph, including
+  `open-agent-sdk` 0.11.3, which removes unused runtime dependencies and fixes
+  request-state cleanup. Provision cargo-zigbuild 0.23.4 for arm64 Linux
+  releases and pin the current install Action used by validation, mutation and
+  release jobs.
+- Resolve explicit file targets and rejections in one pass, avoiding repeated
+  filesystem probes and file-type checks. Limiter guards release their permits
+  through normal field cleanup, and parser errors use derived formatting.
+- Simplify rendering, cache, init, and diff test fixtures; remove duplicate
+  assertions and stale commentary. Cache recovery tests retain the original
+  endpoint, and newline-only documentation has an explicit expected result.
+- Strengthen cache eviction, review-lease ownership and aging, diagnostic
+  output, and child-process limits using existing test cases. Timeout checks
+  exercise real polling and termination without a one-second fixture delay.
 
 ## [3.0.0] - 2026-09-03
 
@@ -949,7 +996,9 @@ LLM for review, and gates commits and pushes on the result. That is all it does.
 - Python, JavaScript, TypeScript, Go and Rust are all first-class. Adding a
   language is an entry in one table.
 
-[Unreleased]: https://github.com/slb350/drep/compare/v3.0.1...HEAD
+[Unreleased]: https://github.com/slb350/drep/compare/v3.1.1...HEAD
+[3.1.1]: https://github.com/slb350/drep/compare/v3.1.0...v3.1.1
+[3.1.0]: https://github.com/slb350/drep/compare/v3.0.1...v3.1.0
 [3.0.1]: https://github.com/slb350/drep/compare/v3.0.0...v3.0.1
 [3.0.0]: https://github.com/slb350/drep/compare/v2.9.0...v3.0.0
 [2.9.0]: https://github.com/slb350/drep/compare/v2.8.0...v2.9.0

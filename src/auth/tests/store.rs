@@ -1,6 +1,9 @@
 //! Reading, writing, normalising and redacting the store itself.
 
 use super::super::*;
+#[cfg(unix)]
+use crate::test_support::assert_mode;
+use std::path::Path;
 
 /// A store path inside a fresh temp dir, plus the dir to keep it alive.
 fn temp_store() -> (tempfile::TempDir, std::path::PathBuf) {
@@ -53,6 +56,52 @@ fn a_stored_key_round_trips_through_the_file() {
 }
 
 #[test]
+fn stale_snapshots_merge_distinct_credential_updates() {
+    let (_dir, path) = temp_store();
+    let mut first = AuthStore::load(&path).expect("first snapshot");
+    let mut second = AuthStore::load(&path).expect("second snapshot");
+    first.set("https://one.example/v1", "one").expect("set one");
+    second
+        .set("https://two.example/v1", "two")
+        .expect("set two");
+
+    first.save(&path).expect("save first snapshot");
+    second.save(&path).expect("save stale second snapshot");
+
+    let merged = AuthStore::load(&path).expect("load merged store");
+    assert_eq!(merged.get("https://one.example/v1"), Some("one"));
+    assert_eq!(merged.get("https://two.example/v1"), Some("two"));
+}
+
+#[test]
+fn a_stale_snapshot_does_not_resurrect_a_concurrent_logout() {
+    let (_dir, path) = temp_store();
+    let mut initial = AuthStore::new();
+    initial
+        .set("https://one.example/v1", "one")
+        .expect("set one");
+    initial
+        .set("https://two.example/v1", "two")
+        .expect("set two");
+    initial.save(&path).expect("seed store");
+
+    let mut logout = AuthStore::load(&path).expect("logout snapshot");
+    let mut login = AuthStore::load(&path).expect("login snapshot");
+    assert!(logout.remove("https://one.example/v1"));
+    login
+        .set("https://three.example/v1", "three")
+        .expect("set three");
+
+    logout.save(&path).expect("save logout");
+    login.save(&path).expect("save stale login snapshot");
+
+    let merged = AuthStore::load(&path).expect("load merged store");
+    assert_eq!(merged.get("https://one.example/v1"), None);
+    assert_eq!(merged.get("https://two.example/v1"), Some("two"));
+    assert_eq!(merged.get("https://three.example/v1"), Some("three"));
+}
+
+#[test]
 fn a_corrupt_store_is_an_error_rather_than_an_empty_one() {
     // Treating unparseable content as "no keys stored" would send a user to
     // re-paste keys they already have, and silently.
@@ -82,18 +131,12 @@ fn saving_creates_the_directory() {
 #[cfg(unix)]
 #[test]
 fn the_saved_file_is_readable_only_by_its_owner() {
-    use std::os::unix::fs::PermissionsExt;
-
     let (_dir, path) = temp_store();
     let mut store = AuthStore::new();
     store.set("https://e/v1", "k").expect("set");
     store.save(&path).expect("save");
 
-    let mode = std::fs::metadata(&path)
-        .expect("metadata")
-        .permissions()
-        .mode();
-    assert_eq!(mode & 0o777, 0o600, "got {:o}", mode & 0o777);
+    assert_mode(&path, 0o600);
 }
 
 #[cfg(unix)]
@@ -108,29 +151,18 @@ fn restrict_narrows_an_existing_file() {
 
     restrict(&path, 0o600).expect("restrict existing file");
 
-    let mode = std::fs::metadata(&path)
-        .expect("metadata")
-        .permissions()
-        .mode();
-    assert_eq!(mode & 0o777, 0o600, "got {:o}", mode & 0o777);
+    assert_mode(&path, 0o600);
 }
 
 #[cfg(unix)]
 #[test]
 fn the_saved_directory_is_enterable_only_by_its_owner() {
-    use std::os::unix::fs::PermissionsExt;
-
     let (_dir, path) = temp_store();
     let mut store = AuthStore::new();
     store.set("https://e/v1", "k").expect("set");
     store.save(&path).expect("save");
 
-    let parent = path.parent().expect("parent");
-    let mode = std::fs::metadata(parent)
-        .expect("metadata")
-        .permissions()
-        .mode();
-    assert_eq!(mode & 0o777, 0o700, "got {:o}", mode & 0o777);
+    assert_mode(path.parent().expect("parent"), 0o700);
 }
 
 #[cfg(unix)]
@@ -151,11 +183,7 @@ fn saving_does_not_narrow_an_existing_directory() {
 
     store.save(&path).expect("save");
 
-    let mode = std::fs::metadata(parent)
-        .expect("metadata")
-        .permissions()
-        .mode();
-    assert_eq!(mode & 0o777, 0o755, "got {:o}", mode & 0o777);
+    assert_mode(parent, 0o755);
 }
 
 #[cfg(unix)]
@@ -173,11 +201,7 @@ fn saving_narrows_a_file_whose_mode_was_widened() {
 
     store.save(&path).expect("second save");
 
-    let mode = std::fs::metadata(&path)
-        .expect("metadata")
-        .permissions()
-        .mode();
-    assert_eq!(mode & 0o777, 0o600, "got {:o}", mode & 0o777);
+    assert_mode(&path, 0o600);
 }
 
 #[test]
@@ -420,7 +444,13 @@ fn saving_leaves_no_temporary_beside_the_store() {
         })
         .collect();
 
-    assert_eq!(names, vec!["auth.toml".to_string()], "got {names:?}");
+    assert_eq!(
+        names.into_iter().collect::<std::collections::BTreeSet<_>>(),
+        ["auth.toml".to_string(), "auth.toml.lock".to_string()]
+            .into_iter()
+            .collect(),
+        "only the store and its persistent lock belong beside it"
+    );
     assert_eq!(
         AuthStore::load(&path)
             .expect("loads")

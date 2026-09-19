@@ -4,7 +4,6 @@ use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Mutex, MutexGuard};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, bail};
@@ -18,10 +17,6 @@ const DIRECTORY: &str = "review-cycles-v1";
 const SLOT_PREFIX: &str = "round-";
 const SLOT_SUFFIX: &str = ".state";
 
-// `flock` is process-associated on some Unix targets, so two threads in this
-// process may both appear to hold the same advisory file lock. The mutex covers
-// that case; the file lock covers independent drep processes.
-static PROCESS_LOCK: Mutex<()> = Mutex::new(());
 static TOKEN_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug)]
@@ -80,8 +75,7 @@ impl Budget {
     }
 
     pub(super) fn claim(&self) -> Result<Claim> {
-        let _process_lock = process_lock();
-        let _file_lock = lock_at(&self.lock_path)?;
+        let _lock = lock_at(&self.lock_path)?;
         fs::create_dir_all(&self.directory)
             .with_context(|| format!("could not create {}", self.directory.display()))?;
 
@@ -105,8 +99,7 @@ impl Budget {
         if !self.directory.exists() {
             return Ok(false);
         }
-        let _process_lock = process_lock();
-        let _file_lock = lock_at(&self.lock_path)?;
+        let _lock = lock_at(&self.lock_path)?;
         let entries = match fs::read_dir(&self.directory) {
             Ok(entries) => entries,
             Err(err) => {
@@ -231,21 +224,18 @@ impl Budget {
     }
 }
 
-fn lock_at(path: &Path) -> Result<fs::File> {
-    let parent = path
+fn lock_at(path: &Path) -> Result<crate::file_lock::ExclusiveLock> {
+    if let Some(parent) = path
         .parent()
-        .context("review-budget lock has no parent directory")?;
-    fs::create_dir_all(parent).with_context(|| format!("could not create {}", parent.display()))?;
-    let file = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .truncate(false)
-        .open(path)
-        .with_context(|| format!("could not open review-budget lock {}", path.display()))?;
-    fs2::FileExt::lock_exclusive(&file)
-        .with_context(|| format!("could not lock review budget {}", path.display()))?;
-    Ok(file)
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("could not create {}", parent.display()))?;
+    }
+    // The shared primitive holds both an in-process mutex and this path's
+    // advisory file lock for the guard's lifetime.
+    crate::file_lock::exclusive(path)
+        .with_context(|| format!("could not lock review budget {}", path.display()))
 }
 
 fn reservation_token() -> String {
@@ -255,12 +245,6 @@ fn reservation_token() -> String {
         .unwrap_or_default()
         .as_nanos();
     format!("{:x}-{nanos:x}-{sequence:x}", std::process::id())
-}
-
-fn process_lock() -> MutexGuard<'static, ()> {
-    PROCESS_LOCK
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 pub(super) fn lease_expired(now: u64, started: u64) -> bool {
@@ -281,8 +265,7 @@ impl Reservation {
     }
 
     pub(super) fn commit(mut self) -> Result<()> {
-        let _process_lock = process_lock();
-        let _file_lock = lock_at(&self.lock_path)?;
+        let _lock = lock_at(&self.lock_path)?;
         if fs::read_to_string(&self.path).ok().as_deref() != Some(self.pending.as_str()) {
             bail!(
                 "review slot {} is no longer owned by this review",
@@ -307,8 +290,7 @@ impl Drop for Reservation {
         if self.committed {
             return;
         }
-        let _process_lock = process_lock();
-        if let Ok(_file_lock) = lock_at(&self.lock_path)
+        if let Ok(_lock) = lock_at(&self.lock_path)
             && fs::read_to_string(&self.path).ok().as_deref() == Some(self.pending.as_str())
         {
             let _ = fs::remove_file(&self.path);

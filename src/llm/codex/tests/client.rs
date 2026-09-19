@@ -386,6 +386,42 @@ async fn a_grandchild_inheriting_output_cannot_hold_a_review_open() {
 
 #[cfg(unix)]
 #[tokio::test]
+async fn a_direct_child_exit_cannot_leave_the_stdin_writer_waiting_on_a_grandchild() {
+    let (dir, client) = fake_client(
+        concat!(
+            "#!/bin/sh\n",
+            "capture=$(dirname \"$0\")\n",
+            "sleep 30 <&0 &\n",
+            "printf '%s' \"$!\" > \"$capture/grandchild.pid\"\n",
+            "printf '%s\\n' \\\n",
+            "  '{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":\"{\\\"issues\\\":[],\\\"summary\\\":\\\"clean\\\"}\"}}' \\\n",
+            "  '{\"type\":\"turn.completed\"}'\n",
+        ),
+        5,
+    );
+    let payload = "x".repeat(1024 * 1024);
+    let started = std::time::Instant::now();
+
+    let result = client.complete_json("review", &payload).await;
+    let elapsed = started.elapsed();
+    let pid = std::fs::read_to_string(dir.path().join("grandchild.pid")).expect("grandchild pid");
+    crate::test_support::probe_and_stop_process(&pid);
+    let err = result.expect_err("the direct child did not consume the payload");
+
+    assert!(
+        matches!(err, LlmError::Transport { status: None, ref message }
+            if message.contains("send the review payload")),
+        "got {err:?}"
+    );
+    assert!(
+        elapsed < Duration::from_secs(3),
+        "the stdin writer waited for the unrelated grandchild: {elapsed:?}"
+    );
+    drop(dir);
+}
+
+#[cfg(unix)]
+#[tokio::test]
 async fn a_signal_terminated_child_is_a_transport_failure() {
     let (dir, client) = fake_client("#!/bin/sh\nkill -TERM $$\n", 5);
     let err = client
