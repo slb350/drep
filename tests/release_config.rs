@@ -108,7 +108,7 @@ fn github_ci_uses_only_guarded_homelab_runners() {
     for (job_name, runner) in [
         (
             "linux",
-            "[self-hosted, linux, x64, homelab-ai-1, ci-proof-drep-linux]",
+            "[self-hosted, linux, x64, homelab-ai-1, drep-linux]",
         ),
         ("test-macos", "[self-hosted, macos, arm64, drep-macos]"),
     ] {
