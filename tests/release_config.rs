@@ -59,9 +59,9 @@ fn workflow_job<'a>(workflow: &'a str, name: &str) -> &'a str {
 
 const SAME_REPOSITORY_PR_GUARD: &str = "github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository";
 const RUST_TOOLCHAIN_ACTION: &str =
-    "dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c";
+    "dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87";
 const SETUP_ZIG_ACTION: &str = "mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29";
-const INSTALL_ACTION: &str = "taiki-e/install-action@3f74d7c16a4242f1c95561e98edc25d36adb4375";
+const INSTALL_ACTION: &str = "taiki-e/install-action@94c31af3204a9f15ab40b35ad084410b905bbc73";
 const CARGO_ZIGBUILD_TOOL: &str = "cargo-zigbuild@0.23.4";
 struct ReleaseTarget {
     triple: &'static str,
@@ -133,7 +133,7 @@ fn github_ci_uses_only_guarded_homelab_runners() {
             && linux.contains("cargo clippy --all-targets --all-features")
             && linux.contains("cargo test --all-targets --all-features")
             && linux.contains("cargo +1.88.0 check"),
-        "the single homelab-1 lane must retain format, clippy, test and MSRV gates"
+        "the single ai-1 lane must retain format, clippy, test and MSRV gates"
     );
     let macos = workflow_job(&workflow, "test-macos");
     assert!(
@@ -144,7 +144,7 @@ fn github_ci_uses_only_guarded_homelab_runners() {
         !workflow.contains("\n  lint:\n")
             && !workflow.contains("\n  test-linux:\n")
             && !workflow.contains("\n  msrv:\n"),
-        "serial homelab-1 validation must not repeat runner and checkout setup across jobs"
+        "serial ai-1 validation must not repeat runner and checkout setup across jobs"
     );
 
     assert!(
@@ -194,7 +194,7 @@ fn maintained_actions_are_pinned_to_full_commit_shas() {
 ///
 /// A target that falls out of this list does not fail anything: the installer
 /// keeps working everywhere else and tells that one user "unsupported
-/// platform". Both Linux triples build on homelab-1, with its x86_64 host
+/// platform". Both Linux triples build on homelab-ai-1, with its x86_64 host
 /// cross-compiling arm64, so dropping one saves nothing that would justify it.
 #[test]
 fn every_supported_platform_is_built() {

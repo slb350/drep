@@ -558,7 +558,7 @@ Homebrew publication. crates.io remains a separate `cargo publish --locked`
 operation because cargo-dist does not publish Rust crates. The arm64 Linux
 runner mapping names homelab-ai-1's x86_64 host explicitly; cargo-dist uses that host
 fact to provision cargo-zigbuild and Zig instead of assuming native arm64.
-`.github/build-setup.yml` installs pinned Zig 0.16.0 and cargo-zigbuild 0.23.3
+`.github/build-setup.yml` installs pinned Zig 0.16.0 and cargo-zigbuild 0.23.4
 for that matrix row before cargo-dist's generated dependency step. That avoids
 the generated pip fallback, which homelab-ai-1's PEP 668-managed Python rejects.
 The same setup installs stable Rust plus the matrix-selected target on macOS
@@ -600,7 +600,8 @@ remains the single definition of the verdict.
 Developer offload through `scripts/mutants-remote.sh` uses the SSH account's
 `~/.cache/drep-mutants/<repo>` tree instead of the protected runner checkout.
 It defaults to `steve@192.168.68.88` and shares the host lock with
-hosted mutation, so the two entrypoints cannot run concurrently. Legion and homelab-1 retain stopped rollback installations after cutover.
+hosted mutation, so the two entrypoints cannot run concurrently. Legion and
+homelab-1 retain stopped rollback installations after cutover.
 The root-owned ai-workstation offload helper launches all commands and rsync as
 `ci-drep-mutants` in the same bounded `ai-ci.slice` and sandbox as hosted jobs.
 The lock is `/srv/ci/fleet/drep-mutants/home/host.lock`; the account home and

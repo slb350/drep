@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Refresh the Rust 1.88-compatible lockfile to `hyper-rustls` 0.27.10 and
+  `rand` 0.10.3, and pin the current Rust-toolchain and install Action
+  revisions by exact SHA. Synchronize workflow labels and repository guidance
+  with the completed homelab-ai-1 runner migration.
+
 ## [3.1.1] - 2026-09-19
 
 ### Changed
