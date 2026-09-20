@@ -106,7 +106,10 @@ fn github_ci_uses_only_guarded_homelab_runners() {
     );
     let expected_guard = format!("    if: {SAME_REPOSITORY_PR_GUARD}");
     for (job_name, runner) in [
-        ("linux", "[self-hosted, linux, x64, drep-linux]"),
+        (
+            "linux",
+            "[self-hosted, linux, x64, homelab-ai-1, drep-linux]",
+        ),
         ("test-macos", "[self-hosted, macos, arm64, drep-macos]"),
     ] {
         let job = workflow_job(&workflow, job_name);

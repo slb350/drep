@@ -30,8 +30,8 @@ fn mutation_ci_splits_main_diff_checks_from_exhaustive_sweeps() {
             && diff_mutants
                 .contains("if: github.event_name == 'push' && github.ref == 'refs/heads/main'")
             && diff_mutants
-                .contains("runs-on: [self-hosted, linux, x64, homelab-legion, drep-mutants]"),
-        "routine mutation must follow successful trusted validation on Legion"
+                .contains("runs-on: [self-hosted, linux, x64, homelab-ai-1, drep-mutants]"),
+        "routine mutation must follow successful trusted validation on ai-1"
     );
     assert!(
         diff_mutants.contains("fetch-depth: 0")
@@ -81,8 +81,8 @@ fn mutation_ci_splits_main_diff_checks_from_exhaustive_sweeps() {
         "manual full sweeps must fail closed outside the default branch and use the triggering SHA"
     );
     assert!(
-        mutants.contains("runs-on: [self-hosted, linux, x64, homelab-legion, drep-mutants]"),
-        "the full sweep must require the dedicated homelab-legion mutation label"
+        mutants.contains("runs-on: [self-hosted, linux, x64, homelab-ai-1, drep-mutants]"),
+        "the full sweep must require the dedicated homelab-ai-1 mutation label"
     );
     let timeout_lines = mutants
         .lines()
@@ -138,12 +138,12 @@ fn remote_full_mutation_sweep_passes_no_phantom_argument() {
 }
 
 #[test]
-fn remote_mutation_sweep_defaults_to_legion_ethernet() {
+fn remote_mutation_sweep_defaults_to_bounded_ai1() {
     let script = remote_mutation_script();
 
     assert!(
-        script.contains("HOST=\"${DREP_MUTANTS_HOST:-192.168.68.72}\""),
-        "developer mutation offload must follow hosted mutation ownership to Legion Ethernet"
+        script.contains("HOST=\"${DREP_MUTANTS_HOST:-steve@192.168.68.88}\""),
+        "developer mutation offload must follow hosted mutation ownership to ai-1"
     );
     assert!(
         script.contains(
@@ -162,10 +162,10 @@ fn remote_mutation_session_owns_sync_run_and_fresh_result_mirroring() {
     let script = remote_mutation_script();
 
     assert!(
-        script.contains("DREP_MUTANTS_REMOTE_HOST_LOCK:-/srv/ci/drep-mutants/host.lock")
+        script.contains("DREP_MUTANTS_REMOTE_HOST_LOCK:-/srv/ci/fleet/drep-mutants/home/host.lock")
             && script.contains("exec 9>\"$host_lock\"")
             && script.contains("flock -E 75 -w \"$wait_seconds\" 9"),
-        "developer and hosted mutation must share the Legion host lock"
+        "developer and hosted mutation must share the ai-1 host lock"
     );
     assert!(
         script.contains("DREP_MUTANTS_HOST_LOCK_WAIT_SECONDS")
@@ -244,4 +244,18 @@ fn mutation_host_lock_wait_policy_has_one_definition() {
             "{name} must not redefine the shared host-lock wait policy"
         );
     }
+}
+
+#[test]
+fn ai1_transport_fails_closed_without_bypassing_the_sandbox() {
+    let output = std::process::Command::new("bash")
+        .arg("tests/ai1-transport.sh")
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .output()
+        .expect("transport contract must execute");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
