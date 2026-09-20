@@ -245,3 +245,17 @@ fn mutation_host_lock_wait_policy_has_one_definition() {
         );
     }
 }
+
+#[test]
+fn ai1_transport_fails_closed_without_bypassing_the_sandbox() {
+    let output = std::process::Command::new("bash")
+        .arg("tests/ai1-transport.sh")
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .output()
+        .expect("transport contract must execute");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
