@@ -74,10 +74,6 @@ case "$RSYNC_IO_TIMEOUT_SECONDS" in
     ;;
 esac
 
-AI1_CI_ROLE=drep-mutants
-# shellcheck source=scripts/mutants-ai1-transport.sh
-. scripts/mutants-ai1-transport.sh
-
 run_local() {
   MUTANTS_JOBS="${MUTANTS_LOCAL_JOBS:-4}" exec ./scripts/mutants-run.sh "$@"
 }
@@ -91,6 +87,10 @@ fi
 # developer needs, and inferring it from an rsync failure would also swallow a
 # full disk or an unwritable directory as "unreachable". One handshake, ~145ms,
 # against a run measured in minutes.
+AI1_CI_ROLE=drep-mutants
+# shellcheck source=scripts/mutants-ai1-transport.sh
+. scripts/mutants-ai1-transport.sh
+
 if ! ssh -o BatchMode=yes -o ConnectTimeout=5 "$HOST" true 2>/dev/null; then
   echo "warning: $HOST is unreachable - running the mutation sweep locally instead." >&2
   echo "         This will use this machine's CPU for the duration." >&2

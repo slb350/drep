@@ -1,6 +1,21 @@
 #!/usr/bin/env bash
 # Source after HOST and AI1_CI_ROLE are assigned. Legacy explicit host overrides
 # retain their transport; ai-1 always executes inside the installed CI sandbox.
+# This private adapter accepts only the -o option pairs used by its callers.
+is_ai1_host() {
+  case "${1##*@}" in
+    192.168.68.88|homelab-ai-1|homelab-ai-1.local) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+ai1_role_check() {
+  case "${AI1_CI_ROLE:-}" in
+    drep-mutants|tattood-mutants) return 0 ;;
+    *) printf 'ai-1 transport: invalid or missing CI role\n' >&2; return 2 ;;
+  esac
+}
+
 ssh() {
   local options=() target command_text
   while [ "$#" -gt 0 ]; do
@@ -19,34 +34,40 @@ ssh() {
     printf 'ai-1 transport: destination required\n' >&2
     return 2
   fi
-  case "$AI1_CI_ROLE" in drep-mutants|tattood-mutants) ;; *) return 2 ;; esac
   target="$1"
   shift
-  if [ "$target" != "steve@192.168.68.88" ] || [ "$#" -eq 0 ]; then
-    command ssh "${options[@]}" "$target" "$@"
+  if ! is_ai1_host "$target" || [ "$#" -eq 0 ]; then
+    command ssh ${options[@]+"${options[@]}"} "$target" "$@"
     return
   fi
+  ai1_role_check || return $?
   if [ "$#" -eq 1 ]; then
     command_text="$1"
   else
     printf -v command_text '%q ' "$@"
   fi
   printf -v command_text 'sudo /usr/local/lib/ai-ci/offload.py %q %q' "$AI1_CI_ROLE" "$command_text"
-  command ssh "${options[@]}" "$target" "$command_text"
+  command ssh ${options[@]+"${options[@]}"} "$target" "$command_text"
 }
 
 rsync() {
   local argument ai1_transfer=0 rsync_path
   for argument in "$@"; do
     case "$argument" in
-      steve@192.168.68.88:*) ai1_transfer=1 ;;
+      rsync://*192.168.68.88*|rsync://*homelab-ai-1*)
+        printf 'ai-1 transport: daemon transfers are unsupported\n' >&2; return 2 ;;
       --rsync-path|--rsync-path=*)
         printf 'ai-1 transport: caller may not replace the remote execution path\n' >&2
         return 2 ;;
+      *::*)
+        if is_ai1_host "${argument%%:*}"; then
+          printf 'ai-1 transport: daemon transfers are unsupported\n' >&2; return 2
+        fi ;;
+      *:*) if is_ai1_host "${argument%%:*}"; then ai1_transfer=1; fi ;;
     esac
   done
   if [ "$ai1_transfer" -eq 1 ]; then
-    case "$AI1_CI_ROLE" in drep-mutants|tattood-mutants) ;; *) return 2 ;; esac
+    ai1_role_check || return $?
     printf -v rsync_path 'sudo /usr/local/lib/ai-ci/offload.py %q rsync' "$AI1_CI_ROLE"
     command rsync --rsync-path="$rsync_path" "$@"
   else
