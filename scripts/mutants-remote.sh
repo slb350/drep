@@ -60,18 +60,18 @@ REMOTE_HOST_LOCK="${DREP_MUTANTS_REMOTE_HOST_LOCK:-/srv/ci/fleet/drep-mutants/ho
 RSYNC_IO_TIMEOUT_SECONDS="${DREP_MUTANTS_RSYNC_TIMEOUT_SECONDS:-300}"
 
 case "$REMOTE_HOST_LOCK" in
-  /*) ;;
-  *)
-    echo "mutants-remote: DREP_MUTANTS_REMOTE_HOST_LOCK must be absolute" >&2
-    exit 64
-    ;;
+/*) ;;
+*)
+  echo "mutants-remote: DREP_MUTANTS_REMOTE_HOST_LOCK must be absolute" >&2
+  exit 64
+  ;;
 esac
 validate_mutants_host_lock_wait_seconds mutants-remote
 case "$RSYNC_IO_TIMEOUT_SECONDS" in
-  0|''|*[!0-9]*)
-    echo "mutants-remote: DREP_MUTANTS_RSYNC_TIMEOUT_SECONDS must be a positive integer" >&2
-    exit 64
-    ;;
+0 | '' | *[!0-9]*)
+  echo "mutants-remote: DREP_MUTANTS_RSYNC_TIMEOUT_SECONDS must be a positive integer" >&2
+  exit 64
+  ;;
 esac
 
 run_local() {
@@ -89,7 +89,10 @@ fi
 # against a run measured in minutes.
 AI1_CI_ROLE=drep-mutants
 # shellcheck source=scripts/mutants-ai1-transport.sh
-. scripts/mutants-ai1-transport.sh
+if ! . scripts/mutants-ai1-transport.sh; then
+  echo "warning: ai-1 transport unavailable; running mutation locally" >&2
+  run_local "$@"
+fi
 
 if ! ssh -o BatchMode=yes -o ConnectTimeout=5 "$HOST" true 2>/dev/null; then
   echo "warning: $HOST is unreachable - running the mutation sweep locally instead." >&2
@@ -150,8 +153,7 @@ for remote_arg in \
   "$MUTANTS_OUT_DIR" \
   "$JOBS" \
   "$RUN_TOKEN" \
-  "$@"
-do
+  "$@"; do
   printf -v remote_arg_q '%q' "$remote_arg"
   REMOTE_COMMAND+=" $remote_arg_q"
 done
@@ -229,8 +231,10 @@ rsync -a --delete --force --delete-excluded --filter='P /target' --mkpath \
 if [ -n "${MUTANTS_EXTRA_FILES:-}" ]; then
   for extra in ${MUTANTS_EXTRA_FILES}; do
     case "$extra" in
-      /*) echo "mutants-remote: MUTANTS_EXTRA_FILES must be repo-relative, got $extra" >&2
-          exit 64 ;;
+    /*)
+      echo "mutants-remote: MUTANTS_EXTRA_FILES must be repo-relative, got $extra" >&2
+      exit 64
+      ;;
     esac
   done
   # shellcheck disable=SC2086  # word splitting is the interface: it is a list
@@ -242,18 +246,18 @@ printf 'run\n' >&7
 finished_status=
 while IFS= read -r remote_line <&8; do
   case "$remote_line" in
-    "mutants-run-finished:$RUN_TOKEN:"*)
-      finished_status=${remote_line##*:}
-      break
-      ;;
-    *) printf '%s\n' "$remote_line" ;;
+  "mutants-run-finished:$RUN_TOKEN:"*)
+    finished_status=${remote_line##*:}
+    break
+    ;;
+  *) printf '%s\n' "$remote_line" ;;
   esac
 done
 
 case "$finished_status" in
-  ''|*[!0-9]*)
-    exit_after_remote_session_failure
-    ;;
+'' | *[!0-9]*)
+  exit_after_remote_session_failure
+  ;;
 esac
 
 # Mirror the results back so `missed.txt`, the logs and the diffs of surviving
