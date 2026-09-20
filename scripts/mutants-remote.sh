@@ -7,15 +7,15 @@
 # full build plus a full test run, and the hook fires on a laptop the developer
 # is still using. Measured on 12 mutants from src/docs/fence.rs: local M5 Max at
 # -j 4 takes 1m54 with the machine pinned. The mutation offload follows the
-# repository's dedicated mutation owner, Legion, and costs this machine
-# nothing. Ordinary Linux validation and release remain on homelab-1.
+# repository's dedicated mutation owner, ai-1, and costs this machine
+# nothing. Ordinary Linux validation and release also run on ai-1.
 #
 # More jobs is not automatically better. Each job
 # gets its own copy of the tree *including* target/, which is how its builds
 # stay warm - so raising -j multiplies a multi-gigabyte copy before any mutant
 # is tested. On the former 32-thread host, the same scope measured 38s at -j 4,
 # 54s at -j 8, and 72s at -j 16: the copy path was I/O-bound, not CPU-bound.
-# Keep the four-worker baseline on Legion until its own complete sweep gives
+# Keep the measured worker baseline until a complete sweep gives
 # a measured reason to change it.
 #
 # The verdict rule is NOT duplicated here. This script syncs, invokes
@@ -25,13 +25,12 @@
 # Falls back to a local run, loudly, when the host is unreachable. A commit gate
 # that silently skips itself because the LAN blipped is worse than a slow one.
 #
-#   DREP_MUTANTS_HOST    ssh target (default: 192.168.68.72, Legion's reserved
-#                        Ethernet address)
+#   DREP_MUTANTS_HOST    ssh target (default: steve@192.168.68.88)
 #   DREP_MUTANTS_DIR     remote path, $HOME-relative
 #                        (default: .cache/drep-mutants/<repo name>)
 #   DREP_MUTANTS_REMOTE_HOST_LOCK
 #                        absolute lock path shared with the hosted runner
-#                        (default: /srv/ci/drep-mutants/host.lock)
+#                        (default: /srv/ci/fleet/drep-mutants/home/host.lock)
 #   DREP_MUTANTS_HOST_LOCK_WAIT_SECONDS
 #                        wait for both remote locks (default: 1800)
 #   DREP_MUTANTS_RSYNC_TIMEOUT_SECONDS
@@ -53,11 +52,11 @@ cd "$(git rev-parse --show-toplevel)"
 # shellcheck source=scripts/mutants-common.sh
 . scripts/mutants-common.sh
 
-HOST="${DREP_MUTANTS_HOST:-192.168.68.72}"
+HOST="${DREP_MUTANTS_HOST:-steve@192.168.68.88}"
 REMOTE_DIR="${DREP_MUTANTS_DIR:-.cache/drep-mutants/$(basename "$PWD")}"
 REMOTE="$HOST:$REMOTE_DIR"
 JOBS="${MUTANTS_JOBS:-4}"
-REMOTE_HOST_LOCK="${DREP_MUTANTS_REMOTE_HOST_LOCK:-/srv/ci/drep-mutants/host.lock}"
+REMOTE_HOST_LOCK="${DREP_MUTANTS_REMOTE_HOST_LOCK:-/srv/ci/fleet/drep-mutants/home/host.lock}"
 RSYNC_IO_TIMEOUT_SECONDS="${DREP_MUTANTS_RSYNC_TIMEOUT_SECONDS:-300}"
 
 case "$REMOTE_HOST_LOCK" in
@@ -74,6 +73,10 @@ case "$RSYNC_IO_TIMEOUT_SECONDS" in
     exit 64
     ;;
 esac
+
+AI1_CI_ROLE=drep-mutants
+# shellcheck source=scripts/mutants-ai1-transport.sh
+. scripts/mutants-ai1-transport.sh
 
 run_local() {
   MUTANTS_JOBS="${MUTANTS_LOCAL_JOBS:-4}" exec ./scripts/mutants-run.sh "$@"

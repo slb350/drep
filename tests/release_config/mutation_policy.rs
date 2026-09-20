@@ -139,12 +139,12 @@ fn remote_full_mutation_sweep_passes_no_phantom_argument() {
 }
 
 #[test]
-fn remote_mutation_sweep_defaults_to_legion_ethernet() {
+fn remote_mutation_sweep_defaults_to_bounded_ai1() {
     let script = remote_mutation_script();
 
     assert!(
-        script.contains("HOST=\"${DREP_MUTANTS_HOST:-192.168.68.72}\""),
-        "developer mutation offload must follow hosted mutation ownership to Legion Ethernet"
+        script.contains("HOST=\"${DREP_MUTANTS_HOST:-steve@192.168.68.88}\""),
+        "developer mutation offload must follow hosted mutation ownership to ai-1"
     );
     assert!(
         script.contains(
@@ -163,10 +163,10 @@ fn remote_mutation_session_owns_sync_run_and_fresh_result_mirroring() {
     let script = remote_mutation_script();
 
     assert!(
-        script.contains("DREP_MUTANTS_REMOTE_HOST_LOCK:-/srv/ci/drep-mutants/host.lock")
+        script.contains("DREP_MUTANTS_REMOTE_HOST_LOCK:-/srv/ci/fleet/drep-mutants/home/host.lock")
             && script.contains("exec 9>\"$host_lock\"")
             && script.contains("flock -E 75 -w \"$wait_seconds\" 9"),
-        "developer and hosted mutation must share the Legion host lock"
+        "developer and hosted mutation must share the ai-1 host lock"
     );
     assert!(
         script.contains("DREP_MUTANTS_HOST_LOCK_WAIT_SECONDS")
