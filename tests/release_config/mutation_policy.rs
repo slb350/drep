@@ -29,9 +29,10 @@ fn mutation_ci_splits_main_diff_checks_from_exhaustive_sweeps() {
         diff_mutants.contains("needs: [linux, test-macos]")
             && diff_mutants
                 .contains("if: github.event_name == 'push' && github.ref == 'refs/heads/main'")
-            && diff_mutants
-                .contains("runs-on: [self-hosted, linux, x64, homelab-legion, drep-mutants]"),
-        "routine mutation must follow successful trusted validation on Legion"
+            && diff_mutants.contains(
+                "runs-on: [self-hosted, linux, x64, homelab-ai-1, ci-proof-drep-mutants]"
+            ),
+        "routine mutation must follow successful trusted validation on ai-1"
     );
     assert!(
         diff_mutants.contains("fetch-depth: 0")
@@ -81,8 +82,8 @@ fn mutation_ci_splits_main_diff_checks_from_exhaustive_sweeps() {
         "manual full sweeps must fail closed outside the default branch and use the triggering SHA"
     );
     assert!(
-        mutants.contains("runs-on: [self-hosted, linux, x64, homelab-legion, drep-mutants]"),
-        "the full sweep must require the dedicated homelab-legion mutation label"
+        mutants.contains("runs-on: [self-hosted, linux, x64, homelab-ai-1, ci-proof-drep-mutants]"),
+        "the full sweep must require the dedicated homelab-ai-1 mutation label"
     );
     let timeout_lines = mutants
         .lines()
