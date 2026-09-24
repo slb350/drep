@@ -600,8 +600,7 @@ remains the single definition of the verdict.
 Developer offload through `scripts/mutants-remote.sh` uses the SSH account's
 `~/.cache/drep-mutants/<repo>` tree instead of the protected runner checkout.
 It defaults to `steve@192.168.68.88` and shares the host lock with
-hosted mutation, so the two entrypoints cannot run concurrently. Every mutation
-workload runs only on ai-1, so Legion's stopped mutation runner is not rollback capacity; homelab-1's stopped Linux validation runner remains rollback material for that job only.
+hosted mutation, so the two entrypoints cannot run concurrently. Mutation runs on ai-1; the only other place a run happens is this machine, when ai-1 is unreachable or `DREP_MUTANTS_REMOTE=0` is set, or a host an operator names explicitly in `DREP_MUTANTS_HOST`. Legion's stopped mutation runner is therefore not rollback capacity; homelab-1's stopped Linux validation runner remains rollback material for that job only.
 The root-owned ai-workstation offload helper launches all commands and rsync as
 `ci-drep-mutants` in the same bounded `ai-ci.slice` and sandbox as hosted jobs.
 The lock is `/srv/ci/fleet/drep-mutants/home/host.lock`; the account home and

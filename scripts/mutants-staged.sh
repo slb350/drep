@@ -13,6 +13,10 @@ set -euo pipefail
 
 # shellcheck source=scripts/mutants-common.sh
 . "$(dirname "$0")/mutants-common.sh"
+# The diff and the run it feeds belong to this checkout's one mutation run, so
+# a manual sweep started meanwhile waits rather than overwriting it.
+acquire_checkout_lock mutants-staged || exit $?
+trap release_checkout_lock EXIT
 DIFF="$MUTANTS_OUT_DIR/staged.diff"
 mkdir -p "$MUTANTS_OUT_DIR"
 
@@ -33,4 +37,5 @@ fi
 # so it is named here as a file the run needs. The alternative was for the
 # transport layer to scan the arguments for `--in-diff`, which is cargo-mutants
 # grammar it has no business knowing.
-MUTANTS_EXTRA_FILES="$DIFF" exec ./scripts/mutants-remote.sh --in-diff "$DIFF"
+# Not exec: the trap releases the checkout lock once the remote run is done.
+MUTANTS_EXTRA_FILES="$DIFF" ./scripts/mutants-remote.sh --in-diff "$DIFF"

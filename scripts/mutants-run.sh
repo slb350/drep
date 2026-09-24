@@ -19,6 +19,9 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 OUT_DIR="$MUTANTS_OUT_DIR"
 mkdir -p "$OUT_DIR"
 
+acquire_checkout_lock mutants-run || exit $?
+trap release_checkout_lock EXIT
+
 # A dedicated mutation host may serve both GitHub and laptop-offloaded runs in
 # separate persistent workspaces. When its operator provides a shared lock,
 # serialize those otherwise independent checkouts before either can clean
@@ -47,41 +50,40 @@ fi
 
 # Scratch copies go beside the checkout, not in the system temp dir.
 #
-# cargo-mutants copies the whole tree, target/ included, into `$TMPDIR` once per
-# job and deletes the copies only on a clean exit. A run that is cancelled or
+# cargo-mutants copies the tree into `$TMPDIR` once per job and deletes the
+# copies only on a clean exit. A run that is cancelled or
 # hits the job timeout strands them. The former Strix host mounted `/tmp` as a
 # tmpfs; in another repository five such sweeps pinned 31 GiB of RAM with
 # nothing else running. Here the copies sit on disk and a stale one costs
 # storage instead of memory.
 #
-# A sibling of the checkout rather than a child, because cargo-mutants' copy
-# excludes only `mutants.out`: a scratch copy under `target/` would itself be
-# copied into every later copy. The root is taken from this script's location
+# A sibling of the checkout rather than a child: cargo-mutants copies the
+# checkout, so scratch inside it would be copied into every later copy
+# (target/ included, once copy_target is on). The root is taken from this script's location
 # rather than the cwd so every caller resolves the same directory.
 ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-export TMPDIR="${DREP_MUTANTS_TMPDIR:-${ROOT}.mutants-tmp}"
-mkdir -p "$TMPDIR"
+SCRATCH_ROOT="${DREP_MUTANTS_TMPDIR:-${ROOT}.mutants-tmp}"
+RUN_SCRATCH="$SCRATCH_ROOT/run"
+mkdir -p "$SCRATCH_ROOT"
 
-# Sweep what the last run left. cargo-mutants never sees a SIGKILL, and the
-# runner's cancellation ends in one, so the trap below is the common case and
-# this is the backstop. The caller's lock means nothing else is copying into
-# this directory right now.
-cleanup_mutation_scratch() {
-  # `find` does not follow symlinks by default. Descendants match the path arm,
-  # then -depth removes the matching top-level cargo-mutants directory last.
-  # No other entry directly under a caller-supplied TMPDIR can match.
-  find "$TMPDIR" -depth -mindepth 1 \
-    \( -name 'cargo-mutants-*.tmp' -o \
-    -path "$TMPDIR"/'cargo-mutants-*.tmp/*' -o \
-    -name 'drep-diff-test-*' -o \
-    -path "$TMPDIR"/'drep-diff-test-*/*' \) -delete 2>/dev/null || true
+# The checkout lock means no other run is using this checkout's scratch, so
+# everything a previous run left in the run directory - tree copies and the
+# temporary files of tests it killed - can go. cargo-mutants never sees a
+# SIGKILL, and the runner's cancellation ends in one, so the trap below is the
+# common case and this is the backstop. Copies from before the run directory
+# sat directly under the root with these two names.
+for stale in "$RUN_SCRATCH" "$SCRATCH_ROOT"/cargo-mutants-*.tmp "$SCRATCH_ROOT"/drep-diff-test-*; do
+  remove_tree "$stale"
+done
+mkdir -p "$RUN_SCRATCH"
+export TMPDIR="$RUN_SCRATCH"
+
+# shellcheck disable=SC2329  # Invoked by the EXIT trap.
+finish_run() {
+  remove_tree "$RUN_SCRATCH"
+  release_checkout_lock
 }
-
-cleanup_mutation_scratch
-# `find -delete` can race with a copy still tearing itself down and report ENOENT
-# for an entry that has already vanished. Losing stale scratch is harmless, so
-# cleanup ignores that status and the EXIT trap preserves the script's verdict.
-trap cleanup_mutation_scratch EXIT
+trap finish_run EXIT
 
 # --cap-lints: `[lints.rust] warnings = "deny"` in Cargo.toml applies to the
 # mutated build too, and a mutant that replaces a function body leaves the
