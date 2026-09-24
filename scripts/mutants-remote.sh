@@ -111,7 +111,6 @@ fi
 echo "mutants: running on $HOST (-j $JOBS), results mirrored back to $MUTANTS_OUT_DIR"
 # The mirror writes this checkout's results, so it is this checkout's one run.
 acquire_checkout_lock mutants-remote || exit $?
-trap release_checkout_lock EXIT
 
 # Keep one remote SSH process alive for the entire transaction. Its open file
 # descriptor holds the host-wide lock while this process synchronizes source,
@@ -195,7 +194,6 @@ cleanup_remote_session() {
   fi
   exec 7>&- 8<&-
   remove_tree "$SESSION_DIR"
-  release_checkout_lock
 }
 trap cleanup_remote_session EXIT
 

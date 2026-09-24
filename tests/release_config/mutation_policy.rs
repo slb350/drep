@@ -307,7 +307,7 @@ fn staged_run_holds_the_checkout_lock_across_the_remote_run() {
     let events = temp.path().join("events");
     common::write_executable(
         &scripts.join("mutants-remote.sh"),
-        "#!/usr/bin/env bash\nprintf '%s|%s|%s|%s\\n' \"$*\" \"$MUTANTS_EXTRA_FILES\" \"${MUTANTS_CHECKOUT_LOCK_HELD:-}\" \"$(cat target/mutants.lock/pid 2>/dev/null)\" >> \"$FAKE_EVENTS\"\n",
+        "#!/usr/bin/env bash\nperl -MFcntl=:flock -e 'open(my $f, q(>>), $ARGV[0]) or exit 2; exit(flock($f, LOCK_EX | LOCK_NB) ? 0 : 1)' target/mutants.lock; held=$?\nprintf '%s|%s|%s|%s\\n' \"$*\" \"$MUTANTS_EXTRA_FILES\" \"${MUTANTS_CHECKOUT_LOCK_HELD:-}\" \"$held\" >> \"$FAKE_EVENTS\"\n",
     );
     let git = |arguments: &[&str]| {
         let output = common::without_outer_git("git", &repository)
@@ -352,17 +352,26 @@ fn staged_run_holds_the_checkout_lock_across_the_remote_run() {
         "the remote run must inherit the lock instead of waiting on it"
     );
     assert!(
-        !fields[3].is_empty(),
-        "the lock must be held while the remote run works"
+        fields[3] == "1",
+        "another process must be refused the lock while the remote run works"
     );
     assert!(
         std::fs::read_to_string(repository.join(diff))
             .expect("staged diff")
             .contains("+fn two() {}")
     );
+    let released = std::process::Command::new("perl")
+        .args([
+            "-MFcntl=:flock",
+            "-e",
+            "open(my $f, '>>', $ARGV[0]) or exit 2; exit(flock($f, LOCK_EX | LOCK_NB) ? 0 : 1)",
+        ])
+        .arg(repository.join("target/mutants.lock"))
+        .status()
+        .expect("probe the checkout lock");
     assert!(
-        !repository.join("target/mutants.lock").exists(),
-        "the staged run must release the lock when the remote run returns"
+        released.success(),
+        "the lock must be free once the staged run returns"
     );
 }
 
@@ -383,6 +392,10 @@ fn mutation_runner_holds_the_configured_host_lock() {
             && script.contains("$OUT_DIR/mutants.out")
             && script.contains("$OUT_DIR/.run-token"),
         "each remote run must clear stale output and publish its own freshness token"
+    );
+    assert!(
+        script.contains("\"$@\" 6<&- 9<&- && status=0"),
+        "cargo-mutants and its fixtures must not inherit the checkout or host lock"
     );
 }
 

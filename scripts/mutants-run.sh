@@ -20,7 +20,6 @@ OUT_DIR="$MUTANTS_OUT_DIR"
 mkdir -p "$OUT_DIR"
 
 acquire_checkout_lock mutants-run || exit $?
-trap release_checkout_lock EXIT
 
 # A dedicated mutation host may serve both GitHub and laptop-offloaded runs in
 # separate persistent workspaces. When its operator provides a shared lock,
@@ -81,7 +80,6 @@ export TMPDIR="$RUN_SCRATCH"
 # shellcheck disable=SC2329  # Invoked by the EXIT trap.
 finish_run() {
   remove_tree "$RUN_SCRATCH"
-  release_checkout_lock
 }
 trap finish_run EXIT
 
@@ -102,6 +100,9 @@ trap finish_run EXIT
 # it should.
 # MUTANTS_JOBS so the same script can be driven harder on a 32-thread box than
 # on the laptop the hook runs on; see scripts/mutants-remote.sh.
+#
+# 6<&- 9<&-: the checkout and host locks stay with this script. A test fixture
+# that outlives its mutant must not inherit either and block the next run.
 
 # A caller that mirrors results across machines needs proof that the output is
 # from this invocation, not a previous sweep. Clear only the exact prior result
@@ -115,7 +116,7 @@ if [ -n "${DREP_MUTANTS_RESULT_TOKEN:-}" ]; then
 fi
 
 cargo mutants -j "${MUTANTS_JOBS:-4}" --no-shuffle --minimum-test-timeout 120 \
-  --cap-lints true --output "$OUT_DIR" "$@" && status=0 || status=$?
+  --cap-lints true --output "$OUT_DIR" "$@" 6<&- 9<&- && status=0 || status=$?
 
 MISSED="$OUT_DIR/mutants.out/missed.txt"
 UNVIABLE="$OUT_DIR/mutants.out/unviable.txt"

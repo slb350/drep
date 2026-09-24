@@ -32,6 +32,21 @@ fn run_with_fake_cargo(
         .expect("run mutation wrapper with fake cargo")
 }
 
+/// Whether another process could take the checkout lock right now.
+#[cfg(unix)]
+fn checkout_lock_is_free(lock: &std::path::Path) -> bool {
+    std::process::Command::new("perl")
+        .args([
+            "-MFcntl=:flock",
+            "-e",
+            "open(my $f, '>>', $ARGV[0]) or exit 2; exit(flock($f, LOCK_EX | LOCK_NB) ? 0 : 1)",
+        ])
+        .arg(lock)
+        .status()
+        .expect("probe the checkout lock")
+        .success()
+}
+
 /// Mutation scratch copies live beside the checkout, never in the system temp dir.
 #[test]
 fn mutation_scratch_copies_stay_off_the_tmpfs() {
@@ -103,7 +118,7 @@ fn mutation_scratch_cleanup_preserves_adjacent_state() {
         "cargo must see the run directory as TMPDIR"
     );
     assert!(
-        !temp.path().join("out.lock").exists(),
+        checkout_lock_is_free(&temp.path().join("out.lock")),
         "the run must release the checkout lock"
     );
 
@@ -128,15 +143,25 @@ fn mutation_scratch_cleanup_preserves_adjacent_state() {
 #[cfg(unix)]
 #[test]
 fn a_second_run_in_one_checkout_waits_for_the_first() {
+    use std::io::BufRead;
     let temp = tempfile::tempdir().expect("tempdir");
     let scratch = temp.path().join("scratch");
-    let mut first = std::process::Command::new("sleep")
-        .arg("30")
+    let lock = temp.path().join("out.lock");
+    let mut first = std::process::Command::new("perl")
+        .args([
+            "-MFcntl=:flock",
+            "-e",
+            "open(my $f, '>>', $ARGV[0]) or die; flock($f, LOCK_EX) or die; $| = 1; print \"locked\\n\"; sleep 30",
+        ])
+        .arg(&lock)
+        .stdout(std::process::Stdio::piped())
         .spawn()
         .expect("spawn the first run's stand-in");
-    let lock = temp.path().join("out.lock");
-    std::fs::create_dir_all(&lock).expect("held lock");
-    std::fs::write(lock.join("pid"), format!("{}\n", first.id())).expect("lock owner");
+    let mut ready = String::new();
+    std::io::BufReader::new(first.stdout.take().expect("stand-in stdout"))
+        .read_line(&mut ready)
+        .expect("stand-in reports the lock");
+    assert_eq!(ready, "locked\n");
     let results = temp.path().join("out/mutants.out");
     std::fs::create_dir_all(&results).expect("first run's results");
     std::fs::write(results.join("missed.txt"), "first run's survivor\n")
@@ -160,23 +185,17 @@ fn a_second_run_in_one_checkout_waits_for_the_first() {
         "first run's survivor\n",
         "the second run must not touch the first run's results"
     );
-    assert!(lock.join("pid").exists(), "the first run keeps its lock");
 }
 
-/// A lock whose owner is gone no longer holds anything.
+/// The kernel drops the lock with its holder, so a lock file a killed run left
+/// behind holds nothing.
 #[cfg(unix)]
 #[test]
-fn a_lock_whose_owner_is_gone_is_taken_over() {
+fn a_leftover_lock_file_holds_nothing() {
     let temp = tempfile::tempdir().expect("tempdir");
     let scratch = temp.path().join("scratch");
-    let mut finished = std::process::Command::new("true")
-        .spawn()
-        .expect("spawn a short-lived process");
-    let dead_pid = finished.id();
-    finished.wait().expect("reap the short-lived process");
     let lock = temp.path().join("out.lock");
-    std::fs::create_dir_all(&lock).expect("stale lock");
-    std::fs::write(lock.join("pid"), format!("{dead_pid}\n")).expect("dead owner");
+    std::fs::write(&lock, "").expect("leftover lock file");
 
     let output = run_with_fake_cargo(temp.path(), &scratch, &[]);
 
@@ -185,5 +204,8 @@ fn a_lock_whose_owner_is_gone_is_taken_over() {
         temp.path().join("cargo-args").exists(),
         "the run must go ahead"
     );
-    assert!(!lock.exists(), "the run must release the lock it took over");
+    assert!(
+        checkout_lock_is_free(&lock),
+        "the run must release the lock"
+    );
 }

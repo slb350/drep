@@ -44,38 +44,28 @@ is_contained_path() {
 
 # One mutation run per checkout at a time. The hook, a local run and a remote
 # transaction all write $MUTANTS_OUT_DIR and this checkout's scratch, so a
-# second run waits instead of deleting the first run's results or copies. macOS
-# has no flock, so the lock is a directory made atomically by mkdir that holds
-# its owner's PID, and a lock whose owner is gone is taken over. A script called
-# by one already holding the lock inherits it through the environment.
+# second run waits instead of deleting the first run's results or copies. The
+# lock is a kernel flock on the file below, held on this shell's descriptor 6:
+# the kernel drops it when the last process holding that descriptor exits, so a
+# killed run never leaves one behind. perl takes it because macOS has no
+# flock(1). A script called by one already holding the lock inherits it through
+# the environment instead of waiting on itself.
 MUTANTS_CHECKOUT_LOCK="${MUTANTS_OUT_DIR}.lock"
 
 acquire_checkout_lock() {
-  local caller="$1" owner waited=0
+  local caller="$1"
   [ -z "${MUTANTS_CHECKOUT_LOCK_HELD:-}" ] || return 0
   validate_mutants_host_lock_wait_seconds "$caller" || return
   mkdir -p "$(dirname "$MUTANTS_CHECKOUT_LOCK")"
-  until mkdir "$MUTANTS_CHECKOUT_LOCK" 2>/dev/null; do
-    owner="$(cat "$MUTANTS_CHECKOUT_LOCK/pid" 2>/dev/null || true)"
-    # An owner that died, or one that died between mkdir and writing its PID
-    # (an empty lock older than a minute), no longer holds anything.
-    if { [ -n "$owner" ] && ! kill -0 "$owner" 2>/dev/null; } ||
-      { [ -z "$owner" ] && [ -n "$(find "$MUTANTS_CHECKOUT_LOCK" -maxdepth 0 -mmin +1 2>/dev/null)" ]; }; then
-      remove_tree "$MUTANTS_CHECKOUT_LOCK"
-      continue
-    fi
-    if [ "$waited" -ge "$MUTANTS_HOST_LOCK_WAIT_SECONDS" ]; then
-      echo "$caller: another mutation run in this checkout holds $MUTANTS_CHECKOUT_LOCK" >&2
-      return 75
-    fi
-    sleep 1
-    waited=$((waited + 1))
-  done
-  printf '%s\n' "$$" >"$MUTANTS_CHECKOUT_LOCK/pid"
-  MUTANTS_CHECKOUT_LOCK_OWNER=1
+  exec 6>>"$MUTANTS_CHECKOUT_LOCK"
+  # shellcheck disable=SC2016  # perl source, not shell.
+  if ! perl -MFcntl=:flock -e '
+    open(my $lock, ">&=", 6) or exit 2;
+    my $deadline = time + $ARGV[0];
+    until (flock($lock, LOCK_EX | LOCK_NB)) { exit 1 if time >= $deadline; sleep 1 }
+  ' "$MUTANTS_HOST_LOCK_WAIT_SECONDS"; then
+    echo "$caller: another mutation run in this checkout holds $MUTANTS_CHECKOUT_LOCK" >&2
+    return 75
+  fi
   export MUTANTS_CHECKOUT_LOCK_HELD=1
-}
-
-release_checkout_lock() {
-  [ -z "${MUTANTS_CHECKOUT_LOCK_OWNER:-}" ] || remove_tree "$MUTANTS_CHECKOUT_LOCK"
 }
