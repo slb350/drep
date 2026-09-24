@@ -30,8 +30,7 @@ jobs:
     # runner or compete with production workloads.
     timeout-minutes: 420
     steps:
-      # cargo-mutants builds every mutant in its own scratch copy of the tree,
-      # which excludes target/, so an ordinary clean checkout loses nothing.
+      # cargo-mutants builds every mutant in its own scratch copy of the tree, which excludes target/, so an ordinary clean checkout loses nothing.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false

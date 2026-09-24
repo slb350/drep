@@ -192,8 +192,7 @@ fn remote_mutation_session_owns_sync_run_and_fresh_result_mirroring() {
     );
 }
 
-/// The checkout lock is taken before the host is probed, so a run that waited
-/// for it does not act on a probe that is half an hour old.
+/// The checkout lock is taken before the host is probed, so a run that waited for it does not act on a probe that is half an hour old.
 #[test]
 fn remote_mutation_takes_the_checkout_lock_before_probing_the_host() {
     let script = remote_mutation_script();
@@ -206,9 +205,7 @@ fn remote_mutation_takes_the_checkout_lock_before_probing_the_host() {
     assert!(lock < probe);
 }
 
-/// The source sync mirrors this checkout with --delete, so its remote
-/// directory is named for this machine and the checkout's path: two checkouts
-/// never share one, and holding the checkout lock is all it takes to own it.
+/// The source sync mirrors this checkout with --delete, so its remote directory is named for this machine and the checkout's path: two checkouts never share one, and holding the checkout lock is all it takes to own it.
 #[cfg(unix)]
 #[test]
 fn checkouts_with_one_name_get_their_own_remote_directories() {
@@ -284,8 +281,7 @@ fn checkouts_with_one_name_get_their_own_remote_directories() {
     );
 }
 
-/// A fixture repository with the staged wrapper, a fake remote that records how
-/// it was called, and one committed Rust file.
+/// A fixture repository with the staged wrapper, a fake remote that records how it was called and what it was given to test, and one committed Rust file.
 #[cfg(unix)]
 fn staged_fixture(temp: &std::path::Path) -> std::path::PathBuf {
     let repository = temp.join("repository");
@@ -298,11 +294,10 @@ fn staged_fixture(temp: &std::path::Path) -> std::path::PathBuf {
         )
         .expect("copy mutation script");
     }
-    // Records whether another process is refused the checkout lock, and whether
-    // this process, started by the lock's holder, gets it without waiting.
+    // Records whether another process is refused the checkout lock, whether this process, started by the lock's holder, gets it without waiting, and the source it was handed. With FAKE_RESTAGE set it stages a further change, as an editor could while the run waits.
     common::write_executable(
         &scripts.join("mutants-remote.sh"),
-        "#!/usr/bin/env bash\nperl -MFcntl=:flock -e \"$LOCK_PROBE\" target/mutants.lock; refused=$?\n. scripts/mutants-common.sh\nMUTANTS_HOST_LOCK_WAIT_SECONDS=0\nacquire_checkout_lock fake-remote; inherited=$?\nprintf '%s|%s|%s|%s\\n' \"$*\" \"$MUTANTS_EXTRA_FILES\" \"$inherited\" \"$refused\" >> \"$FAKE_EVENTS\"\n",
+        "#!/usr/bin/env bash\nperl -MFcntl=:flock -e \"$LOCK_PROBE\" target/mutants.lock; refused=$?\n. scripts/mutants-common.sh\nMUTANTS_HOST_LOCK_WAIT_SECONDS=0\nacquire_checkout_lock fake-remote; inherited=$?\nsource=$(cat \"$MUTANTS_SOURCE_DIR/lib.rs\"); untracked=$(ls \"$MUTANTS_SOURCE_DIR/untracked.rs\" 2>/dev/null)\nprintf '%s|%s|%s|%s|%s|%s\\n' \"$*\" \"$MUTANTS_EXTRA_FILES\" \"$inherited\" \"$refused\" \"$source\" \"$untracked\" >> \"$FAKE_EVENTS\"\nif [ -n \"${FAKE_RESTAGE:-}\" ]; then echo 'fn three() {}' > lib.rs && git add lib.rs; fi\n",
     );
     std::fs::write(repository.join(".gitignore"), "target/\n").expect("gitignore");
     std::fs::write(repository.join("lib.rs"), "fn one() {}\n").expect("source");
@@ -335,29 +330,37 @@ fn staged_git(repository: &std::path::Path, arguments: &[&str]) {
 }
 
 #[cfg(unix)]
-fn run_staged(repository: &std::path::Path, events: &std::path::Path) -> std::process::Output {
-    common::without_outer_git("bash", repository)
+fn run_staged(
+    repository: &std::path::Path,
+    events: &std::path::Path,
+    extra_env: &[(&str, &str)],
+) -> std::process::Output {
+    let mut command = common::without_outer_git("bash", repository);
+    command
         .arg("scripts/mutants-staged.sh")
         .env("FAKE_EVENTS", events)
         .env("LOCK_PROBE", common::LOCK_PROBE)
         .env("DREP_MUTANTS_HOST_LOCK_WAIT_SECONDS", "0")
-        .output()
-        .expect("run the staged wrapper")
+        .env_remove("DREP_MUTANTS_TMPDIR");
+    for (key, value) in extra_env {
+        command.env(key, value);
+    }
+    command.output().expect("run the staged wrapper")
 }
 
-/// A staged run holds the checkout lock from writing its diff until the remote
-/// run returns, so a manual sweep in the same checkout cannot overwrite the diff
-/// or the results in between.
+/// A staged run tests a snapshot of the index, not the working tree, and holds the checkout lock from writing its diff until the remote run returns, so a manual sweep in the same checkout cannot overwrite the diff or the results in between.
 #[cfg(unix)]
 #[test]
-fn staged_run_holds_the_checkout_lock_across_the_remote_run() {
+fn staged_run_tests_the_index_under_the_checkout_lock() {
     let temp = tempfile::tempdir().expect("tempdir");
     let repository = staged_fixture(temp.path());
     let events = temp.path().join("events");
     std::fs::write(repository.join("lib.rs"), "fn two() {}\n").expect("staged source");
     staged_git(&repository, &["add", "lib.rs"]);
+    std::fs::write(repository.join("lib.rs"), "fn unstaged() {}\n").expect("unstaged edit");
+    std::fs::write(repository.join("untracked.rs"), "fn untracked() {}\n").expect("untracked file");
 
-    let output = run_staged(&repository, &events);
+    let output = run_staged(&repository, &events, &[]);
 
     assert!(output.status.success(), "{output:?}");
     let call = std::fs::read_to_string(&events).expect("remote call");
@@ -373,6 +376,11 @@ fn staged_run_holds_the_checkout_lock_across_the_remote_run() {
         fields[3], "1",
         "another process must be refused the lock while the remote run works"
     );
+    assert_eq!(
+        fields[4], "fn two() {}",
+        "the run must build the staged content"
+    );
+    assert_eq!(fields[5], "", "an untracked file must not reach the run");
     assert!(
         std::fs::read_to_string(repository.join(diff))
             .expect("staged diff")
@@ -382,10 +390,32 @@ fn staged_run_holds_the_checkout_lock_across_the_remote_run() {
         common::lock_is_free(&repository.join("target/mutants.lock")),
         "the lock must be free once the staged run returns"
     );
+    assert!(
+        !temp.path().join("repository.mutants-tmp/index").exists(),
+        "the snapshot must be removed when the run ends"
+    );
 }
 
-/// A commit with no Rust changes has nothing to mutate, so it leaves at once
-/// even while a sweep holds this checkout's lock.
+/// `git commit` reads the index again after the hook, so a change staged while the run worked would be committed untested; the run refuses instead.
+#[cfg(unix)]
+#[test]
+fn a_change_staged_during_the_run_is_refused() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let repository = staged_fixture(temp.path());
+    let events = temp.path().join("events");
+    std::fs::write(repository.join("lib.rs"), "fn two() {}\n").expect("staged source");
+    staged_git(&repository, &["add", "lib.rs"]);
+
+    let output = run_staged(&repository, &events, &[("FAKE_RESTAGE", "1")]);
+
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("the index changed during the run"),
+        "{output:?}"
+    );
+}
+
+/// A commit with no Rust changes has nothing to mutate, so it leaves at once even while a sweep holds this checkout's lock.
 #[cfg(unix)]
 #[test]
 fn a_commit_without_rust_changes_does_not_wait_for_a_running_sweep() {
@@ -397,7 +427,7 @@ fn a_commit_without_rust_changes_does_not_wait_for_a_running_sweep() {
     std::fs::create_dir_all(repository.join("target")).expect("target");
     let mut sweep = common::hold_lock(&repository.join("target/mutants.lock"), "30");
 
-    let output = run_staged(&repository, &events);
+    let output = run_staged(&repository, &events, &[]);
     let _ = sweep.kill();
     let _ = sweep.wait();
 
@@ -466,4 +496,13 @@ fn ai1_transport_fails_closed_without_bypassing_the_sandbox() {
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
+}
+
+/// The staged run hands the wrapper a snapshot of the index: the sync ships that tree and a local fallback builds it.
+#[test]
+fn remote_mutation_builds_the_source_it_is_given() {
+    let script = remote_mutation_script();
+    assert!(script.contains("SOURCE=\"${MUTANTS_SOURCE_DIR:-.}\""));
+    assert!(script.contains("\"$SOURCE/\" \"$REMOTE/\""));
+    assert!(script.contains("exec ./scripts/mutants-run.sh --dir \"$SOURCE\" \"$@\""));
 }

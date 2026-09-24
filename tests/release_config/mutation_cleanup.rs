@@ -1,8 +1,6 @@
 use super::common;
 
-/// Runs `mutants-run.sh` against `scratch` with a cargo that records its
-/// arguments and TMPDIR and plants copies the run must clean up. `prelude` runs
-/// in the same shell first, so it can hand the script an open descriptor.
+/// Runs `mutants-run.sh` against `scratch` with a cargo that records its arguments and TMPDIR and plants copies the run must clean up. `prelude` runs in the same shell first, so it can hand the script an open descriptor.
 #[cfg(unix)]
 fn run_with_fake_cargo(
     temp: &std::path::Path,
@@ -41,7 +39,10 @@ fn mutation_scratch_copies_stay_off_the_tmpfs() {
     let script = common::without_comments("scripts/mutants-run.sh");
 
     assert!(
-        script.contains("RUN_SCRATCH=\"${DREP_MUTANTS_TMPDIR:-${MUTANTS_ROOT}.mutants-tmp}/run\"")
+        script.contains("RUN_SCRATCH=\"$MUTANTS_SCRATCH_ROOT/run\"")
+            && common::read("scripts/mutants-common.sh").contains(
+                "MUTANTS_SCRATCH_ROOT=\"${DREP_MUTANTS_TMPDIR:-${MUTANTS_ROOT}.mutants-tmp}\""
+            )
             && script.contains("export TMPDIR=\"$RUN_SCRATCH\""),
         "the run must place its scratch copies in its directory beside the checkout"
     );
@@ -61,8 +62,7 @@ fn mutation_scratch_copies_stay_off_the_tmpfs() {
     );
 }
 
-/// The sweep is destructive only inside the run directory, and the run removes
-/// that directory, test debris included, when it ends.
+/// The sweep is destructive only inside the run directory, and the run removes that directory, test debris included, when it ends.
 #[cfg(unix)]
 #[test]
 fn mutation_scratch_cleanup_preserves_adjacent_state() {
@@ -115,8 +115,7 @@ fn mutation_scratch_cleanup_preserves_adjacent_state() {
     );
 }
 
-/// A run directory that is a symlink is removed as a link; what it points at
-/// is left alone.
+/// A run directory that is a symlink is removed as a link; what it points at is left alone.
 #[cfg(unix)]
 #[test]
 fn a_symlinked_run_directory_is_not_followed() {
@@ -135,8 +134,7 @@ fn a_symlinked_run_directory_is_not_followed() {
     assert!(!scratch.join("run").exists());
 }
 
-/// A second run in the same checkout waits for the first rather than deleting
-/// its results or copies, and gives up with 75 instead of running.
+/// A second run in the same checkout waits for the first rather than deleting its results or copies, and gives up with 75 instead of running.
 #[cfg(unix)]
 #[test]
 fn a_second_run_in_one_checkout_waits_for_the_first() {
@@ -188,8 +186,7 @@ fn a_waiting_run_starts_once_the_lock_is_released() {
     assert!(temp.path().join("cargo-args").exists());
 }
 
-/// The kernel drops the lock with its holder, so a lock file a killed run left
-/// behind holds nothing.
+/// The kernel drops the lock with its holder, so a lock file a killed run left behind holds nothing.
 #[cfg(unix)]
 #[test]
 fn a_leftover_lock_file_holds_nothing() {
@@ -208,8 +205,7 @@ fn a_leftover_lock_file_holds_nothing() {
     assert!(common::lock_is_free(&lock), "the run must release the lock");
 }
 
-/// The remote session holds the host lock on descriptor 9 and starts the run
-/// with it open: the run carries on under that lock instead of waiting on it.
+/// The remote session holds the host lock on descriptor 9 and starts the run with it open: the run carries on under that lock instead of waiting on it.
 #[cfg(unix)]
 #[test]
 fn a_run_started_by_the_host_lock_holder_reuses_its_lock() {
@@ -230,8 +226,7 @@ fn a_run_started_by_the_host_lock_holder_reuses_its_lock() {
     assert!(temp.path().join("cargo-args").exists());
 }
 
-/// Another sweep's host lock makes the run wait, here for no time at all, and
-/// give up with 75 before it starts cargo-mutants.
+/// Another sweep's host lock makes the run wait, here for no time at all, and give up with 75 before it starts cargo-mutants.
 #[cfg(unix)]
 #[test]
 fn a_run_waits_for_a_host_lock_another_sweep_holds() {
