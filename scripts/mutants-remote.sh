@@ -5,10 +5,9 @@
 #
 # Mutation testing is the most CPU-hungry gate in this repo: every mutant is a
 # full build plus a full test run, and the hook fires on a laptop the developer
-# is still using. Measured on 12 mutants from src/docs/fence.rs: local M5 Max at
-# -j 4 takes 1m54 with the machine pinned. The mutation offload follows the
-# repository's dedicated mutation owner, ai-1, and costs this machine
-# nothing. Ordinary Linux validation and release also run on ai-1.
+# is still using. Measured in drep on 12 mutants from src/docs/fence.rs, a local
+# M5 Max at -j 4 took 1m54 with the machine pinned. The offload runs as this
+# repository's CI role on ai-1 and costs this machine nothing.
 #
 # More jobs is not automatically better. Each job builds in its own copy of the
 # tree, which cargo-mutants 27.1.0 makes without target/ unless copy_target is
@@ -26,18 +25,13 @@
 # that silently skips itself because the LAN blipped is worse than a slow one.
 #
 #   DREP_MUTANTS_HOST    ssh target (default: steve@192.168.68.88)
-#   DREP_MUTANTS_DIR     remote path, $HOME-relative
-#                        (default: .cache/drep-mutants/<repo name>)
-#   DREP_MUTANTS_REMOTE_HOST_LOCK
-#                        absolute lock path shared with the hosted runner
-#                        (default: /srv/ci/fleet/drep-mutants/home/host.lock)
 #   DREP_MUTANTS_HOST_LOCK_WAIT_SECONDS
-#                        wait for both remote locks (default: 1800)
+#                        wait for the checkout and host locks (default: 1800)
 #   DREP_MUTANTS_RSYNC_TIMEOUT_SECONDS
 #                        rsync I/O timeout while the host lock is held
 #                        (default: 300)
 #   DREP_MUTANTS_REMOTE  0 to force a local run
-#   MUTANTS_JOBS         -j for the remote run (default: 4)
+#   MUTANTS_JOBS         -j for the remote run (default: the role's MUTANTS_JOBS)
 #   MUTANTS_LOCAL_JOBS   -j for a local or fallback run (default: 4)
 #   MUTANTS_EXTRA_FILES  repo-relative paths this run needs that the sync
 #                        would otherwise skip (space-separated, no spaces in
@@ -52,29 +46,15 @@ cd "$(git rev-parse --show-toplevel)"
 # shellcheck source=scripts/mutants-common.sh
 . scripts/mutants-common.sh
 
+# The ai-1 CI role this repository's mutation runs as, here and in its hosted
+# sweeps. The role's unit also supplies the host lock and the job count.
+AI1_CI_ROLE=drep-mutants
 HOST="${DREP_MUTANTS_HOST:-steve@192.168.68.88}"
-REMOTE_DIR="${DREP_MUTANTS_DIR:-.cache/drep-mutants/$(basename "$PWD")}"
+REMOTE_DIR="$(remote_checkout_dir "$AI1_CI_ROLE")"
 REMOTE="$HOST:$REMOTE_DIR"
-JOBS="${MUTANTS_JOBS:-4}"
-REMOTE_HOST_LOCK="${DREP_MUTANTS_REMOTE_HOST_LOCK:-/srv/ci/fleet/drep-mutants/home/host.lock}"
+JOBS="${MUTANTS_JOBS:-}"
 RSYNC_IO_TIMEOUT_SECONDS="${DREP_MUTANTS_RSYNC_TIMEOUT_SECONDS:-300}"
 
-case "$REMOTE_HOST_LOCK" in
-/*) ;;
-*)
-  echo "mutants-remote: DREP_MUTANTS_REMOTE_HOST_LOCK must be absolute" >&2
-  exit 64
-  ;;
-esac
-# The source sync mirrors this checkout into REMOTE_DIR with --delete, so it has
-# to name a directory below the remote home that can only be this checkout's.
-# The remote session also refuses a non-empty directory holding neither its
-# marker nor a mirrored copy of this script.
-if ! is_contained_path "$REMOTE_DIR"; then
-  echo "mutants-remote: DREP_MUTANTS_DIR must be a path below the remote home without . or .. components, got '$REMOTE_DIR'" >&2
-  exit 64
-fi
-validate_mutants_host_lock_wait_seconds mutants-remote
 case "$RSYNC_IO_TIMEOUT_SECONDS" in
 0 | '' | *[!0-9]*)
   echo "mutants-remote: DREP_MUTANTS_RSYNC_TIMEOUT_SECONDS must be a positive integer" >&2
@@ -86,6 +66,11 @@ run_local() {
   MUTANTS_JOBS="${MUTANTS_LOCAL_JOBS:-4}" exec ./scripts/mutants-run.sh "$@"
 }
 
+# The mirror writes this checkout's results, so it is this checkout's one run.
+# Taken before anything else so a run that waits here probes the host once it
+# has the lock, and a local fallback inherits it through exec.
+acquire_checkout_lock mutants-remote || exit $?
+
 if [ "${DREP_MUTANTS_REMOTE:-1}" = "0" ]; then
   run_local "$@"
 fi
@@ -95,7 +80,6 @@ fi
 # developer needs, and inferring it from an rsync failure would also swallow a
 # full disk or an unwritable directory as "unreachable". One handshake, ~145ms,
 # against a run measured in minutes.
-AI1_CI_ROLE=drep-mutants
 # shellcheck source=scripts/mutants-ai1-transport.sh
 if ! . scripts/mutants-ai1-transport.sh; then
   echo "warning: ai-1 transport unavailable; running mutation locally" >&2
@@ -108,9 +92,7 @@ if ! ssh -o BatchMode=yes -o ConnectTimeout=5 "$HOST" true 2>/dev/null; then
   run_local "$@"
 fi
 
-echo "mutants: running on $HOST (-j $JOBS), results mirrored back to $MUTANTS_OUT_DIR"
-# The mirror writes this checkout's results, so it is this checkout's one run.
-acquire_checkout_lock mutants-remote || exit $?
+echo "mutants: running on $HOST as $AI1_CI_ROLE, results mirrored back to $MUTANTS_OUT_DIR"
 
 # Keep one remote SSH process alive for the entire transaction. Its open file
 # descriptor holds the host-wide lock while this process synchronizes source,
@@ -125,35 +107,24 @@ mkfifo "$CONTROL_IN" "$CONTROL_OUT"
 
 # shellcheck disable=SC2016  # This is the literal remote Bash program.
 REMOTE_SCRIPT='set -euo pipefail
-host_lock=$1
-wait_seconds=$2
-remote_dir=$3
-out_dir=$4
-jobs=$5
-run_token=$6
-shift 6
+wait_seconds=$1
+remote_dir=$2
+out_dir=$3
+jobs=$4
+run_token=$5
+shift 5
 export PATH="$HOME/.cargo/bin:$PATH"
-exec 9>"$host_lock"
+exec 9>>"${DREP_MUTANTS_HOST_LOCK:?the role unit names the host lock}"
 flock -E 75 -w "$wait_seconds" 9
 checkout="$HOME/$remote_dir"
-marker="$checkout/.mutants-remote-checkout"
-if [[ -e $checkout || -L $checkout ]]; then
-  [[ -d $checkout && ! -L $checkout ]] || exit 78
-  if [[ ! -f $marker && ! -f $checkout/scripts/mutants-remote.sh && -n $(ls -A "$checkout") ]]; then
-    printf "mutants-remote: refusing to mirror into %s, which this script did not create\n" "$remote_dir" >&2
-    exit 78
-  fi
-fi
 mkdir -p "$checkout"
-: >"$marker"
 printf "mutants-lock-ready:%s\n" "$run_token"
 IFS= read -r action
 [[ $action == run ]] || exit 74
 cd "$checkout"
 mkdir -p "$out_dir"
-unset DREP_MUTANTS_HOST_LOCK DREP_MUTANTS_HOST_LOCK_WAIT_SECONDS
 set +e
-DREP_MUTANTS_RESULT_TOKEN="$run_token" MUTANTS_JOBS="$jobs" \
+DREP_MUTANTS_RESULT_TOKEN="$run_token" MUTANTS_JOBS="${jobs:-${MUTANTS_JOBS:-4}}" \
   ./scripts/mutants-run.sh "$@"
 status=$?
 set -e
@@ -168,7 +139,6 @@ exit "$status"'
 REMOTE_COMMAND=
 printf -v REMOTE_COMMAND 'bash -c %q bash' "$REMOTE_SCRIPT"
 for remote_arg in \
-  "$REMOTE_HOST_LOCK" \
   "$MUTANTS_HOST_LOCK_WAIT_SECONDS" \
   "$REMOTE_DIR" \
   "$MUTANTS_OUT_DIR" \
@@ -186,7 +156,7 @@ exec 7>"$CONTROL_IN"
 exec 8<"$CONTROL_OUT"
 remote_session_open=1
 
-# shellcheck disable=SC2329  # Invoked by the EXIT trap.
+# shellcheck disable=SC2317,SC2329  # Invoked by the EXIT trap (SC2317 on shellcheck before 0.10, SC2329 after).
 cleanup_remote_session() {
   if [ "$remote_session_open" -eq 1 ]; then
     kill "$REMOTE_SESSION_PID" 2>/dev/null || true
@@ -196,27 +166,9 @@ cleanup_remote_session() {
   remove_tree "$SESSION_DIR"
 }
 trap cleanup_remote_session EXIT
-
-# Every transfer below relies on the remote session's host lock. If that session
-# ends mid-transfer the lock is free for another run, so stop the transfer rather
-# than keep writing into a tree another run may now own. The transport's rsync
-# wrapper is a shell function, so the backgrounded job may be a subshell or rsync
-# itself; stopping its children as well stops rsync and the ssh it started.
-while_session_holds_lock() {
-  "$@" &
-  local transfer=$!
-  while kill -0 "$transfer" 2>/dev/null; do
-    if ! kill -0 "$REMOTE_SESSION_PID" 2>/dev/null; then
-      pkill -TERM -P "$transfer" 2>/dev/null || true
-      kill "$transfer" 2>/dev/null || true
-      wait "$transfer" 2>/dev/null || true
-      echo "mutants-remote: the lock session ended during a transfer; stopped it" >&2
-      exit 74
-    fi
-    sleep 0.1
-  done
-  wait "$transfer"
-}
+# A session that has ended turns the next control write into SIGPIPE, which
+# would kill this shell before the trap above could run.
+trap 'exit 74' PIPE
 
 exit_after_remote_session_failure() {
   if wait "$REMOTE_SESSION_PID"; then
@@ -236,12 +188,14 @@ if [ "$ready" != "mutants-lock-ready:$RUN_TOKEN" ]; then
   exit 74
 fi
 
-# The remote session created the destination, marker included, before it
-# reported the lock ready.
+# The remote session created the destination before it reported the lock ready.
+# REMOTE_DIR is this checkout's alone and the checkout lock is held, so nothing
+# else writes it even if the session ends mid-transfer; the next control write
+# then fails the run.
 #
 # --delete so a file deleted locally cannot linger and be mutated remotely.
-# target/ is excluded in both directions: the remote keeps its own, which holds
-# the run's results and staged diffs. The cache directories are excluded
+# target/ is excluded: the run writes its results there after this sync, and
+# the staged diff follows in the transfer below. The cache directories are excluded
 # because they are 64MB of this checkout that no mutation run reads, re-diffed
 # on every commit against a Rust payload of about 1MB. Credentials are excluded
 # because nothing in the suite reads them and they have no business on another
@@ -253,11 +207,8 @@ fi
 # on the remote while passing here. --force is not enough - it deletes
 # non-empty directories, not protected ones.
 #
-# So: --delete-excluded, which removes the excluded leftovers too, with explicit
-# `P` (protect) rules for `/target`, which holds the results the mirror reads
-# back, and for the checkout marker; --delete-excluded would take both.
-while_session_holds_lock rsync -a --delete --force --delete-excluded \
-  --filter='P /target' --filter='P /.mutants-remote-checkout' \
+# So: --delete-excluded, which removes the excluded leftovers too.
+rsync -a --delete --force --delete-excluded \
   --timeout="$RSYNC_IO_TIMEOUT_SECONDS" \
   --exclude target --exclude 'mutants.out*' \
   --exclude .git --exclude node_modules \
@@ -278,7 +229,7 @@ if [ -n "${MUTANTS_EXTRA_FILES:-}" ]; then
     fi
   done
   # shellcheck disable=SC2086  # word splitting is the interface: it is a list
-  while_session_holds_lock rsync -aR --timeout="$RSYNC_IO_TIMEOUT_SECONDS" \
+  rsync -aR --timeout="$RSYNC_IO_TIMEOUT_SECONDS" \
     ${MUTANTS_EXTRA_FILES} "$REMOTE/"
 fi
 
@@ -304,7 +255,7 @@ esac
 # mutants can be read here, where the fix gets written. The remote process still
 # owns the host lock here, and its unique `.run-token` proved this run reached
 # cargo-mutants rather than exposing a previous result after an early failure.
-while_session_holds_lock rsync -a --timeout="$RSYNC_IO_TIMEOUT_SECONDS" \
+rsync -a --timeout="$RSYNC_IO_TIMEOUT_SECONDS" \
   "$REMOTE/$MUTANTS_OUT_DIR/" "$MUTANTS_OUT_DIR/" 2>/dev/null ||
   echo "warning: mutation completed but its result mirror failed" >&2
 printf 'mirrored\n' >&7

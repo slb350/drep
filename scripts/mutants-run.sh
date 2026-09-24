@@ -10,12 +10,9 @@ set -euo pipefail
 # --output pins the results directory because this script reads `missed.txt` out
 # of it to reach its verdict, so it has to know where it is rather than inherit
 # whatever the caller's cwd happened to be. The path itself is defined once, in
-# mutants-common.sh, because all three scripts in this trio need it. This is not
-# concurrency protection: two runs in the same checkout share this directory
-# exactly as they shared a cwd-relative `mutants.out`.
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# mutants-common.sh, because all three scripts in this trio need it.
 # shellcheck source=scripts/mutants-common.sh
-. "$SCRIPT_DIR/mutants-common.sh"
+. "$(dirname "$0")/mutants-common.sh"
 OUT_DIR="$MUTANTS_OUT_DIR"
 mkdir -p "$OUT_DIR"
 
@@ -35,16 +32,7 @@ if [ -n "$HOST_LOCK" ]; then
       exit 64
       ;;
   esac
-  validate_mutants_host_lock_wait_seconds mutants-run
-  command -v flock >/dev/null || {
-    echo "mutants-run: flock is required for the configured host lock" >&2
-    exit 69
-  }
-  exec 9>"$HOST_LOCK"
-  if ! flock -w "$MUTANTS_HOST_LOCK_WAIT_SECONDS" 9; then
-    echo "mutants-run: another mutation sweep owns $HOST_LOCK" >&2
-    exit 75
-  fi
+  hold_lock 9 "$HOST_LOCK" mutants-run || exit $?
 fi
 
 # Scratch copies go beside the checkout, not in the system temp dir.
@@ -58,30 +46,29 @@ fi
 #
 # A sibling of the checkout rather than a child: cargo-mutants copies the
 # checkout, so scratch inside it would be copied into every later copy
-# (target/ included, once copy_target is on). The root is taken from this script's location
-# rather than the cwd so every caller resolves the same directory.
-ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-SCRATCH_ROOT="${DREP_MUTANTS_TMPDIR:-${ROOT}.mutants-tmp}"
-RUN_SCRATCH="$SCRATCH_ROOT/run"
-mkdir -p "$SCRATCH_ROOT"
+# (target/ included, once copy_target is on).
+RUN_SCRATCH="${DREP_MUTANTS_TMPDIR:-${MUTANTS_ROOT}.mutants-tmp}/run"
 
 # The checkout lock means no other run is using this checkout's scratch, so
 # everything a previous run left in the run directory - tree copies and the
 # temporary files of tests it killed - can go. cargo-mutants never sees a
 # SIGKILL, and the runner's cancellation ends in one, so the trap below is the
-# common case and this is the backstop. Copies from before the run directory
-# sat directly under the root with these two names.
-for stale in "$RUN_SCRATCH" "$SCRATCH_ROOT"/cargo-mutants-*.tmp "$SCRATCH_ROOT"/drep-diff-test-*; do
-  remove_tree "$stale"
-done
+# common case and this is the backstop.
+remove_tree "$RUN_SCRATCH"
 mkdir -p "$RUN_SCRATCH"
 export TMPDIR="$RUN_SCRATCH"
+trap 'remove_tree "$RUN_SCRATCH"' EXIT
 
-# shellcheck disable=SC2329  # Invoked by the EXIT trap.
-finish_run() {
-  remove_tree "$RUN_SCRATCH"
-}
-trap finish_run EXIT
+# A caller that mirrors results across machines needs proof that the output is
+# from this invocation, not a previous sweep. Clear only the exact prior result
+# tree, remove any old marker without following it, and publish the caller's
+# unique token immediately before cargo-mutants starts.
+remove_tree "$OUT_DIR/mutants.out"
+RESULT_TOKEN_FILE="$OUT_DIR/.run-token"
+remove_tree "$RESULT_TOKEN_FILE"
+if [ -n "${DREP_MUTANTS_RESULT_TOKEN:-}" ]; then
+  (umask 077; printf '%s\n' "$DREP_MUTANTS_RESULT_TOKEN" >"$RESULT_TOKEN_FILE")
+fi
 
 # --cap-lints: `[lints.rust] warnings = "deny"` in Cargo.toml applies to the
 # mutated build too, and a mutant that replaces a function body leaves the
@@ -103,18 +90,6 @@ trap finish_run EXIT
 #
 # 6<&- 9<&-: the checkout and host locks stay with this script. A test fixture
 # that outlives its mutant must not inherit either and block the next run.
-
-# A caller that mirrors results across machines needs proof that the output is
-# from this invocation, not a previous sweep. Clear only the exact prior result
-# tree, remove any old marker without following it, and publish the caller's
-# unique token immediately before cargo-mutants starts.
-find "$OUT_DIR/mutants.out" -depth -delete 2>/dev/null || true
-RESULT_TOKEN_FILE="$OUT_DIR/.run-token"
-find "$RESULT_TOKEN_FILE" -depth -delete 2>/dev/null || true
-if [ -n "${DREP_MUTANTS_RESULT_TOKEN:-}" ]; then
-  (umask 077; printf '%s\n' "$DREP_MUTANTS_RESULT_TOKEN" >"$RESULT_TOKEN_FILE")
-fi
-
 cargo mutants -j "${MUTANTS_JOBS:-4}" --no-shuffle --minimum-test-timeout 120 \
   --cap-lints true --output "$OUT_DIR" "$@" 6<&- 9<&- && status=0 || status=$?
 

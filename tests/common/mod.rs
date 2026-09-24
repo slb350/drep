@@ -66,3 +66,48 @@ pub fn without_outer_git(program: &str, dir: &std::path::Path) -> std::process::
     command.current_dir(dir);
     command
 }
+
+/// perl that exits 0 when the lock file named by its argument could be taken
+/// now and 1 while another process holds it: the same kernel flock the
+/// mutation scripts take through perl, since macOS has no flock(1).
+#[allow(dead_code)]
+pub const LOCK_PROBE: &str =
+    "open(my $f, '>>', $ARGV[0]) or exit 2; exit(flock($f, LOCK_EX | LOCK_NB) ? 0 : 1)";
+
+/// Whether another process could take the lock at `path` right now.
+#[allow(dead_code)]
+#[cfg(unix)]
+pub fn lock_is_free(path: &std::path::Path) -> bool {
+    std::process::Command::new("perl")
+        .args(["-MFcntl=:flock", "-e", LOCK_PROBE])
+        .arg(path)
+        .status()
+        .expect("probe the lock")
+        .success()
+}
+
+/// A process holding the lock at `path` until it is killed or `seconds` pass;
+/// returns once the lock is held.
+#[allow(dead_code)]
+#[cfg(unix)]
+pub fn hold_lock(path: &std::path::Path, seconds: &str) -> std::process::Child {
+    use std::io::BufRead;
+    let mut holder = std::process::Command::new("perl")
+        .args([
+            "-MFcntl=:flock",
+            "-MTime::HiRes=sleep",
+            "-e",
+            "open(my $f, '>>', $ARGV[0]) or die; flock($f, LOCK_EX) or die; $| = 1; print \"locked\\n\"; sleep $ARGV[1]",
+        ])
+        .arg(path)
+        .arg(seconds)
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .expect("spawn the lock holder");
+    let mut ready = String::new();
+    std::io::BufReader::new(holder.stdout.take().expect("holder stdout"))
+        .read_line(&mut ready)
+        .expect("the holder reports the lock");
+    assert_eq!(ready, "locked\n");
+    holder
+}

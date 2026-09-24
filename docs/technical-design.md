@@ -593,15 +593,13 @@ ai-1 mutation runner. It fetches full history so `github.event.before` is an exa
 base rather than assuming one pushed commit. `.github/workflows/mutants.yml`
 owns the exhaustive sweep: it runs weekly or by explicit dispatch, refuses a
 manual ref outside the default branch, and never triggers for a push or pull
-request. Both mutation lanes keep `target/` warm, reject any other persistent
-workspace state, and pin `cargo-mutants` 27.1.0. `scripts/mutants-run.sh`
+request. Both mutation lanes pin `cargo-mutants` 27.1.0 and start from a clean checkout, since it builds every mutant in a copy of the tree without `target/`. `scripts/mutants-run.sh`
 remains the single definition of the verdict.
 
-Developer offload through `scripts/mutants-remote.sh` uses the SSH account's
-`~/.cache/drep-mutants/<repo>` tree instead of the protected runner checkout.
+Developer offload through `scripts/mutants-remote.sh` mirrors each checkout into its own directory under the role account's `~/.cache/drep-mutants/`, named for the checkout's path, instead of the protected runner checkout. The checkout lock makes that directory one run's at a time.
 It defaults to `steve@192.168.68.88` and shares the host lock with
 hosted mutation, so the two entrypoints cannot run concurrently. Mutation runs on ai-1; the only other place a run happens is this machine, when ai-1 is unreachable or `DREP_MUTANTS_REMOTE=0` is set, or a host an operator names explicitly in `DREP_MUTANTS_HOST`. Legion's stopped mutation runner is therefore not rollback capacity; homelab-1's stopped Linux validation runner remains rollback material for that job only.
 The root-owned ai-workstation offload helper launches all commands and rsync as
 `ci-drep-mutants` in the same bounded `ai-ci.slice` and sandbox as hosted jobs.
-The lock is `/srv/ci/fleet/drep-mutants/home/host.lock`; the account home and
+The role unit names the host lock, `/srv/ci/fleet/drep-mutants/home/host.lock`, and the offloaded run inherits it from the session that took it; the account home and
 all scratch/build output live on persistent `/srv`.
