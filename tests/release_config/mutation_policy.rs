@@ -207,13 +207,19 @@ fn remote_mutation_takes_the_checkout_lock_before_probing_the_host() {
 }
 
 /// The source sync mirrors this checkout with --delete, so its remote
-/// directory is named for the checkout's path: two checkouts with the same name
+/// directory is named for this machine and the checkout's path: two checkouts
 /// never share one, and holding the checkout lock is all it takes to own it.
 #[cfg(unix)]
 #[test]
 fn checkouts_with_one_name_get_their_own_remote_directories() {
     let temp = tempfile::tempdir().expect("tempdir");
-    let remote_dir = |parent: &str, name: &str| {
+    let fake_bin = temp.path().join("bin");
+    std::fs::create_dir_all(&fake_bin).expect("fake bin");
+    common::write_executable(
+        &fake_bin.join("hostname"),
+        "#!/bin/sh\necho other-machine\n",
+    );
+    let remote_dir_on = |parent: &str, name: &str, machine: Option<&std::path::Path>| {
         let scripts = temp.path().join(parent).join(name).join("scripts");
         std::fs::create_dir_all(&scripts).expect("scripts directory");
         std::fs::copy(
@@ -221,19 +227,26 @@ fn checkouts_with_one_name_get_their_own_remote_directories() {
             scripts.join("mutants-common.sh"),
         )
         .expect("copy mutation script");
-        let output = std::process::Command::new("bash")
+        let mut command = std::process::Command::new("bash");
+        command
             .args([
                 "-c",
                 ". \"$1/mutants-common.sh\" && remote_checkout_dir drep-mutants",
                 "remote-dir-test",
             ])
             .arg(&scripts)
-            .current_dir(temp.path())
-            .output()
-            .expect("derive the remote directory");
+            .current_dir(temp.path());
+        if let Some(bin) = machine {
+            command.env(
+                "PATH",
+                format!("{}:{}", bin.display(), std::env::var("PATH").expect("PATH")),
+            );
+        }
+        let output = command.output().expect("derive the remote directory");
         assert!(output.status.success(), "{output:?}");
         String::from_utf8(output.stdout).expect("utf-8 directory")
     };
+    let remote_dir = |parent: &str, name: &str| remote_dir_on(parent, name, None);
 
     let first = remote_dir("one", "drep");
     let second = remote_dir("two", "drep");
@@ -263,6 +276,11 @@ fn checkouts_with_one_name_get_their_own_remote_directories() {
         first,
         remote_dir("one", "drep"),
         "a checkout keeps its directory"
+    );
+    assert_ne!(
+        first,
+        remote_dir_on("one", "drep", Some(&fake_bin)),
+        "the same path on another machine must not share a directory"
     );
 }
 

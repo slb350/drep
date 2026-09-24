@@ -10,7 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - Mutation runs in one checkout no longer delete each other's results and scratch copies. The hook, a manual run and an offloaded run each hold a kernel lock on `target/mutants.lock` and wait up to `DREP_MUTANTS_HOST_LOCK_WAIT_SECONDS` for it, and a commit with no staged Rust changes exits before taking it. A script started by the lock's holder carries on under the inherited lock, and the ai-1 host lock is taken the same way, so `flock(1)` is no longer required. Each run's scratch is `<checkout>.mutants-tmp/run`, emptied when the run starts and ends.
-- An offloaded run mirrors the checkout into its own directory under the ai-1 role's cache, named for the checkout's path, so two checkouts can no longer sync into one tree. `DREP_MUTANTS_DIR` and `DREP_MUTANTS_REMOTE_HOST_LOCK` are removed: the role's unit supplies the host lock and job count. The transport accepts any well-formed `*-mutants` role and leaves the list of roles to ai-1's `offload.py`.
+- An offloaded run mirrors the checkout into its own directory under the ai-1 role's cache, named for the machine and the checkout's path, so two checkouts can no longer sync into one tree. `DREP_MUTANTS_DIR` and `DREP_MUTANTS_REMOTE_HOST_LOCK` are removed: the role's unit supplies the host lock and job count. The transport accepts any well-formed `*-mutants` role and leaves the list of roles to ai-1's `offload.py`.
 - Both mutation lanes start from a clean checkout. cargo-mutants 27.1.0 builds every mutant in a copy of the tree without `target/`, so the retained `target/` never shortened a sweep.
 
 ### Changed

@@ -596,7 +596,7 @@ manual ref outside the default branch, and never triggers for a push or pull
 request. Both mutation lanes pin `cargo-mutants` 27.1.0 and start from a clean checkout, since it builds every mutant in a copy of the tree without `target/`. `scripts/mutants-run.sh`
 remains the single definition of the verdict.
 
-Developer offload through `scripts/mutants-remote.sh` mirrors each checkout into its own directory under the role account's `~/.cache/drep-mutants/`, named for the checkout's path, instead of the protected runner checkout. The checkout lock makes that directory one run's at a time.
+Developer offload through `scripts/mutants-remote.sh` mirrors each checkout into its own directory under the role account's `~/.cache/drep-mutants/`, named for the machine and the checkout's path, instead of the protected runner checkout. The checkout lock makes that directory one run's at a time.
 It defaults to `steve@192.168.68.88` and shares the host lock with
 hosted mutation, so the two entrypoints cannot run concurrently. Mutation runs on ai-1; the only other place a run happens is this machine, when ai-1 is unreachable or `DREP_MUTANTS_REMOTE=0` is set, or a host an operator names explicitly in `DREP_MUTANTS_HOST`. Legion's stopped mutation runner is therefore not rollback capacity; homelab-1's stopped Linux validation runner remains rollback material for that job only.
 The root-owned ai-workstation offload helper launches all commands and rsync as
