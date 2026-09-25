@@ -85,27 +85,11 @@ jobs:
     runs-on: [self-hosted, linux, x64, homelab-ai-1, drep-mutants]
     timeout-minutes: 120
     steps:
+      # cargo-mutants builds every mutant in its own scratch copy of the tree, which excludes target/, so an ordinary clean checkout loses nothing.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          clean: false
           fetch-depth: 0
           persist-credentials: false
-
-      # Keeping target/ avoids rebuilding every dependency for a small diff.
-      # No other persistent state may influence the mutation result.
-      - name: Verify persistent workspace hygiene
-        shell: bash
-        run: |
-          set -euo pipefail
-          unexpected="$(
-            git status --porcelain=v1 --untracked-files=all --ignored=matching |
-              grep -Ev '^!! target/$' || true
-          )"
-          if [ -n "$unexpected" ]; then
-            echo "unexpected persistent runner state:" >&2
-            echo "$unexpected" >&2
-            exit 1
-          fi
 
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
         with:

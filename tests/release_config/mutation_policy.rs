@@ -34,12 +34,8 @@ fn mutation_ci_splits_main_diff_checks_from_exhaustive_sweeps() {
         "routine mutation must follow successful trusted validation on ai-1"
     );
     assert!(
-        diff_mutants.contains("fetch-depth: 0")
-            && diff_mutants.contains("clean: false")
-            && diff_mutants
-                .contains("git status --porcelain=v1 --untracked-files=all --ignored=matching")
-            && diff_mutants.contains("^!! target/$"),
-        "the diff lane needs complete history and a fail-closed warm workspace"
+        diff_mutants.contains("fetch-depth: 0") && !diff_mutants.contains("clean: false"),
+        "the diff lane needs complete history and a clean checkout"
     );
     assert!(
         diff_mutants.contains("tool: cargo-mutants@27.1.0")
@@ -103,11 +99,8 @@ fn mutation_ci_splits_main_diff_checks_from_exhaustive_sweeps() {
         "the mutation runner must install Clippy because the suite exercises configured Rust compilers"
     );
     assert!(
-        mutants.contains("clean: false")
-            && mutants
-                .contains("git status --porcelain=v1 --untracked-files=all --ignored=matching")
-            && mutants.contains("^!! target/$"),
-        "the warm target cache must be retained only behind a fail-closed workspace check"
+        !mutants.contains("clean: false"),
+        "cargo-mutants builds each mutant in a copy without target/, so the sweep starts from a clean checkout"
     );
     assert!(
         mutants.contains("./scripts/mutants-run.sh"),
@@ -119,7 +112,7 @@ fn mutation_ci_splits_main_diff_checks_from_exhaustive_sweeps() {
 ///
 /// Expanding `"$@"` as part of the remote-command argument loop contributes
 /// zero words when the caller supplied no scope. The remote script shifts only
-/// its six transport fields, leaving a genuinely empty argument vector for
+/// its five transport fields, leaving a genuinely empty argument vector for
 /// cargo-mutants.
 #[test]
 fn remote_full_mutation_sweep_passes_no_phantom_argument() {
@@ -127,7 +120,7 @@ fn remote_full_mutation_sweep_passes_no_phantom_argument() {
 
     assert!(
         script.contains("for remote_arg in")
-            && script.contains("shift 6")
+            && script.contains("shift 5")
             && script.contains("./scripts/mutants-run.sh \"$@\""),
         "the remote wrapper must preserve an empty post-transport argument vector"
     );
@@ -146,10 +139,9 @@ fn remote_mutation_sweep_defaults_to_bounded_ai1() {
         "developer mutation offload must follow hosted mutation ownership to ai-1"
     );
     assert!(
-        script.contains(
-            "REMOTE_DIR=\"${DREP_MUTANTS_DIR:-.cache/drep-mutants/$(basename \"$PWD\")}\""
-        ),
-        "developer mutation offload must not collide with the protected runner checkout"
+        script.contains("AI1_CI_ROLE=drep-mutants")
+            && script.contains("REMOTE_DIR=\"$(remote_checkout_dir \"$AI1_CI_ROLE\")\""),
+        "developer mutation offload must use this checkout's own directory in the role's cache"
     );
     assert!(
         !script.contains("homelab-2.local") && !script.contains("strix.local"),
@@ -162,13 +154,13 @@ fn remote_mutation_session_owns_sync_run_and_fresh_result_mirroring() {
     let script = remote_mutation_script();
 
     assert!(
-        script.contains("DREP_MUTANTS_REMOTE_HOST_LOCK:-/srv/ci/fleet/drep-mutants/home/host.lock")
-            && script.contains("exec 9>\"$host_lock\"")
-            && script.contains("flock -E 75 -w \"$wait_seconds\" 9"),
-        "developer and hosted mutation must share the ai-1 host lock"
+        script.contains("exec 9>>\"${DREP_MUTANTS_HOST_LOCK:?")
+            && script.contains("flock -E 75 -w \"$wait_seconds\" 9")
+            && !script.contains("unset DREP_MUTANTS_HOST_LOCK"),
+        "the offloaded run must take the role's host lock, the one hosted sweeps take, and hand it to the run on descriptor 9"
     );
     assert!(
-        script.contains("DREP_MUTANTS_HOST_LOCK_WAIT_SECONDS")
+        script.contains("\"$MUTANTS_HOST_LOCK_WAIT_SECONDS\"")
             && script.contains("DREP_MUTANTS_RSYNC_TIMEOUT_SECONDS")
             && script.contains("--timeout=\"$RSYNC_IO_TIMEOUT_SECONDS\""),
         "remote lock and transfer waits must remain explicitly bounded"
@@ -184,8 +176,9 @@ fn remote_mutation_session_owns_sync_run_and_fresh_result_mirroring() {
     );
     assert!(
         script.contains("kill \"$REMOTE_SESSION_PID\"")
-            && script.contains("wait \"$REMOTE_SESSION_PID\""),
-        "abnormal local exit must terminate and reap the remote lock session"
+            && script.contains("wait \"$REMOTE_SESSION_PID\"")
+            && script.contains("trap 'exit 74' PIPE"),
+        "abnormal local exit, a dead session included, must terminate and reap the remote lock session"
     );
     let session_start = script
         .find("REMOTE_SESSION_PID=$!")
@@ -199,16 +192,260 @@ fn remote_mutation_session_owns_sync_run_and_fresh_result_mirroring() {
     );
 }
 
+/// The checkout lock is taken before the host is probed, so a run that waited for it does not act on a probe that is half an hour old.
+#[test]
+fn remote_mutation_takes_the_checkout_lock_before_probing_the_host() {
+    let script = remote_mutation_script();
+    let lock = script
+        .find("acquire_checkout_lock mutants-remote")
+        .expect("checkout lock");
+    let probe = script
+        .find("ssh -o BatchMode=yes -o ConnectTimeout=5")
+        .expect("host probe");
+    assert!(lock < probe);
+}
+
+/// The source sync mirrors this checkout with --delete, so its remote directory is named for this machine and the checkout's path: two checkouts never share one, and holding the checkout lock is all it takes to own it.
+#[cfg(unix)]
+#[test]
+fn checkouts_with_one_name_get_their_own_remote_directories() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let fake_bin = temp.path().join("bin");
+    std::fs::create_dir_all(&fake_bin).expect("fake bin");
+    common::write_executable(
+        &fake_bin.join("hostname"),
+        "#!/bin/sh\necho other-machine\n",
+    );
+    let remote_dir_on = |parent: &str, name: &str, machine: Option<&std::path::Path>| {
+        let scripts = temp.path().join(parent).join(name).join("scripts");
+        std::fs::create_dir_all(&scripts).expect("scripts directory");
+        std::fs::copy(
+            format!("{}/scripts/mutants-common.sh", env!("CARGO_MANIFEST_DIR")),
+            scripts.join("mutants-common.sh"),
+        )
+        .expect("copy mutation script");
+        let mut command = std::process::Command::new("bash");
+        command
+            .args([
+                "-c",
+                ". \"$1/mutants-common.sh\" && remote_checkout_dir drep-mutants",
+                "remote-dir-test",
+            ])
+            .arg(&scripts)
+            .current_dir(temp.path());
+        if let Some(bin) = machine {
+            command.env(
+                "PATH",
+                format!("{}:{}", bin.display(), std::env::var("PATH").expect("PATH")),
+            );
+        }
+        let output = command.output().expect("derive the remote directory");
+        assert!(output.status.success(), "{output:?}");
+        String::from_utf8(output.stdout).expect("utf-8 directory")
+    };
+    let remote_dir = |parent: &str, name: &str| remote_dir_on(parent, name, None);
+
+    let first = remote_dir("one", "drep");
+    let second = remote_dir("two", "drep");
+    let odd = remote_dir("three", "my repo;x");
+
+    for dir in [&first, &second, &odd] {
+        let name = dir
+            .strip_prefix(".cache/drep-mutants/")
+            .unwrap_or_else(|| panic!("{dir} must sit in the role's cache"));
+        assert!(
+            !name.is_empty()
+                && name
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || b"-_.".contains(&byte))
+                && name != "."
+                && name != "..",
+            "{dir} must be one plain directory name"
+        );
+    }
+    assert!(first.starts_with(".cache/drep-mutants/drep-"));
+    assert!(odd.starts_with(".cache/drep-mutants/myrepox-"));
+    assert_ne!(
+        first, second,
+        "same-named checkouts must not share a directory"
+    );
+    assert_eq!(
+        first,
+        remote_dir("one", "drep"),
+        "a checkout keeps its directory"
+    );
+    assert_ne!(
+        first,
+        remote_dir_on("one", "drep", Some(&fake_bin)),
+        "the same path on another machine must not share a directory"
+    );
+}
+
+/// A fixture repository with the staged wrapper, a fake remote that records how it was called and what it was given to test, and one committed Rust file.
+#[cfg(unix)]
+fn staged_fixture(temp: &std::path::Path) -> std::path::PathBuf {
+    let repository = temp.join("repository");
+    let scripts = repository.join("scripts");
+    std::fs::create_dir_all(&scripts).expect("scripts directory");
+    for name in ["mutants-common.sh", "mutants-staged.sh"] {
+        std::fs::copy(
+            format!("{}/scripts/{name}", env!("CARGO_MANIFEST_DIR")),
+            scripts.join(name),
+        )
+        .expect("copy mutation script");
+    }
+    // Records whether another process is refused the checkout lock, whether this process, started by the lock's holder, gets it without waiting, and the source it was handed. With FAKE_RESTAGE set it stages a further change, as an editor could while the run waits.
+    common::write_executable(
+        &scripts.join("mutants-remote.sh"),
+        "#!/usr/bin/env bash\nperl -MFcntl=:flock -e \"$LOCK_PROBE\" target/mutants.lock; refused=$?\n. scripts/mutants-common.sh\nMUTANTS_HOST_LOCK_WAIT_SECONDS=0\nacquire_checkout_lock fake-remote; inherited=$?\nsource=$(cat \"$MUTANTS_SOURCE_DIR/lib.rs\"); untracked=$(ls \"$MUTANTS_SOURCE_DIR/untracked.rs\" 2>/dev/null)\nprintf '%s|%s|%s|%s|%s|%s\\n' \"$*\" \"$MUTANTS_EXTRA_FILES\" \"$inherited\" \"$refused\" \"$source\" \"$untracked\" >> \"$FAKE_EVENTS\"\nif [ -n \"${FAKE_RESTAGE:-}\" ]; then echo 'fn three() {}' > lib.rs && git add lib.rs; fi\n",
+    );
+    std::fs::write(repository.join(".gitignore"), "target/\n").expect("gitignore");
+    std::fs::write(repository.join("lib.rs"), "fn one() {}\n").expect("source");
+    staged_git(&repository, &["init", "-q", "-b", "main"]);
+    staged_git(&repository, &["add", "."]);
+    staged_git(
+        &repository,
+        &[
+            "-c",
+            "user.name=Fixture",
+            "-c",
+            "user.email=fixture@example.invalid",
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "-qm",
+            "fixture",
+        ],
+    );
+    repository
+}
+
+#[cfg(unix)]
+fn staged_git(repository: &std::path::Path, arguments: &[&str]) {
+    let output = common::without_outer_git("git", repository)
+        .args(arguments)
+        .output()
+        .expect("run git");
+    assert!(output.status.success(), "git {arguments:?}: {output:?}");
+}
+
+#[cfg(unix)]
+fn run_staged(
+    repository: &std::path::Path,
+    events: &std::path::Path,
+    extra_env: &[(&str, &str)],
+) -> std::process::Output {
+    let mut command = common::without_outer_git("bash", repository);
+    command
+        .arg("scripts/mutants-staged.sh")
+        .env("FAKE_EVENTS", events)
+        .env("LOCK_PROBE", common::LOCK_PROBE)
+        .env("DREP_MUTANTS_HOST_LOCK_WAIT_SECONDS", "0")
+        .env_remove("DREP_MUTANTS_TMPDIR");
+    for (key, value) in extra_env {
+        command.env(key, value);
+    }
+    command.output().expect("run the staged wrapper")
+}
+
+/// A staged run tests a snapshot of the index, not the working tree, and holds the checkout lock from writing its diff until the remote run returns, so a manual sweep in the same checkout cannot overwrite the diff or the results in between.
+#[cfg(unix)]
+#[test]
+fn staged_run_tests_the_index_under_the_checkout_lock() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let repository = staged_fixture(temp.path());
+    let events = temp.path().join("events");
+    std::fs::write(repository.join("lib.rs"), "fn two() {}\n").expect("staged source");
+    staged_git(&repository, &["add", "lib.rs"]);
+    std::fs::write(repository.join("lib.rs"), "fn unstaged() {}\n").expect("unstaged edit");
+    std::fs::write(repository.join("untracked.rs"), "fn untracked() {}\n").expect("untracked file");
+
+    let output = run_staged(&repository, &events, &[]);
+
+    assert!(output.status.success(), "{output:?}");
+    let call = std::fs::read_to_string(&events).expect("remote call");
+    let fields = call.trim_end().split('|').collect::<Vec<_>>();
+    let diff = "target/mutants/staged.diff";
+    assert_eq!(fields[0], format!("--in-diff {diff}"));
+    assert_eq!(fields[1], diff, "the diff must be named for the transfer");
+    assert_eq!(
+        fields[2], "0",
+        "the remote run must inherit the lock instead of waiting on it"
+    );
+    assert_eq!(
+        fields[3], "1",
+        "another process must be refused the lock while the remote run works"
+    );
+    assert_eq!(
+        fields[4], "fn two() {}",
+        "the run must build the staged content"
+    );
+    assert_eq!(fields[5], "", "an untracked file must not reach the run");
+    assert!(
+        std::fs::read_to_string(repository.join(diff))
+            .expect("staged diff")
+            .contains("+fn two() {}")
+    );
+    assert!(
+        common::lock_is_free(&repository.join("target/mutants.lock")),
+        "the lock must be free once the staged run returns"
+    );
+    assert!(
+        !temp.path().join("repository.mutants-tmp/index").exists(),
+        "the snapshot must be removed when the run ends"
+    );
+}
+
+/// `git commit` reads the index again after the hook, so a change staged while the run worked would be committed untested; the run refuses instead.
+#[cfg(unix)]
+#[test]
+fn a_change_staged_during_the_run_is_refused() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let repository = staged_fixture(temp.path());
+    let events = temp.path().join("events");
+    std::fs::write(repository.join("lib.rs"), "fn two() {}\n").expect("staged source");
+    staged_git(&repository, &["add", "lib.rs"]);
+
+    let output = run_staged(&repository, &events, &[("FAKE_RESTAGE", "1")]);
+
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("the index changed during the run"),
+        "{output:?}"
+    );
+}
+
+/// A commit with no Rust changes has nothing to mutate, so it leaves at once even while a sweep holds this checkout's lock.
+#[cfg(unix)]
+#[test]
+fn a_commit_without_rust_changes_does_not_wait_for_a_running_sweep() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let repository = staged_fixture(temp.path());
+    let events = temp.path().join("events");
+    std::fs::write(repository.join("notes.md"), "notes\n").expect("staged prose");
+    staged_git(&repository, &["add", "notes.md"]);
+    std::fs::create_dir_all(repository.join("target")).expect("target");
+    let mut sweep = common::hold_lock(&repository.join("target/mutants.lock"), "30");
+
+    let output = run_staged(&repository, &events, &[]);
+    let _ = sweep.kill();
+    let _ = sweep.wait();
+
+    assert!(output.status.success(), "{output:?}");
+    assert!(
+        String::from_utf8_lossy(&output.stdout).contains("no staged Rust changes"),
+        "{output:?}"
+    );
+    assert!(!events.exists(), "nothing may reach the remote");
+}
+
 #[test]
 fn mutation_runner_holds_the_configured_host_lock() {
     let script = mutation_run_script();
 
     assert!(
-        script.contains("DREP_MUTANTS_HOST_LOCK")
-            && script.contains("validate_mutants_host_lock_wait_seconds mutants-run")
-            && script.contains("MUTANTS_HOST_LOCK_WAIT_SECONDS")
-            && script.contains("flock -w")
-            && script.contains("exec 9>\"$HOST_LOCK\""),
+        script.contains("HOST_LOCK=\"${DREP_MUTANTS_HOST_LOCK:-}\"")
+            && script.contains("hold_lock 9 \"$HOST_LOCK\" mutants-run"),
         "a configured mutation host must serialize GitHub and laptop-offloaded sweeps"
     );
     assert!(
@@ -216,6 +453,10 @@ fn mutation_runner_holds_the_configured_host_lock() {
             && script.contains("$OUT_DIR/mutants.out")
             && script.contains("$OUT_DIR/.run-token"),
         "each remote run must clear stale output and publish its own freshness token"
+    );
+    assert!(
+        script.contains("\"$@\" 6<&- 9<&- && status=0"),
+        "cargo-mutants and its fixtures must not inherit the checkout or host lock"
     );
 }
 
@@ -225,18 +466,15 @@ fn mutation_host_lock_wait_policy_has_one_definition() {
     assert!(
         common.contains(
             "MUTANTS_HOST_LOCK_WAIT_SECONDS=\"${DREP_MUTANTS_HOST_LOCK_WAIT_SECONDS:-1800}\""
-        ) && common.contains("validate_mutants_host_lock_wait_seconds()"),
-        "the shared mutation layer must own the host-lock wait default and validation"
+        ) && common.contains("validate_mutants_host_lock_wait_seconds()")
+            && common.contains("validate_mutants_host_lock_wait_seconds \"$caller\" || return"),
+        "the shared mutation layer must own the lock wait default and check it before every lock"
     );
 
     for (name, script) in [
         ("mutants-remote", remote_mutation_script()),
         ("mutants-run", mutation_run_script()),
     ] {
-        assert!(
-            script.contains(&format!("validate_mutants_host_lock_wait_seconds {name}")),
-            "{name} must invoke the shared host-lock wait validator"
-        );
         assert!(
             !script.contains(
                 "HOST_LOCK_WAIT_SECONDS=\"${DREP_MUTANTS_HOST_LOCK_WAIT_SECONDS:-1800}\""
@@ -258,4 +496,13 @@ fn ai1_transport_fails_closed_without_bypassing_the_sandbox() {
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
+}
+
+/// The staged run hands the wrapper a snapshot of the index: the sync ships that tree and a local fallback builds it.
+#[test]
+fn remote_mutation_builds_the_source_it_is_given() {
+    let script = remote_mutation_script();
+    assert!(script.contains("SOURCE=\"${MUTANTS_SOURCE_DIR:-.}\""));
+    assert!(script.contains("\"$SOURCE/\" \"$REMOTE/\""));
+    assert!(script.contains("exec ./scripts/mutants-run.sh --dir \"$SOURCE\" \"$@\""));
 }

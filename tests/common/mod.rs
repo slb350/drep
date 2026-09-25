@@ -23,3 +23,84 @@ pub fn without_comments(relative: &str) -> String {
         .collect::<Vec<_>>()
         .join("\n")
 }
+
+/// Writes an executable test stub from a child process, so no descriptor of this process can hold it open for writing when another test thread forks: Linux refuses to `exec` such a file (`Text file busy`). Mirrors `test_support::write_executable`, which integration tests cannot reach.
+// Only release_config uses the process helpers; published_hooks shares this module.
+#[allow(dead_code)]
+#[cfg(unix)]
+pub fn write_executable(path: &std::path::Path, contents: &str) {
+    let status = std::process::Command::new("/bin/sh")
+        .arg("-c")
+        .arg(r#"printf '%s' "$2" > "$1" && chmod +x "$1""#)
+        .arg("sh")
+        .arg(path)
+        .arg(contents)
+        .status()
+        .expect("the writer process must start");
+    assert!(
+        status.success(),
+        "writing the executable {} failed: {status}",
+        path.display()
+    );
+}
+
+/// A command whose git calls cannot reach the repository of a hook this suite may be running under. Mirrors the environment `test_support::git` clears.
+#[allow(dead_code)]
+pub fn without_outer_git(program: &str, dir: &std::path::Path) -> std::process::Command {
+    let mut command = std::process::Command::new(program);
+    for variable in [
+        "GIT_DIR",
+        "GIT_WORK_TREE",
+        "GIT_COMMON_DIR",
+        "GIT_INDEX_FILE",
+        "GIT_OBJECT_DIRECTORY",
+        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+        "GIT_QUARANTINE_PATH",
+    ] {
+        command.env_remove(variable);
+    }
+    command.current_dir(dir);
+    command
+}
+
+/// perl that exits 0 when the lock file named by its argument could be taken now and 1 while another process holds it: the same kernel flock the mutation scripts take through perl, since macOS has no flock(1).
+#[allow(dead_code)]
+pub const LOCK_PROBE: &str =
+    "open(my $f, '>>', $ARGV[0]) or exit 2; exit(flock($f, LOCK_EX | LOCK_NB) ? 0 : 1)";
+
+/// Whether another process could take the lock at `path` right now.
+#[allow(dead_code)]
+#[cfg(unix)]
+pub fn lock_is_free(path: &std::path::Path) -> bool {
+    std::process::Command::new("perl")
+        .args(["-MFcntl=:flock", "-e", LOCK_PROBE])
+        .arg(path)
+        .status()
+        .expect("probe the lock")
+        .success()
+}
+
+/// A process holding the lock at `path` until it is killed or `seconds` pass; returns once the lock is held.
+#[allow(dead_code)]
+#[cfg(unix)]
+pub fn hold_lock(path: &std::path::Path, seconds: &str) -> std::process::Child {
+    use std::io::BufRead;
+    let mut holder = std::process::Command::new("perl")
+        .args([
+            "-MFcntl=:flock",
+            "-MTime::HiRes=sleep",
+            "-e",
+            "open(my $f, '>>', $ARGV[0]) or die; flock($f, LOCK_EX) or die; $| = 1; print \"locked\\n\"; sleep $ARGV[1]",
+        ])
+        .arg(path)
+        .arg(seconds)
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .expect("spawn the lock holder");
+    let mut ready = String::new();
+    std::io::BufReader::new(holder.stdout.take().expect("holder stdout"))
+        .read_line(&mut ready)
+        .expect("the holder reports the lock");
+    assert_eq!(ready, "locked\n");
+    holder
+}
