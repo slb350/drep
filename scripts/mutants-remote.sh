@@ -14,7 +14,6 @@
 # Falls back to a local run, loudly, when the host is unreachable. A commit gate
 # that silently skips itself because the LAN blipped is worse than a slow one.
 #
-#   DREP_MUTANTS_HOST    ssh target (default: steve@192.168.68.88)
 #   DREP_MUTANTS_HOST_LOCK_WAIT_SECONDS
 #                        wait for the checkout and host locks (default: 1800)
 #   DREP_MUTANTS_RSYNC_TIMEOUT_SECONDS
@@ -39,7 +38,7 @@ cd "$(git rev-parse --show-toplevel)"
 
 # The ai-1 CI role this repository's mutation runs as, here and in its hosted sweeps. The role's unit also supplies the host lock and the job count.
 AI1_CI_ROLE=drep-mutants
-HOST="${DREP_MUTANTS_HOST:-steve@192.168.68.88}"
+HOST=steve@192.168.68.88
 REMOTE_DIR="$(remote_checkout_dir "$AI1_CI_ROLE")"
 REMOTE="$HOST:$REMOTE_DIR"
 JOBS="${MUTANTS_JOBS:-}"
@@ -146,7 +145,7 @@ exec 7>"$CONTROL_IN"
 exec 8<"$CONTROL_OUT"
 remote_session_open=1
 
-# shellcheck disable=SC2317,SC2329  # Invoked by the EXIT trap (SC2317 on shellcheck before 0.10, SC2329 after).
+# shellcheck disable=SC2329  # Invoked by the EXIT trap.
 cleanup_remote_session() {
   if [ "$remote_session_open" -eq 1 ]; then
     kill "$REMOTE_SESSION_PID" 2>/dev/null || true

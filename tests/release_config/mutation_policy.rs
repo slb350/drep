@@ -135,7 +135,7 @@ fn remote_mutation_sweep_defaults_to_bounded_ai1() {
     let script = remote_mutation_script();
 
     assert!(
-        script.contains("HOST=\"${DREP_MUTANTS_HOST:-steve@192.168.68.88}\""),
+        script.contains("\nHOST=steve@192.168.68.88\n") && !script.contains("DREP_MUTANTS_HOST:-"),
         "developer mutation offload must follow hosted mutation ownership to ai-1"
     );
     assert!(
