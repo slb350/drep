@@ -135,7 +135,9 @@ fn remote_mutation_sweep_defaults_to_bounded_ai1() {
     let script = remote_mutation_script();
 
     assert!(
-        script.contains("HOST=\"${DREP_MUTANTS_HOST:-steve@192.168.68.88}\""),
+        common::read("scripts/mutants-ai1-transport.sh")
+            .contains("\nAI1_HOST=steve@192.168.68.88\n")
+            && !script.contains("DREP_MUTANTS_HOST:-"),
         "developer mutation offload must follow hosted mutation ownership to ai-1"
     );
     assert!(
@@ -184,7 +186,7 @@ fn remote_mutation_session_owns_sync_run_and_fresh_result_mirroring() {
         .find("REMOTE_SESSION_PID=$!")
         .expect("remote session PID assignment must exist");
     let source_sync = script
-        .find("rsync -a --delete")
+        .find("ai1_push -a --delete")
         .expect("source synchronization must exist");
     assert!(
         session_start < source_sync,
@@ -200,7 +202,7 @@ fn remote_mutation_takes_the_checkout_lock_before_probing_the_host() {
         .find("acquire_checkout_lock mutants-remote")
         .expect("checkout lock");
     let probe = script
-        .find("ssh -o BatchMode=yes -o ConnectTimeout=5")
+        .find("ai1_ssh -o BatchMode=yes -o ConnectTimeout=5")
         .expect("host probe");
     assert!(lock < probe);
 }
@@ -503,6 +505,6 @@ fn ai1_transport_fails_closed_without_bypassing_the_sandbox() {
 fn remote_mutation_builds_the_source_it_is_given() {
     let script = remote_mutation_script();
     assert!(script.contains("SOURCE=\"${MUTANTS_SOURCE_DIR:-.}\""));
-    assert!(script.contains("\"$SOURCE/\" \"$REMOTE/\""));
+    assert!(script.contains("\"$SOURCE/\" \"$REMOTE_DIR/\""));
     assert!(script.contains("exec ./scripts/mutants-run.sh --dir \"$SOURCE\" \"$@\""));
 }

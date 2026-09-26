@@ -45,7 +45,7 @@ repos:
         pass_filenames: false
         require_serial: true
 
-      # Mutate the staged diff on Legion; warn and fall back locally if it is
+      # Mutate the staged diff on homelab-ai-1; warn and fall back locally if it is
       # unreachable. CI tests the complete pushed diff on main. Full sweeps
       # run separately through the same verdict script.
       - id: cargo-mutants
