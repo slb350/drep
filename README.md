@@ -618,7 +618,7 @@ cargo clippy --all-targets --all-features     # levels come from [lints] in Carg
 cargo mutants                                 # a green suite is not a discriminating one
 ```
 
-`docs/technical-design.md` is the architecture. `CLAUDE.md` carries the
+`docs/technical-design.md` is the architecture. `AGENTS.md` carries the
 invariants, each with the defect that produced it.
 
 ## License
