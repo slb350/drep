@@ -2,7 +2,7 @@
 #
 # Run cargo-mutants and decide the verdict from the results.
 #
-# Shared verdict for staged-diff, pushed-diff and full mutation runs.
+# Shared verdict for staged-diff, CI-diff and full mutation runs.
 # Arguments pass through to cargo-mutants; the caller chooses the scope.
 
 set -euo pipefail

@@ -6,7 +6,7 @@
 # if the code were wrong. cargo-mutants perturbs the implementation and reports
 # mutations no test catches - a surviving mutant IS a non-discriminating test.
 #
-# The hook tests the staged diff; CI tests the complete pushed diff on main.
+# The hook tests the staged diff; CI tests each change's diff in rust.yml's mutants-diff job.
 # Full sweeps run separately. scripts/mutants-run.sh owns every verdict.
 
 set -euo pipefail

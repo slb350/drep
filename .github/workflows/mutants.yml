@@ -1,8 +1,6 @@
 name: mutants
 
-# This repository is public. Routine trusted pushes mutate their complete diff
-# in rust.yml after validation. The exhaustive 1,490-mutant sweep runs weekly
-# or by explicit dispatch, and only for the default branch.
+# This repository is public. Routine changes mutate their own diff in rust.yml's mutants-diff job after validation. The exhaustive 1,490-mutant sweep runs weekly or by explicit dispatch, and only for the default branch.
 on:
   workflow_dispatch:
   schedule:

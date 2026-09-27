@@ -45,9 +45,7 @@ repos:
         pass_filenames: false
         require_serial: true
 
-      # Mutate the staged diff on homelab-ai-1; warn and fall back locally if it is
-      # unreachable. CI tests the complete pushed diff on main. Full sweeps
-      # run separately through the same verdict script.
+      # Mutate the staged diff on homelab-ai-1; warn and fall back locally if it is unreachable. CI tests each change's diff in rust.yml's mutants-diff job. Full sweeps run separately through the same verdict script.
       - id: cargo-mutants
         name: cargo mutants (staged diff)
         entry: ./scripts/mutants-staged.sh
