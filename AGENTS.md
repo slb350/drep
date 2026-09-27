@@ -89,8 +89,7 @@ Each of these is a rule with a defect behind it. Changing one means the defect
 comes back.
 
 - **Mutation scope follows the trigger.** The local hook tests the staged diff;
-  CI tests the complete pushed diff on trusted `main` pushes after Linux and
-  macOS validation pass. Full sweeps run separately. `scripts/mutants-run.sh`
+  CI tests the complete diff of a trusted `main` push, or of a pull request from a branch of this repository (base to head, on the head tree), after Linux and macOS validation pass; fork pull requests never reach the mutation runner. Full sweeps run separately. `scripts/mutants-run.sh`
   owns the pass/fail rule for all three. A surviving mutant is a test that cannot tell correct from
   incorrect behaviour - fix the test, never exclude the mutant. Mutation
   tests for permission hardening must establish the insecure mode explicitly,
@@ -1150,7 +1149,7 @@ formula push on `!announcement_is_prerelease`, so that job skips.
 
 Jobsy on homelab-ai-1 runs this repository's scheduled maintenance as a weekly dependency-security job, a weekly improvement job, and a weekly security review. Each job works in a fresh checkout of main and opens a draft pull request from a `jobsy/` branch. No job pushes main, creates tags, or publishes to crates.io. Merging and releasing are manual until the review policy is settled.
 
-CI runs mutation testing only after a merge: `rust.yml` sweeps the diff pushed to main once Linux and macOS validation pass, and `mutants.yml` runs the weekly full sweep.
+Mutation testing runs in CI on each Jobsy pull request: `rust.yml` mutates the pull request's diff once Linux and macOS validation pass, and again the diff pushed to main after a merge; `mutants.yml` runs the weekly full sweep.
 
 ## Remotes
 
