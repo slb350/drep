@@ -9,11 +9,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- Mutation runs in one checkout no longer delete each other's results and scratch copies. The hook, a manual run and an offloaded run each hold a kernel lock on `target/mutants.lock` and wait up to `DREP_MUTANTS_HOST_LOCK_WAIT_SECONDS` for it, and a commit with no staged Rust changes exits before taking it. A script started by the lock's holder carries on under the inherited lock, and the ai-1 host lock is taken the same way, so `flock(1)` is no longer required. Each run's scratch is `<checkout>.mutants-tmp/run`, emptied when the run starts and ends.
-- An offloaded run mirrors the checkout into its own directory under the ai-1 role's cache, named for the machine and the checkout's path, so two checkouts can no longer sync into one tree. `DREP_MUTANTS_DIR` and `DREP_MUTANTS_REMOTE_HOST_LOCK` are removed: the role's unit supplies the host lock and job count. The transport accepts any well-formed `*-mutants` role and leaves the list of roles to ai-1's `offload.py`.
-- The staged hook mutation-tests what is being committed: it writes the index to a tree, builds a copy of that tree on ai-1 or locally, and fails if the index changed during the run, because `git commit` reads the index after the hook. Unstaged edits and untracked files no longer reach the run.
-- Mutation offloads go only to homelab-ai-1. `DREP_MUTANTS_HOST` is removed and the transport owns the host: callers use `ai1_ssh`, `ai1_push` and `ai1_pull`, which accept only the options the scripts use, in place of `ssh` and `rsync` wrappers that parsed every argument for a host. A host set in `DREP_MUTANTS_HOST` had no role unit to name the host lock, so the session aborted without running or falling back.
-- Both mutation lanes start from a clean checkout. cargo-mutants 27.1.0 builds every mutant in a copy of the tree without `target/`, so the retained `target/` never shortened a sweep.
+- Mutation runs in one checkout no longer delete each other's results and
+  scratch copies. The hook, a manual run and an offloaded run each hold a kernel
+  lock on `target/mutants.lock` and wait up to
+  `DREP_MUTANTS_HOST_LOCK_WAIT_SECONDS` for it, and a commit with no staged Rust
+  changes exits before taking it. A script started by the lock's holder carries
+  on under the inherited lock, and the ai-1 host lock is taken the same way, so
+  `flock(1)` is no longer required. Each run's scratch is
+  `<checkout>.mutants-tmp/run`, emptied when the run starts and ends.
+- An offloaded run mirrors the checkout into its own directory under the ai-1
+  role's cache, named for the machine and the checkout's path, so two checkouts
+  can no longer sync into one tree. `DREP_MUTANTS_DIR` and
+  `DREP_MUTANTS_REMOTE_HOST_LOCK` are removed: the role's unit supplies the host
+  lock and job count. The transport accepts any well-formed `*-mutants` role and
+  leaves the list of roles to ai-1's `offload.py`.
+- The staged hook mutation-tests what is being committed: it writes the index
+  to a tree, builds a copy of that tree on ai-1 or locally, and fails if the
+  index changed during the run, because `git commit` reads the index after the
+  hook. Unstaged edits and untracked files no longer reach the run.
+- Mutation offloads go only to homelab-ai-1. `DREP_MUTANTS_HOST` is removed and
+  the transport owns the host: callers use `ai1_ssh`, `ai1_push` and `ai1_pull`,
+  which accept only the options the scripts use, in place of `ssh` and `rsync`
+  wrappers that parsed every argument for a host. A host set in
+  `DREP_MUTANTS_HOST` had no role unit to name the host lock, so the session
+  aborted without running or falling back.
+- Both mutation lanes start from a clean checkout. cargo-mutants 27.1.0 builds
+  every mutant in a copy of the tree without `target/`, so the retained
+  `target/` never shortened a sweep.
 
 ### Changed
 
@@ -21,6 +43,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `rand` 0.10.3, and pin the current Rust-toolchain and install Action
   revisions by exact SHA. Synchronize workflow labels and repository guidance
   with the completed homelab-ai-1 runner migration.
+- Refresh compatible Rust dependencies and pin `taiki-e/install-action`
+  2.87.21 by its upstream commit in validation, mutation and release setup.
 
 ## [3.1.1] - 2026-09-19
 
@@ -380,6 +404,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   that does not skip a disabled entry, because serde rejects before there is an
   entry to skip, so a parked provider carrying a field from a newer drep now
   refuses to load the file.
+
 ## [2.7.2] - 2026-08-31
 
 ### Changed
@@ -893,7 +918,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `src/llm/json_parsing/tests/` (four files, verbatim) as the file approached
   the 600-line limit.
 
-### Fixed
+### Fixed: response parsing and credentials
 
 - **A response that was already JSON could be mangled by a fence *inside* it.**
   The extraction ladder tried the fence strategy first, so a valid JSON answer
@@ -947,7 +972,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   preset sets 200,000; the rule that presets carry no cap otherwise is now
   asserted as an exact exception list rather than a blanket prohibition.
 
-### Fixed
+### Fixed: compatibility and test stability
 
 - The declared MSRV is 1.88. `ignore` 0.4.30 uses let-chains without declaring
   its own `rust-version`; measured builds fail on 1.86 and 1.87 and pass on
@@ -1013,8 +1038,7 @@ LLM for review, and gates commits and pushes on the result. That is all it does.
 
 [Unreleased]: https://github.com/slb350/drep/compare/v3.1.1...HEAD
 [3.1.1]: https://github.com/slb350/drep/compare/v3.1.0...v3.1.1
-[3.1.0]: https://github.com/slb350/drep/compare/v3.0.1...v3.1.0
-[3.0.1]: https://github.com/slb350/drep/compare/v3.0.0...v3.0.1
+[3.1.0]: https://github.com/slb350/drep/compare/v3.0.0...v3.1.0
 [3.0.0]: https://github.com/slb350/drep/compare/v2.9.0...v3.0.0
 [2.9.0]: https://github.com/slb350/drep/compare/v2.8.0...v2.9.0
 [2.8.0]: https://github.com/slb350/drep/compare/v2.7.2...v2.8.0

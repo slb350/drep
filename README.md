@@ -22,7 +22,7 @@ curl --proto '=https' --tlsv1.2 -LsSf \
 On `git commit` and `git push`, drep checks your changes twice.
 
 | Layer | Source | Blocks? |
-|---|---|---|
+| --- | --- | --- |
 | Deterministic | ruff, eslint, tsc, gofmt, go vet, clippy | Yes |
 | Semantic | an LLM you point it at | No, unless you ask |
 
@@ -139,7 +139,7 @@ drep doctor                     # what will actually run here
 Exit codes (`3` is specific to `check`):
 
 | Code | Meaning |
-|---|---|
+| --- | --- |
 | 0 | Everything that should have run, ran, and found nothing blocking |
 | 1 | Blocking findings |
 | 2 | Something that should have run did not |
@@ -189,7 +189,7 @@ Three rules decide what runs:
 ## Languages
 
 | Language | Extensions | Tools |
-|---|---|---|
+| --- | --- | --- |
 | Python | `.py` | ruff |
 | JavaScript | `.js` `.jsx` `.mjs` `.cjs` | eslint |
 | TypeScript | `.ts` `.tsx` `.mts` `.cts` | eslint, tsc |
@@ -280,7 +280,7 @@ checks, and their severity answers one question, which is whether the finding
 changes how the document renders.
 
 | Severity | Checks |
-|---|---|
+| --- | --- |
 | error | `unclosed_code_fence` |
 | warning | `empty_heading`, `missing_space_after_heading`, `link_syntax_invalid` |
 | info | `bare_url`, `long_line`, `tab_character`, `trailing_whitespace` |
