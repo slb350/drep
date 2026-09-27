@@ -11,6 +11,7 @@ use crate::llm::codex::command::ChildEnvironment;
 use crate::llm::codex::process;
 use crate::llm::error::{BackendErrorKind, LlmError};
 use crate::llm::json_parsing::Extracted;
+use crate::test_support::{FAKE_CODEX_TIMEOUT_SECS, fake_codex_clean_review};
 
 #[test]
 fn client_diagnostics_and_identity_preserve_the_configured_contract() {
@@ -65,7 +66,7 @@ printf '%s\n' \
         backend: BackendKind::Codex,
         model: Some("gpt-5.6-sol".to_owned()),
         reasoning_effort: Some(ReasoningEffort::High),
-        timeout_secs: 5,
+        timeout_secs: FAKE_CODEX_TIMEOUT_SECS,
         max_concurrent: 1,
         ..LlmConfig::default()
     };
@@ -122,17 +123,12 @@ printf '%s\n' \
 
 #[tokio::test]
 async fn forbidden_tool_activity_is_a_sticky_contract_failure() {
-    let (dir, client) = fake_client(
-        concat!(
-            "#!/bin/sh\n",
-            "sed -n '1,$p' >/dev/null\n",
-            "printf '%s\\n' \\\n",
-            "  '{\"type\":\"item.completed\",\"item\":{\"type\":\"web_search\"}}' \\\n",
-            "  '{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":\"{\\\"issues\\\":[],\\\"summary\\\":\\\"clean\\\"}\"}}' \\\n",
-            "  '{\"type\":\"turn.completed\"}'\n",
-        ),
-        5,
-    );
+    let (dir, client) = fake_client(concat!(
+        "#!/bin/sh\n",
+        "sed -n '1,$p' >/dev/null\n",
+        "printf '%s\\n' '{\"type\":\"item.completed\",\"item\":{\"type\":\"web_search\"}}'\n",
+        fake_codex_clean_review!(),
+    ));
     let err = client
         .complete_json("review", "payload")
         .await
@@ -149,16 +145,13 @@ async fn forbidden_tool_activity_is_a_sticky_contract_failure() {
 
 #[tokio::test]
 async fn unknown_nonzero_exit_is_not_classified_from_stderr_prose() {
-    let (dir, client) = fake_client(
-        concat!(
-            "#!/bin/sh\n",
-            "sed -n '1,$p' >/dev/null\n",
-            "printf '%s\\n' '{\"type\":\"error\",\"message\":\"machine-readable terminal detail\"}'\n",
-            "printf 'unauthorized timeout quota\\033[31m' >&2\n",
-            "exit 19\n",
-        ),
-        5,
-    );
+    let (dir, client) = fake_client(concat!(
+        "#!/bin/sh\n",
+        "sed -n '1,$p' >/dev/null\n",
+        "printf '%s\\n' '{\"type\":\"error\",\"message\":\"machine-readable terminal detail\"}'\n",
+        "printf 'unauthorized timeout quota\\033[31m' >&2\n",
+        "exit 19\n",
+    ));
     let err = client
         .complete_json("review", "payload")
         .await
@@ -184,7 +177,6 @@ async fn unknown_nonzero_exit_is_not_classified_from_stderr_prose() {
 async fn a_large_stderr_is_drained_but_only_a_bounded_excerpt_is_reported() {
     let (dir, client) = fake_client(
         "#!/bin/sh\ndd if=/dev/zero bs=1024 count=40 2>/dev/null | tr '\\000' x >&2\nprintf tail-marker >&2\nexit 19\n",
-        5,
     );
     let err = client
         .complete_json("review", "payload")
@@ -207,16 +199,13 @@ async fn a_large_stderr_is_drained_but_only_a_bounded_excerpt_is_reported() {
 
 #[tokio::test]
 async fn malformed_final_json_stays_an_unparseable_model_response() {
-    let (dir, client) = fake_client(
-        concat!(
-            "#!/bin/sh\n",
-            "sed -n '1,$p' >/dev/null\n",
-            "printf '%s\\n' \\\n",
-            "  '{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":\"not json\"}}' \\\n",
-            "  '{\"type\":\"turn.completed\"}'\n",
-        ),
-        5,
-    );
+    let (dir, client) = fake_client(concat!(
+        "#!/bin/sh\n",
+        "sed -n '1,$p' >/dev/null\n",
+        "printf '%s\\n' \\\n",
+        "  '{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":\"not json\"}}' \\\n",
+        "  '{\"type\":\"turn.completed\"}'\n",
+    ));
     let err = client
         .complete_json("review", "payload")
         .await
@@ -227,10 +216,11 @@ async fn malformed_final_json_stays_an_unparseable_model_response() {
 
 #[tokio::test]
 async fn stdout_overflow_is_a_bounded_transport_failure() {
-    let (dir, client) = fake_client(
-        "#!/bin/sh\ndd if=/dev/zero bs=1048576 count=17 2>/dev/null\nexec /bin/sleep 30\n",
-        5,
-    );
+    // Still running at the deadline, so only the size poll can end the call with this error.
+    let (dir, client) = fake_client(&format!(
+        "#!/bin/sh\ndd if=/dev/zero bs=1048576 count=17 2>/dev/null\nexec /bin/sleep {}\n",
+        2 * FAKE_CODEX_TIMEOUT_SECS
+    ));
     let err = client
         .complete_json("review", "payload")
         .await
@@ -260,7 +250,7 @@ async fn process_stdout_accepts_exactly_sixteen_mebibytes() {
         &ChildEnvironment::default(),
         dir.path(),
         "",
-        Duration::from_secs(5),
+        Duration::from_secs(FAKE_CODEX_TIMEOUT_SECS),
     )
     .await
     .expect("the exact stdout ceiling is accepted");
@@ -286,7 +276,7 @@ async fn process_stderr_retains_exactly_thirty_two_kibibytes_while_draining() {
         &ChildEnvironment::default(),
         dir.path(),
         "",
-        Duration::from_secs(5),
+        Duration::from_secs(FAKE_CODEX_TIMEOUT_SECS),
     )
     .await
     .expect("noisy stderr is drained");
@@ -303,7 +293,7 @@ async fn process_missing_binary_is_a_configuration_failure() {
         &ChildEnvironment::default(),
         dir.path(),
         "",
-        Duration::from_secs(5),
+        Duration::from_secs(FAKE_CODEX_TIMEOUT_SECS),
     )
     .await;
     let err = match result {
@@ -319,7 +309,7 @@ async fn process_missing_binary_is_a_configuration_failure() {
 
 #[tokio::test]
 async fn a_child_that_closes_stdin_early_is_a_transport_failure() {
-    let (dir, client) = fake_client("#!/bin/sh\nexit 0\n", 5);
+    let (dir, client) = fake_client("#!/bin/sh\nexit 0\n");
     let payload = "x".repeat(1024 * 1024);
     let err = client
         .complete_json("review", &payload)
@@ -336,7 +326,6 @@ async fn a_child_that_closes_stdin_early_is_a_transport_failure() {
 async fn a_nonzero_exit_keeps_its_diagnostic_when_stdin_closes_early() {
     let (dir, client) = fake_client(
         "#!/bin/sh\nprintf '%s\\n' '{\"type\":\"error\",\"message\":\"terminal detail\"}'\nexit 19\n",
-        5,
     );
     let payload = "x".repeat(1024 * 1024);
 
@@ -356,21 +345,15 @@ async fn a_nonzero_exit_keeps_its_diagnostic_when_stdin_closes_early() {
 #[cfg(unix)]
 #[tokio::test]
 async fn a_grandchild_inheriting_output_cannot_hold_a_review_open() {
-    let (dir, client) = fake_client(
-        concat!(
-            "#!/bin/sh\n",
-            "sed -n '1,$p' >/dev/null\n",
-            "capture=$(dirname \"$0\")\n",
-            // Keep the grandchild well beyond the review deadline while
-            // leaving enough startup headroom for a heavily parallel suite.
-            "sleep 30 &\n",
-            "printf '%s' \"$!\" > \"$capture/grandchild.pid\"\n",
-            "printf '%s\\n' \\\n",
-            "  '{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":\"{\\\"issues\\\":[],\\\"summary\\\":\\\"clean\\\"}\"}}' \\\n",
-            "  '{\"type\":\"turn.completed\"}'\n",
-        ),
-        10,
-    );
+    let (dir, client) = fake_client(concat!(
+        "#!/bin/sh\n",
+        "sed -n '1,$p' >/dev/null\n",
+        "capture=$(dirname \"$0\")\n",
+        // Outlives FAKE_CODEX_TIMEOUT_SECS, so a review that waited for it ends in a timeout.
+        "sleep 60 &\n",
+        "printf '%s' \"$!\" > \"$capture/grandchild.pid\"\n",
+        fake_codex_clean_review!(),
+    ));
 
     let result = client.complete_json("review", "payload").await;
     let pid = std::fs::read_to_string(dir.path().join("grandchild.pid")).expect("grandchild pid");
@@ -384,46 +367,38 @@ async fn a_grandchild_inheriting_output_cannot_hold_a_review_open() {
     drop(dir);
 }
 
+/// Codex's exit ends the stdin write, although a grandchild holds the pipe and later drains it.
+///
+/// The grandchild keeps stdin open, unread, until Codex has been reaped, and only then reads it. The payload overfills the pipe, so a writer that outlives Codex's exit, whether it waits for the pipe or allows a grace period, completes through the grandchild and reports a payload Codex never read as delivered. The reap that releases the grandchild happens in the poll that ends the review, so no deadline or load decides the outcome.
 #[cfg(unix)]
 #[tokio::test]
 async fn a_direct_child_exit_cannot_leave_the_stdin_writer_waiting_on_a_grandchild() {
-    let (dir, client) = fake_client(
-        concat!(
-            "#!/bin/sh\n",
-            "capture=$(dirname \"$0\")\n",
-            "sleep 30 <&0 &\n",
-            "printf '%s' \"$!\" > \"$capture/grandchild.pid\"\n",
-            "printf '%s\\n' \\\n",
-            "  '{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":\"{\\\"issues\\\":[],\\\"summary\\\":\\\"clean\\\"}\"}}' \\\n",
-            "  '{\"type\":\"turn.completed\"}'\n",
-        ),
-        5,
-    );
+    let (_dir, client) = fake_client(concat!(
+        "#!/bin/sh\n",
+        "codex=$$\n",
+        // A shell without job control gives a background command /dev/null as stdin before applying its redirections (dash, which is /bin/sh on Debian), so the pipe travels on fd 3.
+        "exec 3<&0\n",
+        // kill -0 succeeds on a zombie, so the loop ends when tokio reaps Codex. cat then exits at EOF once the review drops stdin.
+        "(while kill -0 \"$codex\" 2>/dev/null; do sleep 0.1; done; exec cat >/dev/null) <&3 3<&- &\n",
+        fake_codex_clean_review!(),
+    ));
     let payload = "x".repeat(1024 * 1024);
-    let started = std::time::Instant::now();
 
-    let result = client.complete_json("review", &payload).await;
-    let elapsed = started.elapsed();
-    let pid = std::fs::read_to_string(dir.path().join("grandchild.pid")).expect("grandchild pid");
-    crate::test_support::probe_and_stop_process(&pid);
-    let err = result.expect_err("the direct child did not consume the payload");
+    let err = client
+        .complete_json("review", &payload)
+        .await
+        .expect_err("the grandchild, not Codex, consumed the payload");
 
-    assert!(
-        matches!(err, LlmError::Transport { status: None, ref message }
-            if message.contains("send the review payload")),
-        "got {err:?}"
+    assert_eq!(
+        err.to_string(),
+        "LLM transport failed: could not send the review payload to Codex: Codex exited before consuming the complete payload"
     );
-    assert!(
-        elapsed < Duration::from_secs(3),
-        "the stdin writer waited for the unrelated grandchild: {elapsed:?}"
-    );
-    drop(dir);
 }
 
 #[cfg(unix)]
 #[tokio::test]
 async fn a_signal_terminated_child_is_a_transport_failure() {
-    let (dir, client) = fake_client("#!/bin/sh\nkill -TERM $$\n", 5);
+    let (dir, client) = fake_client("#!/bin/sh\nkill -TERM $$\n");
     let err = client
         .complete_json("review", "payload")
         .await
@@ -448,7 +423,7 @@ async fn timeout_stops_a_running_child_and_reports_the_deadline() {
         "stop must terminate the child"
     );
 
-    let (_dir, client) = fake_client("#!/bin/sh\nexec /bin/sleep 30\n", 0);
+    let (_dir, client) = fake_client_with_timeout("#!/bin/sh\nexec /bin/sleep 30\n", 0);
     let err = client
         .complete_json("review", "payload")
         .await
@@ -460,7 +435,11 @@ async fn timeout_stops_a_running_child_and_reports_the_deadline() {
     );
 }
 
-fn fake_client(script: &str, timeout_secs: u64) -> (tempfile::TempDir, CodexClient) {
+fn fake_client(script: &str) -> (tempfile::TempDir, CodexClient) {
+    fake_client_with_timeout(script, FAKE_CODEX_TIMEOUT_SECS)
+}
+
+fn fake_client_with_timeout(script: &str, timeout_secs: u64) -> (tempfile::TempDir, CodexClient) {
     let dir = tempfile::tempdir().expect("tempdir");
     let executable = dir.path().join("fake-codex");
     crate::test_support::write_executable(&executable, script);

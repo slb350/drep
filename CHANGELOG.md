@@ -36,6 +36,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Both mutation lanes start from a clean checkout. cargo-mutants 27.1.0 builds
   every mutant in a copy of the tree without `target/`, so the retained
   `target/` never shortened a sweep.
+- The Codex stdin-writer test (`a_direct_child_exit_cannot_leave_the_stdin_writer_waiting_on_a_grandchild`) required the call to finish within 3 seconds and failed under full-suite load at 4.12 s. On Linux it guarded nothing: dash gives a background command `/dev/null` as stdin, so its grandchild never held the pipe. The grandchild now holds stdin under either shell and drains it once Codex is reaped, so a writer that waits past Codex's exit, grace period included, returns a false success and fails the test with no clock involved. Every fake Codex fixture in the codex and chain tests now shares one generous 30-second deadline from `test_support`, where they had 5 or 10 seconds, along with the clean-review output they had each copied.
 
 ### Changed
 
