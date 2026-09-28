@@ -133,9 +133,9 @@ pub(super) async fn spawn_git(
 }
 
 /// [`spawn_git`]'s output as git wrote it: a blob's content is neither trimmed nor decoded.
-pub(super) async fn spawn_git_bytes(
+pub(super) async fn spawn_git_bytes<S: AsRef<OsStr>>(
     root: &Path,
-    args: &[&str],
+    args: &[S],
     env: GitEnv<'_>,
 ) -> Result<Vec<u8>, GitError> {
     let mut command = Command::new("git");
@@ -181,7 +181,10 @@ pub(super) async fn spawn_git_bytes(
         Err(_) => {
             return Err(GitError::Spawn(format!(
                 "git {} timed out after {}s",
-                args.join(" "),
+                args.iter()
+                    .map(|arg| arg.as_ref().to_string_lossy())
+                    .collect::<Vec<_>>()
+                    .join(" "),
                 GIT_TIMEOUT.as_secs()
             )));
         }

@@ -17,6 +17,7 @@
 //! - `current_commit_sha` is the one place this is reversed: it only feeds
 //!   a cache key, and a cache-key component must never take the analysis down.
 
+use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -298,17 +299,14 @@ impl StagedView {
     }
 
     /// The content the commit records for `path`: its blob in the index, as UTF-8 text.
+    ///
+    /// The `:<path>` spec is built from the path's bytes, so a name that is not
+    /// UTF-8, which `quoting::decode` keeps exactly, reaches git unchanged.
     async fn content(&self, root: &Path, path: &Path) -> std::io::Result<String> {
-        let spec = path
-            .to_str()
-            .map(|path| format!(":{path}"))
-            .ok_or_else(|| {
-                std::io::Error::new(
-                    std::io::ErrorKind::InvalidInput,
-                    format!("{} is not a UTF-8 path", path.display()),
-                )
-            })?;
-        let blob = spawn_git_bytes(root, &["cat-file", "blob", &spec], self.env())
+        let mut spec = OsString::from(":");
+        spec.push(path);
+        let args = [OsStr::new("cat-file"), OsStr::new("blob"), &spec];
+        let blob = spawn_git_bytes(root, &args, self.env())
             .await
             .map_err(std::io::Error::other)?;
         String::from_utf8(blob).map_err(|_| {
