@@ -1,11 +1,12 @@
-//! Content and configuration that must not hide a change from review.
+//! Content that must not hide a change from review.
 //!
 //! Each test drives real `git` and asserts on the hunks the gate reviews, so a
 //! regression in either the flags drep passes to `git diff` or the parser that
-//! reads its output shows up as a change the reviewer never saw.
+//! reads its output shows up as a change the reviewer never saw. Names and
+//! configuration that reshape the patch are in `output_format.rs`.
 
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use crate::diff::hunks::{Hunk, HunkLine};
 use crate::diff::{hunks_since, run_git, staged_hunks};
@@ -55,25 +56,6 @@ async fn an_added_line_spelling_a_deletion_header_does_not_end_the_review() {
             "fn hidden_from_review() {}",
         ]
     );
-}
-
-#[tokio::test]
-async fn paths_git_quotes_or_tab_terminates_are_reviewed() {
-    // `my file.rs` gets a tab after its `+++` label, `quo"te.rs` is always
-    // C-quoted, and `ünï.rs` is quoted under the default `core.quotePath`.
-    let repo = GitRepo::init().await;
-    let root = repo.root();
-    let names = ["my file.rs", "quo\"te.rs", "ünï.rs"];
-    for name in names {
-        fs::write(root.join(name), "fn payload() {}\n").expect("write");
-    }
-    run_in(root, &["add", "."]).await;
-
-    let hunks = staged(root).await;
-
-    let mut paths: Vec<PathBuf> = hunks.into_iter().map(|hunk| hunk.file_path).collect();
-    paths.sort();
-    assert_eq!(paths, names.map(PathBuf::from));
 }
 
 #[tokio::test]
@@ -150,91 +132,4 @@ async fn a_symlink_replaced_by_source_is_reviewed() {
     let added = added_lines(&staged(root).await, "evil.rs");
 
     assert_eq!(added, vec!["fn payload() {}"]);
-}
-
-/// Repository settings that reshape `git diff` output. Each is applied alone.
-/// `diff.upper.textconv` takes effect through the committed `diff=upper`
-/// attribute, and the prefix settings exist from git 2.45.
-const RESHAPING_CONFIG: &[(&str, &str)] = &[
-    ("color.diff", "always"),
-    ("diff.external", "true"),
-    ("diff.mnemonicPrefix", "true"),
-    ("diff.noprefix", "true"),
-    ("diff.srcPrefix", "old/"),
-    ("diff.dstPrefix", "new/"),
-    ("diff.suppressBlankEmpty", "true"),
-    ("diff.upper.textconv", "tr a-z A-Z <"),
-];
-
-const BEFORE: &str = "fn a() {}\n\nfn b() {}\n";
-const AFTER: &str = "fn a() {}\n\nfn changed() {}\n";
-
-/// The new side of `AFTER` exactly as the reviewer must see it.
-fn expected_review() -> Vec<(u32, String)> {
-    vec![
-        (1, "fn a() {}".to_owned()),
-        (2, String::new()),
-        (3, "fn changed() {}".to_owned()),
-    ]
-}
-
-fn reviewed(hunks: &[Hunk]) -> Vec<(u32, String)> {
-    hunks
-        .iter()
-        .filter(|hunk| hunk.file_path == Path::new("lib.rs"))
-        .flat_map(Hunk::numbered_new_lines)
-        .map(|(number, text)| (number, text.to_owned()))
-        .collect()
-}
-
-async fn seeded_repo() -> GitRepo {
-    let repo = GitRepo::init().await;
-    let root = repo.root();
-    fs::write(root.join(".gitattributes"), "*.rs diff=upper\n").expect("write");
-    fs::write(root.join("lib.rs"), BEFORE).expect("write");
-    repo.commit_all("seed").await;
-    repo
-}
-
-#[tokio::test]
-async fn diff_configuration_does_not_reshape_the_staged_review() {
-    let mut reshaped = Vec::new();
-    for (key, value) in RESHAPING_CONFIG {
-        let repo = seeded_repo().await;
-        let root = repo.root();
-        fs::write(root.join("lib.rs"), AFTER).expect("write");
-        run_in(root, &["add", "lib.rs"]).await;
-        run_in(root, &["config", key, value]).await;
-
-        let review = reviewed(&staged(root).await);
-
-        if review != expected_review() {
-            reshaped.push(format!("{key}={value}: {review:?}"));
-        }
-    }
-    assert!(reshaped.is_empty(), "reshaped the review: {reshaped:#?}");
-}
-
-#[tokio::test]
-async fn diff_configuration_does_not_reshape_the_pushed_review() {
-    let mut reshaped = Vec::new();
-    for (key, value) in RESHAPING_CONFIG {
-        let repo = seeded_repo().await;
-        let root = repo.root();
-        repo.create_branch("feature").await;
-        repo.checkout("feature").await;
-        fs::write(root.join("lib.rs"), AFTER).expect("write");
-        repo.commit_all("feature").await;
-        run_in(root, &["config", key, value]).await;
-
-        let hunks = hunks_since(root, "main", files::is_scan_target)
-            .await
-            .expect("hunks_since");
-        let review = reviewed(&hunks);
-
-        if review != expected_review() {
-            reshaped.push(format!("{key}={value}: {review:?}"));
-        }
-    }
-    assert!(reshaped.is_empty(), "reshaped the review: {reshaped:#?}");
 }

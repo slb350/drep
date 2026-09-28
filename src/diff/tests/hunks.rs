@@ -273,49 +273,123 @@ fn whole_file_yields_only_context_lines_starting_at_one() {
     assert_eq!(numbers, vec![1, 2, 3]);
 }
 
+#[test]
+fn a_deleted_files_header_attributes_its_hunks_to_nothing() {
+    // `+++ /dev/null` names no new file, so the deletion's body is dropped
+    // rather than filed under the previous file or a path called `/dev/null`.
+    let diff = "diff --git a/kept.rs b/kept.rs\n\
+                 --- a/kept.rs\n\
+                 +++ b/kept.rs\n\
+                 @@ -1,1 +1,1 @@\n\
+                 -old\n\
+                 +new\n\
+                 diff --git a/gone.rs b/gone.rs\n\
+                 deleted file mode 100644\n\
+                 --- a/gone.rs\n\
+                 +++ /dev/null\n\
+                 @@ -1,1 +0,0 @@\n\
+                 -removed\n";
+
+    let hunks = parse_unified_diff(diff);
+    assert_eq!(hunks.len(), 1, "only kept.rs has a new side, got {hunks:?}");
+    assert_eq!(hunks[0].file_path, PathBuf::from("kept.rs"));
+    assert_eq!(hunks[0].lines.len(), 2);
+}
+
+/// Git C-quotes a path holding a byte `core.quotePath` escapes, including its
+/// `b/` prefix, so the header does not begin `+++ b/`. Read literally, the
+/// file matched no language and its change was never reviewed.
+#[test]
+fn a_quoted_header_names_the_decoded_path() {
+    let diff = "diff --git \"a/src/caf\\303\\251.rs\" \"b/src/caf\\303\\251.rs\"\n\
+                 --- \"a/src/caf\\303\\251.rs\"\n\
+                 +++ \"b/src/caf\\303\\251.rs\"\n\
+                 @@ -1,1 +1,1 @@\n\
+                 -old\n\
+                 +new\n";
+
+    let hunks = parse_unified_diff(diff);
+    assert_eq!(hunks.len(), 1, "got {hunks:?}");
+    assert_eq!(hunks[0].file_path, PathBuf::from("src/caf\u{e9}.rs"));
+}
+
+/// Git ends a `---`/`+++` header with a tab whenever the name holds a space,
+/// quoted or not. Kept, the tab became part of the extension (`.rs\t`).
+#[test]
+fn a_header_naming_a_path_with_a_space_drops_the_tab_git_appends() {
+    let diff = "diff --git a/src/a b.rs b/src/a b.rs\n\
+                 --- a/src/a b.rs\t\n\
+                 +++ b/src/a b.rs\t\n\
+                 @@ -1,1 +1,1 @@\n\
+                 -old\n\
+                 +new\n\
+                 diff --git \"a/c d\\303\\251.rs\" \"b/c d\\303\\251.rs\"\n\
+                 --- \"a/c d\\303\\251.rs\"\t\n\
+                 +++ \"b/c d\\303\\251.rs\"\t\n\
+                 @@ -1,1 +1,1 @@\n\
+                 -old\n\
+                 +new\n";
+
+    let paths: Vec<PathBuf> = parse_unified_diff(diff)
+        .into_iter()
+        .map(|hunk| hunk.file_path)
+        .collect();
+    assert_eq!(
+        paths,
+        vec![PathBuf::from("src/a b.rs"), PathBuf::from("c d\u{e9}.rs")]
+    );
+}
+
+/// A file header appears only before a file's first `@@`. Inside a body the
+/// first byte decides the line kind, so added lines whose text is `++ b/...`
+/// or `++ /dev/null` are code, not a switch to another file or a deletion.
+#[test]
+fn an_added_line_that_reads_like_a_file_header_stays_in_its_hunk() {
+    let diff = "diff --git a/patch.rs b/patch.rs\n\
+                 --- a/patch.rs\n\
+                 +++ b/patch.rs\n\
+                 @@ -1,1 +1,4 @@\n\
+                 +++ b/other.rs\n\
+                 +++ /dev/null\n\
+                 +tail\n\
+                 \x20kept\n";
+
+    let hunks = parse_unified_diff(diff);
+    assert_eq!(hunks.len(), 1, "got {hunks:?}");
+    assert_eq!(hunks[0].file_path, PathBuf::from("patch.rs"));
+    assert_eq!(
+        hunks[0].lines,
+        vec![
+            HunkLine::Added("++ b/other.rs".to_owned()),
+            HunkLine::Added("++ /dev/null".to_owned()),
+            HunkLine::Added("tail".to_owned()),
+            HunkLine::Context("kept".to_owned()),
+        ]
+    );
+}
+
+/// With `diff.noprefix` or `diff.mnemonicPrefix` a header lacks the `b/` the
+/// parser requires. drep pins the prefix on every `git diff` it runs, so an
+/// unprefixed name can only come from some other producer: it is not guessed
+/// at, because `src/lib.rs` would otherwise be read as `lib.rs` under `src/`.
+#[test]
+fn a_header_without_the_destination_prefix_names_no_file() {
+    let diff = "diff --git src/lib.rs src/lib.rs\n\
+                 --- src/lib.rs\n\
+                 +++ src/lib.rs\n\
+                 @@ -1,1 +1,1 @@\n\
+                 -old\n\
+                 +new\n";
+
+    assert!(parse_unified_diff(diff).is_empty());
+}
+
 /// Join diff lines exactly, so a context line keeps its leading space and an
 /// empty line stays empty; a `\`-continued string literal strips both.
 fn diff_of(lines: &[&str]) -> String {
     let mut text = lines.join("\n");
     text.push('\n');
     text
-}
-
-#[test]
-fn an_added_line_spelling_a_deletion_header_stays_in_its_hunk() {
-    // `git diff` output for a new file whose third line is `++ /dev/null`
-    // inside a raw string. Git prefixes it with `+`, so the body carries a line
-    // identical to a deletion header; reading it as one would close the hunk
-    // and hide every later line from review.
-    let diff = diff_of(&[
-        "diff --git a/lib.rs b/lib.rs",
-        "new file mode 100644",
-        "index 0000000..f6c62c3",
-        "--- /dev/null",
-        "+++ b/lib.rs",
-        "@@ -0,0 +1,5 @@",
-        "+fn reviewed() {}",
-        "+const DOC: &str = r\"",
-        "+++ /dev/null",
-        "+\";",
-        "+fn hidden_from_review() {}",
-    ]);
-
-    let hunks = parse_unified_diff(&diff);
-
-    assert_eq!(hunks.len(), 1, "got {hunks:?}");
-    assert_eq!(hunks[0].file_path, PathBuf::from("lib.rs"));
-    let added: Vec<&str> = hunks[0].lines.iter().map(HunkLine::content).collect();
-    assert_eq!(
-        added,
-        vec![
-            "fn reviewed() {}",
-            "const DOC: &str = r\"",
-            "++ /dev/null",
-            "\";",
-            "fn hidden_from_review() {}",
-        ]
-    );
 }
 
 #[test]
@@ -455,49 +529,5 @@ fn every_body_line_kind_counts_against_its_own_side() {
             HunkLine::Added("came".to_owned()),
             HunkLine::Context("last".to_owned()),
         ]
-    );
-}
-
-#[test]
-fn a_path_containing_a_space_drops_the_tab_git_appends_to_its_header() {
-    // Git ends a `+++` label containing a space with a tab.
-    let diff = diff_of(&[
-        "diff --git a/my file.rs b/my file.rs",
-        "--- a/my file.rs",
-        "+++ b/my file.rs\t",
-        "@@ -1 +1 @@",
-        "-old",
-        "+new",
-    ]);
-
-    let hunks = parse_unified_diff(&diff);
-
-    assert_eq!(hunks.len(), 1, "got {hunks:?}");
-    assert_eq!(hunks[0].file_path, PathBuf::from("my file.rs"));
-}
-
-#[test]
-fn a_quoted_path_is_decoded() {
-    let diff = diff_of(&[
-        "diff --git \"a/\\303\\274n\\303\\257.rs\" \"b/\\303\\274n\\303\\257.rs\"",
-        "--- \"a/\\303\\274n\\303\\257.rs\"",
-        "+++ \"b/\\303\\274n\\303\\257.rs\"",
-        "@@ -1 +1 @@",
-        "-old",
-        "+new",
-        "diff --git \"a/sp ace\\t\\\"q\\\".rs\" \"b/sp ace\\t\\\"q\\\".rs\"",
-        "--- \"a/sp ace\\t\\\"q\\\".rs\"\t",
-        "+++ \"b/sp ace\\t\\\"q\\\".rs\"\t",
-        "@@ -1 +1 @@",
-        "-old",
-        "+new",
-    ]);
-
-    let hunks = parse_unified_diff(&diff);
-
-    let paths: Vec<&PathBuf> = hunks.iter().map(|h| &h.file_path).collect();
-    assert_eq!(
-        paths,
-        vec![&PathBuf::from("ünï.rs"), &PathBuf::from("sp ace\t\"q\".rs")]
     );
 }

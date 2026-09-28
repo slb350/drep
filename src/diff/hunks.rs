@@ -21,9 +21,9 @@
 //! through it.
 
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
-use super::quoting::unquote;
+use super::quoting::decode;
 
 /// One line inside a hunk, tagged by what the diff said about it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -155,18 +155,22 @@ impl Hunk {
 ///
 /// - **A hunk body is exactly as long as its `@@` counts say.** Context
 ///   consumes a line from each side, a removal one old line, an addition one
-///   new line, and `\ No newline at end of file` none. Every body line is
+///   new line, and `\ No newline at end of file` none; that marker refers to
+///   the preceding line and never becomes a `HunkLine`. Every body line is
 ///   prefixed, so no content can end a body early: an added source line that
 ///   reads `++ /dev/null` arrives as `+++ /dev/null` and is still an addition,
-///   not a deletion header that hides the rest of the file from review.
+///   not a deletion header that hides the rest of the file from review, and a
+///   removed one reading `-- x` arrives as `--- x` and is still a removal.
 /// - An empty body line is an empty context line, as `diff.suppressBlankEmpty`
 ///   prints it. Any other unprefixed line, or one the counts leave no room
 ///   for, ends the hunk early and is then read as a header.
 /// - **The file path comes from the `+++` label, never from `diff --git`.**
-///   That line carries two paths with no unambiguous separator. The label is
-///   decoded as git writes it: C-quoted when the name needs it, and followed
-///   by a tab when it contains a space. `+++ /dev/null` marks a deletion,
-///   which has nothing to analyze, so its hunks are dropped.
+///   That line carries two paths with no unambiguous separator, so any "find
+///   `b/`" rule captures the wrong span for a repository path that itself
+///   contains `b/` (`src/b/mod.rs`). The label is decoded as git quoted it, and
+///   the tab git appends to a name containing a space is dropped - see
+///   `new_file_path`. `+++ /dev/null` marks a deletion, which has nothing to
+///   analyze, so its hunks are dropped.
 /// - A malformed `@@` produces no hunk, and nothing after it is attributed to
 ///   the hunk before it.
 pub fn parse_unified_diff(diff_text: &str) -> Vec<Hunk> {
@@ -192,7 +196,7 @@ pub fn parse_unified_diff(diff_text: &str) -> Vec<Hunk> {
         if line.starts_with("diff --git ") {
             current_file = None;
         } else if let Some(label) = line.strip_prefix("+++ ") {
-            current_file = new_side_path(label);
+            current_file = new_file_path(label);
         } else if let Some(after_marker) = line.strip_prefix("@@") {
             body = parse_hunk_header(after_marker).and_then(|(os, oc, ns, nc)| {
                 current_file.clone().map(|file_path| Body {
@@ -255,13 +259,17 @@ impl Body {
     }
 }
 
-/// The repository path a `+++` label names, or `None` for `/dev/null`.
+/// The file a `+++ ` header names, or `None` when it names no new file.
 ///
-/// Git appends a tab to a label that contains a space; a tab inside the name
-/// itself is always quoted, so one trailing tab is never part of the path.
-fn new_side_path(label: &str) -> Option<PathBuf> {
-    let label = label.strip_suffix('\t').unwrap_or(label);
-    unquote(label)?.strip_prefix("b/").map(PathBuf::from)
+/// Git ends the header with a tab whenever the name holds a space, and an
+/// unquoted name never holds a tab (git quotes one), so a single trailing tab is
+/// always that marker. The `b/` prefix is removed after decoding because a
+/// quoted field carries it inside the quotes. `/dev/null`, a deletion, has no
+/// such prefix, and neither does a header written without one: the parser does
+/// not guess where a prefix it cannot see would have ended.
+fn new_file_path(target: &str) -> Option<PathBuf> {
+    let field = target.strip_suffix('\t').unwrap_or(target);
+    decode(field).strip_prefix("b").ok().map(Path::to_path_buf)
 }
 
 /// Parse the middle of a `@@` line: `-old[,oc] +new[,nc]`, followed by the

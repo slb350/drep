@@ -1015,21 +1015,24 @@ comes back.
   `files::expand_named`: that expander resolves an empty list to `root`, which
   is what makes bare `drep lint-docs` mean "this tree" and would turn "no
   markdown in this commit" into "lint every document", every commit.
-- **drep fixes the format of every diff it parses, and reads a hunk body by
-  its counts.** Each `git diff` in `src/diff/mod.rs` carries `DIFF_FORMAT`
-  (`--text --no-textconv --no-ext-diff --no-color --src-prefix=a/
-  --dst-prefix=b/`) and `DIFF_FILTER` (`ACMRT`). Without them a committed
-  `binary` or `-diff` attribute, a NUL byte, a symlink replaced by a regular
-  file, or a user's `diff.noprefix`, `diff.mnemonicPrefix`, `color.diff`,
-  textconv or external diff made `git diff` succeed with output that parsed as
-  no change, and a change with no hunks passes the gate. `parse_unified_diff`
-  consumes exactly the lines the `@@` counts declare, as git's `apply.c` does:
-  every body line is prefixed, so an added line reading `++ /dev/null` or
-  `++ b/other.rs` must stay content rather than close the file or reattribute
-  its later hunks. `+++` labels lose git's trailing tab and, like
-  `--name-only` lines, are decoded by `quoting::unquote`, or a name with a
-  space, a quote or a non-ASCII character leaves review.
-  `src/diff/tests/review_evasion.rs` pins each case against real git.
+- **Every `git diff` drep parses goes through `diff::git_diff`, every path
+  it prints goes through `diff::quoting::decode`, and a hunk body is read by
+  its counts.** `DIFF` pins the output format against the user's configuration
+  and the repository's attributes: `diff.noprefix`, `diff.mnemonicPrefix`,
+  `diff.srcPrefix`/`diff.dstPrefix`, `color.ui=always`, `diff.external`, a
+  textconv driver, `diff.suppressBlankEmpty`, and a committed `binary` or
+  `-diff` attribute or a NUL byte (`--text`) each once made the hunk parser find
+  nothing, or text other than the committed text, and the gate reported the
+  file clean. `--diff-filter=ACMRT` keeps `T`, because a symlink replaced by a
+  regular file is a type change. git quotes a name holding `é`, `"`, `\` or a
+  control character, and ends a `+++` name holding a space with a tab; read
+  raw, either name matched no language and the file dropped out of `--staged`
+  and `--diff` unreviewed. `parse_unified_diff` consumes exactly the lines the
+  `@@` counts declare, as git's `apply.c` does: every body line is prefixed,
+  so an added line reading `++ /dev/null` or `++ b/other.rs` stays content
+  rather than closing the file or reattributing its later hunks.
+  `src/diff/tests/output_format.rs` runs real git under each setting and name,
+  and `src/diff/tests/review_evasion.rs` under each kind of content.
 - **`LintOutcome` carries the gate's `Gating`, and the renderer reports it.**
   The footer needs to say whether the findings on screen blocked the run, and
   asking that question a second time in `render` is what `check` documents on
