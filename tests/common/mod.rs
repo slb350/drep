@@ -5,7 +5,11 @@
 //! already been transcribed once. `src/test_support.rs` is the wrong home: it
 //! is `pub(crate)` and holds mock-endpoint fixtures.
 
+#[path = "../../src/test_git_env.rs"]
+pub mod git_env;
+
 /// A UTF-8 file from the repository root.
+#[allow(dead_code)]
 pub fn read(relative: &str) -> String {
     let path = format!("{}/{relative}", env!("CARGO_MANIFEST_DIR"));
     std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{path} must be readable: {e}"))
@@ -16,6 +20,7 @@ pub fn read(relative: &str) -> String {
 /// The generated files carry an explanatory comment above every key, so a
 /// raw-text assertion would be satisfied by the comment describing a setting
 /// as readily as by the setting.
+#[allow(dead_code)]
 pub fn without_comments(relative: &str) -> String {
     read(relative)
         .lines()
@@ -44,22 +49,11 @@ pub fn write_executable(path: &std::path::Path, contents: &str) {
     );
 }
 
-/// A command whose git calls cannot reach the repository of a hook this suite may be running under. Mirrors the environment `test_support::git` clears.
+/// A command whose git calls cannot reach the repository of a hook this suite may be running under: the environment [`git_env::scrub_outer_git`] removes, the same definition the unit tests use.
 #[allow(dead_code)]
 pub fn without_outer_git(program: &str, dir: &std::path::Path) -> std::process::Command {
     let mut command = std::process::Command::new(program);
-    for variable in [
-        "GIT_DIR",
-        "GIT_WORK_TREE",
-        "GIT_COMMON_DIR",
-        "GIT_INDEX_FILE",
-        "GIT_OBJECT_DIRECTORY",
-        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
-        "GIT_QUARANTINE_PATH",
-    ] {
-        command.env_remove(variable);
-    }
-    command.current_dir(dir);
+    git_env::scrub_outer_git(&mut command).current_dir(dir);
     command
 }
 

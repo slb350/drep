@@ -7,6 +7,7 @@
 
 mod changed_since;
 mod current_commit_sha;
+mod hook_environment;
 mod hunk_commands;
 mod hunks;
 mod output_format;
