@@ -111,9 +111,9 @@ pub enum Gating {
 
 /// One `lint-docs` invocation.
 ///
-/// `async` for exactly one reason, and it is not concurrency: `--staged` asks
-/// git which documents this commit touches. Every other mode reads files and
-/// runs pure checks with nothing to await.
+/// `async` for exactly one reason: `--staged` asks git which documents this
+/// commit touches and what they contain. Every other mode reads files and runs
+/// pure checks with nothing to await.
 pub async fn run(args: &LintDocsArgs, root: &Path) -> Result<Exit> {
     let outcome = outcome_for(args, root).await?;
     render::render(&outcome)?;
@@ -123,9 +123,9 @@ pub async fn run(args: &LintDocsArgs, root: &Path) -> Result<Exit> {
 /// The outcome for one invocation, in whichever input mode it names.
 ///
 /// `async` for exactly one reason: `--staged` asks git which documents this
-/// commit touches, through [`crate::diff`], which is the single place in the
-/// binary that invokes git. Everything else here is synchronous file reading
-/// and pure checks.
+/// commit touches and what they contain, through [`crate::diff`], which is the
+/// single place in the binary that invokes git. Everything else here is
+/// synchronous file reading and pure checks.
 pub(crate) async fn outcome_for(args: &LintDocsArgs, root: &Path) -> Result<LintOutcome> {
     if !args.staged {
         return Ok(analyze(args, root));
@@ -137,9 +137,11 @@ pub(crate) async fn outcome_for(args: &LintDocsArgs, root: &Path) -> Result<Lint
     // list to `root`. That default is what makes bare `drep lint-docs` mean
     // "this tree", and reusing it here would turn "this commit touches no
     // markdown" into "lint every document in the repository", on every commit.
-    let staged = crate::diff::staged_files(root, files::is_markdown).await?;
+    let staged = crate::diff::staged_contents(root, files::is_markdown).await?;
     Ok(analyze_files(
-        staged.into_iter().map(|p| root.join(p)).collect(),
+        staged
+            .into_iter()
+            .map(|(path, content)| (root.join(path), content)),
         BTreeMap::new(),
         args.threshold(),
     ))
@@ -152,22 +154,26 @@ pub(crate) async fn outcome_for(args: &LintDocsArgs, root: &Path) -> Result<Lint
 fn analyze(args: &LintDocsArgs, root: &Path) -> LintOutcome {
     let mut failures: BTreeMap<PathBuf, FailureReason> = BTreeMap::new();
     let targets = resolve(&args.paths, root, &mut failures);
-    analyze_files(targets, failures, args.threshold())
+    let loaded = targets.into_iter().map(|path| {
+        let content = std::fs::read_to_string(&path);
+        (path, content)
+    });
+    analyze_files(loaded, failures, args.threshold())
 }
 
-/// Read each target, run the checks, and gate.
+/// Run the checks over each document, given with its content or why it could not be read, and gate.
 ///
 /// Takes the failures already collected rather than starting empty: the path
 /// expansion rejects some of what the user named, and those rejections outrank
 /// every finding this function can produce.
 fn analyze_files(
-    targets: Vec<PathBuf>,
+    loaded: impl IntoIterator<Item = (PathBuf, std::io::Result<String>)>,
     mut failures: BTreeMap<PathBuf, FailureReason>,
     threshold: Option<Severity>,
 ) -> LintOutcome {
     let mut findings = Vec::new();
-    for path in targets {
-        match std::fs::read_to_string(&path) {
+    for (path, content) in loaded {
+        match content {
             Ok(content) => findings.extend(crate::docs::analyze(&path, &content)),
             Err(err) => {
                 failures.insert(path, FailureReason::Unreadable(err.to_string()));

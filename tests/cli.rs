@@ -6,6 +6,8 @@
 //! the returned code - lives in `main.rs` and is only observable from outside
 //! the process.
 
+mod common;
+
 use assert_cmd::Command;
 use tempfile::TempDir;
 
@@ -162,4 +164,191 @@ fn usage_error_also_blocks() {
 #[test]
 fn no_command_is_a_usage_error() {
     drep().assert().failure();
+}
+
+// A pre-commit hook running drep's staged gate reviews what the commit contains,
+// however it was made: `git commit -a`, `git commit <paths>` and a commit from an
+// index the committer chose are made from an index git names to the hook in
+// `GIT_INDEX_FILE`, not from `.git/index`.
+
+const CLEAN_README: &str = "# Title\n\nClean text.\n";
+const BROKEN_README: &str = "# Title\n\nClean text.\n\n#Broken heading\n";
+
+/// A repository whose pre-commit hook is drep's strict staged documentation gate, holding a clean committed README that is now broken in the working tree, and its HEAD.
+fn gated_repository() -> (TempDir, String) {
+    let dir = TempDir::new().expect("temp dir");
+    let root = dir.path();
+    common::git_init(root);
+    common::git_must(root, &["config", "--local", "core.hooksPath", "hooks"]);
+    std::fs::create_dir(root.join("hooks")).expect("hooks directory");
+    common::write_executable(
+        &root.join("hooks").join("pre-commit"),
+        &format!(
+            "#!/bin/sh\nDREP_SITE_CONFIG='{}' exec '{}' lint-docs --staged --strict\n",
+            absent_site_policy().display(),
+            env!("CARGO_BIN_EXE_drep")
+        ),
+    );
+    std::fs::write(root.join("README.md"), CLEAN_README).expect("write the README");
+    common::git_must(root, &["add", "README.md"]);
+    common::git_must(root, &["commit", "--quiet", "--no-verify", "-m", "clean"]);
+    let head = common::git_must(root, &["rev-parse", "HEAD"]);
+    std::fs::write(root.join("README.md"), BROKEN_README).expect("break the README");
+    (dir, head)
+}
+
+/// Commit from `from` through the gate with `extra` arguments and environment, and check the gate refused, named the issue and left HEAD where it was.
+fn assert_gate_refuses(
+    dir: &TempDir,
+    from: &std::path::Path,
+    head: &str,
+    extra: &[&str],
+    env: &[(&str, &std::path::Path)],
+) {
+    let mut commit = common::without_outer_git("git", from);
+    commit
+        .args(["commit", "--quiet", "-m", "broken"])
+        .args(extra);
+    for (name, value) in env {
+        commit.env(name, value);
+    }
+    let output = commit.output().expect("git must run");
+    let said = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        !output.status.success(),
+        "the gate let the commit through: {said}"
+    );
+    assert!(
+        said.contains("missing_space_after_heading"),
+        "the gate named the issue: {said}"
+    );
+    assert_eq!(
+        common::git_must(dir.path(), &["rev-parse", "HEAD"]),
+        head,
+        "nothing was committed"
+    );
+}
+
+/// Builds the index `index` names from HEAD, as git sees it from `from`, and stages `path` into it.
+fn stage_into_index(from: &std::path::Path, index: &std::path::Path, path: &str) {
+    for args in [&["read-tree", "HEAD"][..], &["add", path][..]] {
+        let status = common::without_outer_git("git", from)
+            .env("GIT_INDEX_FILE", index)
+            .args(args)
+            .status()
+            .expect("git must run");
+        assert!(
+            status.success(),
+            "git {args:?} into {} failed",
+            index.display()
+        );
+    }
+}
+
+#[test]
+fn the_staged_gate_reviews_a_commit_of_every_tracked_change() {
+    let (dir, head) = gated_repository();
+    assert_gate_refuses(&dir, dir.path(), &head, &["-a"], &[]);
+}
+
+#[test]
+fn the_staged_gate_reviews_a_commit_of_named_paths() {
+    let (dir, head) = gated_repository();
+    assert_gate_refuses(&dir, dir.path(), &head, &["--", "README.md"], &[]);
+}
+
+#[test]
+fn the_staged_gate_reviews_what_the_commit_records_not_the_working_tree() {
+    let (dir, head) = gated_repository();
+    common::git_must(dir.path(), &["add", "README.md"]);
+    std::fs::write(dir.path().join("README.md"), CLEAN_README).expect("restore the README");
+    assert_gate_refuses(&dir, dir.path(), &head, &[], &[]);
+}
+
+#[test]
+fn the_staged_gate_reviews_a_chosen_index_not_the_working_tree() {
+    let (dir, head) = gated_repository();
+    let elsewhere = TempDir::new().expect("temp dir");
+    let index = elsewhere.path().join("alternate.index");
+    stage_into_index(dir.path(), &index, "README.md");
+    std::fs::write(dir.path().join("README.md"), CLEAN_README).expect("restore the README");
+    assert_gate_refuses(&dir, dir.path(), &head, &[], &[("GIT_INDEX_FILE", &index)]);
+}
+
+// git opens a relative GIT_INDEX_FILE from the top level of the working tree, where it also runs the hook, whichever directory the commit was made from; GIT_PREFIX names that directory and plays no part in finding the index.
+#[test]
+fn the_staged_gate_reviews_a_relative_chosen_index_committed_from_a_subdirectory() {
+    let (dir, head) = gated_repository();
+    let sub = dir.path().join("sub");
+    std::fs::create_dir(&sub).expect("subdirectory");
+    stage_into_index(&sub, std::path::Path::new("commit.index"), "../README.md");
+    assert!(
+        dir.path().join("commit.index").is_file(),
+        "git wrote the relative index at the top level"
+    );
+    std::fs::write(dir.path().join("README.md"), CLEAN_README).expect("restore the README");
+    assert_gate_refuses(
+        &dir,
+        &sub,
+        &head,
+        &[],
+        &[("GIT_INDEX_FILE", std::path::Path::new("commit.index"))],
+    );
+}
+
+#[test]
+fn the_staged_gate_passes_a_clean_commit_whatever_the_working_tree_holds() {
+    let (dir, head) = gated_repository();
+    let clean_edit = format!("{CLEAN_README}\nMore clean text.\n");
+    std::fs::write(dir.path().join("README.md"), &clean_edit).expect("edit the README");
+    common::git_must(dir.path(), &["add", "README.md"]);
+    std::fs::write(dir.path().join("README.md"), BROKEN_README).expect("break the working tree");
+    common::git_must(dir.path(), &["commit", "--quiet", "-m", "clean edit"]);
+    assert_ne!(common::git_must(dir.path(), &["rev-parse", "HEAD"]), head);
+    assert_eq!(
+        common::git_must(dir.path(), &["show", "HEAD:README.md"]),
+        clean_edit.trim_end()
+    );
+}
+
+#[test]
+fn run_from_a_subdirectory_the_staged_gate_reviews_the_whole_commit_and_names_files_from_there() {
+    for relative in ["false", "true"] {
+        let dir = TempDir::new().expect("temp dir");
+        let root = dir.path();
+        common::git_init(root);
+        common::git_must(root, &["config", "--local", "diff.relative", relative]);
+        std::fs::create_dir(root.join("sub")).expect("subdirectory");
+        std::fs::write(root.join("README.md"), CLEAN_README).expect("write the README");
+        std::fs::write(root.join("GUIDE.md"), BROKEN_README).expect("write GUIDE.md");
+        std::fs::write(root.join("sub").join("README.md"), BROKEN_README)
+            .expect("write sub/README.md");
+        common::git_must(root, &["add", "README.md", "GUIDE.md", "sub/README.md"]);
+
+        let output = common::without_outer_git(env!("CARGO_BIN_EXE_drep"), &root.join("sub"))
+            .env("DREP_SITE_CONFIG", absent_site_policy())
+            .args(["lint-docs", "--staged", "--strict"])
+            .output()
+            .expect("drep must run");
+        let said = String::from_utf8_lossy(&output.stdout);
+        assert_eq!(
+            output.status.code(),
+            Some(1),
+            "diff.relative={relative}: {said}"
+        );
+        for named in ["./README.md:5:2", "./../GUIDE.md:5:2"] {
+            assert!(
+                said.contains(named),
+                "diff.relative={relative}: {named} in {said}"
+            );
+        }
+        assert!(
+            !said.contains("./../README.md"),
+            "diff.relative={relative}: {said}"
+        );
+    }
 }

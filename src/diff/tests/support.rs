@@ -5,6 +5,9 @@ use std::path::Path;
 
 use tokio::process::Command;
 
+/// Both values of `diff.relative`: git's default, and the setting that names files from the working directory and leaves out the rest.
+pub(crate) const RELATIVE: [&str; 2] = ["false", "true"];
+
 /// A git repository rooted at a `tempfile::TempDir`.
 ///
 /// Brings the repo into a state where every test is reproducible on every
@@ -105,7 +108,7 @@ impl GitRepo {
 }
 
 /// Run a Git setup command, panicking with its stderr on failure. It starts from `crate::test_support::git`, so it cannot reach the repository of a hook the suite runs under.
-pub(crate) async fn run_in(root: &Path, args: &[&str]) {
+pub(crate) async fn run_in<S: AsRef<std::ffi::OsStr> + std::fmt::Debug>(root: &Path, args: &[S]) {
     let mut command = Command::from(crate::test_support::git(root));
     command.args(args);
     let output = command.output().await.expect("spawn git");

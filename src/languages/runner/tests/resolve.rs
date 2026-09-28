@@ -238,3 +238,25 @@ fn a_glob_config_marker_matches_files_not_directories() {
         "a directory carrying the extension is not a project file"
     );
 }
+
+/// A file above the directory drep runs in is outside it, however its path spells the climb: from `sub/`, the top level's `../top.js` takes no configuration from `sub/`.
+#[test]
+fn a_file_above_the_root_takes_no_configuration_from_it() {
+    let dir = TempDir::new().unwrap();
+    let sub = dir.path().join("sub");
+    std::fs::create_dir(&sub).unwrap();
+    std::fs::write(sub.join("eslint.config.js"), "").unwrap();
+    let spec = ToolSpec {
+        name: "literal",
+        config_files: &["eslint.config.js"],
+        ..ToolSpec::default()
+    };
+    assert_eq!(
+        configuration_root(&spec, &sub, std::path::Path::new("../top.js")),
+        None
+    );
+    assert_eq!(
+        configuration_root(&spec, &sub, std::path::Path::new("lib/../a.js")),
+        Some(sub.clone())
+    );
+}

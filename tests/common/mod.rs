@@ -57,6 +57,39 @@ pub fn without_outer_git(program: &str, dir: &std::path::Path) -> std::process::
     command
 }
 
+/// Run a git fixture command in `dir` that must succeed and return its trimmed output. Mirrors `test_support::git_output`.
+#[allow(dead_code)]
+pub fn git_must(dir: &std::path::Path, args: &[&str]) -> String {
+    let output = without_outer_git("git", dir)
+        .args(args)
+        .output()
+        .unwrap_or_else(|err| panic!("git {} must run: {err}", args.join(" ")));
+    assert!(
+        output.status.success(),
+        "git {} failed: {}",
+        args.join(" "),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8(output.stdout)
+        .expect("git output is utf8")
+        .trim()
+        .to_owned()
+}
+
+/// Initialise a fixture repository under `dir` on `main`, with a local identity, no hooks and no signing. Mirrors `test_support::git_init`.
+#[allow(dead_code)]
+pub fn git_init(dir: &std::path::Path) {
+    git_must(dir, &["init", "--quiet", "--initial-branch=main"]);
+    for (key, value) in [
+        ("user.email", "test@example.com"),
+        ("user.name", "test"),
+        ("core.hooksPath", ""),
+        ("commit.gpgsign", "false"),
+    ] {
+        git_must(dir, &["config", "--local", key, value]);
+    }
+}
+
 /// perl that exits 0 when the lock file named by its argument could be taken now and 1 while another process holds it: the same kernel flock the mutation scripts take through perl, since macOS has no flock(1).
 #[allow(dead_code)]
 pub const LOCK_PROBE: &str =

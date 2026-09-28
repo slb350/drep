@@ -311,7 +311,10 @@ pub async fn install<W: Write>(
     // is unset in some environments.
     if let Some(value) = configured {
         let chainer_dir = resolve_hooks_dir(root, &value);
-        if same_directory(&hooks_dir, &chainer_dir) {
+        // Both inputs are already rooted at the repository: `diff::git_path`
+        // anchors Git's relative output, and `resolve_hooks_dir` anchors the
+        // configured value. Canonicalization therefore never depends on cwd.
+        if diff::same_directory(&hooks_dir, &chainer_dir) {
             writeln!(
                 out,
                 "  core.hooksPath already resolves to {}; no chainer is needed.",
@@ -331,16 +334,6 @@ pub async fn install<W: Write>(
     }
 
     Ok(())
-}
-
-fn same_directory(left: &Path, right: &Path) -> bool {
-    // Both inputs are already rooted at the repository: `diff::git_path`
-    // anchors Git's relative output, and `resolve_hooks_dir` anchors the
-    // configured value. Canonicalization therefore never depends on cwd.
-    left == right
-        || std::fs::canonicalize(left)
-            .and_then(|left| std::fs::canonicalize(right).map(|right| left == right))
-            .unwrap_or(false)
 }
 
 /// Resolve the hooks directory git would consult for repo-local hooks.

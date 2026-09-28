@@ -17,18 +17,23 @@
 //! - `current_commit_sha` is the one place this is reversed: it only feeds
 //!   a cache key, and a cache-key component must never take the analysis down.
 
+use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
-use std::process::Stdio;
 use std::time::Duration;
 
-use tokio::process::Command;
+use futures::StreamExt;
 
 use crate::files;
 
+mod git;
 pub mod hunks;
+mod prefix;
 mod quoting;
 
+use git::{GitEnv, committing_index, spawn_git, spawn_git_bytes};
+pub(crate) use git::{git_query, run_git, same_directory};
 use hunks::{Hunk, parse_unified_diff};
+use prefix::{from_prefix, hunks_from, paths_from, working_prefix};
 
 /// The well-known SHA for the empty git tree.
 ///
@@ -44,13 +49,6 @@ const EMPTY_TREE: &str = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
 /// local `git rev-parse`; if it does not answer by then the answer is
 /// "unknown" and the cache key falls through.
 const SHA_TIMEOUT: Duration = Duration::from_secs(5);
-
-/// Ceiling on any single git invocation.
-///
-/// Generous compared with `SHA_TIMEOUT` because `git diff` on a large history
-/// is legitimately slower than `rev-parse`, but bounded so a hung git cannot
-/// stall a commit.
-const GIT_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// What went wrong shelling out to git.
 ///
@@ -91,95 +89,6 @@ async fn has_head(root: &Path) -> bool {
     run_git(root, &["rev-parse", "--verify", "HEAD"])
         .await
         .is_ok()
-}
-
-/// Run `git <args>` in `root` and return trimmed stdout on success.
-///
-/// All the diff commands want the same shape: capture stdout, capture
-/// stderr separately, never panic. `kill_on_drop` ensures a hung git cannot
-/// outlive its caller.
-/// Every git invocation is bounded.
-///
-/// The timeout lives here rather than at one call site: `current_commit_sha`
-/// wrapped itself, but `staged_files`, `changed_since` and `has_head` called
-/// this bare, so a hung git blocked the gate indefinitely. `kill_on_drop` only
-/// helps when the future is dropped, which nothing was doing.
-///
-/// `pub(crate)` because it is the *only* place drep spawns git. `cli::init`
-/// asks git where the hooks directory is and what `core.hooksPath` holds, and
-/// a second spawn helper there would be a second place for the timeout, the
-/// stdin-null and the non-zero handling to drift.
-/// Run a git query whose answer is carried by its exit code.
-///
-/// `Ok(Some(stdout))` when git exited 0, `Ok(None)` when it exited **1**, and
-/// an error for anything else. Exit 1 is git's "no" - not ignored, not tracked,
-/// no such config key - while 2 and above mean the question could not be asked
-/// at all, and collapsing the two would report a broken repository as a clean
-/// answer.
-///
-/// Three call sites had transcribed this discrimination separately
-/// (`hooks::run_git_config_path`, and `gitignore`'s ignored and tracked
-/// probes), which is three places for the 1-versus-2 rule to drift.
-pub(crate) async fn git_query(root: &Path, args: &[&str]) -> Result<Option<String>, GitError> {
-    match run_git(root, args).await {
-        Ok(stdout) => Ok(Some(stdout)),
-        Err(GitError::NonZero { code: Some(1), .. }) => Ok(None),
-        Err(err) => Err(err),
-    }
-}
-
-pub(crate) async fn run_git(root: &Path, args: &[&str]) -> Result<String, GitError> {
-    let mut command = Command::new("git");
-    command
-        .args(args)
-        // drep names the repository by path, and `current_dir(root)` is that
-        // statement. An inherited `GIT_DIR`/`GIT_WORK_TREE`/`GIT_COMMON_DIR`
-        // silently overrides it, so git answers about a *different* repository
-        // than the one asked about - and a relative `GIT_INDEX_FILE` resolves
-        // against the wrong directory entirely. Both happen in practice,
-        // because drep's whole job is running inside a git hook, where git
-        // exports all of them.
-        //
-        // Removing them makes `root` authoritative. It changes nothing in the
-        // ordinary case (git rediscovers the same repository from the working
-        // directory), and it is what stops the answers depending on who
-        // launched the process.
-        .env_remove("GIT_DIR")
-        .env_remove("GIT_WORK_TREE")
-        .env_remove("GIT_COMMON_DIR")
-        .env_remove("GIT_INDEX_FILE")
-        // The object-database trio, for the same reason as the four above:
-        // they redirect where a child `git` reads and writes objects, so an
-        // inherited one points at the outer repository's store while every
-        // other setting names the intended one.
-        .env_remove("GIT_OBJECT_DIRECTORY")
-        .env_remove("GIT_ALTERNATE_OBJECT_DIRECTORIES")
-        .env_remove("GIT_QUARANTINE_PATH")
-        .current_dir(root)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .kill_on_drop(true);
-
-    let output = match tokio::time::timeout(GIT_TIMEOUT, command.output()).await {
-        Ok(result) => result,
-        Err(_) => {
-            return Err(GitError::Spawn(format!(
-                "git {} timed out after {}s",
-                args.join(" "),
-                GIT_TIMEOUT.as_secs()
-            )));
-        }
-    }
-    .map_err(|err| GitError::Spawn(err.to_string()))?;
-
-    if !output.status.success() {
-        return Err(GitError::NonZero {
-            code: output.status.code(),
-            stderr: String::from_utf8_lossy(&output.stderr).trim().to_owned(),
-        });
-    }
-    Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
 }
 
 /// Resolve a path printed by `git rev-parse` against the queried repository.
@@ -265,6 +174,12 @@ fn filter_paths(output: &str, wanted: fn(&Path) -> bool) -> Vec<PathBuf> {
 /// - `--src-prefix`/`--dst-prefix` restore the `a/` and `b/` that
 ///   `diff.noprefix` removes and `diff.mnemonicPrefix` (`c/` and `i/` for
 ///   `--cached`) and `diff.srcPrefix`/`diff.dstPrefix` replace.
+/// - `--no-relative` overrides `diff.relative`, which names each file from the
+///   working directory and leaves out every file outside it, so a commit run
+///   from a subdirectory passed its other files unreviewed. Every path is named
+///   from the top level, as `:<path>` resolves it when a staged file's content
+///   is read, and `prefix` converts it to the working directory's view before a
+///   query returns it.
 ///
 /// `--diff-filter=ACMRT` is selection rather than format, and is here so the
 /// staged and branch queries state it once; `staged_files` says why deletions
@@ -283,13 +198,14 @@ const DIFF: &[&str] = &[
     "--no-color",
     "--src-prefix=a/",
     "--dst-prefix=b/",
+    "--no-relative",
     "--diff-filter=ACMRT",
 ];
 
 /// Run `git diff` with its output format pinned by [`DIFF`], selecting with
 /// `selection`.
-async fn git_diff(root: &Path, selection: &[&str]) -> Result<String, GitError> {
-    run_git(root, &[DIFF, selection].concat()).await
+async fn git_diff(root: &Path, selection: &[&str], env: GitEnv<'_>) -> Result<String, GitError> {
+    spawn_git(root, &[DIFF, selection].concat(), env).await
 }
 
 /// Files staged for commit, relative to `root`, that drep analyzes.
@@ -302,10 +218,39 @@ pub async fn staged_files(
     root: &Path,
     wanted: fn(&Path) -> bool,
 ) -> Result<Vec<PathBuf>, GitError> {
-    Ok(filter_paths(&staged_diff(root, NAMES).await?, wanted))
+    let (names, prefix) = staged_diff(root, NAMES).await?;
+    Ok(paths_from(filter_paths(&names, wanted), &prefix))
 }
 
-/// `git diff --cached` in whichever output mode the caller wants.
+/// How many staged files have their content read at once: one `git cat-file`
+/// each, bounded like drep's other child-process fan-outs.
+const CONTENT_READ_CONCURRENCY: usize = 4;
+
+/// Each staged file `wanted` accepts, with the content the commit records for it.
+///
+/// The content comes from the same index as the list, never from the working
+/// tree, which differs from it after a partial `git add` and under an index the
+/// committer chose. A file whose content cannot be read carries its error, as
+/// reading it from disk would.
+pub async fn staged_contents(
+    root: &Path,
+    wanted: fn(&Path) -> bool,
+) -> Result<Vec<(PathBuf, std::io::Result<String>)>, GitError> {
+    let view = StagedView::of(root).await?;
+    let paths = filter_paths(&view.diff(root, NAMES).await?, wanted);
+    let view = &view;
+    Ok(futures::stream::iter(paths)
+        .map(|path| async move {
+            let content = view.content(root, &path).await;
+            (from_prefix(&path, &view.prefix), content)
+        })
+        .buffered(CONTENT_READ_CONCURRENCY)
+        .collect()
+        .await)
+}
+
+/// `git diff --cached` in whichever output mode the caller wants, and the
+/// working directory's prefix its paths are to be read from.
 ///
 /// The selection rules — the empty-tree fallback here, `--diff-filter=ACMRT`
 /// in [`DIFF`] — live once rather than in each of `staged_files` and
@@ -313,13 +258,64 @@ pub async fn staged_files(
 /// the other would make the file list and the hunk set disagree about what is
 /// in scope: drep would analyze a file the gate never listed, which is exactly
 /// the class of failure this module exists to prevent.
-async fn staged_diff(root: &Path, mode: &str) -> Result<String, GitError> {
-    let selection: &[&str] = if has_head(root).await {
-        &["--cached", mode]
-    } else {
-        &["--cached", mode, EMPTY_TREE]
-    };
-    git_diff(root, selection).await
+async fn staged_diff(root: &Path, mode: &str) -> Result<(String, PathBuf), GitError> {
+    let view = StagedView::of(root).await?;
+    Ok((view.diff(root, mode).await?, view.prefix))
+}
+
+/// What the staged queries read: whether HEAD exists, the index the commit is being made from, and where `root` sits in the working tree.
+///
+/// Built once per query so the file list and the content read for it come from the same index.
+struct StagedView {
+    head: bool,
+    index: Option<PathBuf>,
+    prefix: PathBuf,
+}
+
+impl StagedView {
+    async fn of(root: &Path) -> Result<Self, GitError> {
+        let (head, index, prefix) =
+            tokio::join!(has_head(root), committing_index(root), working_prefix(root));
+        Ok(Self {
+            head,
+            index: index?,
+            prefix: prefix?,
+        })
+    }
+
+    fn env(&self) -> GitEnv<'_> {
+        self.index
+            .as_deref()
+            .map_or(GitEnv::Scrubbed, GitEnv::Index)
+    }
+
+    async fn diff(&self, root: &Path, mode: &str) -> Result<String, GitError> {
+        let selection: &[&str] = if self.head {
+            &["--cached", mode]
+        } else {
+            &["--cached", mode, EMPTY_TREE]
+        };
+        git_diff(root, selection, self.env()).await
+    }
+
+    /// The content the commit records for `path`: its blob in the index, as UTF-8 text.
+    ///
+    /// The `:<path>` spec is built from the path's bytes, so a name that is not
+    /// UTF-8, which `quoting::decode` keeps exactly, reaches git unchanged.
+    async fn content(&self, root: &Path, path: &Path) -> std::io::Result<String> {
+        let mut spec = OsString::from(":");
+        spec.push(path);
+        let args = [OsStr::new("cat-file"), OsStr::new("blob"), &spec];
+        let blob = spawn_git_bytes(root, &args, self.env())
+            .await
+            .map_err(std::io::Error::other)?;
+        String::from_utf8(blob).map_err(|_| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "stream did not contain valid UTF-8",
+            )
+        })
+    }
 }
 
 /// `git diff <ref>...<HEAD|empty-tree>` in whichever output mode is wanted.
@@ -375,7 +371,7 @@ async fn since_diff(
         }
     };
     let spec = format!("{git_ref}...{ref_b}");
-    git_diff(root, &[mode, &spec]).await
+    git_diff(root, &[mode, &spec], GitEnv::Scrubbed).await
 }
 
 /// Output mode: just the paths.
@@ -393,9 +389,11 @@ const NAMES: &str = "--name-only";
 /// git exit non-zero, and that surfaces here as `Err(GitError::NonZero)`
 /// rather than an empty Vec — see the module docs.
 pub async fn changed_since(root: &Path, git_ref: &str) -> Result<Vec<PathBuf>, GitError> {
-    Ok(filter_paths(
-        &since_diff(root, git_ref, None, NAMES).await?,
-        files::is_scan_target,
+    let (names, prefix) =
+        tokio::join!(since_diff(root, git_ref, None, NAMES), working_prefix(root));
+    Ok(paths_from(
+        filter_paths(&names?, files::is_scan_target),
+        &prefix?,
     ))
 }
 
@@ -414,7 +412,8 @@ pub const CONTEXT_LINES: u32 = 20;
 /// names. `CONTEXT_LINES` of context is requested so the model reading each
 /// hunk has the surrounding function body to compare against.
 pub async fn staged_hunks(root: &Path, wanted: fn(&Path) -> bool) -> Result<Vec<Hunk>, GitError> {
-    Ok(hunks_for(&staged_diff(root, &unified()).await?, wanted))
+    let (diff, prefix) = staged_diff(root, &unified()).await?;
+    Ok(hunks_from(hunks_for(&diff, wanted), &prefix))
 }
 
 /// The `--unified=N` flag, built from [`CONTEXT_LINES`].
@@ -463,10 +462,12 @@ pub async fn hunks_between(
     tip: Option<&str>,
     wanted: fn(&Path) -> bool,
 ) -> Result<Vec<Hunk>, GitError> {
-    Ok(hunks_for(
-        &since_diff(root, git_ref, tip, &unified()).await?,
-        wanted,
-    ))
+    let unified = unified();
+    let (diff, prefix) = tokio::join!(
+        since_diff(root, git_ref, tip, &unified),
+        working_prefix(root)
+    );
+    Ok(hunks_from(hunks_for(&diff?, wanted), &prefix?))
 }
 
 /// The current commit's SHA, with `"unknown"` on any failure.
