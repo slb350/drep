@@ -10,7 +10,7 @@
 
 use std::collections::BTreeSet;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use crate::diff::hunks::Hunk;
 use crate::diff::{hunks_between, staged_files, staged_hunks};
@@ -74,6 +74,7 @@ async fn every_name_git_quotes_is_staged_under_its_own_path() {
 async fn a_name_that_is_not_utf8_keeps_its_bytes_whatever_core_quote_path_says() {
     use std::ffi::OsStr;
     use std::os::unix::ffi::OsStrExt;
+    use std::path::Path;
 
     let repo = GitRepo::init().await;
     let root = repo.root();
