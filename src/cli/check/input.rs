@@ -84,6 +84,15 @@ pub struct Work {
     /// loaded site policy names no refusal markers, avoiding path allocations on
     /// unaffected machines.
     pub(super) reviewed_directories: BTreeSet<PathBuf>,
+    /// Tracked files whose working-tree content differs from the committing
+    /// index, filled only in staged mode.
+    ///
+    /// The deterministic layer's tools read the working tree, so a staged file
+    /// edited afterwards would be linted in a form the commit does not hold -
+    /// and a lint-failing staged blob could pass. A task that would read one
+    /// of these paths is refused instead of run. Empty in every other mode,
+    /// where the working tree *is* what is being reviewed.
+    pub(super) uncommitted: BTreeSet<PathBuf>,
 }
 
 /// The pushed range pre-commit derived from git's pre-push stdin.
@@ -158,10 +167,21 @@ pub async fn resolve(args: &CheckArgs, root: &Path, collect_policy_scope: bool) 
         return resolve_pre_commit(root, &PreCommitPush::from_env()?, collect_policy_scope).await;
     }
 
-    let hunks = if args.staged {
-        diff::staged_hunks(root, files::is_scan_target).await?
+    let (hunks, uncommitted) = if args.staged {
+        // The semantic layer reads the staged hunks while the deterministic
+        // layer reads the working tree, so staged mode also asks which tracked
+        // files differ between the two. An error from either query propagates,
+        // failing the command as other git errors do.
+        let (hunks, uncommitted) = tokio::join!(
+            diff::staged_hunks(root, files::is_scan_target),
+            diff::unstaged_changes(root)
+        );
+        (hunks?, uncommitted?.into_iter().collect())
     } else if let Some(git_ref) = args.diff.as_deref() {
-        diff::hunks_between(root, git_ref, args.tip.as_deref(), files::is_scan_target).await?
+        (
+            diff::hunks_between(root, git_ref, args.tip.as_deref(), files::is_scan_target).await?,
+            BTreeSet::new(),
+        )
     } else {
         return resolve_paths(&args.paths, root, collect_policy_scope);
     };
@@ -171,6 +191,7 @@ pub async fn resolve(args: &CheckArgs, root: &Path, collect_policy_scope: bool) 
         by_file,
         read_failures: BTreeMap::new(),
         lint_only: Vec::new(),
+        uncommitted,
     })
 }
 
@@ -203,6 +224,7 @@ pub(crate) async fn resolve_pre_commit(
         by_file,
         read_failures: BTreeMap::new(),
         lint_only: Vec::new(),
+        uncommitted: BTreeSet::new(),
     })
 }
 
@@ -303,6 +325,7 @@ fn resolve_paths(paths: &[PathBuf], root: &Path, collect_policy_scope: bool) -> 
         read_failures,
         lint_only,
         reviewed_directories,
+        uncommitted: BTreeSet::new(),
     })
 }
 

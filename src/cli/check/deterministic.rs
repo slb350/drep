@@ -48,6 +48,24 @@ pub async fn run(
 ) {
     let mut failures: BTreeMap<PathBuf, FailureReason> = BTreeMap::new();
     let tasks = plan_tasks(work, root);
+    // In staged mode a linter reads the working tree, so a task that would
+    // read content the commit does not hold is refused rather than run: each
+    // of its files fails with the differing paths named, and the commit is
+    // not waved through on a lint of code it does not contain. With no
+    // uncommitted paths - the ordinary case, and every other mode - this
+    // changes nothing.
+    let (tasks, refused) = partition_uncommitted(tasks, root, &work.uncommitted);
+    for (task, paths) in refused {
+        let reason = FailureReason::UncommittedChanges {
+            tool: task.spec.name.to_owned(),
+            paths,
+        };
+        fail_all(
+            task.files.into_iter().map(|file| file.original),
+            &reason,
+            &mut failures,
+        );
+    }
     let (serial, parallel): (Vec<_>, Vec<_>) = tasks
         .into_iter()
         .partition(|task| task.spec.serial_in_repository);
@@ -134,6 +152,76 @@ async fn run_one(task: PlannedTask, root: &Path) -> (runner::ToolOutcome, Vec<Pa
         }
     }
     (outcome, originals)
+}
+
+/// Split `tasks` into those that may run and those that would read
+/// working-tree content the commit does not hold, with the differing paths
+/// each refused task would read.
+///
+/// Comparisons are lexical on absolute paths, never canonicalized: a symlinked
+/// checkout is a spelling the rest of this module deliberately leaves alone,
+/// and `realpath` would answer about a different path than the one the tool
+/// opens.
+fn partition_uncommitted(
+    tasks: Vec<PlannedTask>,
+    root: &Path,
+    uncommitted: &BTreeSet<PathBuf>,
+) -> (Vec<PlannedTask>, Vec<(PlannedTask, Vec<PathBuf>)>) {
+    if uncommitted.is_empty() {
+        return (tasks, Vec::new());
+    }
+    // Each differing path twice: as the user names it (which the failure
+    // reports) and as a lexically normal absolute path (which the comparison
+    // uses). Named from a subdirectory, an entry climbs with `..`, which a
+    // plain join leaves in place.
+    let base = runner::absolute(root);
+    let differing: Vec<(PathBuf, PathBuf)> = uncommitted
+        .iter()
+        .map(|named| (runner::lexically_normal(&base.join(named)), named.clone()))
+        .collect();
+    let mut runnable = Vec::new();
+    let mut refused = Vec::new();
+    for task in tasks {
+        let reads = task_uncommitted_reads(&task, &differing);
+        if reads.is_empty() {
+            runnable.push(task);
+        } else {
+            refused.push((task, reads));
+        }
+    }
+    (runnable, refused)
+}
+
+/// The differing paths `task` would read, as the user names them, sorted.
+///
+/// A per-file tool reads its batch's files and the config files of its
+/// workspace; a whole-project tool (`accepts_files: false`, invoked bare from
+/// its workspace) reads anything under that workspace.
+fn task_uncommitted_reads(task: &PlannedTask, differing: &[(PathBuf, PathBuf)]) -> Vec<PathBuf> {
+    let workspace = runner::lexically_normal(&task.workspace_root);
+    let files: Vec<PathBuf> = task
+        .files
+        .iter()
+        .map(|file| runner::lexically_normal(&file.absolute))
+        .collect();
+    let mut reads: Vec<PathBuf> = differing
+        .iter()
+        .filter(|(absolute, _)| {
+            if task.spec.accepts_files {
+                files.contains(absolute)
+                    || task
+                        .spec
+                        .config_files
+                        .iter()
+                        .any(|name| runner::marker_names_path(&workspace, name, absolute))
+            } else {
+                absolute.starts_with(&workspace)
+            }
+        })
+        .map(|(_, named)| named.clone())
+        .collect();
+    reads.sort();
+    reads
 }
 
 /// Plan the per-language, per-tool batches.
@@ -229,11 +317,20 @@ fn merge_outcome(
                 tool: outcome.tool.to_owned(),
                 detail: outcome.detail,
             };
-            let batch: BTreeMap<PathBuf, FailureReason> = files
-                .into_iter()
-                .map(|file| (file, reason.clone()))
-                .collect();
-            union_failures(failures, batch);
+            fail_all(files, &reason, failures);
         }
     }
+}
+
+/// Record `reason` for every one of `files`, the first reason winning on a collision as everywhere in the orchestrator.
+fn fail_all(
+    files: impl IntoIterator<Item = PathBuf>,
+    reason: &FailureReason,
+    failures: &mut BTreeMap<PathBuf, FailureReason>,
+) {
+    let batch: BTreeMap<PathBuf, FailureReason> = files
+        .into_iter()
+        .map(|file| (file, reason.clone()))
+        .collect();
+    union_failures(failures, batch);
 }

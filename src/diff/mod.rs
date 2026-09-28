@@ -249,6 +249,44 @@ pub async fn staged_contents(
         .await)
 }
 
+/// Tracked files whose working-tree content differs from the index the commit is being made from, named from the directory drep runs in: what a linter reading the working tree would see that the commit does not hold. Untracked files are not included.
+///
+/// The deterministic layer's tools read the working tree, so after a partial
+/// `git add -p` or an edit made after staging they would lint content the
+/// commit does not contain - and a lint-failing staged blob could pass. This
+/// listing is what lets the caller refuse those runs. The index read is the
+/// committing one (`StagedView::env`), so a hook's alternate `GIT_INDEX_FILE`
+/// is honoured the same way it is for the staged diff itself.
+///
+/// The argv is deliberately not [`DIFF`]: that set carries hunk-only pins and
+/// `--diff-filter=ACMRT`, which would drop the deletions this query exists to
+/// see (a staged file deleted from the working tree differs exactly as an
+/// edited one does). What stays is the subset a name-only listing needs:
+/// quoting the name bytes, naming every file from the top level, and ignoring
+/// external diff drivers and textconv.
+pub async fn unstaged_changes(root: &Path) -> Result<Vec<PathBuf>, GitError> {
+    let view = StagedView::of(root).await?;
+    let names = spawn_git(
+        root,
+        &[
+            // A read under a hook must not write: porcelain diff otherwise
+            // rewrites the index it compared to refresh its stat data, and
+            // that index can be the commit's own lock file.
+            "--no-optional-locks",
+            "-c",
+            "core.quotePath=true",
+            "diff",
+            "--name-only",
+            "--no-relative",
+            "--no-ext-diff",
+            "--no-textconv",
+        ],
+        view.env(),
+    )
+    .await?;
+    Ok(paths_from(filter_paths(&names, |_| true), &view.prefix))
+}
+
 /// `git diff --cached` in whichever output mode the caller wants, and the
 /// working directory's prefix its paths are to be read from.
 ///

@@ -52,17 +52,16 @@ fn paths_args(paths: Vec<PathBuf>) -> CheckArgs {
 /// Build a `CheckArgs` for `--diff <ref>` mode.
 fn diff_args(ref_: &str) -> CheckArgs {
     CheckArgs {
-        paths: Vec::new(),
-        staged: false,
         diff: Some(ref_.to_owned()),
-        tip: None,
-        pre_commit_push: false,
-        format: OutputFormat::Text,
-        fail_on: None,
-        cache_only: false,
-        push_gate: false,
-        max_review_rounds: None,
-        unlimited_reviews: false,
+        ..paths_args(Vec::new())
+    }
+}
+
+/// Build a `CheckArgs` for `--staged` mode.
+fn staged_args() -> CheckArgs {
+    CheckArgs {
+        staged: true,
+        ..paths_args(Vec::new())
     }
 }
 
@@ -498,5 +497,37 @@ async fn an_unreadable_file_reports_one_prefix_not_two() {
         line.matches("could not").count(),
         1,
         "the reason must read as one sentence, got: {line}"
+    );
+}
+
+/// Staged mode records the tracked paths whose working-tree content differs
+/// from the committing index, so the deterministic layer can refuse to lint
+/// content the commit does not hold. Paths mode reviews the working tree
+/// itself, so its set is empty.
+#[tokio::test]
+async fn staged_mode_fills_uncommitted_and_paths_mode_leaves_it_empty() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    init_repo_with_commit(dir.path());
+    let source = dir.path().join("app.py");
+    std::fs::write(&source, "value = 1\n").expect("write app.py");
+    crate::test_support::git_add(dir.path(), "app.py");
+    std::fs::write(&source, "value = 2\n").expect("edit after staging");
+
+    let staged = resolve(&staged_args(), dir.path(), false)
+        .await
+        .expect("staged resolve");
+    assert_eq!(
+        staged.uncommitted.iter().cloned().collect::<Vec<_>>(),
+        vec![PathBuf::from("app.py")],
+        "staged mode must name the file whose working-tree content differs"
+    );
+
+    let paths = resolve(&paths_args(vec![source]), dir.path(), false)
+        .await
+        .expect("paths resolve");
+    assert!(
+        paths.uncommitted.is_empty(),
+        "paths mode reviews the working tree itself, got {:?}",
+        paths.uncommitted
     );
 }

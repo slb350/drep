@@ -29,7 +29,11 @@ pub(super) fn ancestors_within(start: &Path, root: &Path) -> Vec<PathBuf> {
 }
 
 /// `path` with each `.` dropped and each `..` taking back the component before it, without consulting the filesystem.
-fn lexically_normal(path: &Path) -> PathBuf {
+///
+/// `pub(crate)` for the deterministic layer's uncommitted-path comparison: a
+/// staged file above the directory drep runs in arrives as `../top.py`, and a
+/// path comparison that does not take the `..` back misses it.
+pub(crate) fn lexically_normal(path: &Path) -> PathBuf {
     let mut normal = PathBuf::new();
     for component in path.components() {
         match component {

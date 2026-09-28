@@ -68,6 +68,14 @@ pub enum FailureReason {
     MalformedFinding(String),
     /// A deterministic tool that should have run could not.
     ToolUnavailable { tool: String, detail: String },
+    /// A linter did not run because it would have read working-tree content the commit does not hold. `paths` are the differing files, as the user names them.
+    ///
+    /// Distinct from [`Self::ToolUnavailable`]: the tool is installed and
+    /// configured, but in staged mode it reads the working tree, and linting a
+    /// staged file's uncommitted edit would judge content the commit does not
+    /// contain - a lint-failing staged blob would pass. Refusing the run keeps
+    /// "unanalyzed is not clean" true for the deterministic layer too.
+    UncommittedChanges { tool: String, paths: Vec<PathBuf> },
     /// Machine site policy refuses to have this repository's source reviewed by
     /// a model, because a marker file is present at its root.
     ///
@@ -232,6 +240,16 @@ impl FailureReason {
             FailureReason::MalformedFinding(detail) => format!("malformed finding: {detail}"),
             FailureReason::ToolUnavailable { tool, detail } => {
                 format!("{tool} could not run: {detail}")
+            }
+            FailureReason::UncommittedChanges { tool, paths } => {
+                let paths = paths
+                    .iter()
+                    .map(|path| path.display().to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!(
+                    "{tool} did not run: the working tree differs from the commit at {paths}; stage those changes or run `git stash --keep-index` first"
+                )
             }
             FailureReason::SitePolicyRefused { marker, policy } => format!(
                 "semantic review is refused by site policy: {} is present (policy: {})",
