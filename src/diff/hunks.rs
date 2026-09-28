@@ -21,7 +21,9 @@
 //! through it.
 
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+
+use super::quoting::decode;
 
 /// One line inside a hunk, tagged by what the diff said about it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -154,14 +156,17 @@ impl Hunk {
 /// - **The file path comes from `+++ b/…`, never from `diff --git a/… b/…`.**
 ///   The git header carries two paths on one line with no unambiguous
 ///   separator, so any "find `b/`" rule captures the wrong span for a
-///   repository path that itself contains `b/` (`src/b/mod.rs`).
+///   repository path that itself contains `b/` (`src/b/mod.rs`). The field is
+///   decoded as git quoted it, and the tab git appends to a name containing a
+///   space is dropped - see `new_file_path`.
 /// - `+++ /dev/null` marks a deletion; there is nothing to analyze, so the
 ///   file's hunks are dropped.
 /// - **Inside a hunk body the first byte alone decides the line kind.** Lines
-///   starting `---` or `+++` are *not* additionally skipped: those headers
-///   appear only before the first `@@` of a file, and a removed source line
-///   whose own text begins with `--` arrives as `---…`. Skipping it silently
-///   drops real removed code.
+///   starting `---` or `+++` are neither skipped nor read as headers there:
+///   those headers appear only before the first `@@` of a file, and a removed
+///   source line whose own text begins with `--` arrives as `---…`, an added
+///   `++ b/x` as `+++ b/x`. Treating either as a header silently drops or
+///   misfiles real code.
 /// - `\ No newline at end of file` refers to the preceding line and never
 ///   becomes a `HunkLine`.
 /// - A malformed `@@` terminates the current hunk without its body being
@@ -186,14 +191,13 @@ pub fn parse_unified_diff(diff_text: &str) -> Vec<Hunk> {
             continue;
         }
 
-        if let Some(path) = line.strip_prefix("+++ b/") {
-            current_file = Some(PathBuf::from(path));
-            continue;
-        }
-
-        if line.starts_with("+++ /dev/null") {
-            hunks.extend(pending.take());
-            current_file = None;
+        // A file header precedes the file's first `@@`, so it is only looked
+        // for outside a hunk body. Inside one, `+++ b/x` is an added line
+        // whose text is `++ b/x`.
+        if pending.is_none()
+            && let Some(target) = line.strip_prefix("+++ ")
+        {
+            current_file = new_file_path(target);
             continue;
         }
 
@@ -231,6 +235,19 @@ pub fn parse_unified_diff(diff_text: &str) -> Vec<Hunk> {
 
     hunks.extend(pending.take());
     hunks
+}
+
+/// The file a `+++ ` header names, or `None` when it names no new file.
+///
+/// Git ends the header with a tab whenever the name holds a space, and an
+/// unquoted name never holds a tab (git quotes one), so a single trailing tab is
+/// always that marker. The `b/` prefix is removed after decoding because a
+/// quoted field carries it inside the quotes. `/dev/null`, a deletion, has no
+/// such prefix, and neither does a header written without one: the parser does
+/// not guess where a prefix it cannot see would have ended.
+fn new_file_path(target: &str) -> Option<PathBuf> {
+    let field = target.strip_suffix('\t').unwrap_or(target);
+    decode(field).strip_prefix("b").ok().map(Path::to_path_buf)
 }
 
 /// Parse the middle of a `@@` line: `-old[,oc] +new[,nc]`, followed by the
