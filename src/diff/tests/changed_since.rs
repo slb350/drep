@@ -23,7 +23,7 @@ async fn three_dot_excludes_base_additions_and_modifications() {
     repo.checkout("main").await;
     fs::write(root.join("new_on_main.rs"), "").expect("write");
     // A base addition alone cannot distinguish two-dot from three-dot:
-    // two-dot reports it as a deletion, which ACMR filters out. A modified
+    // two-dot reports it as a deletion, which ACMRT filters out. A modified
     // shared file survives that filter and exposes the wrong diff scope.
     fs::write(root.join("shared.rs"), "v2\n").expect("write");
     repo.commit_all("main change after fork").await;

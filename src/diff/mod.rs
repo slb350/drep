@@ -26,6 +26,7 @@ use tokio::process::Command;
 use crate::files;
 
 pub mod hunks;
+mod quoting;
 
 use hunks::{Hunk, parse_unified_diff};
 
@@ -225,10 +226,14 @@ pub(crate) async fn repository_root(root: &Path) -> Result<PathBuf, GitError> {
 /// asks for registered-language sources, `lint-docs` asks for markdown. With
 /// the predicate baked in, `lint-docs --staged` could not be expressed at all
 /// and the hook ran over the whole repository instead.
+///
+/// Each line is decoded with `quoting::unquote`, because git C-quotes a name
+/// it cannot print raw and the quoted spelling names no file on disk.
 fn filter_paths(output: &str, wanted: fn(&Path) -> bool) -> Vec<PathBuf> {
     output
         .lines()
         .filter(|line| !line.trim().is_empty())
+        .filter_map(quoting::unquote)
         .map(PathBuf::from)
         .filter(|path| wanted(path))
         .collect()
@@ -236,10 +241,10 @@ fn filter_paths(output: &str, wanted: fn(&Path) -> bool) -> Vec<PathBuf> {
 
 /// Files staged for commit, relative to `root`, that drep analyzes.
 ///
-/// `--diff-filter=ACMR` excludes deletions on purpose: a deleted file
-/// cannot be analyzed, and passing it on would look like an unreadable file
-/// rather than an absent one. The empty-tree fallback covers the
-/// initial-commit case (no `HEAD` yet).
+/// `DIFF_FILTER` excludes deletions on purpose: a deleted file cannot be
+/// analyzed, and passing it on would look like an unreadable file rather than
+/// an absent one. The empty-tree fallback covers the initial-commit case (no
+/// `HEAD` yet).
 pub async fn staged_files(
     root: &Path,
     wanted: fn(&Path) -> bool,
@@ -249,20 +254,52 @@ pub async fn staged_files(
 
 /// `git diff --cached` in whichever output mode the caller wants.
 ///
-/// The selection rules — `--diff-filter=ACMR` and the empty-tree fallback —
-/// live here once rather than in each of `staged_files` and `staged_hunks`.
-/// They were stated twice, and a change applied to one and not the other would
-/// make the file list and the hunk set disagree about what is in scope: drep
-/// would analyze a file the gate never listed, which is exactly the class of
-/// failure this module exists to prevent.
+/// The selection rules — `DIFF_FILTER`, `DIFF_FORMAT` and the empty-tree
+/// fallback — live here once rather than in each of `staged_files` and
+/// `staged_hunks`. They were stated twice, and a change applied to one and not
+/// the other would make the file list and the hunk set disagree about what is
+/// in scope: drep would analyze a file the gate never listed, which is exactly
+/// the class of failure this module exists to prevent.
 async fn staged_diff(root: &Path, mode: &str) -> Result<String, GitError> {
-    let args: &[&str] = if has_head(root).await {
-        &["diff", "--cached", "--diff-filter=ACMR", mode]
-    } else {
-        &["diff", "--cached", "--diff-filter=ACMR", mode, EMPTY_TREE]
-    };
-    run_git(root, args).await
+    let mut args = vec!["diff", "--cached", DIFF_FILTER];
+    args.extend(DIFF_FORMAT);
+    args.push(mode);
+    if !has_head(root).await {
+        args.push(EMPTY_TREE);
+    }
+    run_git(root, &args).await
 }
+
+/// The changes drep reviews: added, copied, modified, renamed, and type
+/// changes. A type change is how a symlink becomes a regular file, so leaving
+/// `T` out would pass that file's whole content unreviewed.
+const DIFF_FILTER: &str = "--diff-filter=ACMRT";
+
+/// Output flags that fix the shape of every diff drep reads, whatever the
+/// repository's attributes or the user's configuration say.
+///
+/// - `--text` because `binary` or `-diff` in a committed `.gitattributes`, or
+///   a single NUL byte in the content, otherwise turns a source file's hunks
+///   into one `Binary files ... differ` line. Binary files outside the
+///   caller's file class are rendered as text too, then dropped unread.
+/// - `--no-textconv` and `--no-ext-diff` because a configured conversion or
+///   external diff program replaces git's text with its own output.
+/// - `--no-color` because `color.diff=always` wraps every line in escapes.
+/// - `--src-prefix`/`--dst-prefix` because `diff.noprefix`,
+///   `diff.mnemonicPrefix` and `diff.srcPrefix`/`diff.dstPrefix` change the
+///   `b/` the parser strips from each `+++` label.
+///
+/// Any of these left to configuration makes `git diff` succeed with output
+/// the parser reads as no changes, or as changes other than the committed
+/// ones, and the gate then passes code it never reviewed.
+const DIFF_FORMAT: [&str; 6] = [
+    "--text",
+    "--no-textconv",
+    "--no-ext-diff",
+    "--no-color",
+    "--src-prefix=a/",
+    "--dst-prefix=b/",
+];
 
 /// `git diff <ref>...<HEAD|empty-tree>` in whichever output mode is wanted.
 ///
@@ -317,7 +354,10 @@ async fn since_diff(
         }
     };
     let spec = format!("{git_ref}...{ref_b}");
-    run_git(root, &["diff", "--diff-filter=ACMR", mode, &spec]).await
+    let mut args = vec!["diff", DIFF_FILTER];
+    args.extend(DIFF_FORMAT);
+    args.extend([mode, &spec]);
+    run_git(root, &args).await
 }
 
 /// Output mode: just the paths.
@@ -351,8 +391,8 @@ pub const CONTEXT_LINES: u32 = 20;
 
 /// Hunks for the files staged for commit.
 ///
-/// Same selection as `staged_files` — `--diff-filter=ACMR`, empty-tree
-/// fallback when there is no HEAD — but the diff itself rather than the
+/// Same selection as `staged_files` — `DIFF_FILTER`, empty-tree fallback
+/// when there is no HEAD — but the diff itself rather than the
 /// names. `CONTEXT_LINES` of context is requested so the model reading each
 /// hunk has the surrounding function body to compare against.
 pub async fn staged_hunks(root: &Path, wanted: fn(&Path) -> bool) -> Result<Vec<Hunk>, GitError> {

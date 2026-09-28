@@ -27,7 +27,7 @@ async fn returns_a_staged_added_source_file() {
 
 #[tokio::test]
 async fn excludes_a_staged_deletion() {
-    // `--diff-filter=ACMR` strips deletions: a deleted file cannot be
+    // `--diff-filter=ACMRT` strips deletions: a deleted file cannot be
     // analyzed, and reporting it would look like an unreadable file rather
     // than an absent one. The test commits a file, then `git rm`s it, and
     // checks the result is empty (not "deletion included").
@@ -134,4 +134,27 @@ async fn the_caller_chooses_the_file_class() {
         .await
         .expect("staged markdown");
     assert_eq!(markdown, vec![Path::new("README.md").to_path_buf()]);
+}
+
+/// Git C-quotes a name it cannot print raw; the caller gets the real path.
+#[tokio::test]
+async fn quoted_names_are_decoded() {
+    let repo = GitRepo::init().await;
+    let root = repo.root();
+
+    fs::write(root.join("ünï.md"), "# Title\n").expect("write");
+    fs::write(root.join("quo\"te.md"), "# Title\n").expect("write");
+    crate::diff::tests::support::run_in(root, &["add", "."]).await;
+
+    let mut markdown = staged_files(root, files::is_markdown)
+        .await
+        .expect("staged markdown");
+    markdown.sort();
+    assert_eq!(
+        markdown,
+        vec![
+            Path::new("quo\"te.md").to_path_buf(),
+            Path::new("ünï.md").to_path_buf(),
+        ]
+    );
 }

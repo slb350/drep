@@ -1015,6 +1015,21 @@ comes back.
   `files::expand_named`: that expander resolves an empty list to `root`, which
   is what makes bare `drep lint-docs` mean "this tree" and would turn "no
   markdown in this commit" into "lint every document", every commit.
+- **drep fixes the format of every diff it parses, and reads a hunk body by
+  its counts.** Each `git diff` in `src/diff/mod.rs` carries `DIFF_FORMAT`
+  (`--text --no-textconv --no-ext-diff --no-color --src-prefix=a/
+  --dst-prefix=b/`) and `DIFF_FILTER` (`ACMRT`). Without them a committed
+  `binary` or `-diff` attribute, a NUL byte, a symlink replaced by a regular
+  file, or a user's `diff.noprefix`, `diff.mnemonicPrefix`, `color.diff`,
+  textconv or external diff made `git diff` succeed with output that parsed as
+  no change, and a change with no hunks passes the gate. `parse_unified_diff`
+  consumes exactly the lines the `@@` counts declare, as git's `apply.c` does:
+  every body line is prefixed, so an added line reading `++ /dev/null` or
+  `++ b/other.rs` must stay content rather than close the file or reattribute
+  its later hunks. `+++` labels lose git's trailing tab and, like
+  `--name-only` lines, are decoded by `quoting::unquote`, or a name with a
+  space, a quote or a non-ASCII character leaves review.
+  `src/diff/tests/review_evasion.rs` pins each case against real git.
 - **`LintOutcome` carries the gate's `Gating`, and the renderer reports it.**
   The footer needs to say whether the findings on screen blocked the run, and
   asking that question a second time in `render` is what `check` documents on

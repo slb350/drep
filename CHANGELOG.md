@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Security:** `check --staged`, `--diff` and the git hooks could review less
+  than the commit contained, and a change with no hunks passes the gate. An
+  added line whose text began `++ /dev/null` ended its file's review at that
+  line, and one beginning `++ b/<path>` moved the file's later hunks to another
+  path. No hunks at all came from a file git labels binary (a committed
+  `binary` or `-diff` attribute, or one NUL byte, which rustc accepts in a
+  comment), a file whose name git quotes or ends with a tab (a space, a quote,
+  a non-ASCII character), or a symlink replaced by a regular file. The user
+  settings `diff.noprefix`, `diff.mnemonicPrefix`, `diff.srcPrefix`,
+  `diff.dstPrefix`, `color.diff=always`, `diff.external` and textconv drivers
+  had the same effect, and `diff.suppressBlankEmpty` shifted line numbers. drep
+  now fixes git's diff format itself (`--text --no-textconv --no-ext-diff
+  --no-color --src-prefix=a/ --dst-prefix=b/`), includes type changes, reads
+  each hunk body by the counts in its `@@` header as git does, and decodes
+  quoted paths, including those `lint-docs --staged` lists.
 - Mutation runs in one checkout no longer delete each other's results and
   scratch copies. The hook, a manual run and an offloaded run each hold a kernel
   lock on `target/mutants.lock` and wait up to

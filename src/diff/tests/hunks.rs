@@ -272,3 +272,232 @@ fn whole_file_yields_only_context_lines_starting_at_one() {
     let numbers: Vec<u32> = hunk.numbered_new_lines().map(|(n, _)| n).collect();
     assert_eq!(numbers, vec![1, 2, 3]);
 }
+
+/// Join diff lines exactly, so a context line keeps its leading space and an
+/// empty line stays empty; a `\`-continued string literal strips both.
+fn diff_of(lines: &[&str]) -> String {
+    let mut text = lines.join("\n");
+    text.push('\n');
+    text
+}
+
+#[test]
+fn an_added_line_spelling_a_deletion_header_stays_in_its_hunk() {
+    // `git diff` output for a new file whose third line is `++ /dev/null`
+    // inside a raw string. Git prefixes it with `+`, so the body carries a line
+    // identical to a deletion header; reading it as one would close the hunk
+    // and hide every later line from review.
+    let diff = diff_of(&[
+        "diff --git a/lib.rs b/lib.rs",
+        "new file mode 100644",
+        "index 0000000..f6c62c3",
+        "--- /dev/null",
+        "+++ b/lib.rs",
+        "@@ -0,0 +1,5 @@",
+        "+fn reviewed() {}",
+        "+const DOC: &str = r\"",
+        "+++ /dev/null",
+        "+\";",
+        "+fn hidden_from_review() {}",
+    ]);
+
+    let hunks = parse_unified_diff(&diff);
+
+    assert_eq!(hunks.len(), 1, "got {hunks:?}");
+    assert_eq!(hunks[0].file_path, PathBuf::from("lib.rs"));
+    let added: Vec<&str> = hunks[0].lines.iter().map(HunkLine::content).collect();
+    assert_eq!(
+        added,
+        vec![
+            "fn reviewed() {}",
+            "const DOC: &str = r\"",
+            "++ /dev/null",
+            "\";",
+            "fn hidden_from_review() {}",
+        ]
+    );
+}
+
+#[test]
+fn an_added_line_spelling_a_file_header_does_not_reattribute_later_hunks() {
+    let diff = diff_of(&[
+        "diff --git a/lib.rs b/lib.rs",
+        "index 1111111..2222222 100644",
+        "--- a/lib.rs",
+        "+++ b/lib.rs",
+        "@@ -1,2 +1,3 @@",
+        " const DOC: &str = r\"",
+        "+++ b/decoy.rs",
+        " \";",
+        "@@ -40,2 +41,3 @@ fn tail() {",
+        " fn tail() {",
+        "+    hidden();",
+        " }",
+    ]);
+
+    let hunks = parse_unified_diff(&diff);
+
+    let paths: Vec<&PathBuf> = hunks.iter().map(|h| &h.file_path).collect();
+    assert_eq!(
+        paths,
+        vec![&PathBuf::from("lib.rs"), &PathBuf::from("lib.rs")],
+        "both hunks belong to lib.rs"
+    );
+    assert_eq!(
+        hunks[0].lines[1],
+        HunkLine::Added("++ b/decoy.rs".to_owned())
+    );
+    assert_eq!(
+        hunks[1].lines[1],
+        HunkLine::Added("    hidden();".to_owned())
+    );
+}
+
+#[test]
+fn a_header_after_a_complete_hunk_body_starts_the_next_file() {
+    // Concatenated unified diffs with no `diff --git` line between files: the
+    // declared counts, not a later header, decide where the body ends.
+    let diff = diff_of(&[
+        "--- a/one.rs",
+        "+++ b/one.rs",
+        "@@ -1,2 +1,2 @@",
+        "-a",
+        "+b",
+        " c",
+        "--- a/two.rs",
+        "+++ b/two.rs",
+        "@@ -1 +1 @@",
+        "-d",
+        "+e",
+    ]);
+
+    let hunks = parse_unified_diff(&diff);
+
+    assert_eq!(hunks.len(), 2, "got {hunks:?}");
+    assert_eq!(hunks[0].file_path, PathBuf::from("one.rs"));
+    assert_eq!(
+        hunks[0].lines,
+        vec![
+            HunkLine::Removed("a".to_owned()),
+            HunkLine::Added("b".to_owned()),
+            HunkLine::Context("c".to_owned()),
+        ]
+    );
+    assert_eq!(hunks[1].file_path, PathBuf::from("two.rs"));
+}
+
+#[test]
+fn a_body_line_beyond_the_declared_counts_ends_the_hunk_without_panicking() {
+    let diff = diff_of(&[
+        "--- a/x.rs",
+        "+++ b/x.rs",
+        "@@ -1 +1,2 @@",
+        "-a",
+        "-surplus",
+        "+b",
+    ]);
+
+    let hunks = parse_unified_diff(&diff);
+
+    assert_eq!(hunks.len(), 1, "got {hunks:?}");
+    assert_eq!(hunks[0].lines, vec![HunkLine::Removed("a".to_owned())]);
+}
+
+#[test]
+fn an_empty_body_line_is_an_empty_context_line() {
+    // `diff.suppressBlankEmpty` drops the space git otherwise prints before an
+    // empty context line. It still occupies a line on both sides.
+    let diff = diff_of(&[
+        "--- a/gap.rs",
+        "+++ b/gap.rs",
+        "@@ -1,3 +1,3 @@",
+        " fn a() {}",
+        "",
+        "-old();",
+        "+new();",
+    ]);
+
+    let hunks = parse_unified_diff(&diff);
+
+    assert_eq!(hunks.len(), 1, "got {hunks:?}");
+    assert_eq!(hunks[0].lines[1], HunkLine::Context(String::new()));
+    let numbered: Vec<(u32, &str)> = hunks[0].numbered_new_lines().collect();
+    assert_eq!(numbered, vec![(1, "fn a() {}"), (2, ""), (3, "new();")]);
+}
+
+#[test]
+fn every_body_line_kind_counts_against_its_own_side() {
+    // Context consumes both sides, a removal only the old side and an
+    // addition only the new side, while the no-newline marker consumes
+    // neither. The trailing `-` and `+` would be absorbed into this hunk if
+    // any kind were counted against the wrong side.
+    let diff = diff_of(&[
+        "--- a/sides.rs",
+        "+++ b/sides.rs",
+        "@@ -1,3 +1,3 @@",
+        " keep",
+        "-gone",
+        "\\ No newline at end of file",
+        "+came",
+        " last",
+        "-beyond the old side",
+        "+beyond the new side",
+    ]);
+
+    let hunks = parse_unified_diff(&diff);
+
+    assert_eq!(hunks.len(), 1, "got {hunks:?}");
+    assert_eq!(
+        hunks[0].lines,
+        vec![
+            HunkLine::Context("keep".to_owned()),
+            HunkLine::Removed("gone".to_owned()),
+            HunkLine::Added("came".to_owned()),
+            HunkLine::Context("last".to_owned()),
+        ]
+    );
+}
+
+#[test]
+fn a_path_containing_a_space_drops_the_tab_git_appends_to_its_header() {
+    // Git ends a `+++` label containing a space with a tab.
+    let diff = diff_of(&[
+        "diff --git a/my file.rs b/my file.rs",
+        "--- a/my file.rs",
+        "+++ b/my file.rs\t",
+        "@@ -1 +1 @@",
+        "-old",
+        "+new",
+    ]);
+
+    let hunks = parse_unified_diff(&diff);
+
+    assert_eq!(hunks.len(), 1, "got {hunks:?}");
+    assert_eq!(hunks[0].file_path, PathBuf::from("my file.rs"));
+}
+
+#[test]
+fn a_quoted_path_is_decoded() {
+    let diff = diff_of(&[
+        "diff --git \"a/\\303\\274n\\303\\257.rs\" \"b/\\303\\274n\\303\\257.rs\"",
+        "--- \"a/\\303\\274n\\303\\257.rs\"",
+        "+++ \"b/\\303\\274n\\303\\257.rs\"",
+        "@@ -1 +1 @@",
+        "-old",
+        "+new",
+        "diff --git \"a/sp ace\\t\\\"q\\\".rs\" \"b/sp ace\\t\\\"q\\\".rs\"",
+        "--- \"a/sp ace\\t\\\"q\\\".rs\"\t",
+        "+++ \"b/sp ace\\t\\\"q\\\".rs\"\t",
+        "@@ -1 +1 @@",
+        "-old",
+        "+new",
+    ]);
+
+    let hunks = parse_unified_diff(&diff);
+
+    let paths: Vec<&PathBuf> = hunks.iter().map(|h| &h.file_path).collect();
+    assert_eq!(
+        paths,
+        vec![&PathBuf::from("ünï.rs"), &PathBuf::from("sp ace\t\"q\".rs")]
+    );
+}
