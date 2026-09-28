@@ -4,9 +4,9 @@ drep is one binary. It reads files, runs the tools the repository configures,
 asks a model about the code that changed, and exits 0, 1, 2 or 3. There is no
 server, no database, no platform client and no background work.
 
-This document is the structure. `CLAUDE.md` carries the invariants, each with
+This document is the structure. `AGENTS.md` carries the invariants, each with
 the defect that produced it; where the two overlap, this file says what the
-shape is and `CLAUDE.md` says why it cannot change.
+shape is and `AGENTS.md` says why it cannot change.
 
 ## The pipeline
 
