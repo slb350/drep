@@ -241,10 +241,11 @@ fn filter_paths(output: &str, wanted: fn(&Path) -> bool) -> Vec<PathBuf> {
 
 /// Every `git diff` drep runs starts with these, ahead of its selection.
 ///
-/// drep parses the output, and git formats it from the user's configuration.
-/// Each option pins one thing a setting would otherwise change, and each such
-/// change made the parser find no hunk, which the gate reports as a clean
-/// file:
+/// drep parses the output, and git formats it from the user's configuration
+/// and the repository's attributes. Each option pins one thing a setting or
+/// attribute would otherwise change, and each such change made the parser find
+/// no hunk, or a hunk other than the committed text, which the gate then
+/// reports as reviewed:
 ///
 /// - `core.quotePath=true` quotes every byte above 0x7f, so a name that is not
 ///   UTF-8 arrives as escapes `quoting::decode` reverses exactly, rather than
@@ -252,28 +253,37 @@ fn filter_paths(output: &str, wanted: fn(&Path) -> bool) -> Vec<PathBuf> {
 /// - `diff.suppressBlankEmpty=false` keeps the leading space on a blank context
 ///   line. Printed empty, the line was skipped and every line after it in the
 ///   hunk carried the wrong number.
-/// - `--no-ext-diff` ignores `diff.external` and `GIT_EXTERNAL_DIFF`, whose
-///   program (difftastic, say) prints something other than a unified diff.
+/// - `--text` because `binary` or `-diff` in a committed `.gitattributes`, or
+///   a single NUL byte in the content, turns a source file's hunks into one
+///   `Binary files ... differ` line. Binary files outside the caller's file
+///   class are rendered as text too, then dropped unread.
+/// - `--no-textconv` and `--no-ext-diff` ignore a textconv driver,
+///   `diff.external` and `GIT_EXTERNAL_DIFF`, whose program (difftastic, say)
+///   prints something other than the committed text as a unified diff.
 /// - `--no-color` overrides `color.ui=always`, which wraps each header in
 ///   escape codes even when stdout is a pipe.
 /// - `--src-prefix`/`--dst-prefix` restore the `a/` and `b/` that
-///   `diff.noprefix` removes and `diff.mnemonicPrefix` replaces (`c/` and `i/`
-///   for `--cached`).
+///   `diff.noprefix` removes and `diff.mnemonicPrefix` (`c/` and `i/` for
+///   `--cached`) and `diff.srcPrefix`/`diff.dstPrefix` replace.
 ///
-/// `--diff-filter=ACMR` is selection rather than format, and is here so the
+/// `--diff-filter=ACMRT` is selection rather than format, and is here so the
 /// staged and branch queries state it once; `staged_files` says why deletions
-/// are left out.
+/// are left out. `T` is kept because a type change is how a symlink becomes a
+/// regular file, and leaving it out passed that file's whole content
+/// unreviewed.
 const DIFF: &[&str] = &[
     "-c",
     "core.quotePath=true",
     "-c",
     "diff.suppressBlankEmpty=false",
     "diff",
+    "--text",
+    "--no-textconv",
     "--no-ext-diff",
     "--no-color",
     "--src-prefix=a/",
     "--dst-prefix=b/",
-    "--diff-filter=ACMR",
+    "--diff-filter=ACMRT",
 ];
 
 /// Run `git diff` with its output format pinned by [`DIFF`], selecting with
@@ -284,7 +294,7 @@ async fn git_diff(root: &Path, selection: &[&str]) -> Result<String, GitError> {
 
 /// Files staged for commit, relative to `root`, that drep analyzes.
 ///
-/// `--diff-filter=ACMR` excludes deletions on purpose: a deleted file
+/// `--diff-filter=ACMRT` excludes deletions on purpose: a deleted file
 /// cannot be analyzed, and passing it on would look like an unreadable file
 /// rather than an absent one. The empty-tree fallback covers the
 /// initial-commit case (no `HEAD` yet).
@@ -297,7 +307,7 @@ pub async fn staged_files(
 
 /// `git diff --cached` in whichever output mode the caller wants.
 ///
-/// The selection rules — the empty-tree fallback here, `--diff-filter=ACMR`
+/// The selection rules — the empty-tree fallback here, `--diff-filter=ACMRT`
 /// in [`DIFF`] — live once rather than in each of `staged_files` and
 /// `staged_hunks`. They were stated twice, and a change applied to one and not
 /// the other would make the file list and the hunk set disagree about what is
@@ -399,7 +409,7 @@ pub const CONTEXT_LINES: u32 = 20;
 
 /// Hunks for the files staged for commit.
 ///
-/// Same selection as `staged_files` — `--diff-filter=ACMR`, empty-tree
+/// Same selection as `staged_files` — `--diff-filter=ACMRT`, empty-tree
 /// fallback when there is no HEAD — but the diff itself rather than the
 /// names. `CONTEXT_LINES` of context is requested so the model reading each
 /// hunk has the surrounding function body to compare against.

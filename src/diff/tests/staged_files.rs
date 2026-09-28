@@ -27,7 +27,7 @@ async fn returns_a_staged_added_source_file() {
 
 #[tokio::test]
 async fn excludes_a_staged_deletion() {
-    // `--diff-filter=ACMR` strips deletions: a deleted file cannot be
+    // `--diff-filter=ACMRT` strips deletions: a deleted file cannot be
     // analyzed, and reporting it would look like an unreadable file rather
     // than an absent one. The test commits a file, then `git rm`s it, and
     // checks the result is empty (not "deletion included").

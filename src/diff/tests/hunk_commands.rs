@@ -80,7 +80,7 @@ async fn hunks_since_uses_three_dot_semantics_not_two_dot() {
     // `three_dot_excludes_base_modifications_that_two_dot_would_report`
     // test, but here we exercise the hunk form rather than the file-name
     // form. The base branch *modifies* a shared file, which a two-dot
-    // diff reports as `M`, which `--diff-filter=ACMR` keeps. A two-dot
+    // diff reports as `M`, which `--diff-filter=ACMRT` keeps. A two-dot
     // implementation would therefore return a hunk for `shared.rs` even
     // though this branch never touched it. We assert that no such hunk
     // appears.
@@ -120,7 +120,7 @@ async fn hunks_since_uses_three_dot_semantics_not_two_dot() {
     assert!(
         !names.iter().any(|n| n.ends_with("shared.rs")),
         "shared.rs was modified on the base, not by this branch - a two-dot \
-         diff reports it as M and ACMR keeps it. got {names:?}"
+         diff reports it as M and ACMRT keeps it. got {names:?}"
     );
 }
 

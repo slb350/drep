@@ -147,6 +147,14 @@ Every `diff` query takes the file-class predicate as a parameter:
 `staged_files`, `changed_since`, `staged_hunks`, `hunks_since`, `hunks_between`.
 `check` passes `is_scan_target`, `lint-docs --staged` passes `is_markdown`.
 
+drep, not the repository's attributes or the user's git configuration, decides
+the diff format: every query runs through `diff::git_diff`, which passes
+`-c core.quotePath=true -c diff.suppressBlankEmpty=false` and `--text
+--no-textconv --no-ext-diff --no-color --src-prefix=a/ --dst-prefix=b/
+--diff-filter=ACMRT`. `hunks::parse_unified_diff` reads each hunk body by the
+counts in its `@@` header, as git's `apply.c` does, so hunk content cannot pose
+as a file header, and `quoting::decode` decodes the paths git C-quotes.
+
 The published pre-commit pre-push hook uses `--pre-commit-push` with filename
 passing disabled. That adapter reads pre-commit's FROM/TO ref environment and
 feeds it to `hunks_between`, so the published hook and the native hook both

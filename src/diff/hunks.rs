@@ -151,90 +151,107 @@ impl Hunk {
 ///
 /// Tolerant by design: anything it does not recognise is skipped rather than
 /// erroring, because a diff that cannot be parsed must not take the gate down.
-/// The intentional quirks:
+/// The rules, which follow git's own reader (`apply.c`):
 ///
-/// - **The file path comes from `+++ b/…`, never from `diff --git a/… b/…`.**
-///   The git header carries two paths on one line with no unambiguous
-///   separator, so any "find `b/`" rule captures the wrong span for a
-///   repository path that itself contains `b/` (`src/b/mod.rs`). The field is
-///   decoded as git quoted it, and the tab git appends to a name containing a
-///   space is dropped - see `new_file_path`.
-/// - `+++ /dev/null` marks a deletion; there is nothing to analyze, so the
-///   file's hunks are dropped.
-/// - **Inside a hunk body the first byte alone decides the line kind.** Lines
-///   starting `---` or `+++` are neither skipped nor read as headers there:
-///   those headers appear only before the first `@@` of a file, and a removed
-///   source line whose own text begins with `--` arrives as `---…`, an added
-///   `++ b/x` as `+++ b/x`. Treating either as a header silently drops or
-///   misfiles real code.
-/// - `\ No newline at end of file` refers to the preceding line and never
-///   becomes a `HunkLine`.
-/// - A malformed `@@` terminates the current hunk without its body being
-///   attributed to the previous one.
+/// - **A hunk body is exactly as long as its `@@` counts say.** Context
+///   consumes a line from each side, a removal one old line, an addition one
+///   new line, and `\ No newline at end of file` none; that marker refers to
+///   the preceding line and never becomes a `HunkLine`. Every body line is
+///   prefixed, so no content can end a body early: an added source line that
+///   reads `++ /dev/null` arrives as `+++ /dev/null` and is still an addition,
+///   not a deletion header that hides the rest of the file from review, and a
+///   removed one reading `-- x` arrives as `--- x` and is still a removal.
+/// - An empty body line is an empty context line, as `diff.suppressBlankEmpty`
+///   prints it. Any other unprefixed line, or one the counts leave no room
+///   for, ends the hunk early and is then read as a header.
+/// - **The file path comes from the `+++` label, never from `diff --git`.**
+///   That line carries two paths with no unambiguous separator, so any "find
+///   `b/`" rule captures the wrong span for a repository path that itself
+///   contains `b/` (`src/b/mod.rs`). The label is decoded as git quoted it, and
+///   the tab git appends to a name containing a space is dropped - see
+///   `new_file_path`. `+++ /dev/null` marks a deletion, which has nothing to
+///   analyze, so its hunks are dropped.
+/// - A malformed `@@` produces no hunk, and nothing after it is attributed to
+///   the hunk before it.
 pub fn parse_unified_diff(diff_text: &str) -> Vec<Hunk> {
-    if diff_text.trim().is_empty() {
-        return Vec::new();
-    }
-
     let mut hunks: Vec<Hunk> = Vec::new();
-    // `None` means "no file to attribute a hunk to" — either we have not
+    // `None` means "no file to attribute a hunk to" - either we have not
     // reached this file's `+++` line yet, or it was a deletion. A `@@` seen
     // while it is `None` produces no hunk, which is what drops a deleted
     // file's body without a separate flag to track.
     let mut current_file: Option<PathBuf> = None;
-    let mut pending: Option<Hunk> = None;
+    let mut body: Option<Body> = None;
 
     for line in diff_text.lines() {
+        // A body whose counts are used up accepts only the no-newline marker,
+        // so the first line after it closes it here and is read as a header.
+        if let Some(open) = body.as_mut() {
+            if open.accept(line) {
+                continue;
+            }
+            hunks.extend(body.take().map(Body::finish));
+        }
+
         if line.starts_with("diff --git ") {
-            hunks.extend(pending.take());
             current_file = None;
-            continue;
-        }
-
-        // A file header precedes the file's first `@@`, so it is only looked
-        // for outside a hunk body. Inside one, `+++ b/x` is an added line
-        // whose text is `++ b/x`.
-        if pending.is_none()
-            && let Some(target) = line.strip_prefix("+++ ")
-        {
-            current_file = new_file_path(target);
-            continue;
-        }
-
-        if let Some(after_marker) = line.strip_prefix("@@") {
-            // Terminates the body regardless of whether the header parses:
-            // that is what stops a malformed `@@`'s lines being appended to
-            // the hunk before it.
-            hunks.extend(pending.take());
-            pending = parse_hunk_header(after_marker).and_then(|(os, oc, ns, nc)| {
-                current_file.clone().map(|file_path| Hunk {
-                    file_path,
-                    old_start: os,
-                    old_count: oc,
-                    new_start: ns,
-                    new_count: nc,
-                    lines: Vec::new(),
+        } else if let Some(label) = line.strip_prefix("+++ ") {
+            current_file = new_file_path(label);
+        } else if let Some(after_marker) = line.strip_prefix("@@") {
+            body = parse_hunk_header(after_marker).and_then(|(os, oc, ns, nc)| {
+                current_file.clone().map(|file_path| Body {
+                    hunk: Hunk {
+                        file_path,
+                        old_start: os,
+                        old_count: oc,
+                        new_start: ns,
+                        new_count: nc,
+                        lines: Vec::new(),
+                    },
+                    old_left: oc,
+                    new_left: nc,
                 })
             });
-            continue;
-        }
-
-        let Some(hunk) = pending.as_mut() else {
-            continue;
-        };
-
-        match line.as_bytes().first() {
-            Some(b'+') => hunk.lines.push(HunkLine::Added(line[1..].to_owned())),
-            Some(b'-') => hunk.lines.push(HunkLine::Removed(line[1..].to_owned())),
-            Some(b' ') => hunk.lines.push(HunkLine::Context(line[1..].to_owned())),
-            // `\ No newline at end of file`, a blank line, or anything else a
-            // well-formed body cannot contain. Never an error.
-            _ => {}
         }
     }
 
-    hunks.extend(pending.take());
+    hunks.extend(body.map(Body::finish));
     hunks
+}
+
+/// A hunk whose body is still being read, with the lines each side of its
+/// `@@` header has left to account for.
+struct Body {
+    hunk: Hunk,
+    old_left: u32,
+    new_left: u32,
+}
+
+impl Body {
+    /// Take `line` into the body, or `false` when it cannot belong there.
+    fn accept(&mut self, line: &str) -> bool {
+        let (entry, old, new) = match line.as_bytes().first() {
+            Some(b' ') => (HunkLine::Context(line[1..].to_owned()), 1, 1),
+            None => (HunkLine::Context(String::new()), 1, 1),
+            Some(b'-') => (HunkLine::Removed(line[1..].to_owned()), 1, 0),
+            Some(b'+') => (HunkLine::Added(line[1..].to_owned()), 0, 1),
+            Some(b'\\') => return true,
+            Some(_) => return false,
+        };
+        let (Some(old_left), Some(new_left)) = (
+            self.old_left.checked_sub(old),
+            self.new_left.checked_sub(new),
+        ) else {
+            return false;
+        };
+        self.old_left = old_left;
+        self.new_left = new_left;
+        self.hunk.lines.push(entry);
+        true
+    }
+
+    fn finish(self) -> Hunk {
+        self.hunk
+    }
 }
 
 /// The file a `+++ ` header names, or `None` when it names no new file.

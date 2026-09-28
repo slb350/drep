@@ -1,12 +1,13 @@
 //! What `git diff` prints under the configuration drep inherits.
 //!
 //! drep parses git's output, and git formats that output from the user's
-//! configuration: path quoting, prefixes, colour, an external diff program and
-//! blank-context suppression all change the text. A shape the parser does not
-//! recognise yields no hunk and no name, and a file with no hunk is a file the
-//! gate reports as clean without reviewing it. These tests use git itself as
-//! the oracle for both halves: the names it quotes, and the settings that
-//! reshape a patch.
+//! configuration: path quoting, prefixes, colour, an external diff program, a
+//! textconv driver and blank-context suppression all change the text. A shape
+//! the parser does not recognise yields no hunk and no name, and a file with
+//! no hunk is a file the gate reports as clean without reviewing it. These
+//! tests use git itself as the oracle for both halves: the names it quotes,
+//! and the settings that reshape a patch. Content that changes the patch is in
+//! `review_evasion.rs`.
 
 use std::collections::BTreeSet;
 use std::fs;
@@ -116,8 +117,12 @@ fn mismatch(hunks: &[Hunk], setting: &str, query: &str) -> Option<String> {
 ///
 /// Each setting, left to apply, made every changed file vanish from both the
 /// staged hook and the pushed range - `diff.suppressBlankEmpty` instead
-/// misnumbered every line after a blank one. The external program prints what
-/// a tool such as difftastic would: something that is not a unified diff.
+/// misnumbered every line after a blank one, and the textconv driver, which
+/// the committed `diff=upper` attribute selects, replaced the committed text
+/// with its own. The external program prints what a tool such as difftastic
+/// would: something that is not a unified diff. `diff.dstPrefix` exists from
+/// git 2.45, and an older git ignores it; `diff.srcPrefix` is not a case,
+/// because it renames only the `---` label, which the parser never reads.
 #[tokio::test]
 async fn user_diff_configuration_cannot_hide_a_change() {
     let tools = tempfile::tempdir().expect("tempdir");
@@ -129,13 +134,17 @@ async fn user_diff_configuration_cannot_hide_a_change() {
     for (key, value) in [
         ("diff.noprefix", "true"),
         ("diff.mnemonicPrefix", "true"),
+        ("diff.dstPrefix", "new/"),
         ("color.ui", "always"),
+        ("color.diff", "always"),
         ("diff.external", external.as_str()),
+        ("diff.upper.textconv", "tr a-z A-Z <"),
         ("diff.suppressBlankEmpty", "true"),
     ] {
         let setting = format!("{key}={value}");
         let repo = GitRepo::init().await;
         let root = repo.root();
+        fs::write(root.join(".gitattributes"), "*.rs diff=upper\n").expect("write");
         fs::write(root.join("m.rs"), BEFORE).expect("write");
         repo.commit_all("seed").await;
         repo.create_branch("feature").await;
