@@ -62,14 +62,13 @@ post-commit backup of gitignored files. With it set, git looks **only** in
 name exists there. The `pre-push` chainer must `exec`, which is how the local
 hook inherits stdin and therefore the refs being pushed.
 
-The pre-push hook sends each changed file to the endpoint in `drep.toml` and
-needs `KIMI_API_KEY` exported. It lives in `.env`, which is gitignored:
+The pre-push hook sends each changed file to the review backends that the local, gitignored `drep.toml` selects, and needs only the credential those entries name: none for a credentialless endpoint or the keyless `codex` preset, otherwise the `${VAR}` an entry's `api_key` references or a key stored with `drep auth`. When that key is kept in the gitignored `.env`, export it for the push:
 
 ```sh
 set -a && . ./.env && set +a && git push origin HEAD
 ```
 
-The gate can take minutes per file and consumes Kimi Coding Plan quota, which is
+The gate can take minutes per file and consumes the selected backend's quota, which is
 why it is pre-push and not pre-commit. A cold push now completes and caches the
 review, deliberately exits 3, and tells you to run `git push` again; that retry
 opens a fresh remote connection and uses cache-only verdicts. This prevents an
@@ -1128,7 +1127,7 @@ Everything before the formula push survives such a failure - the binaries, the
 installer and the GitHub release are already published - so the recovery is to
 push `drep.rb` from the release assets to the tap by hand and fix the section.
 
-The version in `Cargo.toml` is the single source. Tag `vX.Y.Z` and push the tag;
+The version in `Cargo.toml` is the single source. Create the annotated tag `vX.Y.Z` and push it;
 `.github/workflows/release.yml` builds the four targets, creates the GitHub
 release, and pushes the Homebrew formula. cargo-dist does not publish Rust
 crates, so every stable release also requires `cargo publish --dry-run --locked`
@@ -1136,7 +1135,7 @@ before tagging and `cargo publish --locked` from the exact tagged main commit.
 
 ```sh
 cargo publish --dry-run --locked
-git tag vX.Y.Z
+git tag -a vX.Y.Z -m "vX.Y.Z"
 git push origin vX.Y.Z
 cargo publish --locked
 ```
