@@ -120,8 +120,9 @@ fn mismatch(hunks: &[Hunk], setting: &str, query: &str) -> Option<String> {
 /// misnumbered every line after a blank one, and the textconv driver, which
 /// the committed `diff=upper` attribute selects, replaced the committed text
 /// with its own. The external program prints what a tool such as difftastic
-/// would: something that is not a unified diff. `diff.srcPrefix` and
-/// `diff.dstPrefix` exist from git 2.45; an older git ignores them.
+/// would: something that is not a unified diff. `diff.dstPrefix` exists from
+/// git 2.45, and an older git ignores it; `diff.srcPrefix` is not a case,
+/// because it renames only the `---` label, which the parser never reads.
 #[tokio::test]
 async fn user_diff_configuration_cannot_hide_a_change() {
     let tools = tempfile::tempdir().expect("tempdir");
@@ -133,7 +134,6 @@ async fn user_diff_configuration_cannot_hide_a_change() {
     for (key, value) in [
         ("diff.noprefix", "true"),
         ("diff.mnemonicPrefix", "true"),
-        ("diff.srcPrefix", "old/"),
         ("diff.dstPrefix", "new/"),
         ("color.ui", "always"),
         ("color.diff", "always"),

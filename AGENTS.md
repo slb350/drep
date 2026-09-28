@@ -1019,12 +1019,12 @@ comes back.
   it prints goes through `diff::quoting::decode`, and a hunk body is read by
   its counts.** `DIFF` pins the output format against the user's configuration
   and the repository's attributes: `diff.noprefix`, `diff.mnemonicPrefix`,
-  `diff.srcPrefix`/`diff.dstPrefix`, `color.ui=always`, `diff.external`, a
-  textconv driver, `diff.suppressBlankEmpty`, and a committed `binary` or
-  `-diff` attribute or a NUL byte (`--text`) each once made the hunk parser find
-  nothing, or text other than the committed text, and the gate reported the
-  file clean. `--diff-filter=ACMRT` keeps `T`, because a symlink replaced by a
-  regular file is a type change. git quotes a name holding `é`, `"`, `\` or a
+  `diff.dstPrefix`, `color.ui=always`, `diff.external`, a textconv driver,
+  `diff.suppressBlankEmpty`, and a committed `binary` or `-diff` attribute or
+  a NUL byte (`--text`) each once made the hunk parser find nothing, or text
+  other than the committed text, and the gate reported the file clean.
+  `--diff-filter=ACMRT` keeps `T`, because a symlink replaced by a regular
+  file is a type change. git quotes a name holding `é`, `"`, `\` or a
   control character, and ends a `+++` name holding a space with a tab; read
   raw, either name matched no language and the file dropped out of `--staged`
   and `--diff` unreviewed. `parse_unified_diff` consumes exactly the lines the

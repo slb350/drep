@@ -13,22 +13,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `lint-docs --staged` no longer pass a changed file unreviewed. When its name
   held a space, a non-ASCII letter such as `é`, a quote or a backslash, which
   git quotes or marks with a tab, or when configuration reshaped `git diff`'s
-  output (`diff.noprefix`, `diff.mnemonicPrefix`, `color.ui=always`,
-  `diff.external`, `diff.suppressBlankEmpty`), drep found no lines to review
-  and reported "No issues found"; `diff.suppressBlankEmpty` instead misnumbered
-  the lines after a blank one. drep now decodes git's quoted paths, pins the
-  diff format it parses, and keeps an added line whose text starts `++ b/`
-  inside its hunk rather than reading it as a new file's header.
+  output (`diff.noprefix`, `diff.mnemonicPrefix`, `diff.dstPrefix` from git
+  2.45, `color.ui=always`, `diff.external`, `diff.suppressBlankEmpty`), drep
+  found no lines to review and reported "No issues found";
+  `diff.suppressBlankEmpty` instead misnumbered the lines after a blank one.
+  drep now decodes git's quoted paths, pins the diff format it parses, and
+  keeps an added line whose text starts `++ b/` inside its hunk rather than
+  reading it as a new file's header.
 - **Security:** the same diff modes could still review less than a commit
   contained. A source file git labels binary (a committed `binary` or `-diff`
   attribute, or one NUL byte, which rustc accepts in a comment) and a symlink
   replaced by a regular file produced no hunks, and a change with no hunks
   passes the gate; a textconv driver reviewed its converted text instead of
-  the committed text, and `diff.srcPrefix`/`diff.dstPrefix` (git 2.45 and
-  later) hid every change as `diff.noprefix` did. drep now passes `--text` and
-  `--no-textconv`, includes type changes, and reads each hunk body by the
-  counts in its `@@` header as git does, so no line of content can pose as a
-  file header.
+  the committed text. drep now passes `--text` and `--no-textconv`,
+  includes type changes, and reads each hunk body by the counts in its `@@`
+  header as git does, so no line of content can pose as a file header.
 - Mutation runs in one checkout no longer delete each other's results and
   scratch copies. The hook, a manual run and an offloaded run each hold a kernel
   lock on `target/mutants.lock` and wait up to
