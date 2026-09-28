@@ -26,6 +26,7 @@ use tokio::process::Command;
 use crate::files;
 
 pub mod hunks;
+mod quoting;
 
 use hunks::{Hunk, parse_unified_diff};
 
@@ -220,6 +221,10 @@ pub(crate) async fn repository_root(root: &Path) -> Result<PathBuf, GitError> {
 /// half — it is what makes a diff query return files drep can do something
 /// with, and keeps lock/build output from inflating the work set.
 ///
+/// Each line is decoded before the filter sees it: git quotes a name holding
+/// a byte such as `é` or `"`, and the quoted form matched no file class, so a
+/// staged `café.md` was silently absent from `lint-docs --staged`.
+///
 /// `wanted` is a parameter rather than a hardcoded `files::is_scan_target`
 /// because the file classes are disjoint and one command owns each: `check`
 /// asks for registered-language sources, `lint-docs` asks for markdown. With
@@ -229,9 +234,52 @@ fn filter_paths(output: &str, wanted: fn(&Path) -> bool) -> Vec<PathBuf> {
     output
         .lines()
         .filter(|line| !line.trim().is_empty())
-        .map(PathBuf::from)
+        .map(quoting::decode)
         .filter(|path| wanted(path))
         .collect()
+}
+
+/// Every `git diff` drep runs starts with these, ahead of its selection.
+///
+/// drep parses the output, and git formats it from the user's configuration.
+/// Each option pins one thing a setting would otherwise change, and each such
+/// change made the parser find no hunk, which the gate reports as a clean
+/// file:
+///
+/// - `core.quotePath=true` quotes every byte above 0x7f, so a name that is not
+///   UTF-8 arrives as escapes `quoting::decode` reverses exactly, rather than
+///   as raw bytes the lossy conversion of stdout replaces.
+/// - `diff.suppressBlankEmpty=false` keeps the leading space on a blank context
+///   line. Printed empty, the line was skipped and every line after it in the
+///   hunk carried the wrong number.
+/// - `--no-ext-diff` ignores `diff.external` and `GIT_EXTERNAL_DIFF`, whose
+///   program (difftastic, say) prints something other than a unified diff.
+/// - `--no-color` overrides `color.ui=always`, which wraps each header in
+///   escape codes even when stdout is a pipe.
+/// - `--src-prefix`/`--dst-prefix` restore the `a/` and `b/` that
+///   `diff.noprefix` removes and `diff.mnemonicPrefix` replaces (`c/` and `i/`
+///   for `--cached`).
+///
+/// `--diff-filter=ACMR` is selection rather than format, and is here so the
+/// staged and branch queries state it once; `staged_files` says why deletions
+/// are left out.
+const DIFF: &[&str] = &[
+    "-c",
+    "core.quotePath=true",
+    "-c",
+    "diff.suppressBlankEmpty=false",
+    "diff",
+    "--no-ext-diff",
+    "--no-color",
+    "--src-prefix=a/",
+    "--dst-prefix=b/",
+    "--diff-filter=ACMR",
+];
+
+/// Run `git diff` with its output format pinned by [`DIFF`], selecting with
+/// `selection`.
+async fn git_diff(root: &Path, selection: &[&str]) -> Result<String, GitError> {
+    run_git(root, &[DIFF, selection].concat()).await
 }
 
 /// Files staged for commit, relative to `root`, that drep analyzes.
@@ -249,19 +297,19 @@ pub async fn staged_files(
 
 /// `git diff --cached` in whichever output mode the caller wants.
 ///
-/// The selection rules — `--diff-filter=ACMR` and the empty-tree fallback —
-/// live here once rather than in each of `staged_files` and `staged_hunks`.
-/// They were stated twice, and a change applied to one and not the other would
-/// make the file list and the hunk set disagree about what is in scope: drep
-/// would analyze a file the gate never listed, which is exactly the class of
-/// failure this module exists to prevent.
+/// The selection rules — the empty-tree fallback here, `--diff-filter=ACMR`
+/// in [`DIFF`] — live once rather than in each of `staged_files` and
+/// `staged_hunks`. They were stated twice, and a change applied to one and not
+/// the other would make the file list and the hunk set disagree about what is
+/// in scope: drep would analyze a file the gate never listed, which is exactly
+/// the class of failure this module exists to prevent.
 async fn staged_diff(root: &Path, mode: &str) -> Result<String, GitError> {
-    let args: &[&str] = if has_head(root).await {
-        &["diff", "--cached", "--diff-filter=ACMR", mode]
+    let selection: &[&str] = if has_head(root).await {
+        &["--cached", mode]
     } else {
-        &["diff", "--cached", "--diff-filter=ACMR", mode, EMPTY_TREE]
+        &["--cached", mode, EMPTY_TREE]
     };
-    run_git(root, args).await
+    git_diff(root, selection).await
 }
 
 /// `git diff <ref>...<HEAD|empty-tree>` in whichever output mode is wanted.
@@ -317,7 +365,7 @@ async fn since_diff(
         }
     };
     let spec = format!("{git_ref}...{ref_b}");
-    run_git(root, &["diff", "--diff-filter=ACMR", mode, &spec]).await
+    git_diff(root, &[mode, &spec]).await
 }
 
 /// Output mode: just the paths.

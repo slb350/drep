@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `check --staged`, `check --diff`, `check --pre-commit-push` and
+  `lint-docs --staged` no longer pass a changed file unreviewed. When its name
+  held a space, a non-ASCII letter such as `é`, a quote or a backslash, which
+  git quotes or marks with a tab, or when configuration reshaped `git diff`'s
+  output (`diff.noprefix`, `diff.mnemonicPrefix`, `color.ui=always`,
+  `diff.external`, `diff.suppressBlankEmpty`), drep found no lines to review
+  and reported "No issues found"; `diff.suppressBlankEmpty` instead misnumbered
+  the lines after a blank one. drep now decodes git's quoted paths, pins the
+  diff format it parses, and keeps an added line whose text starts `++ b/`
+  inside its hunk rather than reading it as a new file's header.
 - Mutation runs in one checkout no longer delete each other's results and
   scratch copies. The hook, a manual run and an offloaded run each hold a kernel
   lock on `target/mutants.lock` and wait up to

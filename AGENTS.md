@@ -1015,6 +1015,16 @@ comes back.
   `files::expand_named`: that expander resolves an empty list to `root`, which
   is what makes bare `drep lint-docs` mean "this tree" and would turn "no
   markdown in this commit" into "lint every document", every commit.
+- **Every `git diff` drep parses goes through `diff::git_diff`, and every path
+  it prints goes through `diff::quoting::decode`.** `DIFF` pins the output
+  format against the user's configuration: `diff.noprefix`,
+  `diff.mnemonicPrefix`, `color.ui=always`, `diff.external` and
+  `diff.suppressBlankEmpty` each once made the hunk parser find nothing, and
+  the gate reported the file clean. git quotes a name holding `é`, `"`, `\`
+  or a control character, and ends a `+++` name holding a space with a tab;
+  read raw, either name matched no language and the file dropped out of
+  `--staged` and `--diff` unreviewed.
+  `src/diff/tests/output_format.rs` runs real git under each setting and name.
 - **`LintOutcome` carries the gate's `Gating`, and the renderer reports it.**
   The footer needs to say whether the findings on screen blocked the run, and
   asking that question a second time in `render` is what `check` documents on
