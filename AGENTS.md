@@ -186,9 +186,9 @@ comes back.
   package version in `Cargo.toml` and `Cargo.lock`, move the complete
   `CHANGELOG.md` Unreleased material under that version and date, and update
   README's pre-commit revision together. An annotated `v<version>` tag drives
-  cargo-dist's GitHub artifacts and Homebrew publication; crates.io remains a
-  separate `cargo publish --locked` from the same clean tagged commit because
-  cargo-dist does not publish Rust crates. Verify the tag target, GitHub assets,
+  cargo-dist's GitHub artifacts and Homebrew publication, and `publish-crate.yml`
+  publishes the same tagged commit to crates.io, because cargo-dist does not
+  publish Rust crates. Verify the tag target, GitHub assets,
   registry version and published Homebrew formula independently.
   cargo-dist 0.32 replaces the tap formula on every release and does not retain
   the manual audit fixes: it restores Cargo.toml's long article-leading
@@ -1127,17 +1127,12 @@ Everything before the formula push survives such a failure - the binaries, the
 installer and the GitHub release are already published - so the recovery is to
 push `drep.rb` from the release assets to the tap by hand and fix the section.
 
-The version in `Cargo.toml` is the single source. Create the annotated tag `vX.Y.Z` and push it;
-`.github/workflows/release.yml` builds the four targets, creates the GitHub
-release, and pushes the Homebrew formula. cargo-dist does not publish Rust
-crates, so every stable release also requires `cargo publish --dry-run --locked`
-before tagging and `cargo publish --locked` from the exact tagged main commit.
+The version in `Cargo.toml` is the single source. The annotated tag `vX.Y.Z` on main drives both publication paths: `.github/workflows/release.yml` builds the four targets, creates the GitHub release and pushes the Homebrew formula, and `.github/workflows/publish-crate.yml` publishes the same tagged commit to crates.io through trusted publishing, since cargo-dist does not publish Rust crates. Run `cargo publish --dry-run --locked` before tagging. Jobsy's release flow (Scheduled maintenance, below) does both; by hand:
 
 ```sh
 cargo publish --dry-run --locked
 git tag -a vX.Y.Z -m "vX.Y.Z"
 git push origin vX.Y.Z
-cargo publish --locked
 ```
 
 A stable tag needs both prerequisites in place: the `slb350/homebrew-tap`
@@ -1147,7 +1142,9 @@ formula push on `!announcement_is_prerelease`, so that job skips.
 
 ## Scheduled maintenance
 
-Jobsy on homelab-ai-1 runs this repository's scheduled maintenance as a weekly dependency-security job, a weekly improvement job, and a weekly security review. Each job works in a fresh checkout of main and opens a draft pull request from a `jobsy/` branch. No job pushes main, creates tags, or publishes to crates.io. Merging and releasing are manual until the review policy is settled.
+Jobsy on homelab-ai-1 runs this repository's scheduled maintenance as a weekly dependency-security job, a weekly improvement job, and a weekly security review. Each works in a fresh checkout of main and opens a draft pull request from a `jobsy/` branch.
+
+A daily Jobsy review job reviews each open `jobsy/` pull request against this file, fixes it on its own branch when it is not solid, and merges it with a merge commit once every check on the reviewed head has passed; Jobsy refuses the merge otherwise. A weekly Jobsy release job decides under the release rules in this file whether the merged work warrants a release, and if so opens a `jobsy/release/` pull request that bumps the version and moves the changelog entries. When that pull request merges, Jobsy pushes the annotated tag on the merge commit, and the release and publish-crate workflows publish it. No Jobsy job pushes main directly or publishes from its own host.
 
 Mutation testing runs in CI on each Jobsy pull request: `rust.yml` mutates the pull request's diff once Linux and macOS validation pass, and again the diff pushed to main after a merge; `mutants.yml` runs the weekly full sweep.
 
