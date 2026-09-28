@@ -531,3 +531,42 @@ fn every_body_line_kind_counts_against_its_own_side() {
         ]
     );
 }
+
+#[test]
+fn a_hunk_runs_until_both_sides_are_used_up() {
+    // One side of a hunk often runs out first: the removals at the end of a
+    // shortened file come after the last new line, and the additions at the
+    // end of a lengthened one after the last old line. Ending the body with
+    // either side would drop those lines from what the model reads.
+    let diff = diff_of(&[
+        "--- a/tail.rs",
+        "+++ b/tail.rs",
+        "@@ -1,3 +1 @@",
+        " keep",
+        "-dropped one",
+        "-dropped two",
+        "@@ -10 +8,3 @@",
+        " keep",
+        "+added one",
+        "+added two",
+    ]);
+
+    let hunks = parse_unified_diff(&diff);
+
+    let lines: Vec<&[HunkLine]> = hunks.iter().map(|h| h.lines.as_slice()).collect();
+    assert_eq!(
+        lines,
+        vec![
+            &[
+                HunkLine::Context("keep".to_owned()),
+                HunkLine::Removed("dropped one".to_owned()),
+                HunkLine::Removed("dropped two".to_owned()),
+            ][..],
+            &[
+                HunkLine::Context("keep".to_owned()),
+                HunkLine::Added("added one".to_owned()),
+                HunkLine::Added("added two".to_owned()),
+            ][..],
+        ]
+    );
+}

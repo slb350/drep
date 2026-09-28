@@ -183,11 +183,10 @@ pub fn parse_unified_diff(diff_text: &str) -> Vec<Hunk> {
     let mut body: Option<Body> = None;
 
     for line in diff_text.lines() {
+        // A body whose counts are used up accepts only the no-newline marker,
+        // so the first line after it closes it here and is read as a header.
         if let Some(open) = body.as_mut() {
             if open.accept(line) {
-                if open.is_complete() {
-                    hunks.extend(body.take().map(Body::finish));
-                }
                 continue;
             }
             hunks.extend(body.take().map(Body::finish));
@@ -248,10 +247,6 @@ impl Body {
         self.new_left = new_left;
         self.hunk.lines.push(entry);
         true
-    }
-
-    fn is_complete(&self) -> bool {
-        self.old_left == 0 && self.new_left == 0
     }
 
     fn finish(self) -> Hunk {
