@@ -6,6 +6,8 @@
 //! the returned code - lives in `main.rs` and is only observable from outside
 //! the process.
 
+mod common;
+
 use assert_cmd::Command;
 use tempfile::TempDir;
 
@@ -162,4 +164,108 @@ fn usage_error_also_blocks() {
 #[test]
 fn no_command_is_a_usage_error() {
     drep().assert().failure();
+}
+
+// A pre-commit hook running drep's staged gate reviews what the commit contains,
+// however it was made: `git commit -a`, `git commit <paths>` and a commit from an
+// index the committer chose are made from an index git names to the hook in
+// `GIT_INDEX_FILE`, not from `.git/index`.
+
+const CLEAN_README: &str = "# Title\n\nClean text.\n";
+const BROKEN_README: &str = "# Title\n\nClean text.\n\n#Broken heading\n";
+
+/// A repository whose pre-commit hook is drep's strict staged documentation gate, holding a clean committed README that is now broken in the working tree, and its HEAD.
+fn gated_repository() -> (TempDir, String) {
+    let dir = TempDir::new().expect("temp dir");
+    let root = dir.path();
+    common::git_init(root);
+    common::git_must(root, &["config", "--local", "core.hooksPath", "hooks"]);
+    std::fs::create_dir(root.join("hooks")).expect("hooks directory");
+    common::write_executable(
+        &root.join("hooks").join("pre-commit"),
+        &format!(
+            "#!/bin/sh\nDREP_SITE_CONFIG='{}' exec '{}' lint-docs --staged --strict\n",
+            absent_site_policy().display(),
+            env!("CARGO_BIN_EXE_drep")
+        ),
+    );
+    std::fs::write(root.join("README.md"), CLEAN_README).expect("write the README");
+    common::git_must(root, &["add", "README.md"]);
+    common::git_must(root, &["commit", "--quiet", "--no-verify", "-m", "clean"]);
+    let head = common::git_must(root, &["rev-parse", "HEAD"]);
+    std::fs::write(root.join("README.md"), BROKEN_README).expect("break the README");
+    (dir, head)
+}
+
+/// Commit through the gate with `extra` arguments and environment, and check the gate refused, named the issue and left HEAD where it was.
+fn assert_gate_refuses(
+    dir: &TempDir,
+    head: &str,
+    extra: &[&str],
+    env: &[(&str, &std::path::Path)],
+) {
+    let mut commit = common::without_outer_git("git", dir.path());
+    commit
+        .args(["commit", "--quiet", "-m", "broken"])
+        .args(extra);
+    for (name, value) in env {
+        commit.env(name, value);
+    }
+    let output = commit.output().expect("git must run");
+    let said = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        !output.status.success(),
+        "the gate let the commit through: {said}"
+    );
+    assert!(
+        said.contains("missing_space_after_heading"),
+        "the gate named the issue: {said}"
+    );
+    assert_eq!(
+        common::git_must(dir.path(), &["rev-parse", "HEAD"]),
+        head,
+        "nothing was committed"
+    );
+}
+
+#[test]
+fn the_staged_gate_reviews_a_commit_of_every_tracked_change() {
+    let (dir, head) = gated_repository();
+    assert_gate_refuses(&dir, &head, &["-a"], &[]);
+}
+
+#[test]
+fn the_staged_gate_reviews_a_commit_of_named_paths() {
+    let (dir, head) = gated_repository();
+    assert_gate_refuses(&dir, &head, &["--", "README.md"], &[]);
+}
+
+#[test]
+fn the_staged_gate_reviews_what_was_staged() {
+    let (dir, head) = gated_repository();
+    common::git_must(dir.path(), &["add", "README.md"]);
+    assert_gate_refuses(&dir, &head, &[], &[]);
+}
+
+#[test]
+fn the_staged_gate_reviews_a_commit_from_an_index_the_committer_chose() {
+    let (dir, head) = gated_repository();
+    let elsewhere = TempDir::new().expect("temp dir");
+    let index = elsewhere.path().join("alternate.index");
+    for args in [&["read-tree", "HEAD"][..], &["add", "README.md"][..]] {
+        let status = common::without_outer_git("git", dir.path())
+            .env("GIT_INDEX_FILE", &index)
+            .args(args)
+            .status()
+            .expect("git must run");
+        assert!(
+            status.success(),
+            "git {args:?} into the alternate index failed"
+        );
+    }
+    assert_gate_refuses(&dir, &head, &[], &[("GIT_INDEX_FILE", &index)]);
 }

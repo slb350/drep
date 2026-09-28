@@ -6,7 +6,9 @@
 //! build. If you add a file here, declare it in this directory's `mod.rs`.
 
 mod changed_since;
+mod committing_index;
 mod current_commit_sha;
+mod git_env;
 mod hook_environment;
 mod hunk_commands;
 mod hunks;

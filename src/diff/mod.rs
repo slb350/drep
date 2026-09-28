@@ -18,16 +18,16 @@
 //!   a cache key, and a cache-key component must never take the analysis down.
 
 use std::path::{Path, PathBuf};
-use std::process::Stdio;
 use std::time::Duration;
-
-use tokio::process::Command;
 
 use crate::files;
 
+mod git;
 pub mod hunks;
 mod quoting;
 
+use git::{GitEnv, committing_index, spawn_git};
+pub(crate) use git::{git_query, run_git, same_directory};
 use hunks::{Hunk, parse_unified_diff};
 
 /// The well-known SHA for the empty git tree.
@@ -44,13 +44,6 @@ const EMPTY_TREE: &str = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
 /// local `git rev-parse`; if it does not answer by then the answer is
 /// "unknown" and the cache key falls through.
 const SHA_TIMEOUT: Duration = Duration::from_secs(5);
-
-/// Ceiling on any single git invocation.
-///
-/// Generous compared with `SHA_TIMEOUT` because `git diff` on a large history
-/// is legitimately slower than `rev-parse`, but bounded so a hung git cannot
-/// stall a commit.
-const GIT_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// What went wrong shelling out to git.
 ///
@@ -91,95 +84,6 @@ async fn has_head(root: &Path) -> bool {
     run_git(root, &["rev-parse", "--verify", "HEAD"])
         .await
         .is_ok()
-}
-
-/// Run `git <args>` in `root` and return trimmed stdout on success.
-///
-/// All the diff commands want the same shape: capture stdout, capture
-/// stderr separately, never panic. `kill_on_drop` ensures a hung git cannot
-/// outlive its caller.
-/// Every git invocation is bounded.
-///
-/// The timeout lives here rather than at one call site: `current_commit_sha`
-/// wrapped itself, but `staged_files`, `changed_since` and `has_head` called
-/// this bare, so a hung git blocked the gate indefinitely. `kill_on_drop` only
-/// helps when the future is dropped, which nothing was doing.
-///
-/// `pub(crate)` because it is the *only* place drep spawns git. `cli::init`
-/// asks git where the hooks directory is and what `core.hooksPath` holds, and
-/// a second spawn helper there would be a second place for the timeout, the
-/// stdin-null and the non-zero handling to drift.
-/// Run a git query whose answer is carried by its exit code.
-///
-/// `Ok(Some(stdout))` when git exited 0, `Ok(None)` when it exited **1**, and
-/// an error for anything else. Exit 1 is git's "no" - not ignored, not tracked,
-/// no such config key - while 2 and above mean the question could not be asked
-/// at all, and collapsing the two would report a broken repository as a clean
-/// answer.
-///
-/// Three call sites had transcribed this discrimination separately
-/// (`hooks::run_git_config_path`, and `gitignore`'s ignored and tracked
-/// probes), which is three places for the 1-versus-2 rule to drift.
-pub(crate) async fn git_query(root: &Path, args: &[&str]) -> Result<Option<String>, GitError> {
-    match run_git(root, args).await {
-        Ok(stdout) => Ok(Some(stdout)),
-        Err(GitError::NonZero { code: Some(1), .. }) => Ok(None),
-        Err(err) => Err(err),
-    }
-}
-
-pub(crate) async fn run_git(root: &Path, args: &[&str]) -> Result<String, GitError> {
-    let mut command = Command::new("git");
-    command
-        .args(args)
-        // drep names the repository by path, and `current_dir(root)` is that
-        // statement. An inherited `GIT_DIR`/`GIT_WORK_TREE`/`GIT_COMMON_DIR`
-        // silently overrides it, so git answers about a *different* repository
-        // than the one asked about - and a relative `GIT_INDEX_FILE` resolves
-        // against the wrong directory entirely. Both happen in practice,
-        // because drep's whole job is running inside a git hook, where git
-        // exports all of them.
-        //
-        // Removing them makes `root` authoritative. It changes nothing in the
-        // ordinary case (git rediscovers the same repository from the working
-        // directory), and it is what stops the answers depending on who
-        // launched the process.
-        .env_remove("GIT_DIR")
-        .env_remove("GIT_WORK_TREE")
-        .env_remove("GIT_COMMON_DIR")
-        .env_remove("GIT_INDEX_FILE")
-        // The object-database trio, for the same reason as the four above:
-        // they redirect where a child `git` reads and writes objects, so an
-        // inherited one points at the outer repository's store while every
-        // other setting names the intended one.
-        .env_remove("GIT_OBJECT_DIRECTORY")
-        .env_remove("GIT_ALTERNATE_OBJECT_DIRECTORIES")
-        .env_remove("GIT_QUARANTINE_PATH")
-        .current_dir(root)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .kill_on_drop(true);
-
-    let output = match tokio::time::timeout(GIT_TIMEOUT, command.output()).await {
-        Ok(result) => result,
-        Err(_) => {
-            return Err(GitError::Spawn(format!(
-                "git {} timed out after {}s",
-                args.join(" "),
-                GIT_TIMEOUT.as_secs()
-            )));
-        }
-    }
-    .map_err(|err| GitError::Spawn(err.to_string()))?;
-
-    if !output.status.success() {
-        return Err(GitError::NonZero {
-            code: output.status.code(),
-            stderr: String::from_utf8_lossy(&output.stderr).trim().to_owned(),
-        });
-    }
-    Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
 }
 
 /// Resolve a path printed by `git rev-parse` against the queried repository.
@@ -288,8 +192,8 @@ const DIFF: &[&str] = &[
 
 /// Run `git diff` with its output format pinned by [`DIFF`], selecting with
 /// `selection`.
-async fn git_diff(root: &Path, selection: &[&str]) -> Result<String, GitError> {
-    run_git(root, &[DIFF, selection].concat()).await
+async fn git_diff(root: &Path, selection: &[&str], env: GitEnv<'_>) -> Result<String, GitError> {
+    spawn_git(root, &[DIFF, selection].concat(), env).await
 }
 
 /// Files staged for commit, relative to `root`, that drep analyzes.
@@ -314,12 +218,15 @@ pub async fn staged_files(
 /// in scope: drep would analyze a file the gate never listed, which is exactly
 /// the class of failure this module exists to prevent.
 async fn staged_diff(root: &Path, mode: &str) -> Result<String, GitError> {
-    let selection: &[&str] = if has_head(root).await {
+    let (head, index) = tokio::join!(has_head(root), committing_index(root));
+    let index = index?;
+    let selection: &[&str] = if head {
         &["--cached", mode]
     } else {
         &["--cached", mode, EMPTY_TREE]
     };
-    git_diff(root, selection).await
+    let env = index.as_deref().map_or(GitEnv::Scrubbed, GitEnv::Index);
+    git_diff(root, selection, env).await
 }
 
 /// `git diff <ref>...<HEAD|empty-tree>` in whichever output mode is wanted.
@@ -375,7 +282,7 @@ async fn since_diff(
         }
     };
     let spec = format!("{git_ref}...{ref_b}");
-    git_diff(root, &[mode, &spec]).await
+    git_diff(root, &[mode, &spec], GitEnv::Scrubbed).await
 }
 
 /// Output mode: just the paths.
