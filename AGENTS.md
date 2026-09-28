@@ -926,6 +926,7 @@ comes back.
   30 seconds while its internal runner accepts an explicit test deadline.
   Comments state current contracts
   and non-obvious reasons; development history belongs in the changelog.
+- **Process-boundary fixtures prove ordering causally, never by elapsed time.** A test about which of two processes finishes first makes the order observable (a fixture that holds a pipe until the other process has been reaped, then drains it) instead of timing the call against a deadline, which a loaded suite exceeds. A shell fixture hands a pipe to a background command on another descriptor, because dash, `/bin/sh` on the Linux runners, gives a background command `/dev/null` as stdin.
 - **Cross-module fixtures live in `src/test_support.rs`.** Reuse its SSE,
   retry and model-registry builders; `fast_retry_client` must not override
   `max_attempts`. Integration tests are separate crates and share
