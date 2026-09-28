@@ -16,7 +16,7 @@
 //!
 //! Input resolution runs ahead of the probe, because the question is which
 //! repositories this run would send source *from* - see
-//! [`reviewed_directories`]. It reads local files and contacts nothing, so it
+//! [`Work::reviewed_directories`]. It reads local files and contacts nothing, so it
 //! comes before everything the ordering above is about.
 
 use std::path::Path;

@@ -275,6 +275,21 @@ pub(crate) fn probe_and_stop_process(pid: &str) -> bool {
         .success()
 }
 
+/// The deadline for a fake Codex CLI that is expected to finish. It only separates a finished call from a hung one, and a loaded full-suite run can take seconds to start and reap a fixture.
+pub(crate) const FAKE_CODEX_TIMEOUT_SECS: u64 = 30;
+
+/// The lines of a fake Codex CLI script that print a clean review and end the turn, for `concat!` after the rest of the script.
+macro_rules! fake_codex_clean_review {
+    () => {
+        concat!(
+            "printf '%s\\n' \\\n",
+            "  '{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":\"{\\\"issues\\\":[],\\\"summary\\\":\\\"clean\\\"}\"}}' \\\n",
+            "  '{\"type\":\"turn.completed\"}'\n",
+        )
+    };
+}
+pub(crate) use fake_codex_clean_review;
+
 /// Set a fixture's age without sleeping or depending on the wall clock.
 pub(crate) fn set_mtime(path: &std::path::Path, mtime: std::time::SystemTime) {
     let file = std::fs::OpenOptions::new()

@@ -92,16 +92,14 @@ async fn same_model_http_to_codex_failover_returns_the_codex_cache_key() {
         concat!(
             "#!/bin/sh\n",
             "sed -n '1,$p' >/dev/null\n",
-            "printf '%s\\n' \\\n",
-            "  '{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":\"{\\\"issues\\\":[],\\\"summary\\\":\\\"clean\\\"}\"}}' \\\n",
-            "  '{\"type\":\"turn.completed\"}'\n",
+            crate::test_support::fake_codex_clean_review!(),
         ),
     );
     let codex_cfg = LlmConfig {
         backend: BackendKind::Codex,
         model: Some(model.to_owned()),
         reasoning_effort: Some(ReasoningEffort::High),
-        timeout_secs: 5,
+        timeout_secs: crate::test_support::FAKE_CODEX_TIMEOUT_SECS,
         max_concurrent: 1,
         ..LlmConfig::default()
     };

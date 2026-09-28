@@ -577,7 +577,7 @@ private user homes remain unavailable. The service PATH also includes its
 dedicated Cargo bin directory because global jobs download a cached `dist`
 there without adding that directory to `GITHUB_PATH`.
 
-`.github/workflows/rust.yml` runs format, clippy, tests and the 1.88 MSRV check
+`.github/workflows/rust.yml` runs format, clippy, a warning-denied rustdoc build of every item including private ones, tests and the 1.88 MSRV check
 in one homelab-ai-1 allocation, plus the test suite on the native Mac mini. Both
 stable toolchains include Clippy: the test suite runs a real Rust fixture to
 verify compiler-grounded semantic suppression. Its jobs

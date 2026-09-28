@@ -40,6 +40,10 @@ jobs:
       - name: Clippy
         run: cargo clippy --all-targets --all-features
 
+      # Clippy does not run rustdoc's lints, and most modules are private, so only a private-items build sees a broken intra-doc link. [lints] denies its warnings too.
+      - name: Rustdoc
+        run: cargo doc --no-deps --all-features --document-private-items
+
       - name: Test
         run: cargo test --all-targets --all-features
 
