@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use crate::diff::staged_contents;
 use crate::files;
 
-use super::support::{GitRepo, run_in};
+use super::support::{GitRepo, RELATIVE, run_in};
 
 #[tokio::test]
 async fn the_content_is_the_indexs_exactly_whatever_the_working_tree_holds() {
@@ -29,28 +29,31 @@ async fn the_content_is_the_indexs_exactly_whatever_the_working_tree_holds() {
 }
 
 #[tokio::test]
-async fn each_file_is_named_from_the_top_level_and_read_as_named_whatever_diff_relative_says() {
-    let repo = GitRepo::init().await;
-    let root = repo.root();
-    fs::create_dir(root.join("sub")).expect("subdirectory");
-    fs::write(root.join("guide.md"), "# Top\n").expect("write");
-    fs::write(root.join("sub").join("guide.md"), "# Sub\n").expect("write");
-    run_in(root, &["add", "guide.md", "sub/guide.md"]).await;
-    run_in(root, &["config", "--local", "diff.relative", "true"]).await;
+async fn from_a_subdirectory_each_file_is_read_from_the_index_and_named_from_there() {
+    for relative in RELATIVE {
+        let repo = GitRepo::init().await;
+        let root = repo.root();
+        fs::create_dir(root.join("sub")).expect("subdirectory");
+        fs::write(root.join("guide.md"), "# Top\n").expect("write");
+        fs::write(root.join("sub").join("guide.md"), "# Sub\n").expect("write");
+        run_in(root, &["add", "guide.md", "sub/guide.md"]).await;
+        run_in(root, &["config", "--local", "diff.relative", relative]).await;
 
-    let contents = staged_contents(&root.join("sub"), files::is_markdown)
-        .await
-        .expect("staged_contents");
+        let contents = staged_contents(&root.join("sub"), files::is_markdown)
+            .await
+            .expect("staged_contents");
 
-    let read: Vec<_> = contents
-        .iter()
-        .map(|(path, content)| (path.clone(), content.as_deref().expect("readable")))
-        .collect();
-    assert_eq!(
-        read,
-        [
-            (PathBuf::from("guide.md"), "# Top\n"),
-            (PathBuf::from("sub/guide.md"), "# Sub\n"),
-        ]
-    );
+        let read: Vec<_> = contents
+            .iter()
+            .map(|(path, content)| (path.clone(), content.as_deref().expect("readable")))
+            .collect();
+        assert_eq!(
+            read,
+            [
+                (PathBuf::from("../guide.md"), "# Top\n"),
+                (PathBuf::from("guide.md"), "# Sub\n"),
+            ],
+            "diff.relative={relative}"
+        );
+    }
 }

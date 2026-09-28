@@ -5,6 +5,9 @@ use std::path::Path;
 
 use tokio::process::Command;
 
+/// Both values of `diff.relative`: git's default, and the setting that names files from the working directory and leaves out the rest.
+pub(crate) const RELATIVE: [&str; 2] = ["false", "true"];
+
 /// A git repository rooted at a `tempfile::TempDir`.
 ///
 /// Brings the repo into a state where every test is reproducible on every

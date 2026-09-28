@@ -26,11 +26,13 @@ use crate::files;
 
 mod git;
 pub mod hunks;
+mod prefix;
 mod quoting;
 
 use git::{GitEnv, committing_index, spawn_git, spawn_git_bytes};
 pub(crate) use git::{git_query, run_git, same_directory};
 use hunks::{Hunk, parse_unified_diff};
+use prefix::{from_prefix, hunks_from, paths_from, working_prefix};
 
 /// The well-known SHA for the empty git tree.
 ///
@@ -172,10 +174,11 @@ fn filter_paths(output: &str, wanted: fn(&Path) -> bool) -> Vec<PathBuf> {
 ///   `diff.noprefix` removes and `diff.mnemonicPrefix` (`c/` and `i/` for
 ///   `--cached`) and `diff.srcPrefix`/`diff.dstPrefix` replace.
 /// - `--no-relative` overrides `diff.relative`, which names each file from the
-///   working directory and leaves out every file outside it. Every path is then
-///   named from the top level, as `:<path>` resolves it when a staged file's
-///   content is read; under the setting, a subdirectory's `README.md` was
-///   listed as `README.md` and the top level's was read in its place.
+///   working directory and leaves out every file outside it, so a commit run
+///   from a subdirectory passed its other files unreviewed. Every path is named
+///   from the top level, as `:<path>` resolves it when a staged file's content
+///   is read, and `prefix` converts it to the working directory's view before a
+///   query returns it.
 ///
 /// `--diff-filter=ACMRT` is selection rather than format, and is here so the
 /// staged and branch queries state it once; `staged_files` says why deletions
@@ -214,7 +217,8 @@ pub async fn staged_files(
     root: &Path,
     wanted: fn(&Path) -> bool,
 ) -> Result<Vec<PathBuf>, GitError> {
-    Ok(filter_paths(&staged_diff(root, NAMES).await?, wanted))
+    let (names, prefix) = staged_diff(root, NAMES).await?;
+    Ok(paths_from(filter_paths(&names, wanted), &prefix))
 }
 
 /// How many staged files have their content read at once: one `git cat-file`
@@ -237,14 +241,15 @@ pub async fn staged_contents(
     Ok(futures::stream::iter(paths)
         .map(|path| async move {
             let content = view.content(root, &path).await;
-            (path, content)
+            (from_prefix(&path, &view.prefix), content)
         })
         .buffered(CONTENT_READ_CONCURRENCY)
         .collect()
         .await)
 }
 
-/// `git diff --cached` in whichever output mode the caller wants.
+/// `git diff --cached` in whichever output mode the caller wants, and the
+/// working directory's prefix its paths are to be read from.
 ///
 /// The selection rules — the empty-tree fallback here, `--diff-filter=ACMRT`
 /// in [`DIFF`] — live once rather than in each of `staged_files` and
@@ -252,25 +257,28 @@ pub async fn staged_contents(
 /// the other would make the file list and the hunk set disagree about what is
 /// in scope: drep would analyze a file the gate never listed, which is exactly
 /// the class of failure this module exists to prevent.
-async fn staged_diff(root: &Path, mode: &str) -> Result<String, GitError> {
+async fn staged_diff(root: &Path, mode: &str) -> Result<(String, PathBuf), GitError> {
     let view = StagedView::of(root).await?;
-    view.diff(root, mode).await
+    Ok((view.diff(root, mode).await?, view.prefix))
 }
 
-/// What the staged queries read: whether HEAD exists, and the index the commit is being made from.
+/// What the staged queries read: whether HEAD exists, the index the commit is being made from, and where `root` sits in the working tree.
 ///
 /// Built once per query so the file list and the content read for it come from the same index.
 struct StagedView {
     head: bool,
     index: Option<PathBuf>,
+    prefix: PathBuf,
 }
 
 impl StagedView {
     async fn of(root: &Path) -> Result<Self, GitError> {
-        let (head, index) = tokio::join!(has_head(root), committing_index(root));
+        let (head, index, prefix) =
+            tokio::join!(has_head(root), committing_index(root), working_prefix(root));
         Ok(Self {
             head,
             index: index?,
+            prefix: prefix?,
         })
     }
 
@@ -383,9 +391,11 @@ const NAMES: &str = "--name-only";
 /// git exit non-zero, and that surfaces here as `Err(GitError::NonZero)`
 /// rather than an empty Vec — see the module docs.
 pub async fn changed_since(root: &Path, git_ref: &str) -> Result<Vec<PathBuf>, GitError> {
-    Ok(filter_paths(
-        &since_diff(root, git_ref, None, NAMES).await?,
-        files::is_scan_target,
+    let (names, prefix) =
+        tokio::join!(since_diff(root, git_ref, None, NAMES), working_prefix(root));
+    Ok(paths_from(
+        filter_paths(&names?, files::is_scan_target),
+        &prefix?,
     ))
 }
 
@@ -404,7 +414,8 @@ pub const CONTEXT_LINES: u32 = 20;
 /// names. `CONTEXT_LINES` of context is requested so the model reading each
 /// hunk has the surrounding function body to compare against.
 pub async fn staged_hunks(root: &Path, wanted: fn(&Path) -> bool) -> Result<Vec<Hunk>, GitError> {
-    Ok(hunks_for(&staged_diff(root, &unified()).await?, wanted))
+    let (diff, prefix) = staged_diff(root, &unified()).await?;
+    Ok(hunks_from(hunks_for(&diff, wanted), &prefix))
 }
 
 /// The `--unified=N` flag, built from [`CONTEXT_LINES`].
@@ -453,10 +464,12 @@ pub async fn hunks_between(
     tip: Option<&str>,
     wanted: fn(&Path) -> bool,
 ) -> Result<Vec<Hunk>, GitError> {
-    Ok(hunks_for(
-        &since_diff(root, git_ref, tip, &unified()).await?,
-        wanted,
-    ))
+    let unified = unified();
+    let (diff, prefix) = tokio::join!(
+        since_diff(root, git_ref, tip, &unified),
+        working_prefix(root)
+    );
+    Ok(hunks_from(hunks_for(&diff?, wanted), &prefix?))
 }
 
 /// The current commit's SHA, with `"unknown"` on any failure.

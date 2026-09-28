@@ -288,22 +288,39 @@ fn the_staged_gate_passes_a_clean_commit_whatever_the_working_tree_holds() {
 }
 
 #[test]
-fn the_staged_gate_reviews_a_subdirectory_document_whatever_diff_relative_says() {
-    let dir = TempDir::new().expect("temp dir");
-    let root = dir.path();
-    common::git_init(root);
-    common::git_must(root, &["config", "--local", "diff.relative", "true"]);
-    std::fs::create_dir(root.join("sub")).expect("subdirectory");
-    std::fs::write(root.join("README.md"), CLEAN_README).expect("write the README");
-    std::fs::write(root.join("sub").join("README.md"), BROKEN_README).expect("write sub/README.md");
-    common::git_must(root, &["add", "README.md", "sub/README.md"]);
+fn run_from_a_subdirectory_the_staged_gate_reviews_the_whole_commit_and_names_files_from_there() {
+    for relative in ["false", "true"] {
+        let dir = TempDir::new().expect("temp dir");
+        let root = dir.path();
+        common::git_init(root);
+        common::git_must(root, &["config", "--local", "diff.relative", relative]);
+        std::fs::create_dir(root.join("sub")).expect("subdirectory");
+        std::fs::write(root.join("README.md"), CLEAN_README).expect("write the README");
+        std::fs::write(root.join("GUIDE.md"), BROKEN_README).expect("write GUIDE.md");
+        std::fs::write(root.join("sub").join("README.md"), BROKEN_README)
+            .expect("write sub/README.md");
+        common::git_must(root, &["add", "README.md", "GUIDE.md", "sub/README.md"]);
 
-    let output = common::without_outer_git(env!("CARGO_BIN_EXE_drep"), &root.join("sub"))
-        .env("DREP_SITE_CONFIG", absent_site_policy())
-        .args(["lint-docs", "--staged", "--strict"])
-        .output()
-        .expect("drep must run");
-    let said = String::from_utf8_lossy(&output.stdout);
-    assert_eq!(output.status.code(), Some(1), "{said}");
-    assert!(said.contains("missing_space_after_heading"), "{said}");
+        let output = common::without_outer_git(env!("CARGO_BIN_EXE_drep"), &root.join("sub"))
+            .env("DREP_SITE_CONFIG", absent_site_policy())
+            .args(["lint-docs", "--staged", "--strict"])
+            .output()
+            .expect("drep must run");
+        let said = String::from_utf8_lossy(&output.stdout);
+        assert_eq!(
+            output.status.code(),
+            Some(1),
+            "diff.relative={relative}: {said}"
+        );
+        for named in ["./README.md:5:2", "./../GUIDE.md:5:2"] {
+            assert!(
+                said.contains(named),
+                "diff.relative={relative}: {named} in {said}"
+            );
+        }
+        assert!(
+            !said.contains("./../README.md"),
+            "diff.relative={relative}: {said}"
+        );
+    }
 }
