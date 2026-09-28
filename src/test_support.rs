@@ -7,6 +7,9 @@
 
 use std::time::Duration;
 
+#[path = "test_git_env.rs"]
+pub(crate) mod git_env;
+
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -363,30 +366,15 @@ pub(crate) fn write_site_policy(dir: &std::path::Path, markers: &[&str]) -> std:
 
 /// A `git` command scoped to `dir` and nothing else.
 ///
-/// The environment scrubbing matters more than it looks. These tests run under
-/// `cargo test`, but also under `cargo mutants`, and under drep's own
-/// pre-commit hook - and git exports `GIT_DIR`, `GIT_WORK_TREE` and
-/// `GIT_INDEX_FILE` to every hook it runs. A child `git` then inherits them and
-/// operates on the *outer* repository instead of the `TempDir` the test built,
-/// which surfaced as `fatal: .git/index: index file open failed: Not a
-/// directory` from `git worktree add` - a relative `GIT_INDEX_FILE` resolved
-/// against the wrong directory. `crate::diff::run_git` scrubs the same set for
-/// the same reason.
+/// These tests run under `cargo test`, but also under `cargo mutants` and under
+/// drep's own pre-commit hook, and git exports the committing repository's
+/// environment to every hook it runs. A child `git` that inherited it would
+/// operate on the *outer* repository instead of the `TempDir` the test built,
+/// which once surfaced as `fatal: .git/index: index file open failed: Not a
+/// directory` from `git worktree add`. [`git_env::scrub_outer_git`] removes it.
 pub(crate) fn git(dir: &std::path::Path) -> std::process::Command {
     let mut command = std::process::Command::new("git");
-    command
-        .env_remove("GIT_DIR")
-        .env_remove("GIT_WORK_TREE")
-        .env_remove("GIT_COMMON_DIR")
-        .env_remove("GIT_INDEX_FILE")
-        // The object-database trio, for the same reason as the four above:
-        // they redirect where a child `git` reads and writes objects, so an
-        // inherited one points at the outer repository's store while every
-        // other setting names the intended one.
-        .env_remove("GIT_OBJECT_DIRECTORY")
-        .env_remove("GIT_ALTERNATE_OBJECT_DIRECTORIES")
-        .env_remove("GIT_QUARANTINE_PATH")
-        .current_dir(dir);
+    git_env::scrub_outer_git(&mut command).current_dir(dir);
     command
 }
 

@@ -104,10 +104,10 @@ impl GitRepo {
     }
 }
 
-/// Run a Git setup command, panicking with its stderr on failure.
+/// Run a Git setup command, panicking with its stderr on failure. It starts from `crate::test_support::git`, so it cannot reach the repository of a hook the suite runs under.
 pub(crate) async fn run_in(root: &Path, args: &[&str]) {
-    let mut command = Command::new("git");
-    command.args(args).current_dir(root);
+    let mut command = Command::from(crate::test_support::git(root));
+    command.args(args);
     let output = command.output().await.expect("spawn git");
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr).into_owned();

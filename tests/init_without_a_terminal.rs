@@ -10,6 +10,8 @@
 //! Running the binary with a piped stdin is the only thing that tells those two
 //! apart, which is why this lives here rather than beside the other init tests.
 
+mod common;
+
 use std::process::{Command, Stdio};
 
 /// A fresh git repository to install into.
@@ -23,9 +25,8 @@ fn repo() -> tempfile::TempDir {
         // installation at the developer's real shared hooks directory.
         vec!["config", "--local", "core.hooksPath", ""],
     ] {
-        let status = Command::new("git")
+        let status = common::without_outer_git("git", dir.path())
             .args(&args)
-            .current_dir(dir.path())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .status()
@@ -119,11 +120,10 @@ fn run_init(
 ) -> std::process::Output {
     use std::io::Write;
 
-    let mut command = Command::new(env!("CARGO_BIN_EXE_drep"));
+    let mut command = common::without_outer_git(env!("CARGO_BIN_EXE_drep"), dir.path());
     command
         .arg("init")
         .args(extra)
-        .current_dir(dir.path())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         // A store inside the temp dir, so the run cannot read or rewrite the
@@ -449,4 +449,37 @@ fn a_non_interactive_re_run_still_refuses_without_force() {
     assert!(!second.status.success(), "a second run must refuse");
     let stderr = String::from_utf8_lossy(&second.stderr);
     assert!(stderr.contains("--force"), "and name the flag: {stderr}");
+}
+
+/// A git hook runs this suite with the committing repository's environment; its fixtures, and the `drep` they run, must still act only on their own repositories.
+#[test]
+fn fixtures_leave_the_repository_a_hook_runs_them_in_alone() {
+    let enclosing = tempfile::tempdir().expect("tempdir");
+    let init = common::without_outer_git("git", enclosing.path())
+        .args(["init", "--quiet"])
+        .status()
+        .expect("git must run");
+    assert!(init.success(), "git init failed: {init}");
+    let git_dir = enclosing.path().join(".git");
+    let before = common::git_env::repository_state(&git_dir);
+
+    let output = Command::new(std::env::current_exe().expect("this test binary"))
+        .args([
+            "a_piped_stdin_takes_the_flag_path_rather_than_prompting",
+            "--exact",
+            "--test-threads=1",
+        ])
+        .envs(common::git_env::hook_environment(&git_dir))
+        .output()
+        .expect("run an init test under a hook's environment");
+
+    assert!(
+        String::from_utf8_lossy(&output.stdout).contains("1 passed"),
+        "the child ran its one test cleanly: {output:?}"
+    );
+    assert_eq!(
+        common::git_env::repository_state(&git_dir),
+        before,
+        "a fixture changed the enclosing repository"
+    );
 }
