@@ -20,13 +20,15 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use futures::StreamExt;
+
 use crate::files;
 
 mod git;
 pub mod hunks;
 mod quoting;
 
-use git::{GitEnv, committing_index, spawn_git};
+use git::{GitEnv, committing_index, spawn_git, spawn_git_bytes};
 pub(crate) use git::{git_query, run_git, same_directory};
 use hunks::{Hunk, parse_unified_diff};
 
@@ -169,6 +171,11 @@ fn filter_paths(output: &str, wanted: fn(&Path) -> bool) -> Vec<PathBuf> {
 /// - `--src-prefix`/`--dst-prefix` restore the `a/` and `b/` that
 ///   `diff.noprefix` removes and `diff.mnemonicPrefix` (`c/` and `i/` for
 ///   `--cached`) and `diff.srcPrefix`/`diff.dstPrefix` replace.
+/// - `--no-relative` overrides `diff.relative`, which names each file from the
+///   working directory and leaves out every file outside it. Every path is then
+///   named from the top level, as `:<path>` resolves it when a staged file's
+///   content is read; under the setting, a subdirectory's `README.md` was
+///   listed as `README.md` and the top level's was read in its place.
 ///
 /// `--diff-filter=ACMRT` is selection rather than format, and is here so the
 /// staged and branch queries state it once; `staged_files` says why deletions
@@ -187,6 +194,7 @@ const DIFF: &[&str] = &[
     "--no-color",
     "--src-prefix=a/",
     "--dst-prefix=b/",
+    "--no-relative",
     "--diff-filter=ACMRT",
 ];
 
@@ -209,6 +217,33 @@ pub async fn staged_files(
     Ok(filter_paths(&staged_diff(root, NAMES).await?, wanted))
 }
 
+/// How many staged files have their content read at once: one `git cat-file`
+/// each, bounded like drep's other child-process fan-outs.
+const CONTENT_READ_CONCURRENCY: usize = 4;
+
+/// Each staged file `wanted` accepts, with the content the commit records for it.
+///
+/// The content comes from the same index as the list, never from the working
+/// tree, which differs from it after a partial `git add` and under an index the
+/// committer chose. A file whose content cannot be read carries its error, as
+/// reading it from disk would.
+pub async fn staged_contents(
+    root: &Path,
+    wanted: fn(&Path) -> bool,
+) -> Result<Vec<(PathBuf, std::io::Result<String>)>, GitError> {
+    let view = StagedView::of(root).await?;
+    let paths = filter_paths(&view.diff(root, NAMES).await?, wanted);
+    let view = &view;
+    Ok(futures::stream::iter(paths)
+        .map(|path| async move {
+            let content = view.content(root, &path).await;
+            (path, content)
+        })
+        .buffered(CONTENT_READ_CONCURRENCY)
+        .collect()
+        .await)
+}
+
 /// `git diff --cached` in whichever output mode the caller wants.
 ///
 /// The selection rules — the empty-tree fallback here, `--diff-filter=ACMRT`
@@ -218,15 +253,63 @@ pub async fn staged_files(
 /// in scope: drep would analyze a file the gate never listed, which is exactly
 /// the class of failure this module exists to prevent.
 async fn staged_diff(root: &Path, mode: &str) -> Result<String, GitError> {
-    let (head, index) = tokio::join!(has_head(root), committing_index(root));
-    let index = index?;
-    let selection: &[&str] = if head {
-        &["--cached", mode]
-    } else {
-        &["--cached", mode, EMPTY_TREE]
-    };
-    let env = index.as_deref().map_or(GitEnv::Scrubbed, GitEnv::Index);
-    git_diff(root, selection, env).await
+    let view = StagedView::of(root).await?;
+    view.diff(root, mode).await
+}
+
+/// What the staged queries read: whether HEAD exists, and the index the commit is being made from.
+///
+/// Built once per query so the file list and the content read for it come from the same index.
+struct StagedView {
+    head: bool,
+    index: Option<PathBuf>,
+}
+
+impl StagedView {
+    async fn of(root: &Path) -> Result<Self, GitError> {
+        let (head, index) = tokio::join!(has_head(root), committing_index(root));
+        Ok(Self {
+            head,
+            index: index?,
+        })
+    }
+
+    fn env(&self) -> GitEnv<'_> {
+        self.index
+            .as_deref()
+            .map_or(GitEnv::Scrubbed, GitEnv::Index)
+    }
+
+    async fn diff(&self, root: &Path, mode: &str) -> Result<String, GitError> {
+        let selection: &[&str] = if self.head {
+            &["--cached", mode]
+        } else {
+            &["--cached", mode, EMPTY_TREE]
+        };
+        git_diff(root, selection, self.env()).await
+    }
+
+    /// The content the commit records for `path`: its blob in the index, as UTF-8 text.
+    async fn content(&self, root: &Path, path: &Path) -> std::io::Result<String> {
+        let spec = path
+            .to_str()
+            .map(|path| format!(":{path}"))
+            .ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    format!("{} is not a UTF-8 path", path.display()),
+                )
+            })?;
+        let blob = spawn_git_bytes(root, &["cat-file", "blob", &spec], self.env())
+            .await
+            .map_err(std::io::Error::other)?;
+        String::from_utf8(blob).map_err(|_| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "stream did not contain valid UTF-8",
+            )
+        })
+    }
 }
 
 /// `git diff <ref>...<HEAD|empty-tree>` in whichever output mode is wanted.

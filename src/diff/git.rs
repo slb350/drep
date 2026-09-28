@@ -122,12 +122,22 @@ pub(crate) fn same_directory(left: &Path, right: &Path) -> bool {
             .unwrap_or(false)
 }
 
-/// Spawn git in `root` with the environment `env` describes.
+/// Spawn git in `root` with the environment `env` describes, and return its trimmed output.
 pub(super) async fn spawn_git(
     root: &Path,
     args: &[&str],
     env: GitEnv<'_>,
 ) -> Result<String, GitError> {
+    let stdout = spawn_git_bytes(root, args, env).await?;
+    Ok(String::from_utf8_lossy(&stdout).trim().to_owned())
+}
+
+/// [`spawn_git`]'s output as git wrote it: a blob's content is neither trimmed nor decoded.
+pub(super) async fn spawn_git_bytes(
+    root: &Path,
+    args: &[&str],
+    env: GitEnv<'_>,
+) -> Result<Vec<u8>, GitError> {
     let mut command = Command::new("git");
     command
         .args(args)
@@ -184,5 +194,5 @@ pub(super) async fn spawn_git(
             stderr: String::from_utf8_lossy(&output.stderr).trim().to_owned(),
         });
     }
-    Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
+    Ok(output.stdout)
 }

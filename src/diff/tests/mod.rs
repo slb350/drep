@@ -15,5 +15,6 @@ mod hunks;
 mod output_format;
 mod quoting;
 mod review_evasion;
+mod staged_contents;
 mod staged_files;
 pub(crate) mod support;

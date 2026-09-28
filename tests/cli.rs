@@ -245,14 +245,15 @@ fn the_staged_gate_reviews_a_commit_of_named_paths() {
 }
 
 #[test]
-fn the_staged_gate_reviews_what_was_staged() {
+fn the_staged_gate_reviews_what_the_commit_records_not_the_working_tree() {
     let (dir, head) = gated_repository();
     common::git_must(dir.path(), &["add", "README.md"]);
+    std::fs::write(dir.path().join("README.md"), CLEAN_README).expect("restore the README");
     assert_gate_refuses(&dir, &head, &[], &[]);
 }
 
 #[test]
-fn the_staged_gate_reviews_a_commit_from_an_index_the_committer_chose() {
+fn the_staged_gate_reviews_a_chosen_index_not_the_working_tree() {
     let (dir, head) = gated_repository();
     let elsewhere = TempDir::new().expect("temp dir");
     let index = elsewhere.path().join("alternate.index");
@@ -267,5 +268,42 @@ fn the_staged_gate_reviews_a_commit_from_an_index_the_committer_chose() {
             "git {args:?} into the alternate index failed"
         );
     }
+    std::fs::write(dir.path().join("README.md"), CLEAN_README).expect("restore the README");
     assert_gate_refuses(&dir, &head, &[], &[("GIT_INDEX_FILE", &index)]);
+}
+
+#[test]
+fn the_staged_gate_passes_a_clean_commit_whatever_the_working_tree_holds() {
+    let (dir, head) = gated_repository();
+    let clean_edit = format!("{CLEAN_README}\nMore clean text.\n");
+    std::fs::write(dir.path().join("README.md"), &clean_edit).expect("edit the README");
+    common::git_must(dir.path(), &["add", "README.md"]);
+    std::fs::write(dir.path().join("README.md"), BROKEN_README).expect("break the working tree");
+    common::git_must(dir.path(), &["commit", "--quiet", "-m", "clean edit"]);
+    assert_ne!(common::git_must(dir.path(), &["rev-parse", "HEAD"]), head);
+    assert_eq!(
+        common::git_must(dir.path(), &["show", "HEAD:README.md"]),
+        clean_edit.trim_end()
+    );
+}
+
+#[test]
+fn the_staged_gate_reviews_a_subdirectory_document_whatever_diff_relative_says() {
+    let dir = TempDir::new().expect("temp dir");
+    let root = dir.path();
+    common::git_init(root);
+    common::git_must(root, &["config", "--local", "diff.relative", "true"]);
+    std::fs::create_dir(root.join("sub")).expect("subdirectory");
+    std::fs::write(root.join("README.md"), CLEAN_README).expect("write the README");
+    std::fs::write(root.join("sub").join("README.md"), BROKEN_README).expect("write sub/README.md");
+    common::git_must(root, &["add", "README.md", "sub/README.md"]);
+
+    let output = common::without_outer_git(env!("CARGO_BIN_EXE_drep"), &root.join("sub"))
+        .env("DREP_SITE_CONFIG", absent_site_policy())
+        .args(["lint-docs", "--staged", "--strict"])
+        .output()
+        .expect("drep must run");
+    let said = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(output.status.code(), Some(1), "{said}");
+    assert!(said.contains("missing_space_after_heading"), "{said}");
 }
