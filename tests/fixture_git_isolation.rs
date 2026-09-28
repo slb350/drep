@@ -1,4 +1,4 @@
-//! Every test reaches git through `crate::test_support::git` or `tests/common::without_outer_git`, which keep the environment of a hook this suite may run under away from a fixture. A bare spawn inherits it and acts on the repository being committed instead of the fixture's own.
+//! Every test, inline test modules included, reaches git through `crate::test_support::git` or `tests/common::without_outer_git`, which keep the environment of a hook this suite may run under away from a fixture. A bare spawn inherits it and acts on the repository being committed instead of the fixture's own.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -32,6 +32,16 @@ fn is_test_code(relative: &Path) -> bool {
         })
 }
 
+/// The lines of `text` that are test code: all of a test file, and an ordinary source file from its first `#[cfg(test)]` on, where its inline test modules sit.
+fn test_lines<'a>(relative: &Path, text: &'a str) -> impl Iterator<Item = (usize, &'a str)> {
+    let whole = is_test_code(relative);
+    let mut in_tests = whole;
+    text.lines().enumerate().filter(move |(_, line)| {
+        in_tests = in_tests || line.contains("#[cfg(test)]");
+        in_tests
+    })
+}
+
 #[test]
 fn tests_spawn_git_only_through_the_isolating_helpers() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
@@ -41,11 +51,11 @@ fn tests_spawn_git_only_through_the_isolating_helpers() {
     let mut offenders = Vec::new();
     for path in files {
         let relative = path.strip_prefix(root).expect("path under the crate");
-        if !is_test_code(relative) || HELPERS.iter().any(|helper| relative == Path::new(helper)) {
+        if HELPERS.iter().any(|helper| relative == Path::new(helper)) {
             continue;
         }
         let text = fs::read_to_string(&path).expect("read a source");
-        for (number, line) in text.lines().enumerate() {
+        for (number, line) in test_lines(relative, &text) {
             let code = line.split("//").next().unwrap_or_default();
             if code.contains(BARE_GIT) {
                 offenders.push(format!("{}:{}", relative.display(), number + 1));
