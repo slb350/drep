@@ -40,6 +40,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- CI's Linux lane builds every item's documentation (`cargo doc --no-deps --all-features --document-private-items`), whose warnings Cargo.toml's `[lints]` already denies. Clippy does not run rustdoc's lints and most modules are private, so a broken intra-doc link such as the one just fixed in `src/cli/check/refusal.rs` passed every gate.
 - Refresh the Rust 1.88-compatible lockfile to `hyper-rustls` 0.27.10 and
   `rand` 0.10.3, and pin the current Rust-toolchain and install Action
   revisions by exact SHA. Synchronize workflow labels and repository guidance

@@ -131,9 +131,10 @@ fn github_ci_uses_only_guarded_homelab_runners() {
     assert!(
         linux.contains("cargo fmt --all --check")
             && linux.contains("cargo clippy --all-targets --all-features")
+            && linux.contains("cargo doc --no-deps --all-features --document-private-items")
             && linux.contains("cargo test --all-targets --all-features")
             && linux.contains("cargo +1.88.0 check"),
-        "the single ai-1 lane must retain format, clippy, test and MSRV gates"
+        "the single ai-1 lane must retain format, clippy, rustdoc, test and MSRV gates"
     );
     let macos = workflow_job(&workflow, "test-macos");
     assert!(
