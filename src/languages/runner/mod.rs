@@ -23,12 +23,15 @@ use tokio::process::Command;
 use crate::analysis::findings::Finding;
 use crate::languages::spec::{DEFAULT_TOOL_TIMEOUT_SECS, DiagnosticsStream, ToolSpec};
 
+mod ancestry;
 mod narrow;
 pub mod parsers;
 mod uri;
 
 pub use parsers::parse_output;
 
+pub(crate) use ancestry::absolute;
+use ancestry::ancestors_within;
 pub(crate) use narrow::joined_reported;
 use narrow::retain_requested;
 
@@ -177,29 +180,6 @@ fn resolve_tool_at(
     // tool unavailable.
     let name = spec.command.first()?;
     which_first_in(name, path?).map(PathBuf::from)
-}
-
-pub(crate) fn absolute(path: &Path) -> PathBuf {
-    if path.is_absolute() {
-        path.to_path_buf()
-    } else {
-        std::env::current_dir()
-            .map(|cwd| cwd.join(path))
-            .unwrap_or_else(|_| path.to_path_buf())
-    }
-}
-
-fn ancestors_within(start: &Path, root: &Path) -> Vec<PathBuf> {
-    let root = absolute(root);
-    let start = absolute(start);
-    if !start.starts_with(&root) {
-        return Vec::new();
-    }
-    start
-        .ancestors()
-        .take_while(|ancestor| ancestor.starts_with(&root))
-        .map(Path::to_path_buf)
-        .collect()
 }
 
 /// Look up `command` on PATH; `std::process::Command` does not expose this
