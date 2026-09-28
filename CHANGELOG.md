@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.1.2] - 2026-09-28
+
 ### Fixed
 
 - **Security:** a model's unknown severity and a file's name can no longer drive the terminal reading `check`'s or `lint-docs`' text output. A finding whose `severity` was not one drep knows failed the file with a "malformed finding" reason that quoted the value whole, so a model steered by the code under review could put an escape sequence such as an OSC 52 clipboard write, a newline forging a report line, or kilobytes of text into the "could not be analyzed" block. A file name is the repository's text too, and a branch under review can name a file with an escape sequence or a newline in it: the diff decodes git's quoting back to those bytes, and the finding line and the failure block printed them raw. The quoted severity is now bounded and has its control characters replaced, and a file name holding a control character is printed as a quoted, escaped string, in full. Every other name prints as before. `--format json` escapes ESC and the other C0 control characters, and is unchanged.
@@ -1091,7 +1093,8 @@ LLM for review, and gates commits and pushes on the result. That is all it does.
 - Python, JavaScript, TypeScript, Go and Rust are all first-class. Adding a
   language is an entry in one table.
 
-[Unreleased]: https://github.com/slb350/drep/compare/v3.1.1...HEAD
+[Unreleased]: https://github.com/slb350/drep/compare/v3.1.2...HEAD
+[3.1.2]: https://github.com/slb350/drep/compare/v3.1.1...v3.1.2
 [3.1.1]: https://github.com/slb350/drep/compare/v3.1.0...v3.1.1
 [3.1.0]: https://github.com/slb350/drep/compare/v3.0.0...v3.1.0
 [3.0.0]: https://github.com/slb350/drep/compare/v2.9.0...v3.0.0
