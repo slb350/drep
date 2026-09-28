@@ -79,19 +79,26 @@ jobs:
 
       - run: cargo test --all-targets --all-features
 
-  # Exhaustive mutation is scheduled separately. A trusted main push needs
-  # fast feedback only for production code changed by the complete push, after
-  # both ordinary validation lanes have accepted the same revision.
+  # Exhaustive mutation is scheduled separately. A trusted main push or a pull request from this repository's own branches gets fast feedback on only the production code it changes, after both validation lanes pass. Forked pull requests never reach ai-1.
   mutants-diff:
-    name: mutate pushed diff (ai-1)
+    name: mutate diff (ai-1)
     needs: [linux, test-macos]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: [self-hosted, linux, x64, homelab-ai-1, drep-mutants]
     timeout-minutes: 120
+    # Only a pull request's newest head matters, so a push to it cancels the run it supersedes. Every main push keeps its own run, since each mutates a different diff.
+    concurrency:
+      group: mutants-diff-${{ github.event.pull_request.number || github.sha }}
+      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+    # A pull request mutates its head commit, not GitHub's merge commit: cargo-mutants refuses a diff whose new side does not match the tree it mutates. A push has no pull_request object and falls back to its own before and after SHAs.
+    env:
+      DIFF_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+      DIFF_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
     steps:
       # cargo-mutants builds every mutant in its own scratch copy of the tree, which excludes target/, so an ordinary clean checkout loses nothing.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ env.DIFF_HEAD }}
           fetch-depth: 0
           persist-credentials: false
 
@@ -104,13 +111,12 @@ jobs:
         with:
           tool: cargo-mutants@27.1.0
 
-      - name: Materialize pushed diff
+      # Three dots diff from the merge base, so a pull request's diff holds only its own changes after its base branch moves on. An empty end would read as HEAD and yield an empty diff, which cargo-mutants passes.
+      - name: Materialize diff
         shell: bash
-        env:
-          PUSH_BASE: ${{ github.event.before }}
-          PUSH_HEAD: ${{ github.sha }}
         run: |
           set -euo pipefail
-          git diff --no-ext-diff --unified=0 "$PUSH_BASE" "$PUSH_HEAD" > "$RUNNER_TEMP/pushed.diff"
+          : "${DIFF_BASE:?}" "${DIFF_HEAD:?}"
+          git diff --no-ext-diff --unified=0 "$DIFF_BASE...$DIFF_HEAD" > "$RUNNER_TEMP/changes.diff"
 
-      - run: ./scripts/mutants-run.sh --in-diff "$RUNNER_TEMP/pushed.diff"
+      - run: ./scripts/mutants-run.sh --in-diff "$RUNNER_TEMP/changes.diff"

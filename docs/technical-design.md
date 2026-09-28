@@ -4,9 +4,9 @@ drep is one binary. It reads files, runs the tools the repository configures,
 asks a model about the code that changed, and exits 0, 1, 2 or 3. There is no
 server, no database, no platform client and no background work.
 
-This document is the structure. `CLAUDE.md` carries the invariants, each with
+This document is the structure. `AGENTS.md` carries the invariants, each with
 the defect that produced it; where the two overlap, this file says what the
-shape is and `CLAUDE.md` says why it cannot change.
+shape is and `AGENTS.md` says why it cannot change.
 
 ## The pipeline
 
@@ -587,11 +587,8 @@ Cargo binary caching. The action's default save cleanup removes every binary
 that existed when the job began, but these self-hosted runners keep pinned
 publisher tools in that same Cargo bin directory. Registry, Git and target
 caching remain enabled without allowing validation to delete host-owned tools.
-After the Linux and macOS jobs accept a trusted push to `main`, `rust.yml`
-mutates only production code in the complete pushed diff on the dedicated
-ai-1 mutation runner. It fetches full history so `github.event.before` is an exact
-base rather than assuming one pushed commit. `.github/workflows/mutants.yml`
-owns the exhaustive sweep: it runs weekly or by explicit dispatch, refuses a
+After the Linux and macOS jobs pass a trusted push to `main` or a pull request from one of this repository's own branches, `rust.yml` mutates only production code in that change's diff on the dedicated ai-1 mutation runner; forked pull requests are skipped, as they are for validation. A push diffs `github.event.before` against `github.sha`. A pull request checks out its head commit rather than GitHub's merge commit and diffs it against its base SHA from their merge base: cargo-mutants refuses a diff whose new side does not match the tree it mutates, and a two-dot diff against a base branch that has moved on would include lines only the base changed. The job fetches full history so both ends of either diff are present, and refuses an empty end, which git would read as `HEAD` and turn into an empty diff that cargo-mutants passes. A new push to a pull request cancels that pull request's superseded run; every main push keeps its own.
+`.github/workflows/mutants.yml` owns the exhaustive sweep: it runs weekly or by explicit dispatch, refuses a
 manual ref outside the default branch, and never triggers for a push or pull
 request. Both mutation lanes pin `cargo-mutants` 27.1.0 and start from a clean
 checkout, since it builds every mutant in a copy of the tree without `target/`.

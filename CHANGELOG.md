@@ -47,6 +47,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   with the completed homelab-ai-1 runner migration.
 - Refresh compatible Rust dependencies and pin `taiki-e/install-action`
   2.87.21 by its upstream commit in validation, mutation and release setup.
+- Pull requests from this repository's own branches now run diff mutation on ai-1 after Linux and macOS validation pass, as pushes to `main` already did. A pull request mutates its head commit over the changes since it left its base branch (`base.sha...head.sha`), and a newer push to it cancels the superseded run. Forked pull requests still never reach a homelab runner.
 
 ## [3.1.1] - 2026-09-19
 

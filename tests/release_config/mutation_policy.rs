@@ -1,4 +1,7 @@
-use super::{common, rust_workflow, workflow_job};
+use super::{SAME_REPOSITORY_PR, common, job_guard, rust_workflow, workflow_job};
+
+const MUTANTS_RUNNER: &str = "runs-on: [self-hosted, linux, x64, homelab-ai-1, drep-mutants]";
+const CARGO_MUTANTS_TOOL: &str = "tool: cargo-mutants@27.1.0";
 
 fn mutation_workflow() -> String {
     common::without_comments(".github/workflows/mutants.yml")
@@ -16,39 +19,57 @@ fn mutation_common_script() -> String {
     common::without_comments("scripts/mutants-common.sh")
 }
 
-/// Trusted main pushes mutate only their production diff after validation.
+/// Trusted main pushes and same-repository pull requests mutate only their production diff after validation.
 ///
-/// The exhaustive sweep remains a scheduled and explicitly dispatched
-/// backstop. It must not multiply all 1,490 mutants after every ordinary push,
-/// and pull-request code must never reach the homelab runner.
+/// The exhaustive sweep remains a scheduled and explicitly dispatched backstop. It must not multiply all 1,490 mutants after every ordinary push, and forked pull-request code must never reach the homelab runner.
 #[test]
-fn mutation_ci_splits_main_diff_checks_from_exhaustive_sweeps() {
+fn mutation_ci_splits_diff_checks_from_exhaustive_sweeps() {
     let validation = rust_workflow();
     let diff_mutants = workflow_job(&validation, "mutants-diff");
+    assert_eq!(
+        job_guard(diff_mutants),
+        format!(
+            "(github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'pull_request' && {SAME_REPOSITORY_PR})"
+        ),
+        "diff mutation must run only for main pushes and same-repository pull requests, so forked pull-request code never reaches ai-1"
+    );
     assert!(
         diff_mutants.contains("needs: [linux, test-macos]")
-            && diff_mutants
-                .contains("if: github.event_name == 'push' && github.ref == 'refs/heads/main'")
-            && diff_mutants
-                .contains("runs-on: [self-hosted, linux, x64, homelab-ai-1, drep-mutants]"),
-        "routine mutation must follow successful trusted validation on ai-1"
+            && diff_mutants.contains(MUTANTS_RUNNER),
+        "routine mutation must follow successful validation on ai-1"
     );
     assert!(
-        diff_mutants.contains("fetch-depth: 0") && !diff_mutants.contains("clean: false"),
-        "the diff lane needs complete history and a clean checkout"
+        diff_mutants
+            .contains("group: mutants-diff-${{ github.event.pull_request.number || github.sha }}")
+            && diff_mutants
+                .contains("cancel-in-progress: ${{ github.event_name == 'pull_request' }}"),
+        "a newer push to a pull request must cancel its superseded mutation run, while every main push keeps its own"
     );
     assert!(
-        diff_mutants.contains("tool: cargo-mutants@27.1.0")
+        diff_mutants.contains(
+            "DIFF_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}"
+        ) && diff_mutants
+            .contains("DIFF_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}")
+            && diff_mutants.contains("ref: ${{ env.DIFF_HEAD }}"),
+        "a push diffs github.event.before to github.sha, and a pull request diffs its base to its head and checks out that head"
+    );
+    assert!(
+        diff_mutants.contains("fetch-depth: 0")
+            && diff_mutants.contains("persist-credentials: false")
+            && !diff_mutants.contains("clean: false"),
+        "the diff lane needs both ends of the diff in history, a clean checkout, and no persisted token for pull-request code to read"
+    );
+    assert!(
+        diff_mutants.contains(CARGO_MUTANTS_TOOL)
             && diff_mutants.contains("components: clippy")
-            && diff_mutants.contains("PUSH_BASE: ${{ github.event.before }}")
-            && diff_mutants.contains("PUSH_HEAD: ${{ github.sha }}")
+            && diff_mutants.contains(": \"${DIFF_BASE:?}\" \"${DIFF_HEAD:?}\"")
             && diff_mutants.contains(
-                "git diff --no-ext-diff --unified=0 \"$PUSH_BASE\" \"$PUSH_HEAD\" > \"$RUNNER_TEMP/pushed.diff\""
+                "git diff --no-ext-diff --unified=0 \"$DIFF_BASE...$DIFF_HEAD\" > \"$RUNNER_TEMP/changes.diff\""
             )
             && diff_mutants.contains(
-                "./scripts/mutants-run.sh --in-diff \"$RUNNER_TEMP/pushed.diff\""
+                "./scripts/mutants-run.sh --in-diff \"$RUNNER_TEMP/changes.diff\""
             ),
-        "routine CI must materialize and run the shared verdict over the complete pushed diff"
+        "routine CI must refuse an empty diff end, which git reads as HEAD and cargo-mutants passes as an empty diff, and run the shared verdict over the change's own diff"
     );
 
     let workflow = mutation_workflow();
@@ -77,7 +98,7 @@ fn mutation_ci_splits_main_diff_checks_from_exhaustive_sweeps() {
         "manual full sweeps must fail closed outside the default branch and use the triggering SHA"
     );
     assert!(
-        mutants.contains("runs-on: [self-hosted, linux, x64, homelab-ai-1, drep-mutants]"),
+        mutants.contains(MUTANTS_RUNNER),
         "the full sweep must require the dedicated homelab-ai-1 mutation label"
     );
     let timeout_lines = mutants
@@ -91,7 +112,7 @@ fn mutation_ci_splits_main_diff_checks_from_exhaustive_sweeps() {
         "the dedicated mutation sweep needs one exact measured timeout while still releasing a wedged runner"
     );
     assert!(
-        mutants.contains("tool: cargo-mutants@27.1.0"),
+        mutants.contains(CARGO_MUTANTS_TOOL),
         "the mutation gate must retain its verified cargo-mutants version"
     );
     assert!(

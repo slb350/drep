@@ -57,7 +57,21 @@ fn workflow_job<'a>(workflow: &'a str, name: &str) -> &'a str {
     &tail[..end]
 }
 
-const SAME_REPOSITORY_PR_GUARD: &str = "github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository";
+/// The job-level `if:` expression of a job body from `workflow_job`, which must declare exactly one.
+fn job_guard(job: &str) -> &str {
+    let guards = job
+        .lines()
+        .filter_map(|line| line.strip_prefix("    if: "))
+        .collect::<Vec<_>>();
+    match guards.as_slice() {
+        [guard] => guard,
+        _ => panic!("a job must declare exactly one job-level guard, found {guards:?}"),
+    }
+}
+
+/// The condition that keeps forked pull requests off every homelab runner.
+const SAME_REPOSITORY_PR: &str =
+    "github.event.pull_request.head.repo.full_name == github.repository";
 const RUST_TOOLCHAIN_ACTION: &str =
     "dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87";
 const SETUP_ZIG_ACTION: &str = "mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29";
@@ -104,7 +118,7 @@ fn github_ci_uses_only_guarded_homelab_runners() {
         workflow.contains("permissions:\n  contents: read"),
         "validation must explicitly request read-only repository contents"
     );
-    let expected_guard = format!("    if: {SAME_REPOSITORY_PR_GUARD}");
+    let expected_guard = format!("github.event_name == 'push' || {SAME_REPOSITORY_PR}");
     for (job_name, runner) in [
         (
             "linux",
@@ -117,8 +131,9 @@ fn github_ci_uses_only_guarded_homelab_runners() {
             job.contains(&format!("runs-on: {runner}")),
             "{job_name} must run on its repository-scoped homelab runner"
         );
-        assert!(
-            job.lines().any(|line| line == expected_guard),
+        assert_eq!(
+            job_guard(job),
+            expected_guard,
             "{job_name} must reject forked pull requests before using a homelab runner"
         );
         assert!(
