@@ -152,7 +152,10 @@ fn concurrent_stale_reclaimers_never_replace_each_others_reservations() {
         .as_secs();
     let original = Budget::at(dir.path(), "refs/heads/concurrent-stale", 1, now);
     std::fs::create_dir_all(original.directory()).expect("budget directory");
-    std::fs::write(original.directory().join("round-1.state"), "").expect("empty stale slot");
+    let slot = original.directory().join("round-1.state");
+    std::fs::write(&slot, "").expect("empty stale slot");
+    // Pinned rather than left to the write: a slot written in the second after `now` is exactly one lease old at the budget's clock, not stale, and no reclaimer wins.
+    set_mtime(&slot, UNIX_EPOCH + Duration::from_secs(now));
 
     let budget = Arc::new(Budget::at(
         dir.path(),
