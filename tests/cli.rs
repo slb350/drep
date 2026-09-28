@@ -197,14 +197,15 @@ fn gated_repository() -> (TempDir, String) {
     (dir, head)
 }
 
-/// Commit through the gate with `extra` arguments and environment, and check the gate refused, named the issue and left HEAD where it was.
+/// Commit from `from` through the gate with `extra` arguments and environment, and check the gate refused, named the issue and left HEAD where it was.
 fn assert_gate_refuses(
     dir: &TempDir,
+    from: &std::path::Path,
     head: &str,
     extra: &[&str],
     env: &[(&str, &std::path::Path)],
 ) {
-    let mut commit = common::without_outer_git("git", dir.path());
+    let mut commit = common::without_outer_git("git", from);
     commit
         .args(["commit", "--quiet", "-m", "broken"])
         .args(extra);
@@ -232,16 +233,32 @@ fn assert_gate_refuses(
     );
 }
 
+/// Builds the index `index` names from HEAD, as git sees it from `from`, and stages `path` into it.
+fn stage_into_index(from: &std::path::Path, index: &std::path::Path, path: &str) {
+    for args in [&["read-tree", "HEAD"][..], &["add", path][..]] {
+        let status = common::without_outer_git("git", from)
+            .env("GIT_INDEX_FILE", index)
+            .args(args)
+            .status()
+            .expect("git must run");
+        assert!(
+            status.success(),
+            "git {args:?} into {} failed",
+            index.display()
+        );
+    }
+}
+
 #[test]
 fn the_staged_gate_reviews_a_commit_of_every_tracked_change() {
     let (dir, head) = gated_repository();
-    assert_gate_refuses(&dir, &head, &["-a"], &[]);
+    assert_gate_refuses(&dir, dir.path(), &head, &["-a"], &[]);
 }
 
 #[test]
 fn the_staged_gate_reviews_a_commit_of_named_paths() {
     let (dir, head) = gated_repository();
-    assert_gate_refuses(&dir, &head, &["--", "README.md"], &[]);
+    assert_gate_refuses(&dir, dir.path(), &head, &["--", "README.md"], &[]);
 }
 
 #[test]
@@ -249,7 +266,7 @@ fn the_staged_gate_reviews_what_the_commit_records_not_the_working_tree() {
     let (dir, head) = gated_repository();
     common::git_must(dir.path(), &["add", "README.md"]);
     std::fs::write(dir.path().join("README.md"), CLEAN_README).expect("restore the README");
-    assert_gate_refuses(&dir, &head, &[], &[]);
+    assert_gate_refuses(&dir, dir.path(), &head, &[], &[]);
 }
 
 #[test]
@@ -257,19 +274,30 @@ fn the_staged_gate_reviews_a_chosen_index_not_the_working_tree() {
     let (dir, head) = gated_repository();
     let elsewhere = TempDir::new().expect("temp dir");
     let index = elsewhere.path().join("alternate.index");
-    for args in [&["read-tree", "HEAD"][..], &["add", "README.md"][..]] {
-        let status = common::without_outer_git("git", dir.path())
-            .env("GIT_INDEX_FILE", &index)
-            .args(args)
-            .status()
-            .expect("git must run");
-        assert!(
-            status.success(),
-            "git {args:?} into the alternate index failed"
-        );
-    }
+    stage_into_index(dir.path(), &index, "README.md");
     std::fs::write(dir.path().join("README.md"), CLEAN_README).expect("restore the README");
-    assert_gate_refuses(&dir, &head, &[], &[("GIT_INDEX_FILE", &index)]);
+    assert_gate_refuses(&dir, dir.path(), &head, &[], &[("GIT_INDEX_FILE", &index)]);
+}
+
+// git opens a relative GIT_INDEX_FILE from the top level of the working tree, where it also runs the hook, whichever directory the commit was made from; GIT_PREFIX names that directory and plays no part in finding the index.
+#[test]
+fn the_staged_gate_reviews_a_relative_chosen_index_committed_from_a_subdirectory() {
+    let (dir, head) = gated_repository();
+    let sub = dir.path().join("sub");
+    std::fs::create_dir(&sub).expect("subdirectory");
+    stage_into_index(&sub, std::path::Path::new("commit.index"), "../README.md");
+    assert!(
+        dir.path().join("commit.index").is_file(),
+        "git wrote the relative index at the top level"
+    );
+    std::fs::write(dir.path().join("README.md"), CLEAN_README).expect("restore the README");
+    assert_gate_refuses(
+        &dir,
+        &sub,
+        &head,
+        &[],
+        &[("GIT_INDEX_FILE", std::path::Path::new("commit.index"))],
+    );
 }
 
 #[test]
