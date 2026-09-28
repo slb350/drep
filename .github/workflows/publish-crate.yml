@@ -12,7 +12,8 @@ permissions:
 jobs:
   publish:
     name: Publish to crates.io
-    runs-on: ubuntu-latest
+    # The release boundary: the repository's own runner role on homelab-ai-1, as release.yml uses.
+    runs-on: "drep-linux"
     timeout-minutes: 30
     permissions:
       contents: read
@@ -20,7 +21,14 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          fetch-depth: 0
           persist-credentials: false
+      - name: Require the tagged commit to be on main
+        run: |
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "tag $GITHUB_REF_NAME points at $GITHUB_SHA, which main does not contain" >&2
+            exit 1
+          fi
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
         with:
           toolchain: stable
