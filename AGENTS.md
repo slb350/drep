@@ -1145,7 +1145,7 @@ Everything before the formula push survives such a failure - the binaries, the
 installer and the GitHub release are already published - so the recovery is to
 push `drep.rb` from the release assets to the tap by hand and fix the section.
 
-The version in `Cargo.toml` is the single source. The annotated tag `vX.Y.Z` on main drives both publication paths: `.github/workflows/release.yml` builds the four targets, creates the GitHub release and pushes the Homebrew formula, and `.github/workflows/publish-crate.yml` publishes the same tagged commit to crates.io through trusted publishing, since cargo-dist does not publish Rust crates. Run `cargo publish --dry-run --locked` before tagging. Jobsy's release flow (Scheduled maintenance, below) does both; by hand:
+The version in `Cargo.toml` is the single source. The annotated tag `vX.Y.Z` on main drives both publication paths: `.github/workflows/release.yml` builds the four targets, creates the GitHub release and pushes the Homebrew formula, and `.github/workflows/publish-crate.yml` publishes the same tagged commit to crates.io through trusted publishing, since cargo-dist does not publish Rust crates. `publish-crate.yml` runs in the `release` environment, which deploys only from main and `v*` tags, and the crate's crates.io trusted publisher requires it. Run `cargo publish --dry-run --locked` before tagging. Jobsy's release flow (Scheduled maintenance, below) does both; by hand:
 
 ```sh
 cargo publish --dry-run --locked
