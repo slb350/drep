@@ -120,15 +120,15 @@ pub struct ToolSpec {
     /// (ShellCheck), a package marker whose presence it checks (ruff's
     /// `__init__.py`), a schema a plugin reads (rubocop-rails' `db/schema.rb`).
     ///
-    /// In staged mode such a tool is refused while a file anywhere in the
-    /// repository of its language, or of no language drep registers, is
-    /// uncommitted, since it could read content the commit does not hold: an
-    /// import or a sourced helper can sit outside its workspace and need not
-    /// end in `.sh`. Only a tool that reads nothing but the files it
+    /// In staged mode such a tool is refused while any file in the
+    /// repository is uncommitted, since it could read content the commit does
+    /// not hold: an import or a sourced helper can sit outside its workspace,
+    /// under any name, and in another language drep registers. Only a tool that reads nothing but the files it
     /// is given, as `gofmt` formats each one alone, says false; saying true
     /// of one that does not only costs a refusal, while saying false of one
     /// that does lets an uncommitted file decide a commit's lint. A
-    /// whole-project tool reads its whole workspace whatever this says.
+    /// whole-project tool (`accepts_files: false`) reads beyond any files by
+    /// definition and must say true, which the registry's tests hold.
     pub reads_other_sources: bool,
 }
 

@@ -27,7 +27,7 @@ use crate::analysis::result::{FailureReason, union_failures};
 use crate::cli::check::input::Work;
 use crate::languages;
 use crate::languages::runner::{self};
-use crate::languages::spec::{LanguageSupport, ToolSpec};
+use crate::languages::spec::ToolSpec;
 
 const TOOL_PROCESS_CONCURRENCY: usize = 4;
 
@@ -93,15 +93,10 @@ pub async fn run(
     (findings, failures, compiled)
 }
 
-/// One deterministic-tool invocation: the spec, the language whose file set
-/// it runs over, and the files it should be invoked with. The tool name is on
-/// the spec, so it is not duplicated here. The language is what lets a
-/// per-file task recognize the sources beyond its batch it would still read:
-/// ShellCheck follows `source`, eslint follows imports, and both stay within
-/// their own language.
+/// One deterministic-tool invocation: the spec and the files it should be
+/// invoked with. The tool name is on the spec, so it is not duplicated here.
 struct PlannedTask {
     spec: &'static ToolSpec,
-    language: &'static LanguageSupport,
     workspace_root: PathBuf,
     files: Vec<PlannedFile>,
 }
@@ -177,11 +172,10 @@ async fn run_one(task: PlannedTask, root: &Path) -> (runner::ToolOutcome, Vec<Pa
     (outcome, originals)
 }
 
-/// One uncommitted path: as the user names it (which a failure reports), as
-/// a lexically normal absolute path (which the comparisons use), and the
-/// language it belongs to, detected once rather than once per task that
-/// asks. Named from a subdirectory, an entry climbs with `..`, which a plain
-/// join leaves in place.
+/// One uncommitted path, as the user names it (which a failure reports) and
+/// as a lexically normal absolute path (which the comparisons use). Named
+/// from a subdirectory, an entry climbs with `..`, which a plain join leaves
+/// in place.
 ///
 /// Comparisons are lexical on absolute paths, never canonicalized: a symlinked
 /// checkout is a spelling the rest of this module deliberately leaves alone,
@@ -190,7 +184,6 @@ async fn run_one(task: PlannedTask, root: &Path) -> (runner::ToolOutcome, Vec<Pa
 struct Differing {
     absolute: PathBuf,
     named: PathBuf,
-    language: Option<&'static LanguageSupport>,
 }
 
 /// The uncommitted paths in the order `uncommitted` holds them, which is
@@ -201,7 +194,6 @@ fn differing_paths(base: &Path, uncommitted: &BTreeSet<PathBuf>) -> Vec<Differin
         .map(|named| Differing {
             absolute: runner::lexically_normal(&base.join(named)),
             named: named.clone(),
-            language: languages::detect(named),
         })
         .collect()
 }
@@ -242,30 +234,23 @@ fn partition_uncommitted(
 
 /// The differing paths `task` would read, as the user names them, sorted.
 ///
-/// A per-file tool reads its batch's files and its config markers in any
+/// A tool that reads beyond the files it is given (`ToolSpec::reads_other_sources`:
+/// every whole-project tool, and ShellCheck following `source`, eslint and
+/// cppcheck following imports and includes) is refused by any uncommitted
+/// path: a path dependency, an import or a sourced helper can sit anywhere in
+/// the repository, under any name, and in another language drep registers (a
+/// C++ file includes a C header, TypeScript imports JavaScript). A tool that
+/// reads only its files reads its batch and its config markers in any
 /// directory from a batch file's own up to the root: the workspace is the
 /// nearest configured one on disk, and a nearer marker the working tree no
-/// longer holds can be the commit's configuration. A tool that reads beyond
-/// its files - one that follows sources (`ToolSpec::reads_other_sources`:
-/// ShellCheck follows `source`, eslint follows imports), or a whole-project
-/// tool (`accepts_files: false`), which also reads anything under its
-/// workspace - reads any file in the repository of its language or of none
-/// drep registers, since an import, a sourced helper or a path dependency can
-/// sit outside its workspace and need not end in a registered extension. Only
-/// a file of another registered language is none of its sources.
+/// longer holds can be the commit's configuration.
 fn task_uncommitted_reads(
     task: &PlannedTask,
     base: &Path,
     differing: &[Differing],
 ) -> Vec<PathBuf> {
-    let reads_language = |path: &Differing| {
-        path.language
-            .is_none_or(|language| std::ptr::eq(language, task.language))
-    };
-    if !task.spec.accepts_files {
-        return named_where(differing, |path| {
-            path.absolute.starts_with(&task.workspace_root) || reads_language(path)
-        });
+    if task.spec.reads_other_sources {
+        return named_where(differing, |_| true);
     }
     let files: Vec<PathBuf> = task
         .files
@@ -275,14 +260,12 @@ fn task_uncommitted_reads(
     let directories =
         marker_directories(task.files.iter().map(|file| file.absolute.as_path()), base);
     named_where(differing, |path| {
-        files.contains(&path.absolute)
-            || names_marker(task.spec, &directories, &path.absolute)
-            || (task.spec.reads_other_sources && reads_language(path))
+        files.contains(&path.absolute) || names_marker(task.spec, &directories, &path.absolute)
     })
 }
 
-/// Every directory a tool's config markers for `files` can sit in: each file's
-/// own directory and every one above it within `base`.
+/// Every directory a tool's config markers for `files` can be rooted in: each
+/// file's own directory and every one above it within `base`.
 fn marker_directories<'a>(files: impl Iterator<Item = &'a Path>, base: &Path) -> BTreeSet<PathBuf> {
     files
         .filter_map(Path::parent)
@@ -290,10 +273,13 @@ fn marker_directories<'a>(files: impl Iterator<Item = &'a Path>, base: &Path) ->
         .collect()
 }
 
-/// Whether `path` is one of `spec`'s config markers in one of `directories`.
+/// Whether `path` is one of `spec`'s config markers rooted in one of
+/// `directories`. A marker can name a nested path (Checkstyle's
+/// `config/checkstyle/checkstyle.xml`), so each directory is tried as its
+/// root rather than only the marker's own parent.
 fn names_marker(spec: &ToolSpec, directories: &BTreeSet<PathBuf>, path: &Path) -> bool {
-    path.parent().is_some_and(|directory| {
-        directories.contains(directory)
+    directories.iter().any(|directory| {
+        path.starts_with(directory)
             && spec
                 .config_files
                 .iter()
@@ -402,7 +388,6 @@ fn plan_tasks(work: &Work, root: &Path) -> (Vec<PlannedTask>, Vec<Unconfigured>)
                     .into_iter()
                     .map(|(workspace_root, files)| PlannedTask {
                         spec,
-                        language,
                         workspace_root,
                         files,
                     }),

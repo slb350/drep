@@ -88,34 +88,31 @@ async fn a_tool_whose_config_file_is_uncommitted_does_not_run() {
     }
 }
 
-/// A clean file's per-file tool runs exactly as before when the only
-/// uncommitted paths under its workspace belong to other registered
-/// languages: a shell script and a Go file are nothing ruff reads.
+/// A tool that follows sources is refused by an uncommitted file of another
+/// registered language too: cppcheck on a C++ file includes a header drep
+/// calls C, and TypeScript imports JavaScript.
 #[tokio::test]
-async fn a_per_file_tool_runs_when_the_uncommitted_path_is_another_language() {
+async fn a_source_following_tool_refuses_an_uncommitted_file_of_another_language() {
     let dir = tempfile::tempdir().expect("tempdir");
     let argv = ruff_fixture(dir.path());
     let a = dir.path().join("a.py");
     std::fs::write(&a, "a = 1\n").expect("a.py");
 
     let mut work = work_for(std::slice::from_ref(&a));
-    work.uncommitted = [PathBuf::from("main.go"), PathBuf::from("setup.sh")]
-        .into_iter()
-        .collect();
+    work.uncommitted = [PathBuf::from("setup.sh")].into_iter().collect();
     let (_findings, failures, _compiled) = deterministic::run(&work, dir.path()).await;
 
     assert!(
-        failures.is_empty(),
-        "a difference in another language must not refuse the tool, got {failures:?}"
+        !argv.exists(),
+        "ruff must not run beside any uncommitted file"
     );
-    assert_eq!(
-        std::fs::read_to_string(&argv)
-            .expect("recorded argv")
-            .lines()
-            .count(),
-        1,
-        "the tool must run exactly once"
-    );
+    match failures.get(&a) {
+        Some(FailureReason::UncommittedChanges { tool, paths }) => {
+            assert_eq!(tool, "ruff");
+            assert_eq!(paths, &[PathBuf::from("setup.sh")]);
+        }
+        other => panic!("expected UncommittedChanges for {a:?}, got {other:?}"),
+    }
 }
 
 /// A per-file tool that reads other sources of its language under its
@@ -281,7 +278,7 @@ async fn a_tool_reading_only_its_files_runs_beside_an_uncommitted_file_of_its_la
 
 /// A whole-project tool (`accepts_files: false`) is invoked bare from its
 /// workspace and reads all of it, so any differing path under the workspace
-/// refuses the run - and one of another language outside it does not.
+/// refuses the run.
 #[tokio::test]
 async fn a_whole_project_tool_refuses_any_uncommitted_path_under_its_workspace() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -318,29 +315,13 @@ async fn a_whole_project_tool_refuses_any_uncommitted_path_under_its_workspace()
         }
         other => panic!("expected UncommittedChanges for {file:?}, got {other:?}"),
     }
-
-    let mut work = work_for(std::slice::from_ref(&file));
-    work.uncommitted = [PathBuf::from("other.py")].into_iter().collect();
-    let (_findings, failures, _compiled) = deterministic::run(&work, root).await;
-    assert!(
-        failures.is_empty(),
-        "a difference outside the workspace must not refuse the tool, got {failures:?}"
-    );
-    assert_eq!(
-        std::fs::read_to_string(&counter)
-            .expect("counter")
-            .lines()
-            .count(),
-        1,
-        "the tool must run once its workspace no longer differs"
-    );
 }
 
 /// A whole-project tool reads beyond its workspace too, through a path
-/// dependency or a relative import, so an uncommitted file of its language
-/// outside the workspace refuses it.
+/// dependency or a relative import, so an uncommitted file outside the
+/// workspace refuses it.
 #[tokio::test]
-async fn a_whole_project_tool_refuses_its_language_outside_its_workspace() {
+async fn a_whole_project_tool_refuses_an_uncommitted_file_outside_its_workspace() {
     let dir = tempfile::tempdir().expect("tempdir");
     let root = dir.path();
     let bin = root.join("node_modules/.bin/tsc");
@@ -456,6 +437,32 @@ async fn a_config_marker_missing_from_the_working_tree_fails_the_file() {
         Some(FailureReason::UncommittedChanges { tool, paths }) => {
             assert_eq!(tool, "ruff");
             assert_eq!(paths, &[PathBuf::from("pyproject.toml")]);
+        }
+        other => panic!("expected UncommittedChanges for {a:?}, got {other:?}"),
+    }
+}
+
+/// A marker can name a nested path, as Checkstyle's
+/// `config/checkstyle/checkstyle.xml` does: one the working tree no longer
+/// holds fails the file it would have configured, as a marker at the root
+/// itself would.
+#[tokio::test]
+async fn a_nested_config_marker_missing_from_the_working_tree_fails_the_file() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path();
+    let a = root.join("A.java");
+    std::fs::write(&a, "class A {}\n").expect("A.java");
+
+    let mut work = work_for(std::slice::from_ref(&a));
+    work.uncommitted = [PathBuf::from("config/checkstyle/checkstyle.xml")]
+        .into_iter()
+        .collect();
+    let (_findings, failures, _compiled) = deterministic::run(&work, root).await;
+
+    match failures.get(&a) {
+        Some(FailureReason::UncommittedChanges { tool, paths }) => {
+            assert_eq!(tool, "checkstyle");
+            assert_eq!(paths, &[PathBuf::from("config/checkstyle/checkstyle.xml")]);
         }
         other => panic!("expected UncommittedChanges for {a:?}, got {other:?}"),
     }
