@@ -1,7 +1,7 @@
 name: Publish crate
 
 # A release is an annotated vX.Y.Z tag on main. Jobsy pushes it after its review job merges a release pull request; this workflow publishes that exact commit to crates.io through trusted publishing, so no registry token is stored anywhere.
-# The job runs in the release environment, which deploys only from main and v* tags, and crates.io's trusted publisher requires that environment, so a copy of this workflow on any other ref cannot publish.
+# The job runs in the release environment, which deploys only from v* tags, and only repository admins can create, move or delete a v* tag. crates.io's trusted publisher requires that environment, so a copy of this workflow anywhere else cannot publish.
 on:
   push:
     tags:
