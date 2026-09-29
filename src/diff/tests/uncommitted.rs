@@ -107,6 +107,56 @@ async fn lists_a_dirty_submodule_configuration_ignores() {
     assert_eq!(paths, vec![PathBuf::from("shared")]);
 }
 
+/// An edit to a file whose index entry tells git not to compare it
+/// (`assume-unchanged`, `skip-worktree`) is listed: `git diff` hides both. A
+/// flagged file left as the index holds it is not, nor is a `skip-worktree`
+/// file absent from the working tree, as a sparse checkout leaves it; an
+/// assumed-unchanged file deleted from the working tree, or with a directory
+/// in its place, is.
+#[tokio::test]
+async fn lists_edits_index_flags_hide() {
+    let repo = GitRepo::init().await;
+    let root = repo.root();
+    for name in [
+        "assumed.ts",
+        "skipped.ts",
+        "untouched.ts",
+        "sparse.ts",
+        "deleted.ts",
+        "replaced.ts",
+    ] {
+        fs::write(root.join(name), "export const a = 1;\n").expect("write");
+    }
+    repo.commit_all("track them").await;
+    for (flag, name) in [
+        ("--assume-unchanged", "assumed.ts"),
+        ("--skip-worktree", "skipped.ts"),
+        ("--assume-unchanged", "untouched.ts"),
+        ("--skip-worktree", "sparse.ts"),
+        ("--assume-unchanged", "deleted.ts"),
+        ("--assume-unchanged", "replaced.ts"),
+    ] {
+        run_in(root, &["update-index", flag, name]).await;
+    }
+    fs::write(root.join("assumed.ts"), "export const a = 2;\n").expect("edit assumed");
+    fs::write(root.join("skipped.ts"), "export const a = 3;\n").expect("edit skipped");
+    fs::remove_file(root.join("sparse.ts")).expect("leave sparse out");
+    fs::remove_file(root.join("deleted.ts")).expect("delete assumed");
+    fs::remove_file(root.join("replaced.ts")).expect("remove replaced");
+    fs::create_dir(root.join("replaced.ts")).expect("a directory in its place");
+
+    let paths = uncommitted_paths(root).await.expect("uncommitted_paths");
+    assert_eq!(
+        paths,
+        vec![
+            PathBuf::from("assumed.ts"),
+            PathBuf::from("deleted.ts"),
+            PathBuf::from("replaced.ts"),
+            PathBuf::from("skipped.ts"),
+        ]
+    );
+}
+
 /// The index read is the one the commit is made from, not `.git/index`.
 ///
 /// A hook's `GIT_INDEX_FILE` is process-global state a test cannot set from
