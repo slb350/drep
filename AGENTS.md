@@ -1145,7 +1145,7 @@ Everything before the formula push survives such a failure - the binaries, the
 installer and the GitHub release are already published - so the recovery is to
 push `drep.rb` from the release assets to the tap by hand and fix the section.
 
-The version in `Cargo.toml` is the single source. The annotated tag `vX.Y.Z` on main drives both publication paths: `.github/workflows/release.yml` builds the four targets, creates the GitHub release and pushes the Homebrew formula, and `.github/workflows/publish-crate.yml` publishes the same tagged commit to crates.io through trusted publishing, since cargo-dist does not publish Rust crates. Run `cargo publish --dry-run --locked` before tagging. Jobsy's release flow (Scheduled maintenance, below) does both; by hand:
+The version in `Cargo.toml` is the single source. The annotated tag `vX.Y.Z` on main drives both publication paths: `.github/workflows/release.yml` builds the four targets, creates the GitHub release and pushes the Homebrew formula, and `.github/workflows/publish-crate.yml` publishes the same tagged commit to crates.io through trusted publishing, since cargo-dist does not publish Rust crates. `publish-crate.yml` runs in the `release` environment, which deploys only from `v*` tags; a repository ruleset lets only admins create, move or delete a `v*` tag, and the crate's crates.io trusted publisher requires the environment. Run `cargo publish --dry-run --locked` before tagging. Jobsy's release flow (Scheduled maintenance, below) does both; by hand:
 
 ```sh
 cargo publish --dry-run --locked
@@ -1153,10 +1153,7 @@ git tag -a vX.Y.Z -m "vX.Y.Z"
 git push origin vX.Y.Z
 ```
 
-A stable tag needs both prerequisites in place: the `slb350/homebrew-tap`
-repository, and a `HOMEBREW_TAP_TOKEN` secret with `repo` scope on
-`slb350/drep`. A prerelease tag (`v2.0.0-alpha.1`) does not - dist gates the
-formula push on `!announcement_is_prerelease`, so that job skips.
+A stable tag needs both prerequisites in place: the `slb350/homebrew-tap` repository, and a `HOMEBREW_TAP_TOKEN` secret on `slb350/drep`. A prerelease tag (`v2.0.0-alpha.1`) does not - dist gates the formula push on `!announcement_is_prerelease`, so that job skips. The secret is a fine-grained token limited to `slb350/homebrew-tap` with Contents read and write and nothing else, because every workflow run in this repository, on any branch, can read a repository secret, and cargo-dist's Homebrew job cannot run in an environment that would hold it instead.
 
 ## Scheduled maintenance
 
