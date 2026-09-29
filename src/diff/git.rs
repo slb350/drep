@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
 
+use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 
 use super::GitError;
@@ -138,11 +139,38 @@ pub(super) async fn spawn_git_bytes<S: AsRef<OsStr>>(
     args: &[S],
     env: GitEnv<'_>,
 ) -> Result<Vec<u8>, GitError> {
+    spawn_git_io(root, args, env, None).await
+}
+
+/// [`spawn_git_bytes`] with `input` on git's standard input, for a query that
+/// takes its paths there (`--stdin`) rather than on an argument list whose
+/// length the system bounds.
+pub(super) async fn spawn_git_bytes_with_input<S: AsRef<OsStr>>(
+    root: &Path,
+    args: &[S],
+    env: GitEnv<'_>,
+    input: &[u8],
+) -> Result<Vec<u8>, GitError> {
+    spawn_git_io(root, args, env, Some(input)).await
+}
+
+/// Every spawn of git runs here: the environment scrubbed as `env` says,
+/// `input` (if any) on its standard input, and one timeout over the whole run.
+async fn spawn_git_io<S: AsRef<OsStr>>(
+    root: &Path,
+    args: &[S],
+    env: GitEnv<'_>,
+    input: Option<&[u8]>,
+) -> Result<Vec<u8>, GitError> {
     let mut command = Command::new("git");
     command
         .args(args)
         .current_dir(root)
-        .stdin(Stdio::null())
+        .stdin(if input.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
@@ -176,7 +204,21 @@ pub(super) async fn spawn_git_bytes<S: AsRef<OsStr>>(
         command.env("GIT_INDEX_FILE", index);
     }
 
-    let output = match tokio::time::timeout(GIT_TIMEOUT, command.output()).await {
+    let run = async {
+        let mut child = command.spawn()?;
+        let stdin = child.stdin.take();
+        // The input is written while the output is read, so neither pipe can
+        // fill and stall the other. A failed write means git stopped reading,
+        // and its exit status says why.
+        let feed = async {
+            if let (Some(mut stdin), Some(input)) = (stdin, input) {
+                let _ = stdin.write_all(input).await;
+            }
+        };
+        let ((), output) = tokio::join!(feed, child.wait_with_output());
+        output
+    };
+    let output = match tokio::time::timeout(GIT_TIMEOUT, run).await {
         Ok(result) => result,
         Err(_) => {
             return Err(GitError::Spawn(format!(

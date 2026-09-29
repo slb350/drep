@@ -2,7 +2,7 @@
 
 use std::path::{Path, PathBuf};
 
-use super::git::{GitEnv, spawn_git_bytes};
+use super::git::{GitEnv, spawn_git_bytes, spawn_git_bytes_with_input};
 use super::prefix::{from_prefix, paths_from};
 use super::quoting::path_from_bytes;
 use super::{GitError, StagedView};
@@ -48,7 +48,7 @@ pub async fn uncommitted_paths(root: &Path) -> Result<Uncommitted, GitError> {
     let view = StagedView::of(root).await?;
     // `-z`: a name is listed unquoted, with a leading space or a newline of
     // its own intact.
-    let (tracked, untracked, flagged) = tokio::join!(
+    let (tracked, untracked, listing) = tokio::join!(
         spawn_git_bytes(
             root,
             &[
@@ -82,14 +82,33 @@ pub async fn uncommitted_paths(root: &Path) -> Result<Uncommitted, GitError> {
             ],
             view.env(),
         ),
-        flagged_differences(root, &view)
+        spawn_git_bytes(
+            root,
+            &[
+                "--no-optional-locks",
+                "ls-files",
+                "-z",
+                "--stage",
+                "-v",
+                "--full-name",
+                "--",
+                ":/",
+            ],
+            view.env(),
+        )
     );
     let (tracked, untracked) = (tracked?, untracked?);
     let mut paths = paths_from(
         listed(&tracked).chain(listed(&untracked)).collect(),
         &view.prefix,
     );
+    let listing = listing?;
+    let (flagged, filtered) = tokio::join!(
+        flagged_differences(root, &view, &listing),
+        filtered_differences(root, &view, &listing)
+    );
     let flagged = flagged?;
+    paths.extend(filtered?);
     paths.extend(flagged.differing);
     paths.sort();
     paths.dedup();
@@ -108,27 +127,16 @@ pub async fn uncommitted_paths(root: &Path) -> Result<Uncommitted, GitError> {
 /// (`submodule_differs`), and anything else in its place differs. One missing from the working
 /// tree differs when assumed unchanged; a `skip-worktree` one missing is a
 /// sparse checkout's ordinary state and is index-only.
-async fn flagged_differences(root: &Path, view: &StagedView) -> Result<Uncommitted, GitError> {
+async fn flagged_differences(
+    root: &Path,
+    view: &StagedView,
+    listing: &[u8],
+) -> Result<Uncommitted, GitError> {
     const LINK: &[u8] = b"120000";
     const GITLINK: &[u8] = b"160000";
-    let entries = spawn_git_bytes(
-        root,
-        &[
-            "--no-optional-locks",
-            "ls-files",
-            "-z",
-            "--stage",
-            "-v",
-            "--full-name",
-            "--",
-            ":/",
-        ],
-        view.env(),
-    )
-    .await?;
     let mut flagged = Uncommitted::default();
     let mut files: Vec<(PathBuf, &[u8])> = Vec::new();
-    for entry in entries.split(|&byte| byte == 0).filter_map(flagged_entry) {
+    for entry in index_entries(listing).filter(IndexEntry::flagged) {
         let named = from_prefix(&path_from_bytes(entry.name.to_vec()), &view.prefix);
         if entry.mode == GITLINK {
             if submodule_differs(&root.join(&named), entry.blob).await? {
@@ -151,7 +159,7 @@ async fn flagged_differences(root: &Path, view: &StagedView) -> Result<Uncommitt
             // Anything else in a flagged file's place is not the blob the
             // index holds, and hash-object would refuse a directory.
             Ok(_) => flagged.differing.push(named),
-            Err(_) if entry.skip_worktree => flagged.index_only.push(named),
+            Err(_) if entry.skip_worktree() => flagged.index_only.push(named),
             Err(_) => flagged.differing.push(named),
         }
     }
@@ -206,27 +214,105 @@ async fn submodule_differs(path: &Path, commit: &[u8]) -> Result<bool, GitError>
     Ok(!changes.is_empty())
 }
 
-/// One flagged `ls-files --stage -v` record: a lowercase tag is assumed
-/// unchanged, and `S` or `s` is skip-worktree.
-struct FlaggedEntry<'a> {
-    skip_worktree: bool,
+/// Tracked regular files a clean filter (a `filter` attribute) rewrites whose
+/// working-tree bytes differ from what checking out their index blob writes.
+/// `git diff` compares the filtered content and reports none of them, while a
+/// linter reads the file as it is: a filter that strips a suppression comment
+/// commits a file the linter never saw. Git LFS is left alone: it round-trips
+/// losslessly and is content-addressed, so an LFS file `git diff` reports
+/// unchanged already holds its blob's content, and smudging every asset again
+/// would stream them all on each commit.
+async fn filtered_differences(
+    root: &Path,
+    view: &StagedView,
+    listing: &[u8],
+) -> Result<Vec<PathBuf>, GitError> {
+    let regular: Vec<IndexEntry<'_>> = index_entries(listing)
+        .filter(|entry| entry.mode == b"100644" || entry.mode == b"100755")
+        .collect();
+    if regular.is_empty() {
+        return Ok(Vec::new());
+    }
+    let named: Vec<PathBuf> = regular
+        .iter()
+        .map(|entry| from_prefix(&path_from_bytes(entry.name.to_vec()), &view.prefix))
+        .collect();
+    let mut input = Vec::new();
+    for path in &named {
+        input.extend_from_slice(path.as_os_str().as_encoded_bytes());
+        input.push(0);
+    }
+    let attributes = spawn_git_bytes_with_input(
+        root,
+        &["check-attr", "--stdin", "-z", "filter"],
+        view.env(),
+        &input,
+    )
+    .await?;
+    // `path NUL filter NUL value NUL`, one record per path in the order given.
+    let values = attributes.split(|&byte| byte == 0).skip(2).step_by(3);
+    let mut differing = Vec::new();
+    for ((entry, path), value) in regular.iter().zip(named).zip(values) {
+        if matches!(value, b"unspecified" | b"unset" | b"set" | b"lfs") {
+            continue;
+        }
+        // A file absent from the working tree is `git diff`'s to report.
+        let Ok(raw) = std::fs::read(root.join(&path)) else {
+            continue;
+        };
+        let mut at = std::ffi::OsString::from("--path=");
+        at.push(&path);
+        let oid = std::ffi::OsString::from(String::from_utf8_lossy(entry.blob).as_ref());
+        let checkout = spawn_git_bytes(
+            root,
+            &[
+                std::ffi::OsString::from("cat-file"),
+                "--filters".into(),
+                at,
+                oid,
+            ],
+            view.env(),
+        )
+        .await;
+        if checkout.is_ok_and(|content| content == raw) {
+            continue;
+        }
+        differing.push(path);
+    }
+    Ok(differing)
+}
+
+/// One `ls-files --stage -v` record.
+struct IndexEntry<'a> {
+    /// A lowercase tag is assumed unchanged, and `S` or `s` is skip-worktree.
+    tag: u8,
     mode: &'a [u8],
     blob: &'a [u8],
     name: &'a [u8],
 }
 
-/// The record's entry when it carries a flag.
-fn flagged_entry(record: &[u8]) -> Option<FlaggedEntry<'_>> {
-    let tab = record.iter().position(|&byte| byte == b'\t')?;
-    let mut fields = record[..tab].split(|&byte| byte == b' ');
-    let tag = *fields.next()?.first()?;
-    let mode = fields.next()?;
-    let blob = fields.next()?;
-    (tag.is_ascii_lowercase() || tag == b'S').then_some(FlaggedEntry {
-        skip_worktree: tag.eq_ignore_ascii_case(&b'S'),
-        mode,
-        blob,
-        name: &record[tab + 1..],
+impl IndexEntry<'_> {
+    /// Whether git is told not to compare this entry with the working tree.
+    fn flagged(&self) -> bool {
+        self.tag.is_ascii_lowercase() || self.tag == b'S'
+    }
+
+    fn skip_worktree(&self) -> bool {
+        self.tag.eq_ignore_ascii_case(&b'S')
+    }
+}
+
+/// The records of an `ls-files --stage -v -z` listing.
+fn index_entries(listing: &[u8]) -> impl Iterator<Item = IndexEntry<'_>> {
+    listing.split(|&byte| byte == 0).filter_map(|record| {
+        let tab = record.iter().position(|&byte| byte == b'\t')?;
+        let mut fields = record[..tab].split(|&byte| byte == b' ');
+        Some(IndexEntry {
+            tag: *fields.next()?.first()?,
+            mode: fields.next()?,
+            blob: fields.next()?,
+            name: &record[tab + 1..],
+        })
     })
 }
 

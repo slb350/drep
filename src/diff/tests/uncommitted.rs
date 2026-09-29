@@ -141,6 +141,7 @@ async fn lists_edits_index_flags_hide() {
     // A file whose content happens to spell a link target, so only its mode
     // tells it from the link that later takes its place.
     fs::write(root.join("retyped.ts"), "untouched.ts").expect("write retyped");
+    fs::write(root.join("private.ts"), "export const p = 1;\n").expect("write private");
     std::os::unix::fs::symlink("untouched.ts", root.join("kept.ts")).expect("kept link");
     std::os::unix::fs::symlink("untouched.ts", root.join("moved.ts")).expect("moved link");
     repo.commit_all("track them").await;
@@ -169,7 +170,23 @@ async fn lists_edits_index_flags_hide() {
     std::os::unix::fs::symlink("untouched.ts", root.join("retyped.ts"))
         .expect("a link in its place");
 
-    let listed = uncommitted_paths(root).await.expect("uncommitted_paths");
+    // An unflagged file is `git diff`'s to judge and is never hashed, so one
+    // that cannot be read does not fail the listing.
+    use std::os::unix::fs::PermissionsExt;
+    fs::set_permissions(root.join("private.ts"), fs::Permissions::from_mode(0o000))
+        .expect("make private unreadable");
+    let unreadable = fs::File::open(root.join("private.ts")).is_err();
+
+    let mut listed = uncommitted_paths(root).await.expect("uncommitted_paths");
+    fs::set_permissions(root.join("private.ts"), fs::Permissions::from_mode(0o644))
+        .expect("restore private");
+    let private = PathBuf::from("private.ts");
+    assert_eq!(
+        listed.differing.contains(&private),
+        unreadable,
+        "git diff reports it"
+    );
+    listed.differing.retain(|path| *path != private);
     assert_eq!(
         listed.differing,
         vec![
@@ -259,6 +276,42 @@ async fn compares_a_flagged_submodule_with_its_recorded_commit() {
         vec![PathBuf::from("shared")],
         "a file in its place"
     );
+}
+
+/// A clean filter rewrites what is committed and `git diff` compares the
+/// rewritten content, so a file whose raw bytes differ from what checking
+/// out its blob writes is listed though git reports it unchanged; one that
+/// matches is not, nor is a link or a file whose only conversion is no filter.
+#[tokio::test]
+async fn lists_an_edit_a_clean_filter_hides() {
+    let repo = GitRepo::init().await;
+    let root = repo.root();
+    run_in(
+        root,
+        &["config", "filter.strip.clean", "grep -v noqa || true"],
+    )
+    .await;
+    run_in(root, &["config", "filter.strip.smudge", "cat"]).await;
+    // A conversion that is no filter, and a link the filter's pattern names,
+    // are left to `git diff`, whatever checking them out would write.
+    fs::write(
+        root.join(".gitattributes"),
+        "*.py filter=strip\n*.txt eol=crlf\n",
+    )
+    .expect("write attributes");
+    for name in ["edited.py", "kept.py", "lf.txt"] {
+        fs::write(root.join(name), "a = 1\n").expect("write");
+    }
+    std::os::unix::fs::symlink("kept.py", root.join("link.py")).expect("link under the filter");
+    repo.commit_all("track them").await;
+    fs::write(root.join("edited.py"), "a = 1\nimport os  # noqa\n")
+        .expect("edit behind the filter");
+
+    let paths = uncommitted_paths(root)
+        .await
+        .expect("uncommitted_paths")
+        .differing;
+    assert_eq!(paths, vec![PathBuf::from("edited.py")]);
 }
 
 /// The index read is the one the commit is made from, not `.git/index`.

@@ -181,6 +181,28 @@ async fn a_marker_a_sparse_checkout_left_out_refuses_the_tool() {
     assert!(argv.exists(), "ruff runs beside it");
 }
 
+/// A staged file a sparse checkout left out of the working tree is one no
+/// tool can read, so the task that would lint it is refused rather than
+/// reporting it checked, whether the tool reads beyond its files or not.
+#[tokio::test]
+async fn a_batch_file_a_sparse_checkout_left_out_refuses_its_tool() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let file = hadolint_fixture(dir.path(), "Dockerfile");
+    assert_eq!(
+        index_only_refusal(dir.path(), &file, &["Dockerfile"]).await,
+        Some(vec![PathBuf::from("Dockerfile")])
+    );
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let _argv = ruff_fixture(dir.path());
+    let a = dir.path().join("a.py");
+    std::fs::write(&a, "a = 1\n").expect("a.py");
+    assert_eq!(
+        index_only_refusal(dir.path(), &a, &["a.py"]).await,
+        Some(vec![PathBuf::from("a.py")])
+    );
+}
+
 /// A nearer config marker the working tree no longer holds, in any directory
 /// between the file and the one that configured it on disk, is the commit's
 /// configuration, so an uncommitted one refuses the tool rather than letting

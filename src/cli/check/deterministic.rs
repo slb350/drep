@@ -277,16 +277,21 @@ fn task_uncommitted_reads(
 ) -> Vec<PathBuf> {
     let directories =
         marker_directories(task.files.iter().map(|file| file.absolute.as_path()), base);
-    // A marker a sparse checkout left out is still the commit's configuration.
+    let files: Vec<PathBuf> = task
+        .files
+        .iter()
+        .map(|file| runner::lexically_normal(&file.absolute))
+        .collect();
+    // A marker a sparse checkout left out is still the commit's configuration,
+    // and a batch file it left out is one the tool would never see, however it
+    // reads, while the task would report that file checked.
     let mut reads = differences.markers(task.spec, &directories);
+    reads.extend(named_where(&differences.index_only, |path| {
+        files.contains(&path.absolute)
+    }));
     if task.spec.reads_other_sources {
         reads.extend(named_where(&differences.differing, |_| true));
     } else {
-        let files: Vec<PathBuf> = task
-            .files
-            .iter()
-            .map(|file| runner::lexically_normal(&file.absolute))
-            .collect();
         let targets = canonical_reads(task, &directories);
         reads.extend(named_where(&differences.differing, |path| {
             files.contains(&path.absolute)
