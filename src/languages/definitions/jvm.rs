@@ -45,6 +45,7 @@ pub static CHECKSTYLE: ToolSpec = ToolSpec {
     establishes_compilation: false,
     serial_in_repository: false,
     accepts_files: true,
+    reads_other_sources: true,
 };
 
 /// Kotlin linter and formatter, run in lint-only mode.
@@ -67,6 +68,7 @@ pub static KTLINT: ToolSpec = ToolSpec {
     establishes_compilation: false,
     serial_in_repository: false,
     accepts_files: true,
+    reads_other_sources: false,
 };
 
 /// Java language entry.

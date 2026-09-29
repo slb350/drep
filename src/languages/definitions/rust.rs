@@ -21,6 +21,7 @@ pub static CLIPPY: ToolSpec = ToolSpec {
     // `cargo clippy` checks a crate, not files: a path argument is rejected
     // with "unexpected argument". See `ToolSpec::accepts_files`.
     accepts_files: false,
+    reads_other_sources: true,
 };
 
 /// Rust language entry.

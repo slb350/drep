@@ -234,6 +234,7 @@ fn failure_kind(reason: &FailureReason) -> &'static str {
         FailureReason::Truncated => "truncated",
         FailureReason::MalformedFinding(_) => "malformed_finding",
         FailureReason::ToolUnavailable { .. } => "tool_unavailable",
+        FailureReason::UncommittedChanges { .. } => "uncommitted_changes",
         FailureReason::SitePolicyRefused { .. } => "site_policy_refused",
         FailureReason::FileTooLarge { .. } => "file_too_large",
         FailureReason::PayloadTooLarge { .. } => "payload_too_large",

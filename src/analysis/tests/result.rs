@@ -147,3 +147,18 @@ fn an_empty_chain_failure_has_a_complete_fallback_message() {
         "no LLM provider analyzed this file"
     );
 }
+
+/// A refused linter names the tool, the differing paths as the user names
+/// them, and the recovery. The wording is the failure's whole value: a user
+/// meeting it has to learn what to stage from this one line.
+#[test]
+fn uncommitted_changes_names_the_tool_the_paths_and_the_recovery() {
+    let reason = FailureReason::UncommittedChanges {
+        tool: "ruff".to_owned(),
+        paths: vec![PathBuf::from("a.py"), PathBuf::from("pyproject.toml")],
+    };
+    assert_eq!(
+        reason.one_line(),
+        "ruff did not run: the working tree differs from the commit at a.py, pyproject.toml; stage those changes or run `git stash --keep-index --include-untracked` first"
+    );
+}

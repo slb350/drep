@@ -43,6 +43,7 @@ fn expected_kind(reason: &FailureReason) -> &'static str {
         FailureReason::Truncated => "truncated",
         FailureReason::MalformedFinding(_) => "malformed_finding",
         FailureReason::ToolUnavailable { .. } => "tool_unavailable",
+        FailureReason::UncommittedChanges { .. } => "uncommitted_changes",
         FailureReason::SitePolicyRefused { .. } => "site_policy_refused",
         FailureReason::FileTooLarge { .. } => "file_too_large",
         FailureReason::PayloadTooLarge { .. } => "payload_too_large",
@@ -83,6 +84,10 @@ fn each_failure_variant_renders_its_own_kind_tag() {
         FailureReason::ToolUnavailable {
             tool: "ruff".to_owned(),
             detail: "not found".to_owned(),
+        },
+        FailureReason::UncommittedChanges {
+            tool: "ruff".to_owned(),
+            paths: vec![PathBuf::from("a.py")],
         },
         FailureReason::SitePolicyRefused {
             marker: PathBuf::from("/repo/.drep-no-llm"),

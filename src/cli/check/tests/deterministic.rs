@@ -33,7 +33,7 @@ use crate::test_support::write_executable;
 /// Build a `Work` with one whole-file hunk per path. Empty
 /// `read_failures` because deterministic tests start from a clean
 /// input-resolution step.
-fn work_for(paths: &[PathBuf]) -> Work {
+pub(super) fn work_for(paths: &[PathBuf]) -> Work {
     Work {
         lint_only: Vec::new(),
         reviewed_directories: std::collections::BTreeSet::new(),
@@ -42,6 +42,8 @@ fn work_for(paths: &[PathBuf]) -> Work {
             .map(|p| vec![Hunk::whole_file(p.clone(), "x = 1\n")])
             .collect(),
         read_failures: BTreeMap::new(),
+        uncommitted: std::collections::BTreeSet::new(),
+        index_only: std::collections::BTreeSet::new(),
     }
 }
 

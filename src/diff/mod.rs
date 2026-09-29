@@ -29,11 +29,13 @@ mod git;
 pub mod hunks;
 mod prefix;
 mod quoting;
+mod uncommitted;
 
 use git::{GitEnv, committing_index, spawn_git, spawn_git_bytes};
 pub(crate) use git::{git_query, run_git, same_directory};
 use hunks::{Hunk, parse_unified_diff};
 use prefix::{from_prefix, hunks_from, paths_from, working_prefix};
+pub use uncommitted::{Uncommitted, uncommitted_paths};
 
 /// The well-known SHA for the empty git tree.
 ///

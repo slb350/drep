@@ -39,6 +39,7 @@ pub static ESLINT: ToolSpec = ToolSpec {
     establishes_compilation: false,
     serial_in_repository: false,
     accepts_files: true,
+    reads_other_sources: true,
 };
 
 /// TypeScript's compiler-as-checker. Streams diagnostics to stdout.
@@ -57,6 +58,7 @@ pub static TSC: ToolSpec = ToolSpec {
     // Passing source files makes tsc ignore tsconfig.json. Run the configured
     // project and filter its diagnostics back to the requested files.
     accepts_files: false,
+    reads_other_sources: true,
 };
 
 /// JavaScript language entry.

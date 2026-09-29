@@ -15,7 +15,7 @@ pub(crate) fn absolute(path: &Path) -> PathBuf {
 /// `start` and each directory above it, up to and including `root`, or none when `start` is not under `root`.
 ///
 /// Both are made absolute and lexically normal first. A staged or branch file above the directory drep runs in arrives as `../top.js`, and `root/sub/..` compares as under `root/sub` component by component, which found `sub/`'s configuration for a file outside it.
-pub(super) fn ancestors_within(start: &Path, root: &Path) -> Vec<PathBuf> {
+pub(crate) fn ancestors_within(start: &Path, root: &Path) -> Vec<PathBuf> {
     let root = lexically_normal(&absolute(root));
     let start = lexically_normal(&absolute(start));
     if !start.starts_with(&root) {
@@ -29,7 +29,11 @@ pub(super) fn ancestors_within(start: &Path, root: &Path) -> Vec<PathBuf> {
 }
 
 /// `path` with each `.` dropped and each `..` taking back the component before it, without consulting the filesystem.
-fn lexically_normal(path: &Path) -> PathBuf {
+///
+/// `pub(crate)` for the deterministic layer's uncommitted-path comparison: a
+/// staged file above the directory drep runs in arrives as `../top.py`, and a
+/// path comparison that does not take the `..` back misses it.
+pub(crate) fn lexically_normal(path: &Path) -> PathBuf {
     let mut normal = PathBuf::new();
     for component in path.components() {
         match component {

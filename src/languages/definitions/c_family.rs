@@ -47,6 +47,7 @@ pub static CPPCHECK: ToolSpec = ToolSpec {
     establishes_compilation: false,
     serial_in_repository: false,
     accepts_files: true,
+    reads_other_sources: true,
 };
 
 /// C# deterministic checker.
@@ -73,6 +74,7 @@ pub static DOTNET_FORMAT: ToolSpec = ToolSpec {
     establishes_compilation: false,
     serial_in_repository: false,
     accepts_files: false,
+    reads_other_sources: true,
 };
 
 /// C language entry.

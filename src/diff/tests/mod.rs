@@ -20,3 +20,4 @@ mod staged_contents;
 mod staged_files;
 mod subdirectory;
 pub(crate) mod support;
+mod uncommitted;

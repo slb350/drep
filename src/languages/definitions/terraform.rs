@@ -39,6 +39,7 @@ pub static TFLINT: ToolSpec = ToolSpec {
     // bare and narrow findings back to the requested files, exactly as tsc
     // and clippy do.
     accepts_files: false,
+    reads_other_sources: true,
 };
 
 /// Terraform language entry.

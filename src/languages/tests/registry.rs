@@ -95,6 +95,46 @@ fn only_clippy_is_serialized_within_a_repository() {
     }
 }
 
+/// A whole-project tool reads beyond any files by definition, so it must say
+/// so: staged mode reads `reads_other_sources` alone to decide whether any
+/// uncommitted file refuses a tool, and a whole-project tool saying false
+/// would lint a workspace the commit does not hold.
+#[test]
+fn whole_project_tools_read_other_sources() {
+    for lang in all_languages() {
+        for tool in lang.tools {
+            assert!(
+                tool.accepts_files || tool.reads_other_sources,
+                "{} ({}) takes no files and so reads its whole workspace; it must set reads_other_sources",
+                tool.name,
+                lang.name
+            );
+        }
+    }
+}
+
+/// Only a tool that reads nothing but the files it is given may leave
+/// `reads_other_sources` false, since staged mode then lets it run beside
+/// uncommitted files it does not lint: gofmt formats each file alone, hadolint
+/// reads its Dockerfile and YAML, ktlint its files and `.editorconfig`. Every
+/// other tool follows imports or sourced files, or runs code its
+/// configuration loads (a `.luacheckrc` is a Lua script that can `require`
+/// more; a PHPCS ruleset can name custom sniffs).
+#[test]
+fn only_isolated_tools_read_only_their_files() {
+    for lang in all_languages() {
+        for tool in lang.tools {
+            assert_eq!(
+                !tool.reads_other_sources,
+                matches!(tool.name, "gofmt" | "hadolint" | "ktlint"),
+                "{} ({}) has the wrong reads_other_sources",
+                tool.name,
+                lang.name
+            );
+        }
+    }
+}
+
 /// Only a tool whose zero exit proves its inputs compiled may set
 /// `establishes_compilation`, because that flag is what suppresses an LLM
 /// compile-failure claim. A linter wrongly marked true silently discards
@@ -433,6 +473,7 @@ fn lua_tool_is_configured_exactly_as_specified() {
             establishes_compilation: false,
             serial_in_repository: false,
             accepts_files: true,
+            reads_other_sources: true,
         }
     );
 }
