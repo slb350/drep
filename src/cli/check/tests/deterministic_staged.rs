@@ -171,24 +171,22 @@ async fn a_source_following_tool_refuses_an_uncommitted_file_of_no_registered_la
     }
 }
 
-/// A fake `luacheck` that records each invocation's argv, a tool that reads
-/// nothing but the files it is given (`reads_other_sources: false`), with a
-/// `.luacheckrc` opting the root into it. Returns the argv record.
-fn luacheck_fixture(root: &std::path::Path) -> PathBuf {
-    let bin = root.join("lua_modules/bin/luacheck");
-    std::fs::create_dir_all(bin.parent().unwrap()).expect("bin dir");
-    let argv = root.join("argv.txt");
-    write_executable(
-        &bin,
-        format!("#!/bin/sh\nprintf '%s\\n' \"$*\" >> {}\n", argv.display()),
-    );
-    std::fs::write(root.join(".luacheckrc"), "").expect("luacheckrc");
-    argv
+/// A project opted into hadolint, a tool that reads nothing but the files it
+/// is given (`reads_other_sources: false`), by a `.hadolint.yaml` at `root`.
+/// Returns a Dockerfile written at `name` beneath it.
+fn hadolint_fixture(root: &std::path::Path, name: &str) -> PathBuf {
+    std::fs::write(root.join(".hadolint.yaml"), "").expect("hadolint config");
+    let file = root.join(name);
+    std::fs::create_dir_all(file.parent().unwrap()).expect("dockerfile dir");
+    std::fs::write(&file, "FROM scratch\n").expect("dockerfile");
+    file
 }
 
-/// Runs luacheck over `file` with `uncommitted` differing and returns the
-/// paths its refusal names, `None` when it ran.
-async fn luacheck_refusal(
+/// Runs the deterministic layer over `file` with `uncommitted` differing and
+/// returns the paths hadolint's refusal names, `None` when it was not
+/// refused. hadolint need not be installed: a refused tool never starts, and
+/// one that is not refused fails as unavailable or runs.
+async fn hadolint_refusal(
     root: &std::path::Path,
     file: &std::path::Path,
     uncommitted: &[&str],
@@ -198,11 +196,10 @@ async fn luacheck_refusal(
     let (_findings, failures, _compiled) = deterministic::run(&work, root).await;
     match failures.get(file) {
         Some(FailureReason::UncommittedChanges { tool, paths }) => {
-            assert_eq!(tool, "luacheck");
+            assert_eq!(tool, "hadolint");
             Some(paths.clone())
         }
-        None => None,
-        other => panic!("expected UncommittedChanges or nothing for {file:?}, got {other:?}"),
+        _ => None,
     }
 }
 
@@ -211,98 +208,117 @@ async fn luacheck_refusal(
 #[tokio::test]
 async fn a_tool_reading_only_its_files_refuses_its_own_file_and_config() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let argv = luacheck_fixture(dir.path());
-    let a = dir.path().join("a.lua");
-    std::fs::write(&a, "local a = 1\n").expect("a.lua");
+    let file = hadolint_fixture(dir.path(), "Dockerfile");
 
     assert_eq!(
-        luacheck_refusal(dir.path(), &a, &["a.lua"]).await,
-        Some(vec![PathBuf::from("a.lua")])
+        hadolint_refusal(dir.path(), &file, &["Dockerfile"]).await,
+        Some(vec![PathBuf::from("Dockerfile")])
     );
     assert_eq!(
-        luacheck_refusal(dir.path(), &a, &[".luacheckrc"]).await,
-        Some(vec![PathBuf::from(".luacheckrc")])
+        hadolint_refusal(dir.path(), &file, &[".hadolint.yaml"]).await,
+        Some(vec![PathBuf::from(".hadolint.yaml")])
     );
-    assert!(!argv.exists(), "luacheck must not run on either");
 }
 
-/// A batch file or a marker that is a symlink reads its target, and git names
-/// the target when it differs, not the link: an uncommitted target refuses
-/// even a tool that reads only its files.
+/// A batch file that is a symlink, or a marker in a symlinked directory,
+/// reads its target, and git names the target when it differs, not the link:
+/// an uncommitted target refuses even a tool that reads only its files.
 #[tokio::test]
 async fn a_symlinked_file_or_marker_refuses_the_tool_when_its_target_differs() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let argv = luacheck_fixture(dir.path());
-    std::fs::write(dir.path().join("real.lua"), "local a = 1\n").expect("real.lua");
-    let link = dir.path().join("link.lua");
-    std::os::unix::fs::symlink("real.lua", &link).expect("link.lua");
-
+    let root = dir.path();
+    hadolint_fixture(root, "real/Dockerfile");
+    std::fs::create_dir_all(root.join("svc")).expect("svc dir");
+    let link = root.join("svc/Dockerfile");
+    std::os::unix::fs::symlink("../real/Dockerfile", &link).expect("dockerfile link");
     assert_eq!(
-        luacheck_refusal(dir.path(), &link, &["real.lua"]).await,
-        Some(vec![PathBuf::from("real.lua")])
+        hadolint_refusal(root, &link, &["real/Dockerfile"]).await,
+        Some(vec![PathBuf::from("real/Dockerfile")])
     );
 
-    std::fs::create_dir_all(dir.path().join("shared")).expect("shared dir");
-    std::fs::write(dir.path().join("shared/luacheckrc"), "").expect("shared config");
-    std::fs::remove_file(dir.path().join(".luacheckrc")).expect("remove the marker");
-    std::os::unix::fs::symlink("shared/luacheckrc", dir.path().join(".luacheckrc"))
-        .expect("marker link");
-    let a = dir.path().join("a.lua");
-    std::fs::write(&a, "local b = 1\n").expect("a.lua");
+    // A marker reached through a symlinked directory is its target too, which
+    // no link of the marker's own names.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path();
+    hadolint_fixture(root, "real/Dockerfile");
+    std::fs::write(root.join("real/.hadolint.yaml"), "").expect("nearer config");
+    std::os::unix::fs::symlink("real", root.join("svc")).expect("directory link");
+    let file = root.join("svc/Dockerfile");
     assert_eq!(
-        luacheck_refusal(dir.path(), &a, &["shared/luacheckrc"]).await,
-        Some(vec![PathBuf::from("shared/luacheckrc")])
+        hadolint_refusal(root, &file, &["real/.hadolint.yaml"]).await,
+        Some(vec![PathBuf::from("real/.hadolint.yaml")])
     );
-    assert!(!argv.exists(), "luacheck must not run through either link");
+}
+
+/// A marker that is a symlink whose target the working tree no longer holds
+/// is missing on disk, and git reports the deleted target, not the unchanged
+/// link: the target still names the commit's configuration, whether the link
+/// was the file's only marker or a nearer one than the marker that
+/// configured it.
+#[tokio::test]
+async fn a_marker_link_to_a_deleted_target_refuses_the_tool() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path();
+    let file = hadolint_fixture(root, "Dockerfile");
+    std::fs::remove_file(root.join(".hadolint.yaml")).expect("remove the marker");
+    std::os::unix::fs::symlink("shared/hadolint.yaml", root.join(".hadolint.yaml"))
+        .expect("dangling marker link");
+    assert_eq!(
+        hadolint_refusal(root, &file, &["shared/hadolint.yaml"]).await,
+        Some(vec![PathBuf::from("shared/hadolint.yaml")])
+    );
+
+    // A chain of links is followed to its end.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path();
+    let file = hadolint_fixture(root, "Dockerfile");
+    std::fs::remove_file(root.join(".hadolint.yaml")).expect("remove the marker");
+    std::os::unix::fs::symlink("chain.yaml", root.join(".hadolint.yaml")).expect("first link");
+    std::os::unix::fs::symlink("shared/hadolint.yaml", root.join("chain.yaml"))
+        .expect("second, dangling link");
+    assert_eq!(
+        hadolint_refusal(root, &file, &["shared/hadolint.yaml"]).await,
+        Some(vec![PathBuf::from("shared/hadolint.yaml")])
+    );
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path();
+    let file = hadolint_fixture(root, "pkg/Dockerfile");
+    std::os::unix::fs::symlink("../shared/pkg.yaml", root.join("pkg/.hadolint.yaml"))
+        .expect("dangling nearer marker link");
+    assert_eq!(
+        hadolint_refusal(root, &file, &["shared/pkg.yaml"]).await,
+        Some(vec![PathBuf::from("shared/pkg.yaml")])
+    );
 }
 
 /// A nearer config marker the working tree no longer holds, in any directory
 /// between the file and the one that configured it on disk, is the commit's
-/// configuration, so an
-/// uncommitted one refuses the tool rather than letting it lint by the farther.
+/// configuration, so an uncommitted one refuses the tool rather than letting
+/// it lint by the farther.
 #[tokio::test]
 async fn a_nearer_marker_missing_from_the_working_tree_refuses_the_tool() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let argv = luacheck_fixture(dir.path());
-    std::fs::create_dir_all(dir.path().join("pkg/sub")).expect("pkg dirs");
-    let a = dir.path().join("pkg/sub/a.lua");
-    std::fs::write(&a, "local a = 1\n").expect("a.lua");
+    let file = hadolint_fixture(dir.path(), "pkg/sub/Dockerfile");
 
     assert_eq!(
-        luacheck_refusal(dir.path(), &a, &["pkg/.luacheckrc"]).await,
-        Some(vec![PathBuf::from("pkg/.luacheckrc")])
-    );
-    assert!(
-        !argv.exists(),
-        "luacheck must not run by the farther marker"
+        hadolint_refusal(dir.path(), &file, &["pkg/.hadolint.yaml"]).await,
+        Some(vec![PathBuf::from("pkg/.hadolint.yaml")])
     );
 }
 
 /// A per-file tool that reads nothing but the files it is given
-/// (`reads_other_sources: false`, as luacheck is) runs beside an uncommitted
-/// file of its language: nothing it reads differs from the commit.
+/// (`reads_other_sources: false`, as hadolint is) is not refused by an
+/// uncommitted file of its language: nothing it reads differs from the
+/// commit.
 #[tokio::test]
 async fn a_tool_reading_only_its_files_runs_beside_an_uncommitted_file_of_its_language() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let argv = luacheck_fixture(dir.path());
-    let a = dir.path().join("a.lua");
-    std::fs::write(&a, "local a = 1\n").expect("a.lua");
+    let file = hadolint_fixture(dir.path(), "Dockerfile");
 
-    let mut work = work_for(std::slice::from_ref(&a));
-    work.uncommitted = [PathBuf::from("lib.lua")].into_iter().collect();
-    let (_findings, failures, _compiled) = deterministic::run(&work, dir.path()).await;
-
-    assert!(
-        failures.is_empty(),
-        "an uncommitted file luacheck never reads must not refuse it, got {failures:?}"
-    );
     assert_eq!(
-        std::fs::read_to_string(&argv)
-            .expect("recorded argv")
-            .lines()
-            .count(),
-        1,
-        "the tool must run exactly once"
+        hadolint_refusal(dir.path(), &file, &["other/Dockerfile"]).await,
+        None
     );
 }
 

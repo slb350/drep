@@ -115,10 +115,12 @@ pub struct ToolSpec {
     /// being checked. Without that filter a commit gate would block on
     /// pre-existing issues in code the commit never touched.
     pub accepts_files: bool,
-    /// Whether the tool, given files, may also read other files of its own
-    /// language: an import it follows (eslint, `go vet`), a sourced script
-    /// (ShellCheck), a package marker whose presence it checks (ruff's
-    /// `__init__.py`), a schema a plugin reads (rubocop-rails' `db/schema.rb`).
+    /// Whether the tool, given files, may also read other files: an import it
+    /// follows (eslint, `go vet`), a sourced script (ShellCheck), a package
+    /// marker whose presence it checks (ruff's `__init__.py`), a schema a
+    /// plugin reads (rubocop-rails' `db/schema.rb`), or code its configuration
+    /// loads (a `.luacheckrc` is a Lua script that can `require` more, and a
+    /// PHPCS ruleset can name custom sniffs).
     ///
     /// In staged mode such a tool is refused while any file in the
     /// repository is uncommitted, since it could read content the commit does

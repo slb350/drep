@@ -260,14 +260,46 @@ fn task_uncommitted_reads(
     let directories =
         marker_directories(task.files.iter().map(|file| file.absolute.as_path()), base);
     let targets = canonical_reads(task, &directories);
+    let links = marker_links(task.spec, &directories);
     named_where(differing, |path| {
         files.contains(&path.absolute)
             || names_marker(task.spec, &directories, &path.absolute)
+            || links.contains(&path.absolute)
             || path
                 .absolute
                 .canonicalize()
                 .is_ok_and(|target| targets.contains(&target))
     })
+}
+
+/// Where each of `spec`'s markers in `directories` that is a symlink points,
+/// followed lexically link by link, so a link whose target the working tree
+/// no longer holds still names it: git reports the deleted target, not the
+/// unchanged link, and the tool, finding no marker on disk, is not configured
+/// by it. A glob marker names no one file to follow.
+fn marker_links(spec: &ToolSpec, directories: &BTreeSet<PathBuf>) -> BTreeSet<PathBuf> {
+    let mut targets = BTreeSet::new();
+    for directory in directories {
+        for name in spec
+            .config_files
+            .iter()
+            .filter(|name| !name.starts_with("*."))
+        {
+            let mut link = directory.join(name);
+            // A target already found ends the chain, so a cycle cannot loop.
+            while let Ok(target) = std::fs::read_link(&link) {
+                let next = runner::lexically_normal(&match link.parent() {
+                    Some(parent) => parent.join(&target),
+                    None => target,
+                });
+                if !targets.insert(next.clone()) {
+                    break;
+                }
+                link = next;
+            }
+        }
+    }
+    targets
 }
 
 /// What a tool that reads only its files opens, followed through any symlink:
@@ -329,8 +361,9 @@ fn fail_uncommitted_markers(
     }
     for pair in unconfigured {
         let directories = marker_directories(std::iter::once(pair.absolute.as_path()), base);
+        let links = marker_links(pair.spec, &directories);
         let paths = named_where(differing, |path| {
-            names_marker(pair.spec, &directories, &path.absolute)
+            names_marker(pair.spec, &directories, &path.absolute) || links.contains(&path.absolute)
         });
         if !paths.is_empty() {
             let reason = FailureReason::UncommittedChanges {
