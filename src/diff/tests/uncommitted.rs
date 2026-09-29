@@ -1,9 +1,9 @@
-//! `unstaged_changes`: the tracked files a linter reading the working tree would see in a form the commit does not hold.
+//! `uncommitted_paths`: the files a linter reading the working tree would see in a form the commit does not hold.
 
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::diff::unstaged_changes;
+use crate::diff::uncommitted_paths;
 
 use super::support::{GitRepo, run_in};
 
@@ -22,10 +22,11 @@ async fn run_with_index(root: &Path, index: &Path, args: &[&str]) {
     );
 }
 
-/// Edited-after-staging and deleted-from-the-working-tree both differ from
-/// the index; a fully staged file and an untracked file do not.
+/// Edited-after-staging, deleted-from-the-working-tree and untracked files
+/// all differ from what the commit holds; a fully staged file and an ignored
+/// untracked file do not.
 #[tokio::test]
-async fn lists_tracked_working_tree_differences_only() {
+async fn lists_tracked_differences_and_untracked_files_but_not_ignored_ones() {
     let repo = GitRepo::init().await;
     let root = repo.root();
 
@@ -37,12 +38,20 @@ async fn lists_tracked_working_tree_differences_only() {
     fs::write(root.join("edited.py"), "a = 2\n").expect("edit after staging");
     fs::remove_file(root.join("deleted.py")).expect("delete from the working tree");
     fs::write(root.join("untracked.py"), "d = 1\n").expect("write untracked");
+    fs::write(root.join(".gitignore"), "ignored.py\n").expect("write gitignore");
+    fs::write(root.join("ignored.py"), "e = 1\n").expect("write ignored");
+    // The `.gitignore` is itself staged so only `ignored.py` tests exclusion.
+    run_in(root, &["add", ".gitignore"]).await;
 
-    let paths = unstaged_changes(root).await.expect("unstaged_changes");
+    let paths = uncommitted_paths(root).await.expect("uncommitted_paths");
     assert_eq!(
         paths,
-        vec![PathBuf::from("deleted.py"), PathBuf::from("edited.py")],
-        "edited and deleted tracked files, nothing else"
+        vec![
+            PathBuf::from("deleted.py"),
+            PathBuf::from("edited.py"),
+            PathBuf::from("untracked.py"),
+        ],
+        "edited, deleted and untracked-not-ignored files, nothing else"
     );
 }
 
@@ -69,7 +78,7 @@ async fn reads_the_committing_index_a_hook_names() {
     fs::write(root.join("staged.py"), "a = 1\n").expect("restore");
 
     assert!(
-        unstaged_changes(root)
+        uncommitted_paths(root)
             .await
             .expect("ordinary index")
             .is_empty(),
@@ -78,7 +87,7 @@ async fn reads_the_committing_index_a_hook_names() {
 
     let output = std::process::Command::new(std::env::current_exe().expect("this test binary"))
         .args([
-            "diff::tests::unstaged::under_a_hook_names_the_alternate_index",
+            "diff::tests::uncommitted::under_a_hook_names_the_alternate_index",
             "--exact",
             "--test-threads=1",
         ])
@@ -101,9 +110,9 @@ async fn under_a_hook_names_the_alternate_index() {
     let Some(root) = std::env::var_os("DREP_TEST_ALTERNATE_INDEX_ROOT") else {
         return;
     };
-    let paths = unstaged_changes(Path::new(&root))
+    let paths = uncommitted_paths(Path::new(&root))
         .await
-        .expect("unstaged_changes");
+        .expect("uncommitted_paths");
     assert_eq!(
         paths,
         vec![PathBuf::from("staged.py")],
@@ -121,8 +130,24 @@ async fn names_paths_from_the_subdirectory() {
     fs::write(root.join("top.py"), "a = 2\n").expect("edit after staging");
     fs::create_dir_all(root.join("sub")).expect("subdirectory");
 
-    let paths = unstaged_changes(&root.join("sub"))
+    let paths = uncommitted_paths(&root.join("sub"))
         .await
-        .expect("unstaged_changes");
+        .expect("uncommitted_paths");
     assert_eq!(paths, vec![PathBuf::from("../top.py")]);
+}
+
+/// Run from a subdirectory, an untracked file above it is named from there
+/// too: `ls-files` limits a bare listing to the working directory, so the
+/// query selects the whole tree and the prefix conversion does the rest.
+#[tokio::test]
+async fn names_an_untracked_file_above_the_subdirectory() {
+    let repo = GitRepo::init().await;
+    let root = repo.root();
+    fs::write(root.join("helper.py"), "a = 1\n").expect("write untracked");
+    fs::create_dir_all(root.join("sub")).expect("subdirectory");
+
+    let paths = uncommitted_paths(&root.join("sub"))
+        .await
+        .expect("uncommitted_paths");
+    assert_eq!(paths, vec![PathBuf::from("../helper.py")]);
 }

@@ -248,7 +248,7 @@ impl FailureReason {
                     .collect::<Vec<_>>()
                     .join(", ");
                 format!(
-                    "{tool} did not run: the working tree differs from the commit at {paths}; stage those changes or run `git stash --keep-index` first"
+                    "{tool} did not run: the working tree differs from the commit at {paths}; stage those changes or run `git stash --keep-index --include-untracked` first"
                 )
             }
             FailureReason::SitePolicyRefused { marker, policy } => format!(

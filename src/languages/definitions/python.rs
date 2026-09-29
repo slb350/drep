@@ -18,6 +18,7 @@ pub static RUFF: ToolSpec = ToolSpec {
     establishes_compilation: false,
     serial_in_repository: false,
     accepts_files: true,
+    reads_other_sources: true,
 };
 
 /// Python language entry.

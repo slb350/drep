@@ -8,6 +8,7 @@
 
 mod credentials;
 mod deterministic;
+mod deterministic_staged;
 mod failover_report;
 mod failures;
 mod gating;

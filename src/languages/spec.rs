@@ -115,6 +115,19 @@ pub struct ToolSpec {
     /// being checked. Without that filter a commit gate would block on
     /// pre-existing issues in code the commit never touched.
     pub accepts_files: bool,
+    /// Whether the tool, given files, may also read other files of its own
+    /// language: an import it follows (eslint, `go vet`), a sourced script
+    /// (ShellCheck), a package marker whose presence it checks (ruff's
+    /// `__init__.py`), a schema a plugin reads (rubocop-rails' `db/schema.rb`).
+    ///
+    /// In staged mode such a tool is refused while a file of its language
+    /// under its workspace is uncommitted, since it could read content the
+    /// commit does not hold. Only a tool that reads nothing but the files it
+    /// is given, as `gofmt` formats each one alone, says false; saying true
+    /// of one that does not only costs a refusal, while saying false of one
+    /// that does lets an uncommitted file decide a commit's lint. A
+    /// whole-project tool reads its whole workspace whatever this says.
+    pub reads_other_sources: bool,
 }
 
 impl Default for ToolSpec {
@@ -132,6 +145,7 @@ impl Default for ToolSpec {
             establishes_compilation: false,
             serial_in_repository: false,
             accepts_files: true,
+            reads_other_sources: true,
         }
     }
 }

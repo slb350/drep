@@ -17,7 +17,7 @@
 //! files would otherwise pay twenty `ruff` process starts. The batch lives
 //! in `run_tool`; this module just decides which files to pass.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 
 use futures::stream::{self, StreamExt};
@@ -27,7 +27,7 @@ use crate::analysis::result::{FailureReason, union_failures};
 use crate::cli::check::input::Work;
 use crate::languages;
 use crate::languages::runner::{self};
-use crate::languages::spec::ToolSpec;
+use crate::languages::spec::{LanguageSupport, ToolSpec};
 
 const TOOL_PROCESS_CONCURRENCY: usize = 4;
 
@@ -47,14 +47,16 @@ pub async fn run(
     BTreeSet<PathBuf>,
 ) {
     let mut failures: BTreeMap<PathBuf, FailureReason> = BTreeMap::new();
-    let tasks = plan_tasks(work, root);
+    let (tasks, unconfigured) = plan_tasks(work, root);
     // In staged mode a linter reads the working tree, so a task that would
     // read content the commit does not hold is refused rather than run: each
     // of its files fails with the differing paths named, and the commit is
     // not waved through on a lint of code it does not contain. With no
     // uncommitted paths - the ordinary case, and every other mode - this
     // changes nothing.
-    let (tasks, refused) = partition_uncommitted(tasks, root, &work.uncommitted);
+    let base = runner::absolute(root);
+    let differing = differing_paths(&base, &work.uncommitted);
+    let (tasks, refused) = partition_uncommitted(tasks, &differing);
     for (task, paths) in refused {
         let reason = FailureReason::UncommittedChanges {
             tool: task.spec.name.to_owned(),
@@ -66,6 +68,7 @@ pub async fn run(
             &mut failures,
         );
     }
+    fail_uncommitted_markers(unconfigured, &base, &differing, &mut failures);
     let (serial, parallel): (Vec<_>, Vec<_>) = tasks
         .into_iter()
         .partition(|task| task.spec.serial_in_repository);
@@ -90,13 +93,32 @@ pub async fn run(
     (findings, failures, compiled)
 }
 
-/// One deterministic-tool invocation: the spec and the files it should be
-/// invoked with. The tool name is on the spec, so it is not duplicated
-/// here.
+/// One deterministic-tool invocation: the spec, the language whose file set
+/// it runs over, and the files it should be invoked with. The tool name is on
+/// the spec, so it is not duplicated here. The language is what lets a
+/// per-file task recognize the sources beyond its batch it would still read:
+/// ShellCheck follows `source`, eslint follows imports, and both stay within
+/// their own language.
 struct PlannedTask {
     spec: &'static ToolSpec,
+    language: &'static LanguageSupport,
     workspace_root: PathBuf,
     files: Vec<PlannedFile>,
+}
+
+/// A (tool, file) pair whose tool found no configured workspace on disk.
+///
+/// Ordinarily dropped - an unconfigured project has not opted into the tool.
+/// Kept here because in staged mode the marker may be missing from the
+/// working tree while the committing index still holds it, and silently
+/// skipping the file then reports as clean a file the commit's own
+/// configuration would have linted.
+struct Unconfigured {
+    spec: &'static ToolSpec,
+    /// The file as the caller named it, which the failure reports.
+    file: PathBuf,
+    /// The same file absolute, which the marker comparison resolves against.
+    absolute: PathBuf,
 }
 
 struct PlannedFile {
@@ -113,6 +135,7 @@ async fn run_one(task: PlannedTask, root: &Path) -> (runner::ToolOutcome, Vec<Pa
         spec,
         workspace_root,
         files,
+        ..
     } = task;
     let mut arguments = Vec::with_capacity(files.len());
     let mut originals = Vec::with_capacity(files.len());
@@ -154,35 +177,59 @@ async fn run_one(task: PlannedTask, root: &Path) -> (runner::ToolOutcome, Vec<Pa
     (outcome, originals)
 }
 
-/// Split `tasks` into those that may run and those that would read
-/// working-tree content the commit does not hold, with the differing paths
-/// each refused task would read.
+/// One uncommitted path: as the user names it (which a failure reports), as
+/// a lexically normal absolute path (which the comparisons use), and the
+/// language it belongs to, detected once rather than once per task that
+/// asks. Named from a subdirectory, an entry climbs with `..`, which a plain
+/// join leaves in place.
 ///
 /// Comparisons are lexical on absolute paths, never canonicalized: a symlinked
 /// checkout is a spelling the rest of this module deliberately leaves alone,
 /// and `realpath` would answer about a different path than the one the tool
 /// opens.
+struct Differing {
+    absolute: PathBuf,
+    named: PathBuf,
+    language: Option<&'static LanguageSupport>,
+}
+
+/// The uncommitted paths in the order `uncommitted` holds them, which is
+/// sorted, so every subset taken from them is too.
+fn differing_paths(base: &Path, uncommitted: &BTreeSet<PathBuf>) -> Vec<Differing> {
+    uncommitted
+        .iter()
+        .map(|named| Differing {
+            absolute: runner::lexically_normal(&base.join(named)),
+            named: named.clone(),
+            language: languages::detect(named),
+        })
+        .collect()
+}
+
+/// The paths among `differing` that `reads` accepts, as the user names them,
+/// sorted.
+fn named_where(differing: &[Differing], reads: impl Fn(&Differing) -> bool) -> Vec<PathBuf> {
+    differing
+        .iter()
+        .filter(|path| reads(path))
+        .map(|path| path.named.clone())
+        .collect()
+}
+
+/// Split `tasks` into those that may run and those that would read
+/// working-tree content the commit does not hold, with the differing paths
+/// each refused task would read.
 fn partition_uncommitted(
     tasks: Vec<PlannedTask>,
-    root: &Path,
-    uncommitted: &BTreeSet<PathBuf>,
+    differing: &[Differing],
 ) -> (Vec<PlannedTask>, Vec<(PlannedTask, Vec<PathBuf>)>) {
-    if uncommitted.is_empty() {
+    if differing.is_empty() {
         return (tasks, Vec::new());
     }
-    // Each differing path twice: as the user names it (which the failure
-    // reports) and as a lexically normal absolute path (which the comparison
-    // uses). Named from a subdirectory, an entry climbs with `..`, which a
-    // plain join leaves in place.
-    let base = runner::absolute(root);
-    let differing: Vec<(PathBuf, PathBuf)> = uncommitted
-        .iter()
-        .map(|named| (runner::lexically_normal(&base.join(named)), named.clone()))
-        .collect();
     let mut runnable = Vec::new();
     let mut refused = Vec::new();
     for task in tasks {
-        let reads = task_uncommitted_reads(&task, &differing);
+        let reads = task_uncommitted_reads(&task, differing);
         if reads.is_empty() {
             runnable.push(task);
         } else {
@@ -195,42 +242,110 @@ fn partition_uncommitted(
 /// The differing paths `task` would read, as the user names them, sorted.
 ///
 /// A per-file tool reads its batch's files and the config files of its
-/// workspace; a whole-project tool (`accepts_files: false`, invoked bare from
-/// its workspace) reads anything under that workspace.
-fn task_uncommitted_reads(task: &PlannedTask, differing: &[(PathBuf, PathBuf)]) -> Vec<PathBuf> {
-    let workspace = runner::lexically_normal(&task.workspace_root);
+/// workspace, and one that reads other sources of its language
+/// (`ToolSpec::reads_other_sources`: ShellCheck follows `source`, eslint
+/// follows imports) reads any file of that language under the workspace too,
+/// so an uncommitted edit to a helper outside the batch still reaches it. A
+/// whole-project tool (`accepts_files: false`, invoked bare from its
+/// workspace) reads anything under that workspace. The workspace is one
+/// `configuration_root` found, already lexically normal.
+fn task_uncommitted_reads(task: &PlannedTask, differing: &[Differing]) -> Vec<PathBuf> {
+    let workspace = &task.workspace_root;
+    if !task.spec.accepts_files {
+        return named_where(differing, |path| path.absolute.starts_with(workspace));
+    }
     let files: Vec<PathBuf> = task
         .files
         .iter()
         .map(|file| runner::lexically_normal(&file.absolute))
         .collect();
-    let mut reads: Vec<PathBuf> = differing
-        .iter()
-        .filter(|(absolute, _)| {
-            if task.spec.accepts_files {
-                files.contains(absolute)
-                    || task
-                        .spec
-                        .config_files
-                        .iter()
-                        .any(|name| runner::marker_names_path(&workspace, name, absolute))
-            } else {
-                absolute.starts_with(&workspace)
-            }
-        })
-        .map(|(_, named)| named.clone())
-        .collect();
-    reads.sort();
-    reads
+    named_where(differing, |path| {
+        files.contains(&path.absolute)
+            || task
+                .spec
+                .config_files
+                .iter()
+                .any(|name| runner::marker_names_path(workspace, name, &path.absolute))
+            || (task.spec.reads_other_sources
+                && path.absolute.starts_with(workspace)
+                && path
+                    .language
+                    .is_some_and(|language| std::ptr::eq(language, task.language)))
+    })
 }
 
-/// Plan the per-language, per-tool batches.
+/// Fail the file of each pair whose tool found no configured workspace when
+/// one of the tool's config markers is uncommitted in the file's directory or
+/// a directory above it within the root.
+///
+/// Such a pair is ordinarily dropped: the project has not opted in. But in
+/// staged mode the marker can be absent from the working tree while the
+/// committing index still holds it, and then the tool that should have gated
+/// the file would be silently skipped. A tool's uncommitted markers are
+/// found once, not once per file.
+fn fail_uncommitted_markers(
+    unconfigured: Vec<Unconfigured>,
+    base: &Path,
+    differing: &[Differing],
+    failures: &mut BTreeMap<PathBuf, FailureReason>,
+) {
+    if differing.is_empty() {
+        return;
+    }
+    let mut markers: HashMap<*const ToolSpec, Vec<&Differing>> = HashMap::new();
+    for pair in unconfigured {
+        let spec = pair.spec;
+        let candidates = markers.entry(std::ptr::from_ref(spec)).or_insert_with(|| {
+            differing
+                .iter()
+                .filter(|path| {
+                    path.absolute.parent().is_some_and(|directory| {
+                        spec.config_files
+                            .iter()
+                            .any(|name| runner::marker_names_path(directory, name, &path.absolute))
+                    })
+                })
+                .collect()
+        });
+        if candidates.is_empty() {
+            continue;
+        }
+        let Some(start) = pair.absolute.parent() else {
+            continue;
+        };
+        let directories = runner::ancestors_within(start, base);
+        let paths: Vec<PathBuf> = candidates
+            .iter()
+            .filter(|path| {
+                path.absolute
+                    .parent()
+                    .is_some_and(|directory| directories.iter().any(|above| above == directory))
+            })
+            .map(|path| path.named.clone())
+            .collect();
+        if !paths.is_empty() {
+            let reason = FailureReason::UncommittedChanges {
+                tool: spec.name.to_owned(),
+                paths,
+            };
+            fail_all([pair.file], &reason, failures);
+        }
+    }
+}
+
+/// Plan the per-language, per-tool batches, alongside the (tool, file)
+/// pairs that found no configured workspace.
 ///
 /// "Per-language, per-tool" because the same tool can be configured for two
 /// languages, and the spec list lives on the language, not globally. A
 /// tool that appears in two languages' specs is run twice, once per
 /// language, so the bins are disjoint.
-fn plan_tasks(work: &Work, root: &Path) -> Vec<PlannedTask> {
+///
+/// An unconfigured pair is recorded rather than discarded: in staged mode
+/// the marker may be missing from the working tree while the committing
+/// index holds it, and the caller needs the pair to tell "the project never
+/// opted in" from "the commit opted in and the working tree disagrees".
+fn plan_tasks(work: &Work, root: &Path) -> (Vec<PlannedTask>, Vec<Unconfigured>) {
     // The bucketing itself is `languages::group_by_language`, so `doctor` and
     // `check` cannot disagree about which languages a repository contains -
     // doctor's whole job is to predict what check will do. What stays here is
@@ -249,48 +364,52 @@ fn plan_tasks(work: &Work, root: &Path) -> Vec<PlannedTask> {
         .collect();
 
     let repository_root = runner::absolute(root);
-    languages::group_by_language(&paths)
-        .into_iter()
-        .flat_map(|(language, files)| {
-            language.tools.iter().flat_map({
-                let repository_root = repository_root.clone();
-                move |spec| {
-                    let mut workspaces: BTreeMap<PathBuf, Vec<PlannedFile>> = BTreeMap::new();
-                    for file in &files {
-                        let Some(workspace_root) =
-                            runner::configuration_root(spec, &repository_root, file)
-                        else {
-                            continue;
-                        };
-                        let absolute = if file.is_absolute() {
-                            (*file).to_path_buf()
-                        } else {
-                            repository_root.join(file)
-                        };
-                        let Ok(relative) = absolute.strip_prefix(&workspace_root) else {
-                            continue;
-                        };
-                        let argument = relative.to_string_lossy().into_owned();
-                        workspaces
-                            .entry(workspace_root)
-                            .or_default()
-                            .push(PlannedFile {
-                                original: (*file).to_path_buf(),
-                                absolute,
-                                argument,
-                            });
-                    }
-                    workspaces
-                        .into_iter()
-                        .map(move |(workspace_root, files)| PlannedTask {
-                            spec,
-                            workspace_root,
-                            files,
-                        })
-                }
-            })
-        })
-        .collect()
+    let mut tasks = Vec::new();
+    let mut unconfigured = Vec::new();
+    for (language, files) in languages::group_by_language(&paths) {
+        for spec in language.tools {
+            let mut workspaces: BTreeMap<PathBuf, Vec<PlannedFile>> = BTreeMap::new();
+            for file in &files {
+                let absolute = if file.is_absolute() {
+                    (*file).to_path_buf()
+                } else {
+                    repository_root.join(file)
+                };
+                let Some(workspace_root) = runner::configuration_root(spec, &repository_root, file)
+                else {
+                    unconfigured.push(Unconfigured {
+                        spec,
+                        file: (*file).to_path_buf(),
+                        absolute,
+                    });
+                    continue;
+                };
+                let Ok(relative) = absolute.strip_prefix(&workspace_root) else {
+                    continue;
+                };
+                let argument = relative.to_string_lossy().into_owned();
+                workspaces
+                    .entry(workspace_root)
+                    .or_default()
+                    .push(PlannedFile {
+                        original: (*file).to_path_buf(),
+                        absolute,
+                        argument,
+                    });
+            }
+            tasks.extend(
+                workspaces
+                    .into_iter()
+                    .map(|(workspace_root, files)| PlannedTask {
+                        spec,
+                        language,
+                        workspace_root,
+                        files,
+                    }),
+            );
+        }
+    }
+    (tasks, unconfigured)
 }
 
 /// Apply one tool outcome: append findings, and — for `Unavailable` —

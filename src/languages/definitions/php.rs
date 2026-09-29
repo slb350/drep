@@ -23,6 +23,7 @@ pub static PHPCS: ToolSpec = ToolSpec {
     establishes_compilation: false,
     serial_in_repository: false,
     accepts_files: true,
+    reads_other_sources: false,
 };
 
 /// PHP language entry.

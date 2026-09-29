@@ -32,7 +32,7 @@ mod uri;
 pub use parsers::parse_output;
 
 pub(crate) use ancestry::absolute;
-use ancestry::ancestors_within;
+pub(crate) use ancestry::ancestors_within;
 pub(crate) use ancestry::lexically_normal;
 use markers::configured_marker;
 pub use markers::is_configured;

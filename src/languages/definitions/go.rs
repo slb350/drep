@@ -21,6 +21,7 @@ pub static GOFMT: ToolSpec = ToolSpec {
     establishes_compilation: false,
     serial_in_repository: false,
     accepts_files: true,
+    reads_other_sources: false,
 };
 
 /// `go vet`. Streams diagnostics to stderr.
@@ -40,6 +41,7 @@ pub static GO_VET: ToolSpec = ToolSpec {
     establishes_compilation: true,
     serial_in_repository: false,
     accepts_files: true,
+    reads_other_sources: true,
 };
 
 /// Go language entry.
