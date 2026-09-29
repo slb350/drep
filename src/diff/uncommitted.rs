@@ -2,7 +2,7 @@
 
 use std::path::{Path, PathBuf};
 
-use super::git::spawn_git_bytes;
+use super::git::{GitEnv, spawn_git_bytes};
 use super::prefix::{from_prefix, paths_from};
 use super::quoting::path_from_bytes;
 use super::{GitError, StagedView};
@@ -104,11 +104,13 @@ pub async fn uncommitted_paths(root: &Path) -> Result<Uncommitted, GitError> {
 /// from the committing index all the same. `git diff` trusts the flags and
 /// reports neither, so each flagged regular file on disk is hashed and
 /// compared with its index blob, a flagged link's text is compared with its
-/// blob, and anything else in its place differs. One missing from the working
+/// blob, a flagged submodule's checkout with its recorded commit
+/// (`submodule_differs`), and anything else in its place differs. One missing from the working
 /// tree differs when assumed unchanged; a `skip-worktree` one missing is a
 /// sparse checkout's ordinary state and is index-only.
 async fn flagged_differences(root: &Path, view: &StagedView) -> Result<Uncommitted, GitError> {
     const LINK: &[u8] = b"120000";
+    const GITLINK: &[u8] = b"160000";
     let entries = spawn_git_bytes(
         root,
         &[
@@ -128,6 +130,12 @@ async fn flagged_differences(root: &Path, view: &StagedView) -> Result<Uncommitt
     let mut files: Vec<(PathBuf, &[u8])> = Vec::new();
     for entry in entries.split(|&byte| byte == 0).filter_map(flagged_entry) {
         let named = from_prefix(&path_from_bytes(entry.name.to_vec()), &view.prefix);
+        if entry.mode == GITLINK {
+            if submodule_differs(&root.join(&named), entry.blob).await? {
+                flagged.differing.push(named);
+            }
+            continue;
+        }
         match std::fs::symlink_metadata(root.join(&named)) {
             Ok(meta) if meta.is_file() && entry.mode != LINK => files.push((named, entry.blob)),
             Ok(meta) if meta.file_type().is_symlink() && entry.mode == LINK => {
@@ -164,6 +172,38 @@ async fn flagged_differences(root: &Path, view: &StagedView) -> Result<Uncommitt
         }
     }
     Ok(flagged)
+}
+
+/// Whether a flagged submodule's checkout differs from the commit its index
+/// entry records: another commit checked out, changes of its own, or
+/// something other than a directory in its place. A submodule not checked
+/// out, or never initialized, holds nothing a tool can read.
+async fn submodule_differs(path: &Path, commit: &[u8]) -> Result<bool, GitError> {
+    match std::fs::symlink_metadata(path) {
+        Err(_) => return Ok(false),
+        Ok(meta) if !meta.is_dir() => return Ok(true),
+        Ok(_) => {}
+    }
+    if !path.join(".git").exists() {
+        return Ok(false);
+    }
+    let head = spawn_git_bytes(path, &["rev-parse", "HEAD"], GitEnv::Scrubbed).await?;
+    if head.trim_ascii() != commit {
+        return Ok(true);
+    }
+    let changes = spawn_git_bytes(
+        path,
+        &[
+            "--no-optional-locks",
+            "status",
+            "--porcelain",
+            "-z",
+            "--ignore-submodules=none",
+        ],
+        GitEnv::Scrubbed,
+    )
+    .await?;
+    Ok(!changes.is_empty())
 }
 
 /// One flagged `ls-files --stage -v` record: a lowercase tag is assumed

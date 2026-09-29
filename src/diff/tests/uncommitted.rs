@@ -185,6 +185,82 @@ async fn lists_edits_index_flags_hide() {
     assert_eq!(listed.index_only, vec![PathBuf::from("sparse.ts")]);
 }
 
+/// A flagged submodule is compared with the commit its index entry records:
+/// left clean, uninitialized or not checked out it is not listed; checked out
+/// at another commit, edited, or replaced by a file it is, though `git diff`
+/// trusts the flag and reports none of them.
+#[tokio::test]
+async fn compares_a_flagged_submodule_with_its_recorded_commit() {
+    let library = GitRepo::init().await;
+    fs::write(library.root().join("lib.rs"), "pub fn a() {}\n").expect("write lib");
+    library.commit_all("first").await;
+    fs::write(library.root().join("lib.rs"), "pub fn b() {}\n").expect("write lib again");
+    library.commit_all("second").await;
+    let repo = GitRepo::init().await;
+    let root = repo.root();
+    let source = library.root().to_str().expect("utf-8 path");
+    run_in(
+        root,
+        &[
+            "-c",
+            "protocol.file.allow=always",
+            "submodule",
+            "add",
+            source,
+            "shared",
+        ],
+    )
+    .await;
+    repo.commit_all("add the submodule").await;
+    run_in(root, &["update-index", "--assume-unchanged", "shared"]).await;
+    let listed = || async {
+        uncommitted_paths(root)
+            .await
+            .expect("uncommitted_paths")
+            .differing
+    };
+
+    assert_eq!(
+        listed().await,
+        Vec::<PathBuf>::new(),
+        "a clean flagged submodule"
+    );
+    run_in(&root.join("shared"), &["checkout", "-q", "HEAD~1"]).await;
+    assert_eq!(
+        listed().await,
+        vec![PathBuf::from("shared")],
+        "another commit"
+    );
+    run_in(&root.join("shared"), &["checkout", "-q", "-"]).await;
+    fs::write(root.join("shared/lib.rs"), "pub fn c() {}\n").expect("edit the submodule");
+    assert_eq!(
+        listed().await,
+        vec![PathBuf::from("shared")],
+        "changes of its own"
+    );
+
+    // One never initialized, or not checked out, holds nothing a tool reads;
+    // a file in its place is not the submodule.
+    run_in(root, &["submodule", "deinit", "-q", "-f", "shared"]).await;
+    assert_eq!(
+        listed().await,
+        Vec::<PathBuf>::new(),
+        "an uninitialized submodule"
+    );
+    fs::remove_dir(root.join("shared")).expect("remove the empty checkout");
+    assert_eq!(
+        listed().await,
+        Vec::<PathBuf>::new(),
+        "a submodule not checked out"
+    );
+    fs::write(root.join("shared"), "not a submodule\n").expect("a file in its place");
+    assert_eq!(
+        listed().await,
+        vec![PathBuf::from("shared")],
+        "a file in its place"
+    );
+}
+
 /// The index read is the one the commit is made from, not `.git/index`.
 ///
 /// A hook's `GIT_INDEX_FILE` is process-global state a test cannot set from
