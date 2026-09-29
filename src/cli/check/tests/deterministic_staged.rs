@@ -89,8 +89,8 @@ async fn a_tool_whose_config_file_is_uncommitted_does_not_run() {
 }
 
 /// A clean file's per-file tool runs exactly as before when the only
-/// uncommitted paths under its workspace belong to another language or to
-/// none: a shell script and a README are nothing ruff reads.
+/// uncommitted paths under its workspace belong to other registered
+/// languages: a shell script and a Go file are nothing ruff reads.
 #[tokio::test]
 async fn a_per_file_tool_runs_when_the_uncommitted_path_is_another_language() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -99,7 +99,7 @@ async fn a_per_file_tool_runs_when_the_uncommitted_path_is_another_language() {
     std::fs::write(&a, "a = 1\n").expect("a.py");
 
     let mut work = work_for(std::slice::from_ref(&a));
-    work.uncommitted = [PathBuf::from("README.md"), PathBuf::from("setup.sh")]
+    work.uncommitted = [PathBuf::from("main.go"), PathBuf::from("setup.sh")]
         .into_iter()
         .collect();
     let (_findings, failures, _compiled) = deterministic::run(&work, dir.path()).await;
@@ -142,6 +142,33 @@ async fn a_per_file_tool_refuses_a_same_language_uncommitted_path_under_its_work
         Some(FailureReason::UncommittedChanges { tool, paths }) => {
             assert_eq!(tool, "ruff");
             assert_eq!(paths, &[PathBuf::from("lib.py")]);
+        }
+        other => panic!("expected UncommittedChanges for {a:?}, got {other:?}"),
+    }
+}
+
+/// A tool that reads other sources is refused by an uncommitted file of no
+/// registered language too: ShellCheck follows `source` into a helper with
+/// any name, so an extensionless one can hold what the commit does not.
+#[tokio::test]
+async fn a_source_following_tool_refuses_an_uncommitted_file_of_no_registered_language() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let argv = ruff_fixture(dir.path());
+    let a = dir.path().join("a.py");
+    std::fs::write(&a, "a = 1\n").expect("a.py");
+
+    let mut work = work_for(std::slice::from_ref(&a));
+    work.uncommitted = [PathBuf::from("lib/common")].into_iter().collect();
+    let (_findings, failures, _compiled) = deterministic::run(&work, dir.path()).await;
+
+    assert!(
+        !argv.exists(),
+        "a tool that follows sources must not run beside an unclassified uncommitted file"
+    );
+    match failures.get(&a) {
+        Some(FailureReason::UncommittedChanges { tool, paths }) => {
+            assert_eq!(tool, "ruff");
+            assert_eq!(paths, &[PathBuf::from("lib/common")]);
         }
         other => panic!("expected UncommittedChanges for {a:?}, got {other:?}"),
     }

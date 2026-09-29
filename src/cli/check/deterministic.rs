@@ -242,10 +242,12 @@ fn partition_uncommitted(
 /// The differing paths `task` would read, as the user names them, sorted.
 ///
 /// A per-file tool reads its batch's files and the config files of its
-/// workspace, and one that reads other sources of its language
-/// (`ToolSpec::reads_other_sources`: ShellCheck follows `source`, eslint
-/// follows imports) reads any file of that language under the workspace too,
-/// so an uncommitted edit to a helper outside the batch still reaches it. A
+/// workspace, and one that reads other sources (`ToolSpec::reads_other_sources`:
+/// ShellCheck follows `source`, eslint follows imports) reads any file under
+/// the workspace of its language or of none drep registers, so an uncommitted
+/// edit to a helper outside the batch still reaches it: a sourced shell helper
+/// need not end in `.sh`. Only a file of another registered language is none
+/// of its sources. A
 /// whole-project tool (`accepts_files: false`, invoked bare from its
 /// workspace) reads anything under that workspace. The workspace is one
 /// `configuration_root` found, already lexically normal.
@@ -270,7 +272,7 @@ fn task_uncommitted_reads(task: &PlannedTask, differing: &[Differing]) -> Vec<Pa
                 && path.absolute.starts_with(workspace)
                 && path
                     .language
-                    .is_some_and(|language| std::ptr::eq(language, task.language)))
+                    .is_none_or(|language| std::ptr::eq(language, task.language)))
     })
 }
 
