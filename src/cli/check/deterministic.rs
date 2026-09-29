@@ -55,8 +55,11 @@ pub async fn run(
     // uncommitted paths - the ordinary case, and every other mode - this
     // changes nothing.
     let base = runner::absolute(root);
-    let differing = differing_paths(&base, &work.uncommitted);
-    let (tasks, refused) = partition_uncommitted(tasks, &base, &differing);
+    let differences = Differences {
+        differing: differing_paths(&base, &work.uncommitted),
+        index_only: differing_paths(&base, &work.index_only),
+    };
+    let (tasks, refused) = partition_uncommitted(tasks, &base, &differences);
     for (task, paths) in refused {
         let reason = FailureReason::UncommittedChanges {
             tool: task.spec.name.to_owned(),
@@ -68,7 +71,7 @@ pub async fn run(
             &mut failures,
         );
     }
-    fail_uncommitted_markers(unconfigured, &base, &differing, &mut failures);
+    fail_uncommitted_markers(unconfigured, &base, &differences, &mut failures);
     let (serial, parallel): (Vec<_>, Vec<_>) = tasks
         .into_iter()
         .partition(|task| task.spec.serial_in_repository);
@@ -186,6 +189,29 @@ struct Differing {
     named: PathBuf,
 }
 
+/// What the working tree does not hold of the commit: paths it holds
+/// otherwise (`differing`), and configuration a sparse checkout left out of
+/// it (`index_only`), which no tool can read but which still configures one.
+struct Differences {
+    differing: Vec<Differing>,
+    index_only: Vec<Differing>,
+}
+
+impl Differences {
+    /// The paths among both that name one of `spec`'s markers in
+    /// `directories`, directly or through a link, sorted.
+    fn markers(&self, spec: &ToolSpec, directories: &BTreeSet<PathBuf>) -> Vec<PathBuf> {
+        let links = marker_links(spec, directories);
+        let is_marker = |path: &Differing| {
+            names_marker(spec, directories, &path.absolute) || links.contains(&path.absolute)
+        };
+        let mut paths = named_where(&self.differing, is_marker);
+        paths.extend(named_where(&self.index_only, is_marker));
+        paths.sort();
+        paths
+    }
+}
+
 /// The uncommitted paths in the order `uncommitted` holds them, which is
 /// sorted, so every subset taken from them is too.
 fn differing_paths(base: &Path, uncommitted: &BTreeSet<PathBuf>) -> Vec<Differing> {
@@ -214,15 +240,15 @@ fn named_where(differing: &[Differing], reads: impl Fn(&Differing) -> bool) -> V
 fn partition_uncommitted(
     tasks: Vec<PlannedTask>,
     base: &Path,
-    differing: &[Differing],
+    differences: &Differences,
 ) -> (Vec<PlannedTask>, Vec<(PlannedTask, Vec<PathBuf>)>) {
-    if differing.is_empty() {
+    if differences.differing.is_empty() && differences.index_only.is_empty() {
         return (tasks, Vec::new());
     }
     let mut runnable = Vec::new();
     let mut refused = Vec::new();
     for task in tasks {
-        let reads = task_uncommitted_reads(&task, base, differing);
+        let reads = task_uncommitted_reads(&task, base, differences);
         if reads.is_empty() {
             runnable.push(task);
         } else {
@@ -247,29 +273,32 @@ fn partition_uncommitted(
 fn task_uncommitted_reads(
     task: &PlannedTask,
     base: &Path,
-    differing: &[Differing],
+    differences: &Differences,
 ) -> Vec<PathBuf> {
-    if task.spec.reads_other_sources {
-        return named_where(differing, |_| true);
-    }
-    let files: Vec<PathBuf> = task
-        .files
-        .iter()
-        .map(|file| runner::lexically_normal(&file.absolute))
-        .collect();
     let directories =
         marker_directories(task.files.iter().map(|file| file.absolute.as_path()), base);
-    let targets = canonical_reads(task, &directories);
-    let links = marker_links(task.spec, &directories);
-    named_where(differing, |path| {
-        files.contains(&path.absolute)
-            || names_marker(task.spec, &directories, &path.absolute)
-            || links.contains(&path.absolute)
-            || path
-                .absolute
-                .canonicalize()
-                .is_ok_and(|target| targets.contains(&target))
-    })
+    // A marker a sparse checkout left out is still the commit's configuration.
+    let mut reads = differences.markers(task.spec, &directories);
+    if task.spec.reads_other_sources {
+        reads.extend(named_where(&differences.differing, |_| true));
+    } else {
+        let files: Vec<PathBuf> = task
+            .files
+            .iter()
+            .map(|file| runner::lexically_normal(&file.absolute))
+            .collect();
+        let targets = canonical_reads(task, &directories);
+        reads.extend(named_where(&differences.differing, |path| {
+            files.contains(&path.absolute)
+                || path
+                    .absolute
+                    .canonicalize()
+                    .is_ok_and(|target| targets.contains(&target))
+        }));
+    }
+    reads.sort();
+    reads.dedup();
+    reads
 }
 
 /// Where each of `spec`'s markers in `directories` that is a symlink points,
@@ -353,18 +382,15 @@ fn names_marker(spec: &ToolSpec, directories: &BTreeSet<PathBuf>, path: &Path) -
 fn fail_uncommitted_markers(
     unconfigured: Vec<Unconfigured>,
     base: &Path,
-    differing: &[Differing],
+    differences: &Differences,
     failures: &mut BTreeMap<PathBuf, FailureReason>,
 ) {
-    if differing.is_empty() {
+    if differences.differing.is_empty() && differences.index_only.is_empty() {
         return;
     }
     for pair in unconfigured {
         let directories = marker_directories(std::iter::once(pair.absolute.as_path()), base);
-        let links = marker_links(pair.spec, &directories);
-        let paths = named_where(differing, |path| {
-            names_marker(pair.spec, &directories, &path.absolute) || links.contains(&path.absolute)
-        });
+        let paths = differences.markers(pair.spec, &directories);
         if !paths.is_empty() {
             let reason = FailureReason::UncommittedChanges {
                 tool: pair.spec.name.to_owned(),

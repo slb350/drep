@@ -3,7 +3,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::diff::uncommitted_paths;
+use crate::diff::{Uncommitted, uncommitted_paths};
 
 use super::support::{GitRepo, run_in};
 
@@ -43,7 +43,10 @@ async fn lists_tracked_differences_and_untracked_files_but_not_ignored_ones() {
     // The `.gitignore` is itself staged so only `ignored.py` tests exclusion.
     run_in(root, &["add", ".gitignore"]).await;
 
-    let paths = uncommitted_paths(root).await.expect("uncommitted_paths");
+    let paths = uncommitted_paths(root)
+        .await
+        .expect("uncommitted_paths")
+        .differing;
     assert_eq!(
         paths,
         vec![
@@ -66,7 +69,10 @@ async fn keeps_a_leading_space_in_a_name() {
     fs::write(root.join(" edited.lua"), "local a = 2\n").expect("edit after staging");
     fs::write(root.join(" untracked.lua"), "local b = 1\n").expect("write untracked");
 
-    let paths = uncommitted_paths(root).await.expect("uncommitted_paths");
+    let paths = uncommitted_paths(root)
+        .await
+        .expect("uncommitted_paths")
+        .differing;
     assert_eq!(
         paths,
         vec![
@@ -103,7 +109,10 @@ async fn lists_a_dirty_submodule_configuration_ignores() {
     fs::write(root.join("shared/lib.rs"), "pub fn b() {}\n").expect("edit the submodule");
     run_in(root, &["config", "diff.ignoreSubmodules", "all"]).await;
 
-    let paths = uncommitted_paths(root).await.expect("uncommitted_paths");
+    let paths = uncommitted_paths(root)
+        .await
+        .expect("uncommitted_paths")
+        .differing;
     assert_eq!(paths, vec![PathBuf::from("shared")]);
 }
 
@@ -112,7 +121,9 @@ async fn lists_a_dirty_submodule_configuration_ignores() {
 /// flagged file left as the index holds it is not, nor is a `skip-worktree`
 /// file absent from the working tree, as a sparse checkout leaves it; an
 /// assumed-unchanged file deleted from the working tree, or with a directory
-/// in its place, is.
+/// in its place, is. A flagged link is compared by its text, and a link in
+/// place of a flagged file differs whatever its text. The absent
+/// `skip-worktree` file is index-only.
 #[tokio::test]
 async fn lists_edits_index_flags_hide() {
     let repo = GitRepo::init().await;
@@ -127,8 +138,16 @@ async fn lists_edits_index_flags_hide() {
     ] {
         fs::write(root.join(name), "export const a = 1;\n").expect("write");
     }
+    // A file whose content happens to spell a link target, so only its mode
+    // tells it from the link that later takes its place.
+    fs::write(root.join("retyped.ts"), "untouched.ts").expect("write retyped");
+    std::os::unix::fs::symlink("untouched.ts", root.join("kept.ts")).expect("kept link");
+    std::os::unix::fs::symlink("untouched.ts", root.join("moved.ts")).expect("moved link");
     repo.commit_all("track them").await;
     for (flag, name) in [
+        ("--assume-unchanged", "kept.ts"),
+        ("--assume-unchanged", "retyped.ts"),
+        ("--skip-worktree", "moved.ts"),
         ("--assume-unchanged", "assumed.ts"),
         ("--skip-worktree", "skipped.ts"),
         ("--assume-unchanged", "untouched.ts"),
@@ -144,17 +163,26 @@ async fn lists_edits_index_flags_hide() {
     fs::remove_file(root.join("deleted.ts")).expect("delete assumed");
     fs::remove_file(root.join("replaced.ts")).expect("remove replaced");
     fs::create_dir(root.join("replaced.ts")).expect("a directory in its place");
+    fs::remove_file(root.join("moved.ts")).expect("remove moved link");
+    std::os::unix::fs::symlink("assumed.ts", root.join("moved.ts")).expect("retarget moved link");
+    fs::remove_file(root.join("retyped.ts")).expect("remove retyped");
+    std::os::unix::fs::symlink("untouched.ts", root.join("retyped.ts"))
+        .expect("a link in its place");
 
-    let paths = uncommitted_paths(root).await.expect("uncommitted_paths");
+    let listed = uncommitted_paths(root).await.expect("uncommitted_paths");
     assert_eq!(
-        paths,
+        listed.differing,
         vec![
             PathBuf::from("assumed.ts"),
             PathBuf::from("deleted.ts"),
+            PathBuf::from("moved.ts"),
             PathBuf::from("replaced.ts"),
+            PathBuf::from("retyped.ts"),
             PathBuf::from("skipped.ts"),
-        ]
+        ],
+        "a flagged link is compared by its text: kept.ts still names its blob"
     );
+    assert_eq!(listed.index_only, vec![PathBuf::from("sparse.ts")]);
 }
 
 /// The index read is the one the commit is made from, not `.git/index`.
@@ -180,10 +208,7 @@ async fn reads_the_committing_index_a_hook_names() {
     fs::write(root.join("staged.py"), "a = 1\n").expect("restore");
 
     assert!(
-        uncommitted_paths(root)
-            .await
-            .expect("ordinary index")
-            .is_empty(),
+        uncommitted_paths(root).await.expect("ordinary index") == Uncommitted::default(),
         "the working tree matches the ordinary index"
     );
 
@@ -214,7 +239,8 @@ async fn under_a_hook_names_the_alternate_index() {
     };
     let paths = uncommitted_paths(Path::new(&root))
         .await
-        .expect("uncommitted_paths");
+        .expect("uncommitted_paths")
+        .differing;
     assert_eq!(
         paths,
         vec![PathBuf::from("staged.py")],
@@ -234,7 +260,8 @@ async fn names_paths_from_the_subdirectory() {
 
     let paths = uncommitted_paths(&root.join("sub"))
         .await
-        .expect("uncommitted_paths");
+        .expect("uncommitted_paths")
+        .differing;
     assert_eq!(paths, vec![PathBuf::from("../top.py")]);
 }
 
@@ -250,6 +277,7 @@ async fn names_an_untracked_file_above_the_subdirectory() {
 
     let paths = uncommitted_paths(&root.join("sub"))
         .await
-        .expect("uncommitted_paths");
+        .expect("uncommitted_paths")
+        .differing;
     assert_eq!(paths, vec![PathBuf::from("../helper.py")]);
 }

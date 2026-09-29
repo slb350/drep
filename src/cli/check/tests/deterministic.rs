@@ -43,6 +43,7 @@ pub(super) fn work_for(paths: &[PathBuf]) -> Work {
             .collect(),
         read_failures: BTreeMap::new(),
         uncommitted: std::collections::BTreeSet::new(),
+        index_only: std::collections::BTreeSet::new(),
     }
 }
 

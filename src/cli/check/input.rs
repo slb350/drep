@@ -95,6 +95,10 @@ pub struct Work {
     /// instead of run. Empty in every other mode, where the working tree *is*
     /// what is being reviewed.
     pub(super) uncommitted: BTreeSet<PathBuf>,
+    /// Files marked `skip-worktree` and absent from the working tree, filled
+    /// only in staged mode. No tool can read one, but one can be the
+    /// configuration the commit gives a file.
+    pub(super) index_only: BTreeSet<PathBuf>,
 }
 
 /// The pushed range pre-commit derived from git's pre-push stdin.
@@ -169,7 +173,7 @@ pub async fn resolve(args: &CheckArgs, root: &Path, collect_policy_scope: bool) 
         return resolve_pre_commit(root, &PreCommitPush::from_env()?, collect_policy_scope).await;
     }
 
-    let (hunks, uncommitted) = if args.staged {
+    let (hunks, uncommitted, index_only) = if args.staged {
         // The semantic layer reads the staged hunks while the deterministic
         // layer reads the working tree, so staged mode also asks which files
         // differ between the two or exist untracked. An error from either
@@ -178,10 +182,16 @@ pub async fn resolve(args: &CheckArgs, root: &Path, collect_policy_scope: bool) 
             diff::staged_hunks(root, files::is_scan_target),
             diff::uncommitted_paths(root)
         );
-        (hunks?, uncommitted?.into_iter().collect())
+        let uncommitted = uncommitted?;
+        (
+            hunks?,
+            uncommitted.differing.into_iter().collect(),
+            uncommitted.index_only.into_iter().collect(),
+        )
     } else if let Some(git_ref) = args.diff.as_deref() {
         (
             diff::hunks_between(root, git_ref, args.tip.as_deref(), files::is_scan_target).await?,
+            BTreeSet::new(),
             BTreeSet::new(),
         )
     } else {
@@ -194,6 +204,7 @@ pub async fn resolve(args: &CheckArgs, root: &Path, collect_policy_scope: bool) 
         read_failures: BTreeMap::new(),
         lint_only: Vec::new(),
         uncommitted,
+        index_only,
     })
 }
 
@@ -227,6 +238,7 @@ pub(crate) async fn resolve_pre_commit(
         read_failures: BTreeMap::new(),
         lint_only: Vec::new(),
         uncommitted: BTreeSet::new(),
+        index_only: BTreeSet::new(),
     })
 }
 
@@ -328,6 +340,7 @@ fn resolve_paths(paths: &[PathBuf], root: &Path, collect_policy_scope: bool) -> 
         lint_only,
         reviewed_directories,
         uncommitted: BTreeSet::new(),
+        index_only: BTreeSet::new(),
     })
 }
 
