@@ -28,7 +28,7 @@ pub fn is_configured(spec: &ToolSpec, root: &Path) -> bool {
 ///
 /// The list reads as a preference rather than as whatever the filesystem
 /// returns, so the first declared match wins.
-pub(super) fn configured_marker(spec: &ToolSpec, root: &Path) -> Option<String> {
+pub(crate) fn configured_marker(spec: &ToolSpec, root: &Path) -> Option<String> {
     spec.config_files
         .iter()
         .find_map(|name| marker_match(root, name))

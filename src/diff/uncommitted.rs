@@ -42,6 +42,9 @@ pub async fn uncommitted_paths(root: &Path) -> Result<Vec<PathBuf>, GitError> {
                 "diff",
                 "--name-only",
                 "-z",
+                // A dirty submodule a staged file builds against differs even
+                // where configuration says to ignore submodules.
+                "--ignore-submodules=none",
                 "--no-relative",
                 "--no-ext-diff",
                 "--no-textconv",

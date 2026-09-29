@@ -76,6 +76,37 @@ async fn keeps_a_leading_space_in_a_name() {
     );
 }
 
+/// A dirty submodule is listed even where configuration tells `git diff` to
+/// ignore submodules: a staged file can build against its working-tree
+/// content.
+#[tokio::test]
+async fn lists_a_dirty_submodule_configuration_ignores() {
+    let library = GitRepo::init().await;
+    fs::write(library.root().join("lib.rs"), "pub fn a() {}\n").expect("write lib");
+    library.commit_all("library").await;
+    let repo = GitRepo::init().await;
+    let root = repo.root();
+    let source = library.root().to_str().expect("utf-8 path");
+    run_in(
+        root,
+        &[
+            "-c",
+            "protocol.file.allow=always",
+            "submodule",
+            "add",
+            source,
+            "shared",
+        ],
+    )
+    .await;
+    repo.commit_all("add the submodule").await;
+    fs::write(root.join("shared/lib.rs"), "pub fn b() {}\n").expect("edit the submodule");
+    run_in(root, &["config", "diff.ignoreSubmodules", "all"]).await;
+
+    let paths = uncommitted_paths(root).await.expect("uncommitted_paths");
+    assert_eq!(paths, vec![PathBuf::from("shared")]);
+}
+
 /// The index read is the one the commit is made from, not `.git/index`.
 ///
 /// A hook's `GIT_INDEX_FILE` is process-global state a test cannot set from

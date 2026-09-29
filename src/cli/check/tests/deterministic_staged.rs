@@ -226,6 +226,36 @@ async fn a_tool_reading_only_its_files_refuses_its_own_file_and_config() {
     assert!(!argv.exists(), "luacheck must not run on either");
 }
 
+/// A batch file or a marker that is a symlink reads its target, and git names
+/// the target when it differs, not the link: an uncommitted target refuses
+/// even a tool that reads only its files.
+#[tokio::test]
+async fn a_symlinked_file_or_marker_refuses_the_tool_when_its_target_differs() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let argv = luacheck_fixture(dir.path());
+    std::fs::write(dir.path().join("real.lua"), "local a = 1\n").expect("real.lua");
+    let link = dir.path().join("link.lua");
+    std::os::unix::fs::symlink("real.lua", &link).expect("link.lua");
+
+    assert_eq!(
+        luacheck_refusal(dir.path(), &link, &["real.lua"]).await,
+        Some(vec![PathBuf::from("real.lua")])
+    );
+
+    std::fs::create_dir_all(dir.path().join("shared")).expect("shared dir");
+    std::fs::write(dir.path().join("shared/luacheckrc"), "").expect("shared config");
+    std::fs::remove_file(dir.path().join(".luacheckrc")).expect("remove the marker");
+    std::os::unix::fs::symlink("shared/luacheckrc", dir.path().join(".luacheckrc"))
+        .expect("marker link");
+    let a = dir.path().join("a.lua");
+    std::fs::write(&a, "local b = 1\n").expect("a.lua");
+    assert_eq!(
+        luacheck_refusal(dir.path(), &a, &["shared/luacheckrc"]).await,
+        Some(vec![PathBuf::from("shared/luacheckrc")])
+    );
+    assert!(!argv.exists(), "luacheck must not run through either link");
+}
+
 /// A nearer config marker the working tree no longer holds, in any directory
 /// between the file and the one that configured it on disk, is the commit's
 /// configuration, so an

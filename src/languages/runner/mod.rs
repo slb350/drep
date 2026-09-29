@@ -34,7 +34,7 @@ pub use parsers::parse_output;
 pub(crate) use ancestry::absolute;
 pub(crate) use ancestry::ancestors_within;
 pub(crate) use ancestry::lexically_normal;
-use markers::configured_marker;
+pub(crate) use markers::configured_marker;
 pub use markers::is_configured;
 pub(crate) use markers::marker_names_path;
 pub(crate) use narrow::joined_reported;

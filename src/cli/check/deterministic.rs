@@ -240,8 +240,8 @@ fn partition_uncommitted(
 /// path: a path dependency, an import or a sourced helper can sit anywhere in
 /// the repository, under any name, and in another language drep registers (a
 /// C++ file includes a C header, TypeScript imports JavaScript). A tool that
-/// reads only its files reads its batch and its config markers in any
-/// directory from a batch file's own up to the root: the workspace is the
+/// reads only its files reads its batch and its config markers, through any
+/// symlink, in any directory from a batch file's own up to the root: the workspace is the
 /// nearest configured one on disk, and a nearer marker the working tree no
 /// longer holds can be the commit's configuration.
 fn task_uncommitted_reads(
@@ -259,9 +259,32 @@ fn task_uncommitted_reads(
         .collect();
     let directories =
         marker_directories(task.files.iter().map(|file| file.absolute.as_path()), base);
+    let targets = canonical_reads(task, &directories);
     named_where(differing, |path| {
-        files.contains(&path.absolute) || names_marker(task.spec, &directories, &path.absolute)
+        files.contains(&path.absolute)
+            || names_marker(task.spec, &directories, &path.absolute)
+            || path
+                .absolute
+                .canonicalize()
+                .is_ok_and(|target| targets.contains(&target))
     })
+}
+
+/// What a tool that reads only its files opens, followed through any symlink:
+/// its batch files and the config marker it finds in each of `directories`.
+/// Git names a symlink's target when the target differs, not the link a batch
+/// holds, so a differing path is matched by its canonical target too, as the
+/// findings a tool reports through a symlinked checkout are.
+fn canonical_reads(task: &PlannedTask, directories: &BTreeSet<PathBuf>) -> BTreeSet<PathBuf> {
+    let markers = directories.iter().filter_map(|directory| {
+        runner::configured_marker(task.spec, directory).map(|name| directory.join(name))
+    });
+    task.files
+        .iter()
+        .map(|file| file.absolute.clone())
+        .chain(markers)
+        .filter_map(|path| path.canonicalize().ok())
+        .collect()
 }
 
 /// Every directory a tool's config markers for `files` can be rooted in: each
