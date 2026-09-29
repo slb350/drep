@@ -78,7 +78,7 @@ fn octal_digit(byte: u8) -> Option<u8> {
 /// exactly. Elsewhere git stores UTF-8 names, so the lossy conversion never
 /// replaces anything. The `cfg` covers only the differing expression; see
 /// `languages::runner::is_executable` for why there is no gated twin.
-fn path_from_bytes(bytes: Vec<u8>) -> PathBuf {
+pub(super) fn path_from_bytes(bytes: Vec<u8>) -> PathBuf {
     #[cfg(unix)]
     let path = {
         use std::os::unix::ffi::OsStringExt;

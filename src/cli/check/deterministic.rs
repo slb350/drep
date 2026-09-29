@@ -17,7 +17,7 @@
 //! files would otherwise pay twenty `ruff` process starts. The batch lives
 //! in `run_tool`; this module just decides which files to pass.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use futures::stream::{self, StreamExt};
@@ -56,7 +56,7 @@ pub async fn run(
     // changes nothing.
     let base = runner::absolute(root);
     let differing = differing_paths(&base, &work.uncommitted);
-    let (tasks, refused) = partition_uncommitted(tasks, &differing);
+    let (tasks, refused) = partition_uncommitted(tasks, &base, &differing);
     for (task, paths) in refused {
         let reason = FailureReason::UncommittedChanges {
             tool: task.spec.name.to_owned(),
@@ -221,6 +221,7 @@ fn named_where(differing: &[Differing], reads: impl Fn(&Differing) -> bool) -> V
 /// each refused task would read.
 fn partition_uncommitted(
     tasks: Vec<PlannedTask>,
+    base: &Path,
     differing: &[Differing],
 ) -> (Vec<PlannedTask>, Vec<(PlannedTask, Vec<PathBuf>)>) {
     if differing.is_empty() {
@@ -229,7 +230,7 @@ fn partition_uncommitted(
     let mut runnable = Vec::new();
     let mut refused = Vec::new();
     for task in tasks {
-        let reads = task_uncommitted_reads(&task, differing);
+        let reads = task_uncommitted_reads(&task, base, differing);
         if reads.is_empty() {
             runnable.push(task);
         } else {
@@ -241,38 +242,62 @@ fn partition_uncommitted(
 
 /// The differing paths `task` would read, as the user names them, sorted.
 ///
-/// A per-file tool reads its batch's files and the config files of its
-/// workspace, and one that reads other sources (`ToolSpec::reads_other_sources`:
-/// ShellCheck follows `source`, eslint follows imports) reads any file under
-/// the workspace of its language or of none drep registers, so an uncommitted
-/// edit to a helper outside the batch still reaches it: a sourced shell helper
-/// need not end in `.sh`. Only a file of another registered language is none
-/// of its sources. A
-/// whole-project tool (`accepts_files: false`, invoked bare from its
-/// workspace) reads anything under that workspace. The workspace is one
-/// `configuration_root` found, already lexically normal.
-fn task_uncommitted_reads(task: &PlannedTask, differing: &[Differing]) -> Vec<PathBuf> {
-    let workspace = &task.workspace_root;
+/// A per-file tool reads its batch's files and its config markers in any
+/// directory from a batch file's own up to the root: the workspace is the
+/// nearest configured one on disk, and a nearer marker the working tree no
+/// longer holds can be the commit's configuration. A tool that reads beyond
+/// its files - one that follows sources (`ToolSpec::reads_other_sources`:
+/// ShellCheck follows `source`, eslint follows imports), or a whole-project
+/// tool (`accepts_files: false`), which also reads anything under its
+/// workspace - reads any file in the repository of its language or of none
+/// drep registers, since an import, a sourced helper or a path dependency can
+/// sit outside its workspace and need not end in a registered extension. Only
+/// a file of another registered language is none of its sources.
+fn task_uncommitted_reads(
+    task: &PlannedTask,
+    base: &Path,
+    differing: &[Differing],
+) -> Vec<PathBuf> {
+    let reads_language = |path: &Differing| {
+        path.language
+            .is_none_or(|language| std::ptr::eq(language, task.language))
+    };
     if !task.spec.accepts_files {
-        return named_where(differing, |path| path.absolute.starts_with(workspace));
+        return named_where(differing, |path| {
+            path.absolute.starts_with(&task.workspace_root) || reads_language(path)
+        });
     }
     let files: Vec<PathBuf> = task
         .files
         .iter()
         .map(|file| runner::lexically_normal(&file.absolute))
         .collect();
+    let directories =
+        marker_directories(task.files.iter().map(|file| file.absolute.as_path()), base);
     named_where(differing, |path| {
         files.contains(&path.absolute)
-            || task
-                .spec
+            || names_marker(task.spec, &directories, &path.absolute)
+            || (task.spec.reads_other_sources && reads_language(path))
+    })
+}
+
+/// Every directory a tool's config markers for `files` can sit in: each file's
+/// own directory and every one above it within `base`.
+fn marker_directories<'a>(files: impl Iterator<Item = &'a Path>, base: &Path) -> BTreeSet<PathBuf> {
+    files
+        .filter_map(Path::parent)
+        .flat_map(|directory| runner::ancestors_within(directory, base))
+        .collect()
+}
+
+/// Whether `path` is one of `spec`'s config markers in one of `directories`.
+fn names_marker(spec: &ToolSpec, directories: &BTreeSet<PathBuf>, path: &Path) -> bool {
+    path.parent().is_some_and(|directory| {
+        directories.contains(directory)
+            && spec
                 .config_files
                 .iter()
-                .any(|name| runner::marker_names_path(workspace, name, &path.absolute))
-            || (task.spec.reads_other_sources
-                && path.absolute.starts_with(workspace)
-                && path
-                    .language
-                    .is_none_or(|language| std::ptr::eq(language, task.language)))
+                .any(|name| runner::marker_names_path(directory, name, path))
     })
 }
 
@@ -283,8 +308,7 @@ fn task_uncommitted_reads(task: &PlannedTask, differing: &[Differing]) -> Vec<Pa
 /// Such a pair is ordinarily dropped: the project has not opted in. But in
 /// staged mode the marker can be absent from the working tree while the
 /// committing index still holds it, and then the tool that should have gated
-/// the file would be silently skipped. A tool's uncommitted markers are
-/// found once, not once per file.
+/// the file would be silently skipped.
 fn fail_uncommitted_markers(
     unconfigured: Vec<Unconfigured>,
     base: &Path,
@@ -294,40 +318,14 @@ fn fail_uncommitted_markers(
     if differing.is_empty() {
         return;
     }
-    let mut markers: HashMap<*const ToolSpec, Vec<&Differing>> = HashMap::new();
     for pair in unconfigured {
-        let spec = pair.spec;
-        let candidates = markers.entry(std::ptr::from_ref(spec)).or_insert_with(|| {
-            differing
-                .iter()
-                .filter(|path| {
-                    path.absolute.parent().is_some_and(|directory| {
-                        spec.config_files
-                            .iter()
-                            .any(|name| runner::marker_names_path(directory, name, &path.absolute))
-                    })
-                })
-                .collect()
+        let directories = marker_directories(std::iter::once(pair.absolute.as_path()), base);
+        let paths = named_where(differing, |path| {
+            names_marker(pair.spec, &directories, &path.absolute)
         });
-        if candidates.is_empty() {
-            continue;
-        }
-        let Some(start) = pair.absolute.parent() else {
-            continue;
-        };
-        let directories = runner::ancestors_within(start, base);
-        let paths: Vec<PathBuf> = candidates
-            .iter()
-            .filter(|path| {
-                path.absolute
-                    .parent()
-                    .is_some_and(|directory| directories.iter().any(|above| above == directory))
-            })
-            .map(|path| path.named.clone())
-            .collect();
         if !paths.is_empty() {
             let reason = FailureReason::UncommittedChanges {
-                tool: spec.name.to_owned(),
+                tool: pair.spec.name.to_owned(),
                 paths,
             };
             fail_all([pair.file], &reason, failures);

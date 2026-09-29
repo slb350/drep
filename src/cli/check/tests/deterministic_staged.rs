@@ -174,20 +174,90 @@ async fn a_source_following_tool_refuses_an_uncommitted_file_of_no_registered_la
     }
 }
 
+/// A fake `luacheck` that records each invocation's argv, a tool that reads
+/// nothing but the files it is given (`reads_other_sources: false`), with a
+/// `.luacheckrc` opting the root into it. Returns the argv record.
+fn luacheck_fixture(root: &std::path::Path) -> PathBuf {
+    let bin = root.join("lua_modules/bin/luacheck");
+    std::fs::create_dir_all(bin.parent().unwrap()).expect("bin dir");
+    let argv = root.join("argv.txt");
+    write_executable(
+        &bin,
+        format!("#!/bin/sh\nprintf '%s\\n' \"$*\" >> {}\n", argv.display()),
+    );
+    std::fs::write(root.join(".luacheckrc"), "").expect("luacheckrc");
+    argv
+}
+
+/// Runs luacheck over `file` with `uncommitted` differing and returns the
+/// paths its refusal names, `None` when it ran.
+async fn luacheck_refusal(
+    root: &std::path::Path,
+    file: &std::path::Path,
+    uncommitted: &[&str],
+) -> Option<Vec<PathBuf>> {
+    let mut work = work_for(&[file.to_path_buf()]);
+    work.uncommitted = uncommitted.iter().map(PathBuf::from).collect();
+    let (_findings, failures, _compiled) = deterministic::run(&work, root).await;
+    match failures.get(file) {
+        Some(FailureReason::UncommittedChanges { tool, paths }) => {
+            assert_eq!(tool, "luacheck");
+            Some(paths.clone())
+        }
+        None => None,
+        other => panic!("expected UncommittedChanges or nothing for {file:?}, got {other:?}"),
+    }
+}
+
+/// Even a tool that reads only its files reads those files and its
+/// configuration: an uncommitted one of either refuses it.
+#[tokio::test]
+async fn a_tool_reading_only_its_files_refuses_its_own_file_and_config() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let argv = luacheck_fixture(dir.path());
+    let a = dir.path().join("a.lua");
+    std::fs::write(&a, "local a = 1\n").expect("a.lua");
+
+    assert_eq!(
+        luacheck_refusal(dir.path(), &a, &["a.lua"]).await,
+        Some(vec![PathBuf::from("a.lua")])
+    );
+    assert_eq!(
+        luacheck_refusal(dir.path(), &a, &[".luacheckrc"]).await,
+        Some(vec![PathBuf::from(".luacheckrc")])
+    );
+    assert!(!argv.exists(), "luacheck must not run on either");
+}
+
+/// A nearer config marker the working tree no longer holds, in any directory
+/// between the file and the one that configured it on disk, is the commit's
+/// configuration, so an
+/// uncommitted one refuses the tool rather than letting it lint by the farther.
+#[tokio::test]
+async fn a_nearer_marker_missing_from_the_working_tree_refuses_the_tool() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let argv = luacheck_fixture(dir.path());
+    std::fs::create_dir_all(dir.path().join("pkg/sub")).expect("pkg dirs");
+    let a = dir.path().join("pkg/sub/a.lua");
+    std::fs::write(&a, "local a = 1\n").expect("a.lua");
+
+    assert_eq!(
+        luacheck_refusal(dir.path(), &a, &["pkg/.luacheckrc"]).await,
+        Some(vec![PathBuf::from("pkg/.luacheckrc")])
+    );
+    assert!(
+        !argv.exists(),
+        "luacheck must not run by the farther marker"
+    );
+}
+
 /// A per-file tool that reads nothing but the files it is given
 /// (`reads_other_sources: false`, as luacheck is) runs beside an uncommitted
 /// file of its language: nothing it reads differs from the commit.
 #[tokio::test]
 async fn a_tool_reading_only_its_files_runs_beside_an_uncommitted_file_of_its_language() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let bin = dir.path().join("lua_modules/bin/luacheck");
-    std::fs::create_dir_all(bin.parent().unwrap()).expect("bin dir");
-    let argv = dir.path().join("argv.txt");
-    write_executable(
-        &bin,
-        format!("#!/bin/sh\nprintf '%s\\n' \"$*\" >> {}\n", argv.display()),
-    );
-    std::fs::write(dir.path().join(".luacheckrc"), "").expect("luacheckrc");
+    let argv = luacheck_fixture(dir.path());
     let a = dir.path().join("a.lua");
     std::fs::write(&a, "local a = 1\n").expect("a.lua");
 
@@ -211,7 +281,7 @@ async fn a_tool_reading_only_its_files_runs_beside_an_uncommitted_file_of_its_la
 
 /// A whole-project tool (`accepts_files: false`) is invoked bare from its
 /// workspace and reads all of it, so any differing path under the workspace
-/// refuses the run - and one outside it does not.
+/// refuses the run - and one of another language outside it does not.
 #[tokio::test]
 async fn a_whole_project_tool_refuses_any_uncommitted_path_under_its_workspace() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -264,6 +334,45 @@ async fn a_whole_project_tool_refuses_any_uncommitted_path_under_its_workspace()
         1,
         "the tool must run once its workspace no longer differs"
     );
+}
+
+/// A whole-project tool reads beyond its workspace too, through a path
+/// dependency or a relative import, so an uncommitted file of its language
+/// outside the workspace refuses it.
+#[tokio::test]
+async fn a_whole_project_tool_refuses_its_language_outside_its_workspace() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path();
+    let bin = root.join("node_modules/.bin/tsc");
+    std::fs::create_dir_all(bin.parent().unwrap()).expect("bin dir");
+    let counter = root.join("counter.txt");
+    write_executable(
+        &bin,
+        format!(
+            "#!/bin/sh\nprintf '%s\\n' called >> {}\n",
+            counter.display()
+        ),
+    );
+    let member = root.join("apps/web");
+    std::fs::create_dir_all(member.join("src")).expect("member dirs");
+    std::fs::write(member.join("tsconfig.json"), "{}\n").expect("tsconfig");
+    let file = member.join("src/app.ts");
+    std::fs::write(&file, "const x: number = 1;\n").expect("source");
+
+    let mut work = work_for(std::slice::from_ref(&file));
+    work.uncommitted = [PathBuf::from("shared/lib.ts")].into_iter().collect();
+    let (_findings, failures, _compiled) = deterministic::run(&work, root).await;
+    assert!(
+        !counter.exists(),
+        "tsc must not run while a TypeScript file it can import differs"
+    );
+    match failures.get(&file) {
+        Some(FailureReason::UncommittedChanges { tool, paths }) => {
+            assert_eq!(tool, "tsc");
+            assert_eq!(paths, &[PathBuf::from("shared/lib.ts")]);
+        }
+        other => panic!("expected UncommittedChanges for {file:?}, got {other:?}"),
+    }
 }
 
 /// A whole-project tool reads every file under its workspace, tracked or

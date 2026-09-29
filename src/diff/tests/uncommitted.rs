@@ -55,6 +55,27 @@ async fn lists_tracked_differences_and_untracked_files_but_not_ignored_ones() {
     );
 }
 
+/// A name is listed byte for byte: one that begins with a space keeps it,
+/// tracked or untracked, where a trimmed listing named another file.
+#[tokio::test]
+async fn keeps_a_leading_space_in_a_name() {
+    let repo = GitRepo::init().await;
+    let root = repo.root();
+    fs::write(root.join(" edited.lua"), "local a = 1\n").expect("write edited");
+    run_in(root, &["add", " edited.lua"]).await;
+    fs::write(root.join(" edited.lua"), "local a = 2\n").expect("edit after staging");
+    fs::write(root.join(" untracked.lua"), "local b = 1\n").expect("write untracked");
+
+    let paths = uncommitted_paths(root).await.expect("uncommitted_paths");
+    assert_eq!(
+        paths,
+        vec![
+            PathBuf::from(" edited.lua"),
+            PathBuf::from(" untracked.lua")
+        ]
+    );
+}
+
 /// The index read is the one the commit is made from, not `.git/index`.
 ///
 /// A hook's `GIT_INDEX_FILE` is process-global state a test cannot set from
