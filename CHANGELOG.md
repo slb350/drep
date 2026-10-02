@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.1.2] - 2026-09-28
+
 ### Fixed
 
 - The crates.io publish job runs in a `release` environment that deploys only from `v*` tags, which only repository admins can create, as crates.io recommends for trusted publishing, so a copy of the workflow anywhere else cannot obtain a publishing token.
@@ -1061,7 +1063,8 @@ LLM for review, and gates commits and pushes on the result. That is all it does.
 - Python, JavaScript, TypeScript, Go and Rust are all first-class. Adding a
   language is an entry in one table.
 
-[Unreleased]: https://github.com/slb350/drep/compare/v3.1.1...HEAD
+[Unreleased]: https://github.com/slb350/drep/compare/v3.1.2...HEAD
+[3.1.2]: https://github.com/slb350/drep/compare/v3.1.1...v3.1.2
 [3.1.1]: https://github.com/slb350/drep/compare/v3.1.0...v3.1.1
 [3.1.0]: https://github.com/slb350/drep/compare/v3.0.0...v3.1.0
 [3.0.0]: https://github.com/slb350/drep/compare/v2.9.0...v3.0.0
