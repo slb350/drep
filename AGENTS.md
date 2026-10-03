@@ -990,7 +990,19 @@ comes back.
   spaces" stops a ```` ```make ```` sample being a
   Makefile. `trailing_whitespace`, no, so it fires everywhere. The fence table
   in `src/docs/tests/fence.rs` asserts its own completeness, so a new check
-  cannot skip the decision.
+  cannot skip the decision. What *is* a fence is CommonMark 0.31.2's fenced
+  code block (section 4.5), not "a line that starts with three backticks":
+  three or more backticks or tildes open one (a backtick opener's info string
+  holds no backtick), only the same character, at least as many of it and
+  followed by nothing, closes it, and a block left open runs to the end of the
+  file, which is what `unclosed_code_fence` reports, at the opener. A toggle on
+  every backtick line read a `~~~` sample holding a backtick line, a
+  four-backtick fence documenting a three-backtick one and a block holding an
+  info-string line as unclosed, and that check is the one finding the
+  installed hook blocks on; a `~~~` sample was never a fence at all. Unbounded
+  indentation is the one deliberate relaxation, for a fence inside a list item.
+  The link checks follow the same grammar: an `<https://...>` autolink is a
+  link and is never a `bare_url`.
 - **Doc-check severity is "does it change how the document renders".** An
   unclosed fence turns every line below it into code, so it alone is `error`;
   a heading or link that renders wrong is `warning`; whitespace and line
