@@ -292,6 +292,15 @@ shorthand for `--fail-on info`, which blocks on everything; over a real
 repository that is dominated by line length, and a hook that blocks a commit
 over a long line is a hook that gets deleted.
 
+Fences are read as CommonMark reads them: three or more backticks or tildes
+open a block, only the same character, at least as many of it and with nothing
+after it, closes the block, and a block with no closing fence runs to the end
+of the file. So a four-backtick fence can hold a three-backtick sample, a `~~~`
+sample can hold backticks, and a line with an info string inside a block stays
+part of it. A fence nested in a list item may be indented by any amount. A URL
+inside an `<https://...>` autolink is already a link and is not reported as a
+bare URL.
+
 ## Configuration
 
 `drep.toml`, written by `drep init`:

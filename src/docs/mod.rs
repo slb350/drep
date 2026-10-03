@@ -141,7 +141,9 @@ impl Check {
             Check::TabCharacter => "replace tabs with spaces",
             Check::TrailingBlankLines => "remove the blank line(s) at end of file",
             Check::TrailingWhitespace => "remove the trailing whitespace",
-            Check::UnclosedCodeFence => "close it with ```",
+            Check::UnclosedCodeFence => {
+                "close it with a fence of the same character, at least as long"
+            }
         }
     }
 }

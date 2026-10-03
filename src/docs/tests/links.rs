@@ -110,6 +110,64 @@ fn only_the_first_bare_url_on_a_line_is_reported() {
     );
 }
 
+// An autolink is `<` and `>` around an absolute URI (CommonMark 0.31.2,
+// section 6.5, examples 594-610). It is already a link, so telling its author
+// to wrap it as `[text](url)` is wrong, and the URL the old message quoted
+// carried the closing `>`.
+
+#[test]
+fn an_autolink_is_not_a_bare_url() {
+    silent("<https://example.com/a>", Check::BareUrl);
+    silent("<http://example.com/a>", Check::BareUrl);
+    silent("see <https://example.com/a> for more", Check::BareUrl);
+}
+
+#[test]
+fn an_autolink_hides_a_url_nested_in_its_own_query() {
+    silent("<https://a.example/?next=http://b.example>", Check::BareUrl);
+}
+
+#[test]
+fn an_autolink_does_not_excuse_a_bare_url_beside_it() {
+    let before = "<https://a.example> and ";
+    fires_once_at(
+        &format!("{before}https://b.example"),
+        Check::BareUrl,
+        1,
+        before.chars().count() as u32 + 1,
+    );
+    // Touching it, with nothing between the `>` and the next scheme.
+    fires_once_at(
+        "<https://a.example>https://b.example",
+        Check::BareUrl,
+        1,
+        20,
+    );
+    // After several, so the scan resumes past each autolink it blanks.
+    let before = "<https://a.example> <https://b.example> ";
+    fires_once_at(
+        &format!("{before}https://c.example"),
+        Check::BareUrl,
+        1,
+        before.chars().count() as u32 + 1,
+    );
+}
+
+#[test]
+fn text_that_is_not_an_autolink_still_holds_a_bare_url() {
+    // Example 608: a space after the `<`.
+    fires_once_at("< https://foo.bar >", Check::BareUrl, 1, 3);
+    // Example 602: a space inside.
+    fires_once_at("<https://foo.bar/baz bim>", Check::BareUrl, 1, 2);
+    // No closing `>`.
+    fires_once_at("<https://foo.bar", Check::BareUrl, 1, 2);
+    // A `<` before the `>`, and a control character before it.
+    fires_once_at("<https://foo.bar<baz>", Check::BareUrl, 1, 2);
+    fires_once_at("<https://foo.bar\u{7}baz>", Check::BareUrl, 1, 2);
+    // A `>` with no `<` before the scheme.
+    fires_once_at("https://foo.bar>", Check::BareUrl, 1, 1);
+}
+
 // ---- link_syntax_invalid ----
 
 #[test]
