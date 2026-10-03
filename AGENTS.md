@@ -364,8 +364,14 @@ comes back.
   guessed from prose. HTTP and Codex cache identities differ by construction;
   Codex includes CLI version and reasoning effort. The default concurrency is
   one until live qualification proves a higher value is safe for plan usage.
-  `docs/openai-integration-plan.md` records the measured choice of `codex exec`
-  over app-server and the TDD/release gates.
+  The surface is `codex exec`, not `codex app-server`, and that was measured
+  for 2.3.0 (2026-08-20): app-server inherited the user's configuration, global
+  instructions, skills and MCP servers, a minimal request carried 22,200 input
+  tokens and initialised the user's MCP servers, and its CLI had no
+  `--ignore-user-config`; the locked-down `codex exec` request carried 10,849
+  and emitted only lifecycle and final-message events. Reconsider app-server
+  only if it gains an isolation contract equivalent to `--ignore-user-config`
+  and a measured multi-file run materially outperforms the exec backend.
 - **`temperature` is `Option<f32>`, and absent means the parameter is not sent.**
   It defaulted to 0.2 while every endpoint drep could reach accepted it. Two of
   the four models drep now ships a preset for reject it outright - `k3` answers
