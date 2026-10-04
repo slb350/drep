@@ -108,6 +108,42 @@ fn fail_on_error_blocks_on_an_unclosed_fence() {
     assert_eq!(outcome.exit, Exit::FoundIssues);
 }
 
+/// A document the renderer shows correctly must not block the commit that holds it.
+///
+/// Each fixture is a fence the hook once read as unclosed, which is the one
+/// finding `--fail-on error` blocks on: a `~~~` sample holding a backtick fence
+/// line, a four-backtick fence documenting a fenced sample, and an info-string
+/// line inside a block. The unclosed twin of each is asserted too, so a gate that
+/// stopped reading fences at all would not pass.
+#[test]
+fn fail_on_error_passes_fences_that_render_closed_and_blocks_those_that_do_not() {
+    let closed = [
+        "# Title\n\n~~~\n```\n~~~\n",
+        "# Title\n\n````markdown\n```bash\necho hi\n```\n````\n",
+        "# Title\n\n```text\n```rust\nfn main() {}\n```\n",
+    ];
+    for document in closed {
+        let dir = repo(&[("README.md", document)]);
+        let outcome = run_failing_on(dir.path(), &[], Severity::Error);
+        assert!(
+            outcome.findings.is_empty(),
+            "{document:?} renders closed, got {:?}",
+            outcome.findings
+        );
+        assert_eq!(outcome.exit, Exit::Clean, "{document:?}");
+    }
+    let open = [
+        "# Title\n\n~~~\n```\n",
+        "# Title\n\n````markdown\n```bash\necho hi\n```\n",
+        "# Title\n\n```text\n```rust\nfn main() {}\n",
+    ];
+    for document in open {
+        let dir = repo(&[("README.md", document)]);
+        let outcome = run_failing_on(dir.path(), &[], Severity::Error);
+        assert_eq!(outcome.exit, Exit::FoundIssues, "{document:?}");
+    }
+}
+
 /// The shorthand and the threshold are one mechanism, not two.
 #[test]
 fn strict_gates_exactly_as_fail_on_info_does() {

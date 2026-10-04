@@ -23,6 +23,12 @@ use crate::text::excerpt;
 /// local truncation.
 const URL_EXCERPT_MAX: usize = 60;
 
+/// The schemes [`bare_url`] reports, each with its `://`.
+const SCHEMES: [&[char]; 2] = [
+    &['h', 't', 't', 'p', 's', ':', '/', '/'],
+    &['h', 't', 't', 'p', ':', '/', '/'],
+];
+
 /// Run the link checks over `line`.
 ///
 /// Skipped entirely inside a code fence: a sample showing `[broken](` on
@@ -39,19 +45,20 @@ pub fn check(
     }
 
     // Blanking only copies when the line holds something to blank. A backtick
-    // can open a code span and a `[` can open a link; a line with neither is
-    // already its own blanked form. Lines holding a stray `]` and nothing else
-    // fall into the else branch and are still counted below, which is the
-    // point - an unmatched closing bracket is exactly what the balance check
-    // exists to catch.
+    // can open a code span, a `[` can open a link and a `<` an autolink; a line
+    // with none of them is already its own blanked form. Lines holding a stray
+    // `]` and nothing else fall into the else branch and are still counted
+    // below, which is the point - an unmatched closing bracket is exactly what
+    // the balance check exists to catch.
     //
     // `scratch` is owned by the caller and reused across lines, so the copy
     // costs a memcpy rather than an allocation.
-    let blanked: &[char] = if line.text.contains('`') || line.text.contains('[') {
+    let blanked: &[char] = if line.text.contains(['`', '[', '<']) {
         scratch.clear();
         scratch.extend_from_slice(chars);
         blank_inline_code(scratch);
         blank_links(scratch);
+        blank_autolinks(scratch);
         blank_reference_definition(scratch);
         scratch
     } else {
@@ -140,6 +147,46 @@ fn match_link(chars: &[char], start: usize) -> Option<usize> {
     }
 }
 
+/// Overwrite every `<https://...>` autolink with spaces.
+///
+/// An autolink is a link: CommonMark gives its URL as the link's label, so it is
+/// the one place a URL is meant to be written bare, and "wrap it as `[text](url)`"
+/// would change what renders. Only `http` and `https` autolinks are recognised,
+/// because those are the only URLs [`bare_url`] reports; the URL inside one may
+/// itself contain a second scheme, which is why the whole span is blanked rather
+/// than only its first URL.
+fn blank_autolinks(chars: &mut [char]) {
+    let mut i = 0;
+    while i < chars.len() {
+        if chars[i] == '<'
+            && let Some(end) = match_autolink(chars, i)
+        {
+            chars[i..=end].fill(' ');
+            i = end;
+        }
+        i += 1;
+    }
+}
+
+/// Match an autolink starting at `start`, returning the index of its `>`.
+///
+/// The URL runs to the first ASCII control character, space, `<` or `>`, and the
+/// autolink is complete only when that character is the `>`: a space inside
+/// (`<https://foo.bar/baz bim>`) or a missing close makes the text plain, and
+/// the URL in it is as bare as any other.
+fn match_autolink(chars: &[char], start: usize) -> Option<usize> {
+    debug_assert_eq!(chars[start], '<');
+    if !SCHEMES
+        .iter()
+        .any(|scheme| chars[start + 1..].starts_with(scheme))
+    {
+        return None;
+    }
+    (start + 1..chars.len())
+        .find(|i| chars[*i].is_ascii_control() || matches!(chars[*i], ' ' | '<' | '>'))
+        .filter(|end| chars[*end] == '>')
+}
+
 /// Overwrite the destination of a link reference definition with spaces.
 ///
 /// `[ref]: https://example.com` declares a link target; the URL there is
@@ -200,10 +247,6 @@ fn bare_url(line: &Line<'_>, blanked: &[char], file_path: &str, out: &mut Vec<Fi
 /// The "at least one" is load-bearing: prose that mentions `https://` as a
 /// literal string, with nothing after it, is not a URL anyone can follow.
 fn find_url(chars: &[char]) -> Option<usize> {
-    const SCHEMES: [&[char]; 2] = [
-        &['h', 't', 't', 'p', 's', ':', '/', '/'],
-        &['h', 't', 't', 'p', ':', '/', '/'],
-    ];
     // Both schemes begin with `h`, so one character comparison rejects most
     // positions before any slice compare is set up. Measured over this
     // repository's docs, the guard is 19% of the whole analysis pass: the

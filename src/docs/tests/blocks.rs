@@ -121,3 +121,81 @@ fn structural_checks_report_a_column() {
         }
     }
 }
+
+#[test]
+fn a_tilde_fence_is_closed_by_a_tilde_fence() {
+    silent("~~~a\nx\n~~~\n", Check::UnclosedCodeFence);
+    fires_once_at("text\n\n~~~a\nx\n", Check::UnclosedCodeFence, 3, 1);
+}
+
+#[test]
+fn a_longer_outer_fence_holding_shorter_ones_is_closed() {
+    // Reading every ```` ``` ```` line as a toggle counted four delimiters here
+    // and then three in the next case, reporting a document that renders
+    // correctly as broken.
+    silent(
+        "````markdown\n```bash\necho hi\n```\n````\n",
+        Check::UnclosedCodeFence,
+    );
+    silent(
+        "````markdown\n```bash\necho hi\n````\n",
+        Check::UnclosedCodeFence,
+    );
+}
+
+#[test]
+fn a_shorter_closing_fence_leaves_the_block_open() {
+    // The block is open to the end of the document (CommonMark example 126), so
+    // the finding is at the opener, not at the shorter run that failed to close it.
+    fires_once_at("````\naaa\n```\n", Check::UnclosedCodeFence, 1, 1);
+}
+
+#[test]
+fn a_fence_marker_with_an_info_string_inside_a_fence_does_not_close_it() {
+    silent(
+        "```text\n```rust\nfn main() {}\n```\n",
+        Check::UnclosedCodeFence,
+    );
+    // And the same lines with the closer missing leave the *first* fence open.
+    fires_once_at(
+        "```text\n```rust\nfn main() {}\n",
+        Check::UnclosedCodeFence,
+        1,
+        1,
+    );
+}
+
+#[test]
+fn a_fence_of_the_other_character_inside_a_fence_is_content() {
+    silent("~~~\n```\n~~~\n", Check::UnclosedCodeFence);
+    silent("```\n~~~\n```\n", Check::UnclosedCodeFence);
+}
+
+#[test]
+fn only_the_opener_of_the_block_left_open_is_reported() {
+    // Two blocks: the first closed, the second never. A tilde opener inside the
+    // second block is content and must not be the line reported.
+    fires_once_at(
+        "```a\nx\n```\n\n````b\n~~~c\n",
+        Check::UnclosedCodeFence,
+        5,
+        1,
+    );
+}
+
+#[test]
+fn an_unclosed_tilde_fence_message_quotes_its_own_opener() {
+    let found = of_kind("text\n\n~~~rust\nfn main() {}\n", Check::UnclosedCodeFence);
+    assert!(found[0].message.contains("~~~rust"), "{}", found[0].message);
+}
+
+#[test]
+fn the_unclosed_fence_suggestion_fits_a_tilde_fence_too() {
+    // Adding ``` inside a ~~~ block closes nothing, so the advice cannot name
+    // one fence character.
+    assert!(
+        !Check::UnclosedCodeFence.suggestion().contains("```"),
+        "{}",
+        Check::UnclosedCodeFence.suggestion()
+    );
+}

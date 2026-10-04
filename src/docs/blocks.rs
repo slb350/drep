@@ -73,9 +73,9 @@ fn trailing_blank_lines(lines: &[Line<'_>], file_path: &str, out: &mut Vec<Findi
     ));
 }
 
-/// An odd number of fence delimiters leaves the last one open.
+/// A fence that is never closed.
 ///
-/// Reported at that last delimiter, which is where the unterminated block
+/// Reported at its opening fence, which is where the unterminated block
 /// starts - not at end of file, where the symptom is. Severity is
 /// [`crate::analysis::findings::Severity::Error`] alone among the ten, because
 /// every line below this one renders as code.
@@ -85,13 +85,9 @@ fn unclosed_code_fence(
     file_path: &str,
     out: &mut Vec<Finding>,
 ) {
-    let delimiters = fences.delimiters();
-    if delimiters.len().is_multiple_of(2) {
+    let Some(opener) = fences.unclosed() else {
         return;
-    }
-    let opener = *delimiters
-        .last()
-        .expect("an odd count is at least one delimiter");
+    };
     let text = lines
         .get(opener as usize - 1)
         .map_or("", |line| line.text.trim());

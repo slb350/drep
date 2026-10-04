@@ -128,3 +128,115 @@ fn a_file_with_no_fence_at_all_leaves_every_line_in_prose() {
     let content = "#Heading\n\nmore\n";
     assert!(run(content).iter().any(|f| f.line == 1));
 }
+
+// The rules below are CommonMark 0.31.2's fenced code blocks (section 4.5,
+// examples 119-146). Each case is a document that renders correctly, so a
+// finding on it is a false positive - and `unclosed_code_fence` is the one
+// check that blocks a commit by default.
+
+/// The lines of `content`, 1-based, that sit outside every fence.
+fn prose_lines(content: &str) -> Vec<usize> {
+    let raw: Vec<&str> = content.lines().collect();
+    let fences = crate::docs::fence::Fences::scan(&raw);
+    fences
+        .mask()
+        .iter()
+        .enumerate()
+        .filter(|(_, inside)| !**inside)
+        .map(|(index, _)| index + 1)
+        .collect()
+}
+
+#[test]
+fn a_tilde_fence_is_a_fence() {
+    // Example 120. Read as prose, a shebang in a `~~~bash` sample was reported
+    // as a heading with no space after its `#`.
+    let content = "~~~bash\n#!/bin/bash\n#comment\n~~~\n\n#Heading\n";
+    silent_at_lines(content, Check::MissingSpaceAfterHeading, &[2, 3]);
+    fires_once_at(content, Check::MissingSpaceAfterHeading, 6, 2);
+}
+
+/// Assert that `check` reports nothing on any of `lines`.
+#[track_caller]
+fn silent_at_lines(content: &str, check: Check, lines: &[u32]) {
+    let hits: Vec<u32> = of_kind(content, check)
+        .into_iter()
+        .map(|f| f.line)
+        .filter(|line| lines.contains(line))
+        .collect();
+    assert_eq!(
+        hits,
+        Vec::<u32>::new(),
+        "{} over {content:?}",
+        check.as_str()
+    );
+}
+
+#[test]
+fn a_fence_is_closed_only_by_the_character_that_opened_it() {
+    // Examples 122 and 123: a backtick fence is not closed by `~~~`, nor a
+    // tilde fence by a backtick one.
+    assert_eq!(prose_lines("```\naaa\n~~~\nstill code\n```\nprose\n"), [6]);
+    assert_eq!(prose_lines("~~~\naaa\n```\nstill code\n~~~\nprose\n"), [6]);
+}
+
+#[test]
+fn a_closing_fence_must_be_at_least_as_long_as_the_opening_one() {
+    // Examples 124 and 125: the shorter run inside is content.
+    assert_eq!(prose_lines("````\naaa\n```\nmore\n``````\nprose\n"), [6]);
+    assert_eq!(prose_lines("~~~~\naaa\n~~~\nmore\n~~~~\nprose\n"), [6]);
+    // Exactly as long, and longer, both close.
+    assert_eq!(prose_lines("```\naaa\n```\nprose\n"), [4]);
+    assert_eq!(prose_lines("```\naaa\n`````\nprose\n"), [4]);
+}
+
+#[test]
+fn a_closing_fence_carries_nothing_after_it_but_spaces_and_tabs() {
+    // A line with an info string cannot close a fence, so a markdown sample
+    // that shows an opening fence is content. Reading it as a closer flipped
+    // every fence below it.
+    assert_eq!(
+        prose_lines("```text\n```rust\nfn main() {}\n```\nprose\n"),
+        [5]
+    );
+    assert_eq!(prose_lines("```\ncode\n```  \t\nprose\n"), [4]);
+}
+
+#[test]
+fn a_backtick_fence_whose_info_string_has_a_backtick_is_not_a_fence() {
+    // Examples 138 and 145: that line is an inline code span in a paragraph.
+    assert_eq!(prose_lines("``` aa ```\nfoo\n"), [1, 2]);
+    assert_eq!(prose_lines("``` ```\naaa\n"), [1, 2]);
+}
+
+#[test]
+fn a_tilde_fence_may_carry_backticks_in_its_info_string() {
+    // Example 146.
+    assert_eq!(prose_lines("~~~ aa ``` ~~~\nfoo\n~~~\nprose\n"), [4]);
+}
+
+#[test]
+fn fewer_than_three_characters_is_not_a_fence() {
+    // Example 121.
+    assert_eq!(prose_lines("``\nfoo\n``\n"), [1, 2, 3]);
+    assert_eq!(prose_lines("~~\nfoo\n~~\n"), [1, 2, 3]);
+}
+
+#[test]
+fn a_fence_marker_line_inside_a_fence_that_cannot_close_it_stays_code() {
+    // The line opens nothing while a fence is open, and closes nothing it does
+    // not match, so it is neither a second fence nor a toggle.
+    assert_eq!(
+        prose_lines("````\n~~~\n```bash\n~~~~\ntext\n````\nprose\n"),
+        [7]
+    );
+}
+
+#[test]
+fn a_nested_fence_documenting_a_fence_is_one_block() {
+    // The usual reason for a four-backtick fence: showing a fenced sample.
+    let content = "````markdown\n```bash\n#!/bin/bash\n```\n````\n\n#Heading\n";
+    silent_at_lines(content, Check::MissingSpaceAfterHeading, &[3]);
+    fires_once_at(content, Check::MissingSpaceAfterHeading, 7, 2);
+    silent(content, Check::UnclosedCodeFence);
+}

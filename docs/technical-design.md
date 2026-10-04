@@ -317,6 +317,13 @@ fence? Headings, `long_line` and the link checks, yes. `tab_character`, yes,
 because "replace tabs with spaces" would break a Makefile sample.
 `trailing_whitespace`, no.
 
+Fences are CommonMark 0.31.2's fenced code blocks: a run of three or more
+backticks or tildes opens one, only the same character, at least as long and
+followed by nothing, closes it, and a block left open runs to the end of the
+file. The one deliberate relaxation is indentation, which is unbounded so a
+fence inside a list item is still a fence. The link checks treat an
+`<https://...>` autolink as a link.
+
 Severity answers whether the finding changes how the document renders, which is
 what keeps `--fail-on` calibratable. `unclosed_code_fence` alone is `error`.
 
