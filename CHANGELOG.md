@@ -63,6 +63,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Refresh the Rust 1.88-compatible lockfile, moving `yoke-derive` from yanked
+  0.8.3 to 0.8.4, `open-agent-sdk` to 0.11.5, `cc` to 1.6.0, `async-compression`
+  to 0.4.50, `compression-codecs` to 0.4.45, `lazy_static` to 1.5.1, `libc` to
+  0.2.190, `mio` to 1.2.4, `tokio` to 1.53.2 and `tokio-rustls` to 0.26.6.
+  `reqwest` stays on the 0.12 line at 0.12.28: 0.13 is not compatible with the
+  1.88 MSRV.
 - CI's Linux lane builds every item's documentation (`cargo doc --no-deps --all-features --document-private-items`), whose warnings Cargo.toml's `[lints]` already denies. Clippy does not run rustdoc's lints and most modules are private, so a broken intra-doc link such as the one just fixed in `src/cli/check/refusal.rs` passed every gate.
 - Refresh the Rust 1.88-compatible lockfile to `hyper-rustls` 0.27.10 and
   `rand` 0.10.3, and pin the current Rust-toolchain and install Action
