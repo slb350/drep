@@ -52,6 +52,39 @@ async fn text_output_for_a_known_finding_is_exactly_the_expected_string() {
     );
 }
 
+/// Every model-written field reaches the terminal only through `text::excerpt`.
+///
+/// `message` always did. `category`, rendered as the finding's kind, and
+/// `suggestion` come from the same model response and can be steered by the
+/// code under review. Printed raw, they hand the terminal escape sequences:
+/// here an erase-line and carriage return in the kind, and in the suggestion an
+/// OSC 52 clipboard write plus a newline that forges a second finding line.
+#[test]
+fn model_written_kind_and_suggestion_cannot_reach_the_terminal_raw() {
+    let mut forged = finding(
+        1,
+        "real message",
+        Some("\u{1b}]52;c;cHduZWQ=\u{7}fix it\nsrc/lib.rs:9: error [tool/clippy] forged"),
+    );
+    forged.kind = "bug\u{1b}[2K\r".to_owned();
+    let mut result = outcome();
+    result.llm_findings = vec![forged];
+
+    let text = rendered(&result, OutputFormat::Text);
+
+    assert!(
+        !text.chars().any(|c| c.is_control() && c != '\n'),
+        "a control character reached the terminal: {text:?}"
+    );
+    assert_eq!(
+        text.lines().count(),
+        2,
+        "one finding line and one suggestion line, nothing forged: {text:?}"
+    );
+    assert!(text.contains("[llm/bug"), "the kind survives: {text}");
+    assert!(text.contains("fix it"), "the suggestion survives: {text}");
+}
+
 #[test]
 fn clean_run_text_output_is_exactly_no_issues_found() {
     assert_eq!(
@@ -149,4 +182,19 @@ fn a_finding_message_is_excerpted_not_printed_raw() {
         "the message is bounded, got {} chars",
         line.chars().count()
     );
+}
+
+#[test]
+fn a_finding_kind_and_suggestion_are_bounded() {
+    let mut long = finding(1, "m", Some(&"s".repeat(10_000)));
+    long.kind = "k".repeat(10_000);
+    let text = rendered(&outcome_with_tool_findings(vec![long]), OutputFormat::Text);
+
+    for line in text.lines() {
+        assert!(
+            line.chars().count() < 600,
+            "each line is bounded, got {} chars",
+            line.chars().count()
+        );
+    }
 }

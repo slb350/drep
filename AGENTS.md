@@ -976,6 +976,19 @@ comes back.
   both must have control characters replaced or an escape sequence in them is
   interpreted. A second copy written for `bare_url` truncated but did not
   strip, which is the one thing the function exists for.
+
+  That covers every field, not just the obvious one. A finding's message,
+  kind and suggestion all come from a tool's or a model's JSON, which decodes
+  `\u001b` into a real escape, and the code under review can steer the model:
+  `cli::render` excerpts all three, and a newline left in any of them prints a
+  forged finding line. An HTTP backend's `LlmError::Transport` message carries the
+  endpoint's whole error body, which the SDK reads without a bound, so
+  `complete_json` excerpts it. A model listing's `display_name` is excerpted
+  in `Model::label`, and an id holding a control character is dropped in
+  `parse` rather than cleaned, because the id is written to `drep.toml` and a
+  cleaned copy in the menu would name a different model than the config.
+  JSON output is not routed through it: serde_json escapes ESC and every
+  other C0 control character, though not DEL or the C1 range.
 - **`cli::render` owns the finding line and the "could not be analyzed"
   block**, shared by `check` and `lint-docs`. The source prefix (`tool/`,
   `llm/`) is a parameter, which is the one deliberate difference; `lint-docs`

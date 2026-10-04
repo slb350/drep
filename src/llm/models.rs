@@ -75,14 +75,28 @@ pub struct Model {
     pub display_name: Option<String>,
 }
 
+/// The longest label the wizard prints for one model.
+///
+/// Real labels are a few dozen characters - the longest in the listings the
+/// tests carry is `MiniMax-M2.7-highspeed (MiniMax-M2.7-Highspeed)`. The bound
+/// is for an endpoint that sends far more than that, not for any of them.
+const LABEL_MAX: usize = 120;
+
 impl Model {
     /// How the wizard lists this model: the id, plus the vendor's own name for
     /// it when that differs.
+    ///
+    /// Through [`crate::text::excerpt`], because both halves are the
+    /// endpoint's text and this goes straight to the terminal. Parsing the
+    /// listing already refuses an id with a control character in it, but
+    /// `display_name` is shown, never stored, so it is cleaned here rather
+    /// than refused there.
     pub fn label(&self) -> String {
-        match &self.display_name {
+        let label = match &self.display_name {
             Some(name) if name != &self.id => format!("{} ({name})", self.id),
             _ => self.id.clone(),
-        }
+        };
+        crate::text::excerpt(&label, LABEL_MAX)
     }
 }
 
@@ -252,6 +266,12 @@ struct Entry {
 ///
 /// An empty list is [`ListError::Unsupported`] rather than an empty menu: a
 /// prompt offering nothing is worse than the free-text prompt it replaced.
+///
+/// An id with a control character in it is dropped, not cleaned. The id is
+/// what the user's choice writes into `drep.toml`, so a cleaned copy in the
+/// menu would show one name while the config held another, and the raw one
+/// would reach every later report of that provider. No honest endpoint serves
+/// a model whose name carries an escape sequence.
 fn parse(body: &str) -> Result<Vec<Model>, ListError> {
     let listing: Listing = serde_json::from_str(body)
         .map_err(|err| ListError::Malformed(crate::text::excerpt(&err.to_string(), 120)))?;
@@ -259,7 +279,7 @@ fn parse(body: &str) -> Result<Vec<Model>, ListError> {
     let models: Vec<Model> = listing
         .data
         .into_iter()
-        .filter(|entry| !entry.id.is_empty())
+        .filter(|entry| !entry.id.is_empty() && !entry.id.chars().any(char::is_control))
         .map(|entry| Model {
             id: entry.id,
             display_name: entry.display_name,
