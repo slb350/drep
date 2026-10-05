@@ -132,6 +132,56 @@ fn an_entry_with_no_id_is_dropped() {
 }
 
 #[test]
+fn an_id_carrying_a_control_character_is_dropped() {
+    // The id is what a number at the prompt selects and what `drep.toml` then
+    // names, so it reaches every later report of that provider. An id carrying
+    // an escape sequence is not a model an honest endpoint serves; offering it
+    // would have the menu show one name and the config hold another.
+    let models =
+        parse(r#"{"data":[{"id":"evil\u001b]0;title\u0007"},{"id":"real"}]}"#).expect("parses");
+
+    assert_eq!(models.len(), 1);
+    assert_eq!(models[0].id, "real");
+}
+
+#[test]
+fn a_label_never_carries_a_control_character() {
+    // `display_name` is the endpoint's text and the wizard prints the label to
+    // the terminal, so an escape sequence in it must not survive.
+    let model = Model {
+        id: "k3".to_string(),
+        display_name: Some("K3\u{1b}[2J\u{1b}]52;c;cHduZWQ=\u{7}".to_string()),
+    };
+
+    let label = model.label();
+
+    assert!(
+        !label.chars().any(char::is_control),
+        "a control character survived: {label:?}"
+    );
+    assert!(label.starts_with("k3 (K3"), "the text survives: {label}");
+}
+
+#[test]
+fn a_label_is_bounded() {
+    // One menu line per model: a display name of kilobytes must not become
+    // kilobytes of terminal output.
+    let model = Model {
+        id: "k3".to_string(),
+        display_name: Some("K".repeat(10_000)),
+    };
+
+    let label = model.label();
+
+    assert!(
+        label.chars().count() <= LABEL_MAX + 1,
+        "the label is bounded, got {} chars",
+        label.chars().count()
+    );
+    assert!(label.ends_with('…'), "a cut label says so: {label}");
+}
+
+#[test]
 fn a_body_that_is_not_a_listing_is_malformed() {
     let err = parse("not json at all").expect_err("unparseable");
 

@@ -35,7 +35,7 @@ use crate::analysis::findings::Finding;
 use crate::analysis::result::{FailureReason, ProviderFailure};
 use crate::cli::OutputFormat;
 use crate::cli::check::{CheckOutcome, ProviderUse, ReviewActivity};
-use crate::cli::render::{finding_line, write_failures};
+use crate::cli::render::{finding_line, suggestion_line, write_failures};
 
 /// Render the outcome to stdout in the requested format.
 ///
@@ -124,9 +124,7 @@ fn write_review_activity<W: Write>(out: &mut W, activity: Option<&ReviewActivity
 
 fn finding_details(finding: &Finding) -> Vec<String> {
     let mut details = Vec::new();
-    if let Some(suggestion) = &finding.suggestion {
-        details.push(format!("    suggestion: {suggestion}"));
-    }
+    details.extend(suggestion_line(finding));
     if let Some(fingerprint) = &finding.fingerprint {
         details.push(format!("    acknowledge: drep acknowledge {fingerprint}"));
     }

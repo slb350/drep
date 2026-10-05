@@ -10,7 +10,7 @@ use serde_json::json;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
-use crate::llm::client::{Extracted, LlmClient};
+use crate::llm::client::{Extracted, LlmClient, TRANSPORT_EXCERPT_MAX};
 use crate::llm::error::LlmError;
 use crate::test_support::{
     cfg_for, fast_retry_client, mount_sse, request_count, server_returning, sse,
@@ -447,5 +447,50 @@ async fn the_reported_body_is_stripped_of_control_characters() {
     assert!(
         message.contains("red"),
         "the text itself survives: {message}"
+    );
+}
+
+/// An endpoint's error body is bounded and stripped of control characters too.
+///
+/// The SDK carries a non-success response's whole body in its error. That
+/// message is what the failure block prints for the file, and what the chain
+/// clones onto every later file once the provider is demoted. The body is the
+/// endpoint's text, so it gets the same excerpt as the unparseable body above:
+/// here an OSC 52 clipboard write, an erase-line and a newline, followed by
+/// enough padding to flood a terminal.
+#[tokio::test]
+async fn an_error_body_is_bounded_and_stripped_of_control_characters() {
+    let server = MockServer::start().await;
+    let body = format!(
+        "\u{1b}]52;c;cHduZWQ=\u{7}model denied\n\u{1b}[2K{}",
+        "x".repeat(10_000)
+    );
+    Mock::given(method("POST"))
+        .and(path("/v1/chat/completions"))
+        .respond_with(ResponseTemplate::new(400).set_body_string(body))
+        .mount(&server)
+        .await;
+
+    let err = fast_retry_client(&cfg_for(&server, "m", 1))
+        .complete_json("sys", "content")
+        .await
+        .expect_err("a 400 fails the file");
+    let LlmError::Transport { status, message } = err else {
+        panic!("a 400 is a transport failure, got {err:?}");
+    };
+
+    assert_eq!(status, Some(400), "the status survives as a number");
+    assert!(
+        !message.chars().any(char::is_control),
+        "an escape sequence must not survive into the report: {message:?}"
+    );
+    assert!(
+        message.contains("model denied"),
+        "the body's text survives: {message}"
+    );
+    assert!(
+        message.chars().count() <= TRANSPORT_EXCERPT_MAX + 1,
+        "the body is bounded, not printed whole: {} characters",
+        message.chars().count()
     );
 }

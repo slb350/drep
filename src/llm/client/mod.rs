@@ -53,6 +53,14 @@ use crate::text::excerpt;
 /// is often a sentence or two in.
 const RESPONSE_EXCERPT_MAX: usize = 200;
 
+/// How much of a transport error reaches the report.
+///
+/// For an HTTP failure the SDK's error carries the endpoint's whole response
+/// body, read without a bound, and that text is the endpoint's rather than
+/// drep's. 400 matches what the Codex backend keeps of its own reported error,
+/// so the two backends' failure blocks read alike.
+const TRANSPORT_EXCERPT_MAX: usize = 400;
+
 /// A configured LLM client ready to issue requests.
 ///
 /// Built once per process from `LlmConfig`; `complete_json` is the only
@@ -333,8 +341,15 @@ impl LlmClient {
                     // `status_code`); reading it before formatting means the
                     // number survives as a number, and a later caller can
                     // branch on it rather than parsing the message.
+                    //
+                    // The message goes through `excerpt` like every other
+                    // piece of endpoint text. For a non-success status it is
+                    // the response body verbatim: a hostile or compromised
+                    // endpoint chooses every byte, and the failure block
+                    // prints it to the terminal, once for every file the
+                    // demoted provider then skips.
                     let status = e.status_code();
-                    let message = format!("{e}");
+                    let message = excerpt(&e.to_string(), TRANSPORT_EXCERPT_MAX);
                     return Err(LlmError::Transport { status, message });
                 }
             }
