@@ -1,5 +1,7 @@
 self-hosted-runner:
   labels:
+    - mac-mini-m6
+    - drep-macos-m6
     - homelab-ai-1
     - drep-linux
     - drep-macos
