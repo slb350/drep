@@ -65,6 +65,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Refresh the Rust 1.88-compatible lockfile: `cc` 1.6.0 to 1.8.0, `hyper` 1.11.1
+  to 1.12.0, `h2` 0.4.19 to 0.4.20, `serde_json` 1.0.151 to 1.0.154, `syn` 3.0.6
+  to 3.0.8, `tokio-util` 0.7.19 to 0.7.20, `toml` 1.1.6 to 1.1.8 (with
+  `toml_parser` 1.1.5, `toml_datetime` 1.1.2, `serde_spanned` 1.1.2 and
+  `toml_writer` 1.1.3), `smallvec` 1.16.2 to 1.16.3, `zeroize` 1.9.0 to 1.9.1
+  and `want` 0.3.1 to 0.3.2. cargo-audit and osv-scanner reported no
+  vulnerability, warning or OSV finding before or after the update, so no
+  `Cargo.toml` requirement changed. Of these, `hyper` 1.12.0 drops a
+  `content-length` the client added itself once `transfer-encoding` is present,
+  `h2` 0.4.20 rejects two `content-length` values that disagree, a response with
+  no `:status` and a `GOAWAY` naming a stream, and `zeroize` 1.9.1 gives
+  `Zeroizing` an opaque `Debug` and no longer reads uninitialized memory in the
+  fallback its `optimization_barrier` used. `h2` and `zeroize` sit under the
+  HTTP client every review request goes through; `cc` is the build dependency
+  `blake3` and `openssl-sys` use, which is what the arm64 Linux release target
+  compiles OpenSSL with. `reqwest` stays on the 0.12 line at
+  0.12.28: 0.13 is a semver-major release outside `Cargo.toml`'s `0.12`
+  requirement and `open-agent-sdk` 0.11.5 still depends on 0.12, whose copy drep
+  shares rather than building a second one.
 - Refresh the Rust 1.88-compatible lockfile, moving `yoke-derive` from yanked
   0.8.3 to 0.8.4, `open-agent-sdk` to 0.11.5, `cc` to 1.6.0, `async-compression`
   to 0.4.50, `compression-codecs` to 0.4.45, `lazy_static` to 1.5.1, `libc` to
