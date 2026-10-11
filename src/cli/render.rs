@@ -45,7 +45,8 @@ const SUGGESTION_MAX: usize = 400;
 /// escape, so a raw print hands the terminal an escape sequence, a newline
 /// forges a line of its own, and a multi-kilobyte field hands it a flood. A
 /// model's `category` becomes the kind, and the code under review can steer
-/// the model.
+/// the model. The file name is the repository's, and is printed through
+/// [`crate::text::path_label`] for the same reason.
 pub fn finding_line(source: Option<&str>, f: &Finding) -> String {
     let column = f.column.map(|c| format!(":{c}")).unwrap_or_default();
     let kind = crate::text::excerpt(&f.kind, KIND_MAX);
@@ -55,7 +56,7 @@ pub fn finding_line(source: Option<&str>, f: &Finding) -> String {
     };
     format!(
         "{}:{}{}: {} [{}] {}",
-        f.file_path,
+        crate::text::path_label(&f.file_path),
         f.line,
         column,
         f.severity.as_str(),
@@ -94,6 +95,8 @@ pub fn write_suggestion<W: Write>(out: &mut W, f: &Finding) -> Result<()> {
 /// The "N file(s) could not be analyzed" block.
 ///
 /// `findings_above` decides the separating blank line - see the module doc.
+/// Each file is named through [`crate::text::path_label_of`], as in
+/// [`finding_line`].
 pub fn write_failures<W: Write>(
     out: &mut W,
     failures: &BTreeMap<PathBuf, FailureReason>,
@@ -107,7 +110,12 @@ pub fn write_failures<W: Write>(
     }
     writeln!(out, "{} file(s) could not be analyzed:", failures.len())?;
     for (path, reason) in failures {
-        writeln!(out, "  {}: {}", path.display(), reason.one_line())?;
+        writeln!(
+            out,
+            "  {}: {}",
+            crate::text::path_label_of(path),
+            reason.one_line()
+        )?;
     }
     Ok(())
 }
