@@ -270,6 +270,45 @@ fn an_unterminated_code_span_does_not_swallow_the_rest_of_the_line() {
 }
 
 #[test]
+fn a_double_backtick_span_hides_a_url_from_the_bare_url_check() {
+    // CommonMark opens a span with a run of backticks and closes it with a run
+    // of exactly the same length. Pairing single backticks read the two-tick
+    // delimiters as empty spans and left the URL between them in prose.
+    silent("run ``curl https://example.com`` first", Check::BareUrl);
+}
+
+#[test]
+fn a_double_backtick_span_holding_a_backtick_hides_its_brackets() {
+    // The documented way to show a literal backtick. The inner tick must not
+    // end the span, or the bracket after it counts as an unbalanced link.
+    silent("type `` ` [ `` to begin", Check::LinkSyntaxInvalid);
+    silent("the span ``[a`` is code", Check::LinkSyntaxInvalid);
+}
+
+#[test]
+fn a_span_closes_at_the_next_run_of_its_own_length_only() {
+    // The single tick inside is a different length, so the span runs to the
+    // closing pair and the broken link after it is the only finding.
+    fires_once_at("``a`b`` then [broken](", Check::LinkSyntaxInvalid, 1, 1);
+    silent("``a`b https://example.com`` end", Check::BareUrl);
+}
+
+#[test]
+fn a_longer_run_inside_a_span_is_skipped_whole() {
+    // Three ticks contain a run of two, but a run is one unit: the span opened
+    // by two ticks closes only at the later pair.
+    silent("``a ``` https://example.com`` end", Check::BareUrl);
+}
+
+#[test]
+fn an_opening_run_with_no_closer_is_literal_and_later_spans_still_count() {
+    // No run of three follows the opener, so it is plain text; the single-tick
+    // span after it is still code.
+    silent("``` stray `https://example.com`", Check::BareUrl);
+    fires_once_at("`` stray then https://example.com", Check::BareUrl, 1, 15);
+}
+
+#[test]
 fn two_nested_brackets_in_a_row_terminate() {
     // `[x[a][b](u)`: the link-text scanner consumes `[a]` as a nested pair and
     // resumes on the `[` of `[b]`, which is the only shape where it enters the

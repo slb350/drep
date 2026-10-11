@@ -71,24 +71,47 @@ pub fn check(
 
 /// Overwrite every `` `code span` `` with spaces.
 ///
-/// A backtick with no partner ends the scan: the rest of the line is prose, and
-/// treating a lone backtick as opening a span that runs to end-of-line would
-/// blank text that renders as itself.
+/// CommonMark's rule: a run of backticks opens a span, and the span ends at the
+/// next run of *exactly* the same length, so ``` `` ` `` ``` shows a literal
+/// backtick. A run with no such partner is plain text and scanning resumes
+/// after it - treating it as opening a span that runs to end-of-line would
+/// blank text that renders as itself, and a later run of another length can
+/// still open a span of its own.
 fn blank_inline_code(chars: &mut [char]) {
     let mut i = 0;
     while i < chars.len() {
-        if chars[i] == '`' {
-            // From `i + 1`, not from `i`: `chars[i]` is the opening backtick,
-            // and a search that could match it would pair every backtick with
-            // itself and blank one character instead of the span.
-            let Some(close) = (i + 1..chars.len()).find(|j| chars[*j] == '`') else {
-                return;
-            };
-            chars[i..=close].fill(' ');
-            i = close;
+        if chars[i] != '`' {
+            i += 1;
+            continue;
         }
-        i += 1;
+        let open = backtick_run(chars, i);
+        let mut j = i + open;
+        let mut close = None;
+        while j < chars.len() {
+            if chars[j] == '`' {
+                let run = backtick_run(chars, j);
+                if run == open {
+                    close = Some(j + run);
+                    break;
+                }
+                j += run;
+            } else {
+                j += 1;
+            }
+        }
+        match close {
+            Some(end) => {
+                chars[i..end].fill(' ');
+                i = end;
+            }
+            None => i += open,
+        }
     }
+}
+
+/// Length of the run of backticks starting at `start`.
+fn backtick_run(chars: &[char], start: usize) -> usize {
+    chars[start..].iter().take_while(|c| **c == '`').count()
 }
 
 /// Overwrite every well-formed `[text](url)` with spaces.
