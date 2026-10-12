@@ -989,6 +989,17 @@ comes back.
   cleaned copy in the menu would name a different model than the config.
   JSON output is not routed through it: serde_json escapes ESC and every
   other C0 control character, though not DEL or the C1 range.
+
+  A `FailureReason` is not excerpted at render time: `write_failures` prints
+  `one_line()` as it stands, so text from outside drep is excerpted where the
+  reason is built. A malformed finding quotes the model's unknown `severity`
+  through `excerpt` at `MALFORMED_VALUE_EXCERPT_MAX`; quoted raw it carried an
+  OSC 52 clipboard write, forged lines and a flood into the failure block.
+  A file name is the one exception to excerpting, because a shortened name
+  names another file: every text report prints one through
+  `text::path_label`, which quotes and escapes a name holding a control
+  character and leaves every other name as it stands. The diff decodes git's
+  quoting, so a branch under review hands drep the raw bytes of a name.
 - **`cli::render` owns the finding line and the "could not be analyzed"
   block**, shared by `check` and `lint-docs`. The source prefix (`tool/`,
   `llm/`) is a parameter, which is the one deliberate difference; `lint-docs`

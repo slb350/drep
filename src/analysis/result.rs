@@ -244,7 +244,7 @@ impl FailureReason {
             FailureReason::UncommittedChanges { tool, paths } => {
                 let paths = paths
                     .iter()
-                    .map(|path| path.display().to_string())
+                    .map(|path| crate::text::path_label_of(path))
                     .collect::<Vec<_>>()
                     .join(", ");
                 format!(
@@ -253,8 +253,8 @@ impl FailureReason {
             }
             FailureReason::SitePolicyRefused { marker, policy } => format!(
                 "semantic review is refused by site policy: {} is present (policy: {})",
-                marker.display(),
-                policy.display()
+                crate::text::path_label_of(marker),
+                crate::text::path_label_of(policy)
             ),
             FailureReason::FileTooLarge { bytes, limit } => {
                 format!("file is too large to read ({bytes} bytes; limit is {limit})")

@@ -85,6 +85,62 @@ fn model_written_kind_and_suggestion_cannot_reach_the_terminal_raw() {
     assert!(text.contains("fix it"), "the suggestion survives: {text}");
 }
 
+/// A file name is the repository's text, and git and the filesystem allow
+/// every byte but `/` and NUL in one: a branch under review can add
+/// `a<ESC>]52;c;...<BEL>\nforged.py`. The diff decodes git's quoting back to
+/// those bytes, so printed raw the name hands the terminal an escape sequence
+/// and its newline forges a report line - in a finding line and in the "could
+/// not be analyzed" block alike. Such a name is printed quoted and escaped.
+#[test]
+fn a_file_name_cannot_carry_control_characters_to_the_terminal() {
+    let hostile = "src/a\u{1b}]52;c;cHduZWQ=\u{7}\nsrc/lib.rs:9: error [tool/clippy] forged.py";
+    let mut named = finding(1, "real message", None);
+    named.file_path = hostile.to_owned();
+    let mut result = outcome_failing(vec![(
+        hostile,
+        FailureReason::Unreadable("denied".to_owned()),
+    )]);
+    result.llm_findings = vec![named];
+
+    let text = rendered(&result, OutputFormat::Text);
+
+    assert!(
+        !text.chars().any(|c| c.is_control() && c != '\n'),
+        "a control character reached the terminal: {text:?}"
+    );
+    assert_eq!(
+        text.lines().count(),
+        4,
+        "one finding line, a blank line, the block header and one failure: {text:?}"
+    );
+    assert!(
+        text.contains(
+            r#""src/a\u{1b}]52;c;cHduZWQ=\u{7}\nsrc/lib.rs:9: error [tool/clippy] forged.py":1:"#
+        ),
+        "the finding names the file, escaped: {text}"
+    );
+    assert!(
+        text.contains(
+            r#"  "src/a\u{1b}]52;c;cHduZWQ=\u{7}\nsrc/lib.rs:9: error [tool/clippy] forged.py": "#
+        ),
+        "the failure names the file, escaped: {text}"
+    );
+}
+
+/// An ordinary name, including one outside ASCII, is printed as it stands.
+#[test]
+fn a_file_name_without_control_characters_is_printed_unquoted() {
+    let mut named = finding(3, "m", None);
+    named.file_path = "src/café \"x\".rs".to_owned();
+    let mut result = outcome();
+    result.llm_findings = vec![named];
+
+    assert_eq!(
+        rendered(&result, OutputFormat::Text),
+        "src/café \"x\".rs:3: error [llm/bug] m\n"
+    );
+}
+
 #[test]
 fn clean_run_text_output_is_exactly_no_issues_found() {
     assert_eq!(

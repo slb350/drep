@@ -162,3 +162,30 @@ fn uncommitted_changes_names_the_tool_the_paths_and_the_recovery() {
         "ruff did not run: the working tree differs from the commit at a.py, pyproject.toml; stage those changes or run `git stash --keep-index --include-untracked` first"
     );
 }
+
+/// The paths a reason names are the repository's file names, and the "could
+/// not be analyzed" block prints `one_line` as it stands, so a name holding an
+/// escape sequence or a newline is quoted and escaped where the reason is
+/// rendered.
+#[test]
+fn a_reason_names_a_hostile_file_quoted_and_escaped() {
+    let hostile = PathBuf::from("a\u{1b}[2K\rb\nforged.py");
+    let reasons = [
+        FailureReason::UncommittedChanges {
+            tool: "ruff".to_owned(),
+            paths: vec![hostile.clone()],
+        },
+        FailureReason::SitePolicyRefused {
+            marker: hostile.clone(),
+            policy: PathBuf::from("/etc/drep/site.toml"),
+        },
+    ];
+    for reason in reasons {
+        let line = reason.one_line();
+        assert!(!line.chars().any(char::is_control), "{line:?}");
+        assert!(
+            line.contains(r#""a\u{1b}[2K\rb\nforged.py""#),
+            "the name survives, escaped: {line}"
+        );
+    }
+}

@@ -12,7 +12,9 @@ use std::path::PathBuf;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
+use crate::analysis::code_quality::MALFORMED_VALUE_EXCERPT_MAX;
 use crate::analysis::findings::Severity;
+use crate::analysis::result::FailureReason;
 use crate::diff::hunks::Hunk;
 
 use super::support::analyzer_with_fast_retry;
@@ -184,6 +186,60 @@ async fn unknown_severity_marks_the_file_unanalyzed() {
         result.dropped_out_of_range, 0,
         "unknown severity is not an out-of-range drop, got {}",
         result.dropped_out_of_range
+    );
+}
+
+/// The unknown severity a malformed record names is the model's own text, and
+/// the "could not be analyzed" block prints the failure reason as it stands.
+/// JSON decodes `\u001b` into a real escape and the code under review can steer
+/// the model, so the value must arrive bounded and free of control characters:
+/// an OSC 52 sequence writes the clipboard, and a newline forges a line of the
+/// report.
+#[tokio::test]
+async fn an_unknown_severity_cannot_carry_control_characters_or_a_flood() {
+    let server = MockServer::start().await;
+    let hostile = format!(
+        "blocker\u{1b}]52;c;cHduZWQ=\u{7}\n  src/other.py: forged line{}",
+        "x".repeat(5_000)
+    );
+    let body = serde_json::json!({
+        "issues": [{"line": 100, "severity": hostile, "category": "bug", "message": "bad"}],
+        "summary": "",
+    })
+    .to_string();
+    mount_sse(
+        &server,
+        ResponseTemplate::new(200).set_body_raw(sse(&[&body]), "text/event-stream"),
+    )
+    .await;
+
+    let (analyzer, _dir) = analyzer_for(&server);
+    let result = analyzer.analyze_file(&hunks_for_python_at(100)).await;
+
+    let reason = result
+        .failed_files
+        .get(&PathBuf::from("src/lib.py"))
+        .expect("an unknown severity must mark the file unanalyzed");
+    let rendered = reason.one_line();
+    assert!(
+        rendered.contains("unknown severity `blocker"),
+        "the reason must still name the value it rejected: {rendered:?}"
+    );
+    assert!(
+        !rendered.chars().any(char::is_control),
+        "model text must not reach the terminal with control characters: {rendered:?}"
+    );
+    let FailureReason::MalformedFinding(detail) = reason else {
+        panic!("an unknown severity is a malformed finding, got {reason:?}");
+    };
+    let quoted = detail
+        .strip_prefix("unknown severity `")
+        .and_then(|rest| rest.strip_suffix('`'))
+        .expect("the detail quotes the rejected value");
+    assert!(
+        quoted.chars().count() <= MALFORMED_VALUE_EXCERPT_MAX + 1,
+        "the quoted value must be bounded, got {} characters",
+        quoted.chars().count()
     );
 }
 

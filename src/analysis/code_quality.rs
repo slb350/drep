@@ -51,6 +51,13 @@ use crate::llm::chain::{ChainError, ProviderChain};
 use crate::llm::error::LlmError;
 use crate::llm::json_parsing::Extracted;
 
+/// The longest response value a malformed-finding reason quotes.
+///
+/// Real severities are one short word. The value is the model's own text and
+/// the "could not be analyzed" block prints the reason as it stands, so it is
+/// quoted through [`crate::text::excerpt`] at this bound.
+pub(crate) const MALFORMED_VALUE_EXCERPT_MAX: usize = 40;
+
 /// The code-quality analyzer.
 ///
 /// Built once per process. The `chain` and the `cache` are both passed in
@@ -479,7 +486,10 @@ fn parse_issue(issue: &Value, payload: &payload::Payload, file_path: &str) -> Is
         return IssueOutcome::Malformed("missing `severity`".to_owned());
     };
     let Ok(severity) = severity_str.parse::<LlmSeverity>() else {
-        return IssueOutcome::Malformed(format!("unknown severity `{severity_str}`"));
+        return IssueOutcome::Malformed(format!(
+            "unknown severity `{}`",
+            crate::text::excerpt(severity_str, MALFORMED_VALUE_EXCERPT_MAX)
+        ));
     };
     let severity = severity.to_severity();
 
