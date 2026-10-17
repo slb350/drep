@@ -12,13 +12,14 @@ permissions:
   contents: read
 
 jobs:
-  # ai-1 has a dedicated repository-scoped validation runner, so separate Linux jobs would only
+  # homelab-1 has a dedicated repository-scoped validation runner, so separate Linux jobs would only
   # serialize while repeating checkout, cache and toolchain setup. Keep the
   # complete Linux gate in one allocation; macOS remains independent below.
   linux:
+    # Preserve the required check name across the host move.
     name: validate (ai-1)
     if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: [self-hosted, linux, x64, homelab-ai-1, drep-linux]
+    runs-on: [self-hosted, linux, x64, homelab-1, drep-linux]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -79,12 +80,13 @@ jobs:
 
       - run: cargo test --all-targets --all-features
 
-  # Exhaustive mutation is scheduled separately. A trusted main push or a pull request from this repository's own branches gets fast feedback on only the production code it changes, after both validation lanes pass. Forked pull requests never reach ai-1.
+  # Exhaustive mutation is scheduled separately. A trusted main push or a pull request from this repository's own branches gets fast feedback on only the production code it changes, after both validation lanes pass. Forked pull requests never reach the self-hosted runner.
   mutants-diff:
+    # Preserve the required check name across the host move.
     name: mutate diff (ai-1)
     needs: [linux, test-macos]
     if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)
-    runs-on: [self-hosted, linux, x64, homelab-ai-1, drep-mutants]
+    runs-on: [self-hosted, linux, x64, homelab-1, drep-mutants]
     timeout-minutes: 120
     # Only a pull request's newest head matters, so a push to it cancels the run it supersedes. Every main push keeps its own run, since each mutates a different diff.
     concurrency:

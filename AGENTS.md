@@ -1,5 +1,10 @@
 # AGENTS.md
 
+October 16 CI placement: Steve selected homelab-1 for all existing ai-1 self-hosted Linux CI roles
+and their mutation offloads. The homelab repository's `docs/37-homelab-1-ci-return.md` owns cutover
+status and recovery. The transport's historical `AI1_*` names and
+`mutants-ai1-transport.sh` filename remain compatibility interfaces.
+
 Instructions for coding agents working in this repository. This file is tracked and authoritative. A local `CLAUDE.md` stays gitignored; it imports this file with `@AGENTS.md` and may add private notes.
 
 ## What drep is
@@ -25,7 +30,7 @@ cargo fmt --all
 cargo build --release                       # the git hooks run ./target/release/drep
 
 ./scripts/mutants-staged.sh                 # the staged diff, what the hook runs
-./scripts/mutants-remote.sh                 # an explicit full sweep on homelab-ai-1
+./scripts/mutants-remote.sh                 # an explicit full sweep on homelab-1
 ./scripts/mutants-run.sh                    # an explicit local full sweep
 
 ./target/release/drep doctor                # what will run in this repository; an
@@ -95,7 +100,7 @@ comes back.
   not rely on the process umask: the former Strix runner used `UMask=0077`, which once
   made a deleted `restrict(..., 0o700)` call look correct in the clean CI
   environment while the same mutant was caught under a developer shell.
-- **Explicit offloaded sweeps run on homelab-ai-1 (`192.168.68.88`), not here.** For local hooks,
+- **Explicit offloaded sweeps run on homelab-1 (`192.168.68.73`), not here.** For local hooks,
   `scripts/mutants-remote.sh` syncs the tree, runs `mutants-run.sh` there and
   propagates its exit code, mirroring `target/mutants/` back. Its SSH-owned
   worktree is `~/.cache/drep-mutants/<repo>`, separate from protected runner
@@ -129,7 +134,7 @@ comes back.
   after each run. cargo-mutants deletes its copies only on a clean exit, so a
   cancelled or timed-out job strands them. The former Strix host mounted
   `/tmp` as tmpfs, where five killed runs once pinned 31 GiB of RAM; the
-  dedicated homelab-ai-1 path is disk-backed. A sibling rather than a child of the checkout
+  dedicated homelab-1 path is disk-backed. A sibling rather than a child of the checkout
   because the copy excludes only `mutants.out`, so a copy under `target/`
   would be copied into every later one. Cleanup uses a depth-first,
   prefix-scoped `find -delete` for both `cargo-mutants-*.tmp` and interrupted
@@ -137,7 +142,7 @@ comes back.
   `rmdir`; broad recursive removal commands have damaged this server before.
   Do not move the scratch root back or weaken the cleanup boundary.
 - **Every GitHub Actions job is repository-scoped and self-hosted.** Hardened,
-  isolated roles on homelab-ai-1 own Linux validation, both Linux release
+  isolated roles on homelab-1 own Linux validation, both Linux release
   targets, cargo-dist's global release phases under the `drep-linux` label,
   and mutation under the separate `drep-mutants` label. The Xcode-equipped M1
   at `Mac-Mini-3.local` owns native
@@ -152,12 +157,12 @@ comes back.
   `host = "x86_64-unknown-linux-gnu"`: `drep-linux` is a custom label, so without
   the host cargo-dist assumes native arm64 and omits cargo-zigbuild and Zig.
   `.github/build-setup.yml` provisions pinned Zig 0.16.0 and cargo-zigbuild
-  0.23.4 for that row before cargo-dist's generated pip fallback; homelab-ai-1's
+  0.23.4 for that row before cargo-dist's generated pip fallback; homelab-1's
   PEP 668-managed Python rejects the fallback's system install.
   The same setup provisions stable Rust and the matrix-selected target for Mac
   release builds, so they do not depend on a LaunchAgent or runner `.path`
   inheriting an interactive user's Rust installation.
-  Cargo-dist's global homelab-ai-1 jobs still assume hosted-image tools: the
+  Cargo-dist's global homelab-1 jobs still assume hosted-image tools: the
   runner `.path` must include its dedicated Cargo bin directory for cached
   `dist` and `/usr/local/bin` for `gh`. The role capability preflight must
   assert those entries and dist's version before admitting the runner; a
@@ -1154,12 +1159,12 @@ comes back.
   gates the formula push on `!announcement_is_prerelease`, so a `-alpha` tag
   releases binaries and installer without the tap repository or
   `HOMEBREW_TAP_TOKEN` existing; the first stable tag needs both.
-- **The arm64 Linux release cross-builds on x86_64 homelab-ai-1.** Its cargo-dist
+- **The arm64 Linux release cross-builds on x86_64 homelab-1.** Its cargo-dist
   runner entry declares the x86_64 host explicitly, and the repository-owned
   build setup installs pinned Zig and cargo-zigbuild versions before the
   generated dependency step. Reqwest enables `native-tls-vendored` for that
   target only, because its SDK dependency enables native TLS and an arm64
-  build cannot discover homelab-ai-1's x86_64 OpenSSL through pkg-config. Keep
+  build cannot discover homelab-1's x86_64 OpenSSL through pkg-config. Keep
   the TLS library self-contained rather than depending on mutable target sysroot
   packages on the runner, and do not make native targets compile it from
   source. The Apple and x86_64 Linux targets remain native builds.

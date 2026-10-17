@@ -567,17 +567,17 @@ exit-3 push handshake. Deterministic tools still run and still gate;
 ## Distribution
 
 `dist-workspace.toml` drives cargo-dist. Four targets are built on two
-repository-scoped homelab runners: homelab-ai-1 builds both Linux targets and owns
+repository-scoped homelab runners: homelab-1 builds both Linux targets and owns
 global plan, host and Homebrew publication work, while the arm64 Mac mini uses
 the native macOS SDK to build both Apple targets. The generated
 `.github/workflows/release.yml` is tag-only and creates the GitHub release and
 Homebrew publication. crates.io remains a separate `cargo publish --locked`
 operation because cargo-dist does not publish Rust crates. The arm64 Linux
-runner mapping names homelab-ai-1's x86_64 host explicitly; cargo-dist uses that host
+runner mapping names homelab-1's x86_64 host explicitly; cargo-dist uses that host
 fact to provision cargo-zigbuild and Zig instead of assuming native arm64.
 `.github/build-setup.yml` installs pinned Zig 0.16.0 and cargo-zigbuild 0.23.4
 for that matrix row before cargo-dist's generated dependency step. That avoids
-the generated pip fallback, which homelab-ai-1's PEP 668-managed Python rejects.
+the generated pip fallback, which homelab-1's PEP 668-managed Python rejects.
 The same setup installs stable Rust plus the matrix-selected target on macOS
 before cargo-dist is installed, so the Mac service never depends on an
 interactive user's shell profile or a runner-global Cargo path.
@@ -585,7 +585,7 @@ Reqwest enables `native-tls-vendored` only for arm64 Linux, which compiles
 OpenSSL for that target instead of requiring an arm64 OpenSSL sysroot on the
 x86_64 host or adding the source build to native targets.
 
-Cargo-dist's global jobs have two explicit homelab-ai-1 host prerequisites that its
+Cargo-dist's global jobs have two explicit homelab-1 host prerequisites that its
 generated workflow assumes are present on a GitHub-hosted image: `gh` must be
 on the service PATH, and Homebrew publication uses Linuxbrew's supported
 `/home/linuxbrew/.linuxbrew` prefix. The hardened service keeps home directories
@@ -595,7 +595,7 @@ dedicated Cargo bin directory because global jobs download a cached `dist`
 there without adding that directory to `GITHUB_PATH`.
 
 `.github/workflows/rust.yml` runs format, clippy, a warning-denied rustdoc build of every item including private ones, tests and the 1.88 MSRV check
-in one homelab-ai-1 allocation, plus the test suite on the native Mac mini. Both
+in one homelab-1 allocation, plus the test suite on the native Mac mini. Both
 stable toolchains include Clippy: the test suite runs a real Rust fixture to
 verify compiler-grounded semantic suppression. Its jobs
 accept pushes and same-repository pull requests but skip forked pull requests
@@ -604,7 +604,7 @@ Cargo binary caching. The action's default save cleanup removes every binary
 that existed when the job began, but these self-hosted runners keep pinned
 publisher tools in that same Cargo bin directory. Registry, Git and target
 caching remain enabled without allowing validation to delete host-owned tools.
-After the Linux and macOS jobs pass a trusted push to `main` or a pull request from one of this repository's own branches, `rust.yml` mutates only production code in that change's diff on the dedicated ai-1 mutation runner; forked pull requests are skipped, as they are for validation. A push diffs `github.event.before` against `github.sha`. A pull request checks out its head commit rather than GitHub's merge commit and diffs it against its base SHA from their merge base: cargo-mutants refuses a diff whose new side does not match the tree it mutates, and a two-dot diff against a base branch that has moved on would include lines only the base changed. The job fetches full history so both ends of either diff are present, and refuses an empty end, which git would read as `HEAD` and turn into an empty diff that cargo-mutants passes. A new push to a pull request cancels that pull request's superseded run; every main push keeps its own.
+After the Linux and macOS jobs pass a trusted push to `main` or a pull request from one of this repository's own branches, `rust.yml` mutates only production code in that change's diff on the dedicated homelab-1 mutation runner; forked pull requests are skipped, as they are for validation. A push diffs `github.event.before` against `github.sha`. A pull request checks out its head commit rather than GitHub's merge commit and diffs it against its base SHA from their merge base: cargo-mutants refuses a diff whose new side does not match the tree it mutates, and a two-dot diff against a base branch that has moved on would include lines only the base changed. The job fetches full history so both ends of either diff are present, and refuses an empty end, which git would read as `HEAD` and turn into an empty diff that cargo-mutants passes. A new push to a pull request cancels that pull request's superseded run; every main push keeps its own.
 `.github/workflows/mutants.yml` owns the exhaustive sweep: it runs weekly or by explicit dispatch, refuses a
 manual ref outside the default branch, and never triggers for a push or pull
 request. Both mutation lanes pin `cargo-mutants` 27.1.0 and start from a clean
@@ -615,13 +615,13 @@ Developer offload through `scripts/mutants-remote.sh` mirrors each checkout
 into its own directory under the role account's `~/.cache/drep-mutants/`, named
 for the machine and the checkout's path, instead of the protected runner
 checkout. The checkout lock makes that directory one run's at a time.
-It defaults to `steve@192.168.68.88` and shares the host lock with
+It defaults to `steve@192.168.68.73` and shares the host lock with
 hosted mutation, so the two entrypoints cannot run concurrently. Mutation runs
-on ai-1; the only other place a run happens is this machine, when ai-1 is
-unreachable or `DREP_MUTANTS_REMOTE=0` is set. Legion's stopped mutation runner
-is therefore not rollback capacity; homelab-1's stopped Linux validation runner
-remains rollback material for that job only.
-The root-owned ai-workstation offload helper launches all commands and rsync as
+on homelab-1. The local hook retains its explicit fallback when that host is
+unreachable or `DREP_MUTANTS_REMOTE=0` is set. The ai-1 predecessors remain
+fenced until migration acceptance. An attended rollback must drain and fence
+the replacement before restoring predecessor routes; Legion remains retired.
+The root-owned homelab-1 offload helper launches all commands and rsync as
 `ci-drep-mutants` in the same bounded `ai-ci.slice` and sandbox as hosted jobs.
 The role unit names the host lock, `/srv/ci/fleet/drep-mutants/home/host.lock`,
 and the offloaded run inherits it from the session that took it; the account
