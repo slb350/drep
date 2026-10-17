@@ -1,6 +1,6 @@
 use super::{SAME_REPOSITORY_PR, common, job_guard, rust_workflow, workflow_job};
 
-const MUTANTS_RUNNER: &str = "runs-on: [self-hosted, linux, x64, homelab-ai-1, drep-mutants]";
+const MUTANTS_RUNNER: &str = "runs-on: [self-hosted, linux, x64, homelab-1, drep-mutants]";
 const CARGO_MUTANTS_TOOL: &str = "tool: cargo-mutants@27.1.0";
 
 fn mutation_workflow() -> String {
@@ -31,12 +31,12 @@ fn mutation_ci_splits_diff_checks_from_exhaustive_sweeps() {
         format!(
             "(github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'pull_request' && {SAME_REPOSITORY_PR})"
         ),
-        "diff mutation must run only for main pushes and same-repository pull requests, so forked pull-request code never reaches ai-1"
+        "diff mutation must run only for main pushes and same-repository pull requests, so forked pull-request code never reaches homelab-1"
     );
     assert!(
         diff_mutants.contains("needs: [linux, test-macos]")
             && diff_mutants.contains(MUTANTS_RUNNER),
-        "routine mutation must follow successful validation on ai-1"
+        "routine mutation must follow successful validation on homelab-1"
     );
     assert!(
         diff_mutants
@@ -99,7 +99,7 @@ fn mutation_ci_splits_diff_checks_from_exhaustive_sweeps() {
     );
     assert!(
         mutants.contains(MUTANTS_RUNNER),
-        "the full sweep must require the dedicated homelab-ai-1 mutation label"
+        "the full sweep must require the dedicated homelab-1 mutation label"
     );
     let timeout_lines = mutants
         .lines()
@@ -157,9 +157,9 @@ fn remote_mutation_sweep_defaults_to_bounded_ai1() {
 
     assert!(
         common::read("scripts/mutants-ai1-transport.sh")
-            .contains("\nAI1_HOST=steve@192.168.68.88\n")
+            .contains("\nAI1_HOST=steve@192.168.68.73\n")
             && !script.contains("DREP_MUTANTS_HOST:-"),
-        "developer mutation offload must follow hosted mutation ownership to ai-1"
+        "developer mutation offload must follow hosted mutation ownership to homelab-1"
     );
     assert!(
         script.contains("AI1_CI_ROLE=drep-mutants")

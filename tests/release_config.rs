@@ -120,10 +120,7 @@ fn github_ci_uses_only_guarded_homelab_runners() {
     );
     let expected_guard = format!("github.event_name == 'push' || {SAME_REPOSITORY_PR}");
     for (job_name, runner) in [
-        (
-            "linux",
-            "[self-hosted, linux, x64, homelab-ai-1, drep-linux]",
-        ),
+        ("linux", "[self-hosted, linux, x64, homelab-1, drep-linux]"),
         ("test-macos", "[self-hosted, macos, arm64, drep-macos]"),
     ] {
         let job = workflow_job(&workflow, job_name);
@@ -149,7 +146,7 @@ fn github_ci_uses_only_guarded_homelab_runners() {
             && linux.contains("cargo doc --no-deps --all-features --document-private-items")
             && linux.contains("cargo test --all-targets --all-features")
             && linux.contains("cargo +1.88.0 check"),
-        "the single ai-1 lane must retain format, clippy, rustdoc, test and MSRV gates"
+        "the single homelab-1 lane must retain format, clippy, rustdoc, test and MSRV gates"
     );
     let macos = workflow_job(&workflow, "test-macos");
     assert!(
@@ -160,7 +157,7 @@ fn github_ci_uses_only_guarded_homelab_runners() {
         !workflow.contains("\n  lint:\n")
             && !workflow.contains("\n  test-linux:\n")
             && !workflow.contains("\n  msrv:\n"),
-        "serial ai-1 validation must not repeat runner and checkout setup across jobs"
+        "serial homelab-1 validation must not repeat runner and checkout setup across jobs"
     );
 
     assert!(
@@ -210,7 +207,7 @@ fn maintained_actions_are_pinned_to_full_commit_shas() {
 ///
 /// A target that falls out of this list does not fail anything: the installer
 /// keeps working everywhere else and tells that one user "unsupported
-/// platform". Both Linux triples build on homelab-ai-1, with its x86_64 host
+/// platform". Both Linux triples build on homelab-1, with its x86_64 host
 /// cross-compiling arm64, so dropping one saves nothing that would justify it.
 #[test]
 fn every_supported_platform_is_built() {

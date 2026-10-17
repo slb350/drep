@@ -13,7 +13,7 @@ permissions:
 jobs:
   publish:
     name: Publish to crates.io
-    # The release boundary: the repository's own runner role on homelab-ai-1, as release.yml uses.
+    # The release boundary: the repository's own runner role on homelab-1, as release.yml uses.
     runs-on: "drep-linux"
     timeout-minutes: 30
     environment: release
