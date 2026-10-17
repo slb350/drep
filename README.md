@@ -299,7 +299,8 @@ of the file. So a four-backtick fence can hold a three-backtick sample, a `~~~`
 sample can hold backticks, and a line with an info string inside a block stays
 part of it. A fence nested in a list item may be indented by any amount. A URL
 inside an `<https://...>` autolink is already a link and is not reported as a
-bare URL.
+bare URL, and neither is one in the attribute of a raw HTML tag
+(`<img src="https://...">`) or inside an HTML comment on the same line.
 
 ## Configuration
 

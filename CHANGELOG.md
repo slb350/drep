@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `lint-docs` no longer reports a URL inside a raw HTML tag as a `bare_url`. `<img src="https://...">` and `<a href="https://...">`, the usual way a README centres a logo or links an image, were reported with the rest of the tag (`https://example.com/a.png">`) as the URL, and the advice to wrap it as `[text](url)` would break the tag. A tag is recognised by CommonMark's grammar for raw HTML, so `x<y https://example.com>` is still plain text, and only the tag is skipped: a URL written between two tags is still reported. A URL or an unmatched bracket inside an HTML comment on the same line is skipped too. A tag or comment that ends on a later line is still read as text.
+
 ## [3.1.2] - 2026-10-12
 
 ### Fixed
