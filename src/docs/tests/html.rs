@@ -190,3 +190,36 @@ fn the_shortest_comments_are_complete() {
 fn an_attribute_name_may_start_with_a_colon() {
     silent(r#"<a :href="https://example.com">x</a>"#, Check::BareUrl);
 }
+
+#[test]
+fn a_comment_ends_at_the_first_close_after_its_opener_wherever_it_starts() {
+    // `<!-->` and `<!--->` close themselves even after other text, so the URL
+    // after them is prose and a later `-->` closes nothing.
+    fires_once_at("See <!--> https://example.com -->", Check::BareUrl, 1, 11);
+    fires_once_at("See <!---> https://example.com -->", Check::BareUrl, 1, 12);
+}
+
+#[test]
+fn an_empty_unquoted_value_ends_the_tag_as_plain_text() {
+    // An unquoted value is nonempty, so `href=>` is not an attribute and the
+    // earlier attribute's URL is not inside a tag.
+    fires_once_at(
+        r#"<a title="https://example.com" href=>"#,
+        Check::BareUrl,
+        1,
+        11,
+    );
+}
+
+#[test]
+fn only_spaces_and_tabs_separate_the_parts_of_a_tag() {
+    silent("<a\thref=\"https://example.com\">x</a>", Check::BareUrl);
+    // A no-break space is whitespace to Rust but not to the grammar, so this
+    // is not a tag and the URL in it is reported.
+    fires_once_at(
+        "<a\u{a0}href=\"https://example.com\">",
+        Check::BareUrl,
+        1,
+        10,
+    );
+}

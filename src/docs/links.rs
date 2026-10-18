@@ -1,8 +1,8 @@
 //! The two checks that need markdown's link grammar.
 //!
-//! Both work on a *blanked* copy of the line: inline code spans,
-//! well-formed links, autolinks and raw HTML tags are overwritten with spaces before either check looks at
-//! it. Blanked rather than removed, so every surviving character keeps its
+//! Both work on a *blanked* copy of the line: inline code spans, well-formed
+//! links, autolinks and raw HTML tags are overwritten with spaces before either
+//! check looks at it. Blanked rather than removed, so every surviving character keeps its
 //! original column and a reported position points at the real line.
 //!
 //! The order is not arbitrary. Inline code is blanked first, because a
@@ -45,7 +45,8 @@ pub fn check(
     }
 
     // Blanking only copies when the line holds something to blank. A backtick
-    // can open a code span, a `[` can open a link and a `<` an autolink; a line
+    // can open a code span, a `[` can open a link and a `<` an autolink or an
+    // HTML tag; a line
     // with none of them is already its own blanked form. Lines holding a stray
     // `]` and nothing else fall into the else branch and are still counted
     // below, which is the point - an unmatched closing bracket is exactly what
@@ -260,19 +261,26 @@ fn match_tag(chars: &[char], start: usize) -> Option<usize> {
     if !chars.get(name)?.is_ascii_alphabetic() {
         return None;
     }
-    let mut i = skip_while(chars, name + 1, |c| c.is_ascii_alphanumeric() || c == '-');
+    // From `name`, not `name + 1`: its first letter already satisfies the
+    // predicate, so skipping it by hand would be an unobservable difference.
+    let mut i = skip_while(chars, name, |c| c.is_ascii_alphanumeric() || c == '-');
     if closing {
-        i = skip_while(chars, i, char::is_whitespace);
+        i = skip_while(chars, i, is_tag_space);
         return (chars.get(i) == Some(&'>')).then_some(i);
     }
     loop {
-        let attributes = skip_while(chars, i, char::is_whitespace);
+        let attributes = skip_while(chars, i, is_tag_space);
         // An attribute needs whitespace before it, so `<a href="x"href="y">` is
         // not a tag.
         let separated = attributes > i;
         match *chars.get(attributes)? {
             '>' => return Some(attributes),
-            '/' => return (chars.get(attributes + 1) == Some(&'>')).then_some(attributes + 1),
+            // One index both tested and returned, so the `>` it names is the
+            // one that was checked.
+            '/' => {
+                let close = attributes + 1;
+                return (chars.get(close) == Some(&'>')).then_some(close);
+            }
             c if separated && (c.is_ascii_alphabetic() || matches!(c, '_' | ':')) => {
                 i = attribute_end(chars, attributes)?;
             }
@@ -287,22 +295,28 @@ fn attribute_end(chars: &[char], start: usize) -> Option<usize> {
     let name_end = skip_while(chars, start, |c| {
         c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | ':' | '-')
     });
-    let equals = skip_while(chars, name_end, char::is_whitespace);
+    let equals = skip_while(chars, name_end, is_tag_space);
     if chars.get(equals) != Some(&'=') {
         return Some(name_end);
     }
-    let value = skip_while(chars, equals + 1, char::is_whitespace);
+    let value = skip_while(chars, equals + 1, is_tag_space);
     match *chars.get(value)? {
         quote @ ('"' | '\'') => (value + 1..chars.len())
             .find(|i| chars[*i] == quote)
             .map(|close| close + 1),
         _ => {
             let end = skip_while(chars, value, |c| {
-                !c.is_whitespace() && !matches!(c, '"' | '\'' | '=' | '<' | '>' | '`')
+                !is_tag_space(c) && !matches!(c, '"' | '\'' | '=' | '<' | '>' | '`')
             });
             (end > value).then_some(end)
         }
     }
+}
+
+/// Whitespace as the raw HTML grammar counts it inside one line: spaces and
+/// tabs. A no-break space is whitespace to Rust but text to CommonMark.
+fn is_tag_space(c: char) -> bool {
+    matches!(c, ' ' | '\t')
 }
 
 /// The first index at or after `from` whose character fails `keep`.
