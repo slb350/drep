@@ -11,7 +11,11 @@ use crate::analysis::findings::Finding;
 use crate::diff::hunks::Hunk;
 
 pub const DEFAULT_PATH: &str = ".drep/acknowledgements.toml";
+/// The directory component of [`DEFAULT_PATH`].
+const DIRECTORY: &str = ".drep";
 const CONTEXT_RADIUS: u32 = 3;
+/// How much of a toml parse message reaches the terminal.
+const PARSE_MESSAGE_MAX: usize = 200;
 
 #[derive(Debug, Default, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -21,8 +25,18 @@ pub struct Store {
 }
 
 impl Store {
+    /// Read the store under `root`; an absent store is an empty one.
+    ///
+    /// The store is repository content, so a branch under review chooses what
+    /// sits at this path. Neither the directory nor the file may be a symbolic
+    /// link, or reading would open any file on the reviewer's machine. A parse
+    /// failure reports the toml message alone, excerpted: the error's
+    /// `Display` renders the offending source line, and the message can quote
+    /// a key holding control characters.
     pub fn load(root: &Path) -> Result<Self> {
         let path = root.join(DEFAULT_PATH);
+        refuse_link(&root.join(DIRECTORY))?;
+        refuse_link(&path)?;
         let raw = match std::fs::read_to_string(&path) {
             Ok(raw) => raw,
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(Self::default()),
@@ -30,7 +44,13 @@ impl Store {
                 return Err(err).with_context(|| format!("could not read {}", path.display()));
             }
         };
-        toml::from_str(&raw).with_context(|| format!("could not parse {}", path.display()))
+        toml::from_str(&raw).map_err(|err: toml::de::Error| {
+            anyhow!(
+                "could not parse {}: {}",
+                path.display(),
+                crate::text::excerpt(err.message(), PARSE_MESSAGE_MAX)
+            )
+        })
     }
 
     pub fn contains(&self, fingerprint: &str) -> bool {
@@ -46,6 +66,11 @@ impl Store {
         let parent = path
             .parent()
             .ok_or_else(|| anyhow!("{} has no parent", path.display()))?;
+        // Checked before creation: a linked directory would receive the
+        // temporary and the published store outside the repository. The file
+        // itself needs no check, because `persist` replaces a link rather
+        // than writing through it.
+        refuse_link(parent)?;
         std::fs::create_dir_all(parent)
             .with_context(|| format!("could not create {}", parent.display()))?;
         let rendered = toml::to_string_pretty(self).context("could not render acknowledgements")?;
@@ -63,6 +88,21 @@ impl Store {
             .with_context(|| format!("could not publish {}", path.display()))?;
         Ok(())
     }
+}
+
+/// Refuse a symbolic link at `path`.
+///
+/// An absent or uninspectable path passes: the read or directory creation that
+/// follows meets the same condition and reports it.
+fn refuse_link(path: &Path) -> Result<()> {
+    if std::fs::symlink_metadata(path).is_ok_and(|metadata| metadata.file_type().is_symlink()) {
+        return Err(anyhow!(
+            "{} is a symbolic link; acknowledgements are read and written only inside the \
+             repository",
+            path.display()
+        ));
+    }
+    Ok(())
 }
 
 pub fn validate_fingerprint(value: &str) -> Result<()> {
@@ -191,6 +231,89 @@ mod tests {
         assert!(
             err.to_string().contains("could not read"),
             "the error should identify the failed read: {err:#}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_store_linked_out_of_the_repository_is_neither_read_nor_quoted() {
+        // The store is repository content, so a branch under review can make
+        // it a link to any file on the reviewer's machine. Reading through it
+        // and reporting the parse error rendered the target's first line.
+        let outside = tempfile::tempdir().expect("outside dir");
+        let secret = outside.path().join("netrc");
+        std::fs::write(&secret, "machine example.com password hunter2-secret\n")
+            .expect("outside file");
+        let repo = tempfile::tempdir().expect("repo");
+        std::fs::create_dir(repo.path().join(".drep")).expect(".drep");
+        std::os::unix::fs::symlink(&secret, repo.path().join(DEFAULT_PATH)).expect("symlink");
+
+        let err = Store::load(repo.path()).expect_err("a linked store must be refused");
+        let rendered = format!("{err:#} {err:?}");
+
+        assert!(
+            !rendered.contains("hunter2-secret"),
+            "the error quoted a file outside the repository: {rendered}"
+        );
+        assert!(rendered.contains("is a symbolic link"), "{rendered}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_store_inside_a_linked_directory_is_not_read() {
+        // The file is regular, so only the directory check can refuse it.
+        let outside = tempfile::tempdir().expect("outside dir");
+        let mut store = Store::default();
+        store.insert("a".repeat(64));
+        store.save(outside.path()).expect("outside store");
+        let repo = tempfile::tempdir().expect("repo");
+        std::os::unix::fs::symlink(outside.path().join(".drep"), repo.path().join(".drep"))
+            .expect("symlink");
+
+        let err = Store::load(repo.path()).expect_err("a linked directory must be refused");
+
+        assert!(format!("{err:#}").contains("is a symbolic link"), "{err:#}");
+    }
+
+    #[test]
+    fn a_parse_error_quotes_neither_the_source_line_nor_its_control_characters() {
+        let repo = tempfile::tempdir().expect("repo");
+        let path = repo.path().join(DEFAULT_PATH);
+        std::fs::create_dir_all(path.parent().expect("parent")).expect(".drep");
+        std::fs::write(
+            &path,
+            "\"\\u001b]52;c;Zm9v\\u0007\" = \"source-line-text\"\n",
+        )
+        .expect("store");
+
+        let err = Store::load(repo.path()).expect_err("an unknown field is a parse error");
+        let rendered = format!("{err:#}");
+
+        assert!(rendered.contains("unknown field"), "{rendered}");
+        assert!(!rendered.contains("source-line-text"), "{rendered}");
+        assert!(!rendered.chars().any(char::is_control), "{rendered:?}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_linked_store_directory_is_never_written_through() {
+        let outside = tempfile::tempdir().expect("outside dir");
+        let repo = tempfile::tempdir().expect("repo");
+        std::os::unix::fs::symlink(outside.path(), repo.path().join(".drep")).expect("symlink");
+        let mut store = Store::default();
+        store.insert("a".repeat(64));
+
+        let err = store
+            .save(repo.path())
+            .expect_err("a linked directory must be refused");
+
+        assert!(format!("{err:#}").contains("is a symbolic link"), "{err:#}");
+        assert!(
+            std::fs::read_dir(outside.path())
+                .expect("outside dir")
+                .next()
+                .is_none(),
+            "save wrote into a directory outside the repository"
         );
     }
 

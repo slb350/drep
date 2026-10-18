@@ -228,6 +228,9 @@ source. `.drep/acknowledgements.toml` stores rejected fingerprints. Checks load
 the file read-only and filter matches; `drep acknowledge` is the only writer,
 publishing it atomically. Because line numbers are excluded from the hash, a
 pure line shift does not resurrect a finding, while a local source edit does.
+The store is repository content, so a symbolic link at `.drep` or at the file
+is refused rather than followed, and a parse error reports toml's excerpted
+message rather than the offending source line.
 
 The HTTP backend uses `open-agent-sdk`. The subscription backend invokes
 `codex exec --json` with ChatGPT authentication forced. It runs in an empty

@@ -13,14 +13,19 @@ impl AuthStore {
     /// A missing file is an empty store, which is the normal first-run state.
     /// Every other read or parse failure remains fatal so corruption never
     /// masquerades as a machine with no stored credentials.
+    ///
+    /// A parse failure carries the toml error's message alone. Its `Display`
+    /// renders the offending source line, and in this file that line is an
+    /// endpoint and its key, so the full rendering would print a credential.
     pub fn load(path: &Path) -> Result<Self, AuthError> {
         let content = match fs::read_to_string(path) {
             Ok(content) => content,
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(Self::new()),
             Err(err) => return Err(AuthError::Read(path.to_path_buf(), err)),
         };
-        toml::from_str(&content)
-            .map_err(|err: toml::de::Error| AuthError::Parse(path.to_path_buf(), err.to_string()))
+        toml::from_str(&content).map_err(|err: toml::de::Error| {
+            AuthError::Parse(path.to_path_buf(), err.message().to_owned())
+        })
     }
 
     /// Merge this snapshot's mutations into the latest store and publish it.

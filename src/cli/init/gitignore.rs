@@ -49,6 +49,10 @@ pub enum Outcome {
     /// Git tracks the file, so `.gitignore` cannot affect it. Nothing was
     /// written, because writing would have implied otherwise.
     Tracked,
+    /// `.gitignore` is a symbolic link. Git does not follow one in the working
+    /// tree, and a cloned repository chooses where it points, so nothing was
+    /// written through it.
+    Linked,
 }
 
 impl Outcome {
@@ -61,6 +65,10 @@ impl Outcome {
             Self::Tracked => format!(
                 "! {ENTRY} is tracked by git, so .gitignore will not affect it.\n  \
                  Run `git rm --cached {ENTRY}` to stop tracking it, keeping the file."
+            ),
+            Self::Linked => format!(
+                "! .gitignore is a symbolic link, which git does not follow, so {ENTRY} was not \
+                 added.\n  Replace it with a regular file to ignore {ENTRY}."
             ),
         }
     }
@@ -121,8 +129,16 @@ async fn is_tracked(root: &Path) -> Result<bool> {
 /// A missing trailing newline on the existing file is repaired before
 /// appending, because otherwise the entry joins the last line and both rules
 /// stop working - and the file that gets damaged is one drep did not write.
+///
+/// A symbolic link is reported rather than followed: the repository chose its
+/// target, which may be any file outside it, or a dangling path that writing
+/// would create.
 fn append(root: &Path) -> Result<Outcome> {
     let path = root.join(".gitignore");
+    // An inspection failure falls through to the read, which reports it.
+    if std::fs::symlink_metadata(&path).is_ok_and(|metadata| metadata.file_type().is_symlink()) {
+        return Ok(Outcome::Linked);
+    }
     let existing = match std::fs::read_to_string(&path) {
         Ok(content) => Some(content),
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => None,
