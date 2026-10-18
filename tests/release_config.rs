@@ -35,9 +35,18 @@ fn parsed_toml(relative: &str) -> toml::Table {
     toml::from_str(&common::read(relative)).unwrap_or_else(|e| panic!("{relative} must parse: {e}"))
 }
 
-fn parsed_yaml(relative: &str) -> serde_yaml_ng::Value {
-    serde_yaml_ng::from_str(&common::read(relative))
+/// The first document of a repository YAML file.
+///
+/// A key that may legitimately be absent is read with `SafelyIndex::get` rather
+/// than `Index`: unlike a `Value` enum, indexing a `YamlOwned` mapping panics on
+/// a missing key, and an update entry with nothing to exclude is a valid
+/// Dependabot configuration.
+fn parsed_yaml(relative: &str) -> saphyr::YamlOwned {
+    <saphyr::YamlOwned as saphyr::LoadableYamlNode>::load_from_str(&common::read(relative))
         .unwrap_or_else(|e| panic!("{relative} must parse: {e}"))
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| panic!("{relative} must contain a YAML document"))
 }
 
 fn workflow_job<'a>(workflow: &'a str, name: &str) -> &'a str {
@@ -452,13 +461,20 @@ fn release_workflow_needs_no_manual_ci_exception() {
 /// creates a clean-looking PR whose change disappears at the next `dist init`.
 #[test]
 fn dependabot_excludes_the_generated_release_workflow() {
+    use saphyr::SafelyIndex as _;
+
     let config = parsed_yaml(".github/dependabot.yml");
-    let updates = config["updates"]
-        .as_sequence()
+    let updates = config
+        .get("updates")
+        .and_then(saphyr::YamlOwned::as_sequence)
         .expect("Dependabot must declare update entries");
     let excludes_generated_workflow = updates
         .iter()
-        .filter_map(|update| update["exclude-paths"].as_sequence())
+        .filter_map(|update| {
+            update
+                .get("exclude-paths")
+                .and_then(saphyr::YamlOwned::as_sequence)
+        })
         .flatten()
         .any(|path| path.as_str() == Some(".github/workflows/release.yml"));
 

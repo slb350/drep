@@ -7,9 +7,57 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Security:** the lockfile takes `rustls` 0.23.45 to 0.23.46, the version RustSec lists as patched
+  for the four advisories cargo-audit and osv-scanner reported against `main`: `RUSTSEC-2026-0346`,
+  a client session's `Debug` output exposing TLS secrets, `RUSTSEC-2026-0347`, buffered application
+  data reaching the outer server after an ECH rejection, `RUSTSEC-2026-0348`, Brotli certificate
+  decompression allocating up to 1 GiB before authentication, and `RUSTSEC-2026-0349`, an
+  unauthenticated `ServerHello` downgrading later connections to classical key exchange. `rustls` is
+  not a dependency of drep: `Cargo.lock` records it because `reqwest` names the TLS backend it can
+  also be built with, and neither drep (`native-tls-vendored`) nor `open-agent-sdk` 0.11.6 (`json`,
+  `stream`) enables it, so `cargo tree --all-features --target all -i rustls` resolves nothing and
+  no gate compiles it. The lockfile is the whole fix: a `Cargo.toml` requirement cannot name a crate
+  this one does not depend on, and adding one would build a second TLS stack into every release
+  binary.
+- The release-contract test parses its YAML with `saphyr` 0.2.2 in place of `serde_yaml_ng` 0.10.0,
+  which clears the one warning that remained: `RUSTSEC-2024-0449`, `unsafe-libyaml` unmaintained.
+  `serde_yaml_ng` 0.10.0 is that crate's newest release and still depends on `unsafe-libyaml`, whose
+  repository is archived and whose advisory carries an empty `patched` list, so no update to any
+  `serde_yaml_ng` version clears it and the parser itself had to change. Of the safe-Rust parsers
+  that advisory names, `saphyr` is the only one that builds on this crate's 1.88 floor -
+  `serde-saphyr` 2.0.0 and `noyalib` 0.0.58 both declare `rust-version` 1.89 - and its `encoding`
+  feature is off, because it exists to decode non-UTF-8 byte streams and would pull a second
+  `encoding_rs` copy into the development graph. `saphyr`'s `Index` panics where a `Value` enum
+  yields null, so the Dependabot test reads `updates` and `exclude-paths` through `SafelyIndex::get`
+  and still treats an update entry with nothing to exclude as the valid configuration it is. Neither
+  crate reaches a release binary: both are development dependencies.
+- Refresh the Rust 1.88-compatible lockfile: `open-agent-sdk` 0.11.5 to 0.11.6, `tokio` 1.53.2 to
+  1.53.3, `libc` 0.2.190 to 0.2.191, `syn` 3.0.8 to 3.0.9, `unicode-ident` 1.0.26 to 1.0.27,
+  `async-compression` 0.4.50 to 0.4.51 (with `compression-codecs` 0.4.45 to 0.4.46 and
+  `compression-core` 0.4.33 to 0.4.34), `equivalent` 1.0.2 to 1.0.3 and `schannel` 0.1.29 to 0.1.30.
+  `open-agent-sdk` 0.11.6 is the one with a visible effect: an error a server reports inside an
+  OpenAI-protocol stream now reaches the caller as `Error::Api` carrying the server's own status,
+  where 0.11.5 surfaced a `Stream` parse failure or finished cleanly. drep reads `status_code()` on
+  the error it is handed and passes the number to `is_retryable_status`, so a 429 or a 503 in a
+  stream now fails over to the next provider and a 400 stops that file without failing over and
+  without demoting the provider for the rest of the run, instead of failing over on a status drep
+  never saw. `reqwest` stays at 0.12.28: 0.13.5 is semver-major, outside this crate's `0.12`
+  requirement and `open-agent-sdk` 0.11.6's `^0.12.28`, whose single copy drep shares rather than
+  building a second one. cargo-audit with `--deny warnings` and osv-scanner both report nothing
+  against the resulting lockfile.
+
 ### Fixed
 
-- `lint-docs` no longer reports a URL inside a raw HTML tag as a `bare_url`. `<img src="https://...">` and `<a href="https://...">`, the usual way a README centres a logo or links an image, were reported with the rest of the tag (`https://example.com/a.png">`) as the URL, and the advice to wrap it as `[text](url)` would break the tag. A tag is recognised by CommonMark's grammar for raw HTML, so `x<y https://example.com>` is still plain text, and only the tag is skipped: a URL written between two tags is still reported. A URL or an unmatched bracket inside an HTML comment on the same line is skipped too. A tag or comment that ends on a later line is still read as text.
+- `lint-docs` no longer reports a URL inside a raw HTML tag as a `bare_url`. `<img
+  src="https://...">` and `<a href="https://...">`, the usual way a README centres a logo or links
+  an image, were reported with the rest of the tag (`https://example.com/a.png">`) as the URL, and
+  the advice to wrap it as `[text](url)` would break the tag. A tag is recognised by CommonMark's
+  grammar for raw HTML, so `x<y https://example.com>` is still plain text, and only the tag is
+  skipped: a URL written between two tags is still reported. A URL or an unmatched bracket inside an
+  HTML comment on the same line is skipped too. A tag or comment that ends on a later line is still
+  read as text.
 
 ## [3.1.2] - 2026-10-12
 
