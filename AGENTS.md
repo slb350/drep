@@ -1037,7 +1037,11 @@ comes back.
   installed hook blocks on; a `~~~` sample was never a fence at all. Unbounded
   indentation is the one deliberate relaxation, for a fence inside a list item.
   The link checks follow the same grammar: an `<https://...>` autolink is a
-  link and is never a `bare_url`.
+  link and is never a `bare_url`. Raw inline HTML is blanked by the spec's tag
+  and comment grammar (section 6.6), not from `<` to `>`: `x<y https://e.com>`
+  is not a tag because a URL is not an attribute name, and wrapping an
+  attribute's URL in `[text](url)` would break the tag. A tag or comment that
+  ends on a later line is plain text, as each check reads one line.
 - **Doc-check severity is "does it change how the document renders".** An
   unclosed fence turns every line below it into code, so it alone is `error`;
   a heading or link that renders wrong is `warning`; whitespace and line

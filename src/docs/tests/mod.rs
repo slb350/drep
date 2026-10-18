@@ -7,6 +7,7 @@
 mod analyze;
 mod blocks;
 mod fence;
+mod html;
 mod lines;
 mod links;
 mod vocabulary;
