@@ -118,6 +118,41 @@ fn a_corrupt_store_is_an_error_rather_than_an_empty_one() {
 }
 
 #[test]
+fn a_parse_error_never_quotes_a_stored_key() {
+    // A hand-edited store that repeats an endpoint fails to parse at the line
+    // holding the second key. The toml crate's `Display` renders that source
+    // line, so a full rendering would print the credential into the terminal,
+    // a hook log or an agent transcript; the message alone names the problem.
+    let (_dir, path) = temp_store();
+    std::fs::create_dir_all(path.parent().expect("parent")).expect("mkdir");
+    std::fs::write(
+        &path,
+        "[keys]\n\
+         \"https://api.example/v1\" = \"sk-first-secret\"\n\
+         \"https://api.example/v1\" = \"sk-second-secret\"\n",
+    )
+    .expect("write");
+
+    let err = AuthStore::load(&path).expect_err("a duplicate key is a parse error");
+    let rendered = format!("{err} {err:?}");
+
+    assert!(
+        matches!(err, AuthError::Parse(..)),
+        "expected a parse error, got {err:?}"
+    );
+    assert!(
+        rendered.contains("duplicate key"),
+        "the error should still say what is wrong: {rendered}"
+    );
+    for secret in ["sk-first-secret", "sk-second-secret"] {
+        assert!(
+            !rendered.contains(secret),
+            "a parse error printed a stored key: {rendered}"
+        );
+    }
+}
+
+#[test]
 fn saving_creates_the_directory() {
     let (_dir, path) = temp_store();
     let mut store = AuthStore::new();

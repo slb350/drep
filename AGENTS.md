@@ -518,6 +518,19 @@ comes back.
   for a ceiling-only policy; a direct test pins both its false and true branches
   because end-to-end refusal tests cannot distinguish a broken preflight from
   the inner guard.
+- **Repository content never steers a read or write outside the repository,
+  and a TOML parse error never quotes its source.** `.drep/acknowledgements.toml`
+  and `.gitignore` are repository content, so a branch under review chooses
+  what sits at those paths. A symbolic link at `.drep` or at the store is
+  refused before any read or directory creation, and `drep init` reports a
+  linked `.gitignore` as `Outcome::Linked` without writing; git does not follow
+  a working-tree `.gitignore` link either. Reading through the store link once
+  printed `/proc/self/environ`, every exported key included, because
+  `toml::de::Error`'s `Display` renders the offending source line. Every TOML
+  parse error therefore carries `message()` alone: in the credential store that
+  line is an endpoint and its key, and the store's message from repository
+  content also passes through `text::excerpt`, since it can quote a key that
+  holds control characters.
 - **`auth::normalise` lowercases the scheme and host but never the path.** Paths
   are case-sensitive; collapsing them merged two endpoints on one host into a
   single entry and handed one's key to the other.

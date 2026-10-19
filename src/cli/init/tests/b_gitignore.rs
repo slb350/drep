@@ -136,17 +136,53 @@ fn the_tracked_message_says_how_to_fix_it() {
 
 #[test]
 fn every_outcome_has_its_own_message() {
-    // The four are reported to the user and mean different things; two sharing a
+    // The five are reported to the user and mean different things; two sharing a
     // sentence would make the report useless for telling them apart.
     let messages = [
         Outcome::Added.message(),
         Outcome::Created.message(),
         Outcome::AlreadyIgnored.message(),
         Outcome::Tracked.message(),
+        Outcome::Linked.message(),
     ];
 
     let mut unique = messages.to_vec();
     unique.sort();
     unique.dedup();
-    assert_eq!(unique.len(), 4, "messages collide: {messages:?}");
+    assert_eq!(unique.len(), 5, "messages collide: {messages:?}");
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_symlinked_gitignore_never_writes_outside_the_repository() {
+    // A cloned repository can commit `.gitignore` as a link to any path. Git
+    // does not follow it, so `drep.toml` reads as unignored, and appending
+    // through the link would edit or create a file outside the repository.
+    let outside = tempfile::tempdir().expect("outside dir");
+    let target = outside.path().join("ssh-config");
+    std::fs::write(&target, "Host example\n").expect("outside file");
+    let dir = repo(None);
+    let link = dir.path().join(".gitignore");
+    std::os::unix::fs::symlink(&target, &link).expect("symlink");
+
+    let outcome = ensure(dir.path()).await.expect("ensure");
+
+    assert_eq!(outcome, Outcome::Linked);
+    assert_eq!(
+        std::fs::read_to_string(&target).expect("outside file survives"),
+        "Host example\n",
+        "the link's target was written"
+    );
+
+    let dangling = outside.path().join("created-by-drep");
+    std::fs::remove_file(&link).expect("remove link");
+    std::os::unix::fs::symlink(&dangling, &link).expect("dangling symlink");
+
+    let outcome = ensure(dir.path()).await.expect("ensure");
+
+    assert_eq!(outcome, Outcome::Linked);
+    assert!(
+        !dangling.exists(),
+        "a dangling link's target was created outside the repository"
+    );
 }
