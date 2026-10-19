@@ -94,7 +94,16 @@ reqwest = { version = "0.12", features = ["native-tls-vendored"] }
 
 [dev-dependencies]
 assert_cmd = "2.2"
-serde_yaml_ng = "0.10.0"
+# The release-contract test reads workflow YAML. `serde_yaml_ng` 0.10.0 is its
+# newest release and still depends on `unsafe-libyaml`, which RUSTSEC-2024-0449
+# reports as unmaintained - the repository is archived and `patched` is empty,
+# so no update to any `serde_yaml_ng` version clears the warning. `saphyr` is
+# the safe-Rust parser that advisory names, and the only named alternative whose
+# own MSRV (1.85) sits at or under this crate's 1.88 floor; `serde-saphyr` and
+# `noyalib` both declare 1.89. Its `encoding` feature is off because it exists
+# to decode non-UTF-8 byte streams and pulls a second `encoding_rs` copy into
+# the dev graph.
+saphyr = { version = "0.2.2", default-features = false }
 wiremock = "0.6"
 
 [profile.release]
