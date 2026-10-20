@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.1.3] - 2026-10-20
+
 ### Changed
 
 - **Security:** the lockfile takes `rustls` 0.23.45 to 0.23.46, the version RustSec lists as patched
@@ -1146,7 +1148,8 @@ LLM for review, and gates commits and pushes on the result. That is all it does.
 - Python, JavaScript, TypeScript, Go and Rust are all first-class. Adding a
   language is an entry in one table.
 
-[Unreleased]: https://github.com/slb350/drep/compare/v3.1.2...HEAD
+[Unreleased]: https://github.com/slb350/drep/compare/v3.1.3...HEAD
+[3.1.3]: https://github.com/slb350/drep/compare/v3.1.2...v3.1.3
 [3.1.2]: https://github.com/slb350/drep/compare/v3.1.1...v3.1.2
 [3.1.1]: https://github.com/slb350/drep/compare/v3.1.0...v3.1.1
 [3.1.0]: https://github.com/slb350/drep/compare/v3.0.0...v3.1.0
