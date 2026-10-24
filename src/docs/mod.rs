@@ -11,6 +11,8 @@
 //!   every check that asks. See its module doc for why that is not a per-check
 //!   concern.
 //! - `lines` holds the checks that look at one line in isolation.
+//! - `html` finds the raw HTML tags and comments, which may run over several
+//!   lines, for `links` to skip.
 //! - `links` holds the two that need markdown's link grammar.
 //! - `blocks` holds the three that span more than one line.
 //!
@@ -19,6 +21,7 @@
 
 mod blocks;
 mod fence;
+mod html;
 mod lines;
 mod links;
 
@@ -215,14 +218,15 @@ pub fn analyze(path: &Path, content: &str) -> Vec<Finding> {
     // `chars` holds the line under examination, `scratch` the blanked copy the
     // link checks work on. Both are cleared and refilled, so peak memory is the
     // longest line rather than the file.
+    let html = html::spans(&lines);
     let mut findings = Vec::new();
     let mut chars: Vec<char> = Vec::new();
     let mut scratch: Vec<char> = Vec::new();
-    for line in &lines {
+    for (line, html) in lines.iter().zip(&html) {
         chars.clear();
         chars.extend(line.text.chars());
         lines::check(line, &chars, &file_path, &mut findings);
-        links::check(line, &chars, &mut scratch, &file_path, &mut findings);
+        links::check(line, &chars, html, &mut scratch, &file_path, &mut findings);
     }
     blocks::check(&lines, &fences, &file_path, &mut findings);
 
