@@ -1053,8 +1053,12 @@ comes back.
   link and is never a `bare_url`. Raw inline HTML is blanked by the spec's tag
   and comment grammar (section 6.6), not from `<` to `>`: `x<y https://e.com>`
   is not a tag because a URL is not an attribute name, and wrapping an
-  attribute's URL in `[text](url)` would break the tag. A tag or comment that
-  ends on a later line is plain text, as each check reads one line.
+  attribute's URL in `[text](url)` would break the tag. `docs::html::spans`
+  decides which columns are raw HTML over a whole paragraph, because a line
+  ending is whitespace between a tag's parts and may sit inside a quoted value
+  or a comment; a `<!--` opening a line (three spaces of indentation at most)
+  also runs over blank lines to its `-->`. A tag or comment that is never
+  closed within its scope is plain text.
 - **Doc-check severity is "does it change how the document renders".** An
   unclosed fence turns every line below it into code, so it alone is `error`;
   a heading or link that renders wrong is `warning`; whitespace and line

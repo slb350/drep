@@ -1,14 +1,16 @@
 //! The two checks that need markdown's link grammar.
 //!
 //! Both work on a *blanked* copy of the line: inline code spans, well-formed
-//! links, autolinks and raw HTML tags are overwritten with spaces before either
-//! check looks at it. Blanked rather than removed, so every surviving character keeps its
-//! original column and a reported position points at the real line.
+//! links, autolinks and raw HTML (found by the `html` module) are overwritten with spaces
+//! before either check looks at it. Blanked rather than removed, so every surviving character
+//! keeps its original column and a reported position points at the real line.
 //!
 //! The order is not arbitrary. Inline code is blanked first, because a
 //! backticked `[text](url)` is a literal a reader is meant to type rather than
 //! a link, so it must neither be consumed by the link scanner nor count toward
 //! the bracket balance.
+
+use std::ops::Range;
 
 use crate::analysis::findings::Finding;
 use crate::docs::{Check, Line, finding};
@@ -33,9 +35,12 @@ const SCHEMES: [&[char]; 2] = [
 ///
 /// Skipped entirely inside a code fence: a sample showing `[broken](` on
 /// purpose is documentation, not a defect.
+///
+/// `html` is where raw HTML covers this line, as `html::spans` found it.
 pub fn check(
     line: &Line<'_>,
     chars: &[char],
+    html: &[Range<usize>],
     scratch: &mut Vec<char>,
     file_path: &str,
     out: &mut Vec<Finding>,
@@ -45,22 +50,24 @@ pub fn check(
     }
 
     // Blanking only copies when the line holds something to blank. A backtick
-    // can open a code span, a `[` can open a link and a `<` an autolink or an
-    // HTML tag; a line
-    // with none of them is already its own blanked form. Lines holding a stray
+    // can open a code span, a `[` can open a link and a `<` an autolink; a
+    // line with none of them, and no raw HTML carried over from an earlier
+    // line, is already its own blanked form. Lines holding a stray
     // `]` and nothing else fall into the else branch and are still counted
     // below, which is the point - an unmatched closing bracket is exactly what
     // the balance check exists to catch.
     //
     // `scratch` is owned by the caller and reused across lines, so the copy
     // costs a memcpy rather than an allocation.
-    let blanked: &[char] = if line.text.contains(['`', '[', '<']) {
+    let blanked: &[char] = if line.text.contains(['`', '[', '<']) || !html.is_empty() {
         scratch.clear();
         scratch.extend_from_slice(chars);
         blank_inline_code(scratch);
         blank_links(scratch);
         blank_autolinks(scratch);
-        blank_raw_html(scratch);
+        for range in html {
+            scratch[range.clone()].fill(' ');
+        }
         blank_reference_definition(scratch);
         scratch
     } else {
@@ -79,7 +86,7 @@ pub fn check(
 /// after it - treating it as opening a span that runs to end-of-line would
 /// blank text that renders as itself, and a later run of another length can
 /// still open a span of its own.
-fn blank_inline_code(chars: &mut [char]) {
+pub(super) fn blank_inline_code(chars: &mut [char]) {
     let mut i = 0;
     while i < chars.len() {
         if chars[i] != '`' {
@@ -103,7 +110,11 @@ fn blank_inline_code(chars: &mut [char]) {
         }
         match close {
             Some(end) => {
-                chars[i..end].fill(' ');
+                // A line ending stays one: the raw HTML scan reads a span
+                // over several lines and must still see where each ends.
+                for c in chars[i..end].iter_mut().filter(|c| **c != '\n') {
+                    *c = ' ';
+                }
                 i = end;
             }
             None => i += open,
@@ -210,120 +221,6 @@ fn match_autolink(chars: &[char], start: usize) -> Option<usize> {
     (start + 1..chars.len())
         .find(|i| chars[*i].is_ascii_control() || matches!(chars[*i], ' ' | '<' | '>'))
         .filter(|end| chars[*end] == '>')
-}
-
-/// Overwrite every raw inline HTML tag and comment with spaces.
-///
-/// CommonMark passes raw HTML through untouched, so a URL in an attribute
-/// (`<img src="https://...">`) is the markup's own address: it is not prose,
-/// and wrapping it in `[text](url)` would break the tag. Only the tag is
-/// blanked. Text between two tags is markdown, so a bare URL there still counts.
-///
-/// A tag is recognised by the grammar of the spec's section 6.6 rather than by
-/// "from `<` to `>`", because a looser rule would swallow prose: `x<y
-/// https://example.com>` is not a tag, since a URL is not an attribute name, and
-/// the URL in it is as bare as any other. A tag or comment whose end is on a
-/// later line is plain text here, as every check works one line at a time.
-fn blank_raw_html(chars: &mut [char]) {
-    let mut i = 0;
-    while i < chars.len() {
-        if chars[i] == '<'
-            && let Some(end) = match_comment(chars, i).or_else(|| match_tag(chars, i))
-        {
-            chars[i..=end].fill(' ');
-            i = end;
-        }
-        i += 1;
-    }
-}
-
-/// Match `<!-- ... -->` starting at `start`, returning the index of its last `>`.
-///
-/// The search for `-->` begins inside the opener, as CommonMark 0.31.2 defines
-/// it: `<!-->` and `<!--->` are complete comments.
-fn match_comment(chars: &[char], start: usize) -> Option<usize> {
-    const OPEN: [char; 4] = ['<', '!', '-', '-'];
-    const CLOSE: [char; 3] = ['-', '-', '>'];
-    if !chars[start..].starts_with(&OPEN) {
-        return None;
-    }
-    (start + 2..chars.len())
-        .find(|i| chars[*i..].starts_with(&CLOSE))
-        .map(|i| i + CLOSE.len() - 1)
-}
-
-/// Match an open or closing tag starting at `start`, returning the index of its
-/// `>`.
-fn match_tag(chars: &[char], start: usize) -> Option<usize> {
-    debug_assert_eq!(chars[start], '<');
-    let closing = chars.get(start + 1) == Some(&'/');
-    let name = start + 1 + usize::from(closing);
-    if !chars.get(name)?.is_ascii_alphabetic() {
-        return None;
-    }
-    // From `name`, not `name + 1`: its first letter already satisfies the
-    // predicate, so skipping it by hand would be an unobservable difference.
-    let mut i = skip_while(chars, name, |c| c.is_ascii_alphanumeric() || c == '-');
-    if closing {
-        i = skip_while(chars, i, is_tag_space);
-        return (chars.get(i) == Some(&'>')).then_some(i);
-    }
-    loop {
-        let attributes = skip_while(chars, i, is_tag_space);
-        // An attribute needs whitespace before it, so `<a href="x"href="y">` is
-        // not a tag.
-        let separated = attributes > i;
-        match *chars.get(attributes)? {
-            '>' => return Some(attributes),
-            // One index both tested and returned, so the `>` it names is the
-            // one that was checked.
-            '/' => {
-                let close = attributes + 1;
-                return (chars.get(close) == Some(&'>')).then_some(close);
-            }
-            c if separated && (c.is_ascii_alphabetic() || matches!(c, '_' | ':')) => {
-                i = attribute_end(chars, attributes)?;
-            }
-            _ => return None,
-        }
-    }
-}
-
-/// The index just past the attribute whose name starts at `start`, with its
-/// value if it has one.
-fn attribute_end(chars: &[char], start: usize) -> Option<usize> {
-    let name_end = skip_while(chars, start, |c| {
-        c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | ':' | '-')
-    });
-    let equals = skip_while(chars, name_end, is_tag_space);
-    if chars.get(equals) != Some(&'=') {
-        return Some(name_end);
-    }
-    let value = skip_while(chars, equals + 1, is_tag_space);
-    match *chars.get(value)? {
-        quote @ ('"' | '\'') => (value + 1..chars.len())
-            .find(|i| chars[*i] == quote)
-            .map(|close| close + 1),
-        _ => {
-            let end = skip_while(chars, value, |c| {
-                !is_tag_space(c) && !matches!(c, '"' | '\'' | '=' | '<' | '>' | '`')
-            });
-            (end > value).then_some(end)
-        }
-    }
-}
-
-/// Whitespace as the raw HTML grammar counts it inside one line: spaces and
-/// tabs. A no-break space is whitespace to Rust but text to CommonMark.
-fn is_tag_space(c: char) -> bool {
-    matches!(c, ' ' | '\t')
-}
-
-/// The first index at or after `from` whose character fails `keep`.
-fn skip_while(chars: &[char], from: usize, keep: impl Fn(char) -> bool) -> usize {
-    (from..chars.len())
-        .find(|i| !keep(chars[*i]))
-        .unwrap_or(chars.len())
 }
 
 /// Overwrite the destination of a link reference definition with spaces.

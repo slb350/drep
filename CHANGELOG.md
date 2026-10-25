@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `lint-docs` no longer reports a URL inside a raw HTML tag or comment that runs over several lines.
+  A logo written as `<img` / `src="https://..."` / `alt="...">` on separate lines, the usual shape
+  once a README tag outgrows one line, had its URL reported as a `bare_url`, and so did the text of
+  a commented-out section and any bracket in it as `link_syntax_invalid`. A line ending now counts
+  as the whitespace it is between a tag's parts and may sit inside a quoted value or a comment, and
+  a `<!--` opening a line (at most three spaces in) runs over blank lines to its `-->` as an HTML
+  block does. A tag or comment that is never closed is still plain text, as is anything past a blank
+  line that ends a paragraph. A code span is recognised over a line ending in the same scan, so a
+  backticked `<!--` still opens nothing. The scan lives in `docs::html` with the tag grammar that
+  moved out of `docs::links`.
+
 ## [3.1.3] - 2026-10-20
 
 ### Changed
