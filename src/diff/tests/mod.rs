@@ -8,6 +8,7 @@
 mod changed_since;
 mod committing_index;
 mod current_commit_sha;
+mod diverging;
 mod git_env;
 mod hook_environment;
 mod hunk_commands;

@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Security:** `--diff` and `--pre-commit-push` no longer pass a commit on lint findings that come
+  from a different tree. The deterministic tools read the working tree, but in branch modes drep
+  never checked that the working tree held the commit being checked. The pre-push hook checks
+  `--tip <local_oid>`, so pushing a branch that was not checked out (`git push origin feature`
+  from `main`) linted whatever `main` had on disk. An uncommitted fix to a pushed commit also made
+  ruff report the fixed content and pass a push that still held the finding. Branch modes now list
+  every path where the working tree may differ from the tip (`HEAD` without `--tip`): the
+  working-tree changes `--staged` already refused, plus `git diff --cached <tip>`. A tool that would
+  read one of those paths fails with `uncommitted_changes` and the same message `--staged` gives,
+  which now also says how to recover before a push. A tip that starts with `-` is refused before
+  git sees it.
 - `lint-docs` no longer reports a URL inside a raw HTML tag or comment that runs over several lines.
   A logo written as `<img` / `src="https://..."` / `alt="...">` on separate lines, the usual shape
   once a README tag outgrows one line, had its URL reported as a `bare_url`, and so did the text of

@@ -84,19 +84,21 @@ pub struct Work {
     /// loaded site policy names no refusal markers, avoiding path allocations on
     /// unaffected machines.
     pub(super) reviewed_directories: BTreeSet<PathBuf>,
-    /// Files whose working-tree state the committing index does not hold:
+    /// Files whose working-tree state the reviewed commit does not hold:
     /// tracked files whose working-tree content differs from it, plus
-    /// untracked files git does not ignore. Filled only in staged mode.
+    /// untracked files git does not ignore. In staged mode the commit is the
+    /// committing index; in the branch modes (`--diff`, `--tip`, a pre-commit
+    /// pre-push range) it is the range's tip, which need not be checked out.
     ///
     /// The deterministic layer's tools read the working tree, so a staged file
-    /// edited afterwards - or a helper it imports that was never added - would
-    /// be linted in a form the commit does not hold, and a lint-failing staged
-    /// blob could pass. A task that would read one of these paths is refused
-    /// instead of run. Empty in every other mode, where the working tree *is*
-    /// what is being reviewed.
+    /// edited afterwards, a pushed ref that is not the checked-out one, or a
+    /// helper that was never added would be linted in a form the commit does
+    /// not hold, and a lint-failing commit could pass. A task that would read
+    /// one of these paths is refused instead of run. Empty in paths mode,
+    /// where the working tree *is* what is being reviewed.
     pub(super) uncommitted: BTreeSet<PathBuf>,
     /// Files marked `skip-worktree` and absent from the working tree, filled
-    /// only in staged mode. No tool can read one, but one can be the
+    /// in staged and branch modes. No tool can read one, but one can be the
     /// configuration the commit gives a file.
     pub(super) index_only: BTreeSet<PathBuf>,
 }
@@ -189,11 +191,7 @@ pub async fn resolve(args: &CheckArgs, root: &Path, collect_policy_scope: bool) 
             uncommitted.index_only.into_iter().collect(),
         )
     } else if let Some(git_ref) = args.diff.as_deref() {
-        (
-            diff::hunks_between(root, git_ref, args.tip.as_deref(), files::is_scan_target).await?,
-            BTreeSet::new(),
-            BTreeSet::new(),
-        )
+        branch_hunks(root, git_ref, args.tip.as_deref()).await?
     } else {
         return resolve_paths(&args.paths, root, collect_policy_scope);
     };
@@ -225,10 +223,8 @@ pub(crate) async fn resolve_pre_commit(
     // watching for. Each discarded call cost two `git` spawns (~37 ms
     // measured), paid on every pre-commit and pre-push run before any useful
     // work started.
-    let hunks = match pre_commit {
-        PreCommitPush::Range { from, to } => {
-            diff::hunks_between(root, from, Some(to), files::is_scan_target).await?
-        }
+    let (hunks, uncommitted, index_only) = match pre_commit {
+        PreCommitPush::Range { from, to } => branch_hunks(root, from, Some(to)).await?,
         PreCommitPush::AllFiles => return resolve_paths(&[], root, collect_policy_scope),
     };
     let by_file = group_by_file(hunks);
@@ -237,9 +233,35 @@ pub(crate) async fn resolve_pre_commit(
         by_file,
         read_failures: BTreeMap::new(),
         lint_only: Vec::new(),
-        uncommitted: BTreeSet::new(),
-        index_only: BTreeSet::new(),
+        uncommitted,
+        index_only,
     })
+}
+
+/// A branch range's hunks, and what the working tree does not hold of its tip.
+///
+/// The semantic layer reads the range from git's object store while the
+/// deterministic layer reads the working tree, which need not hold the tip:
+/// the pre-push hook passes the pushed ref's oid, which may not be checked
+/// out, and a checkout can carry uncommitted edits. Listing the difference is
+/// what lets the deterministic layer refuse a linter that would judge content
+/// the range does not contain, as staged mode does for the committing index.
+async fn branch_hunks(
+    root: &Path,
+    git_ref: &str,
+    tip: Option<&str>,
+) -> Result<(Vec<Hunk>, BTreeSet<PathBuf>, BTreeSet<PathBuf>)> {
+    let (hunks, diverging) = tokio::join!(
+        diff::hunks_between(root, git_ref, tip, files::is_scan_target),
+        diff::diverging_from(root, tip.unwrap_or("HEAD"))
+    );
+    let hunks = hunks?;
+    let diverging = diverging?;
+    Ok((
+        hunks,
+        diverging.differing.into_iter().collect(),
+        diverging.index_only.into_iter().collect(),
+    ))
 }
 
 /// Paths mode: walk the user's paths, read each file, build a whole-file

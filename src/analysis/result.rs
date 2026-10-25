@@ -71,9 +71,10 @@ pub enum FailureReason {
     /// A linter did not run because it would have read working-tree content the commit does not hold. `paths` are the differing files, as the user names them.
     ///
     /// Distinct from [`Self::ToolUnavailable`]: the tool is installed and
-    /// configured, but in staged mode it reads the working tree, and linting a
-    /// staged file's uncommitted edit would judge content the commit does not
-    /// contain - a lint-failing staged blob would pass. Refusing the run keeps
+    /// configured, but in staged and branch modes it reads the working tree,
+    /// and linting a staged file's uncommitted edit or a checkout that is not
+    /// the pushed tip would judge content the commit does not contain - a
+    /// lint-failing commit would pass. Refusing the run keeps
     /// "unanalyzed is not clean" true for the deterministic layer too.
     UncommittedChanges { tool: String, paths: Vec<PathBuf> },
     /// Machine site policy refuses to have this repository's source reviewed by
@@ -248,7 +249,7 @@ impl FailureReason {
                     .collect::<Vec<_>>()
                     .join(", ");
                 format!(
-                    "{tool} did not run: the working tree differs from the commit at {paths}; stage those changes or run `git stash --keep-index --include-untracked` first"
+                    "{tool} did not run: the working tree differs from the commit being checked at {paths}; before a commit, stage those changes or run `git stash --keep-index --include-untracked`; before a push, check out the pushed commit with nothing uncommitted"
                 )
             }
             FailureReason::SitePolicyRefused { marker, policy } => format!(

@@ -159,7 +159,7 @@ fn uncommitted_changes_names_the_tool_the_paths_and_the_recovery() {
     };
     assert_eq!(
         reason.one_line(),
-        "ruff did not run: the working tree differs from the commit at a.py, pyproject.toml; stage those changes or run `git stash --keep-index --include-untracked` first"
+        "ruff did not run: the working tree differs from the commit being checked at a.py, pyproject.toml; before a commit, stage those changes or run `git stash --keep-index --include-untracked`; before a push, check out the pushed commit with nothing uncommitted"
     );
 }
 

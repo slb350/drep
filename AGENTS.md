@@ -659,6 +659,19 @@ comes back.
   that the read guard never sits below the payload ceiling. A file too large
   for the model is still linted, via `Work::lint_only` — it has a path, and
   ruff reads the file itself.
+- **A linter runs only where the working tree holds the commit being checked.**
+  Tools read the working tree; the review reads git. `--staged` fills
+  `Work::uncommitted` from `diff::uncommitted_paths` (working tree against the
+  index), and `--diff` / `--pre-commit-push` fill it from
+  `diff::diverging_from` against the tip, `HEAD` when no `--tip` is given:
+  the same set plus `git diff --cached <tip>`, which by transitivity is every
+  path where the working tree may not hold the tip. Branch modes once left the
+  set empty, so the pre-push hook's `--tip <local_oid>`, pushing a branch that
+  is not checked out, linted whatever was checked out, and an uncommitted
+  fix passed a commit that still held the finding. A staged change the working
+  tree reverts is still refused; that is the conservative direction. Every ref a
+  user or hook supplies goes through `diff::refuse_flag_like` before git sees
+  it: `--output=<file>` in that position makes `git diff` write a file.
 - **`crate::http` is the only GET drep issues for itself, and the only bound on
   a body it did not produce.** Reviews go through open-agent-sdk; what is left
   is `drep init` asking an endpoint which models it serves and asking

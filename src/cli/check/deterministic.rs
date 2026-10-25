@@ -48,12 +48,12 @@ pub async fn run(
 ) {
     let mut failures: BTreeMap<PathBuf, FailureReason> = BTreeMap::new();
     let (tasks, unconfigured) = plan_tasks(work, root);
-    // In staged mode a linter reads the working tree, so a task that would
-    // read content the commit does not hold is refused rather than run: each
-    // of its files fails with the differing paths named, and the commit is
-    // not waved through on a lint of code it does not contain. With no
-    // uncommitted paths - the ordinary case, and every other mode - this
-    // changes nothing.
+    // In staged and branch modes a linter reads the working tree, so a task
+    // that would read content the reviewed commit does not hold is refused
+    // rather than run: each of its files fails with the differing paths named,
+    // and the commit is not waved through on a lint of code it does not
+    // contain. With no uncommitted paths - the ordinary case, and paths mode -
+    // this changes nothing.
     let base = runner::absolute(root);
     let differences = Differences {
         differing: differing_paths(&base, &work.uncommitted),

@@ -35,7 +35,7 @@ use git::{GitEnv, committing_index, spawn_git, spawn_git_bytes};
 pub(crate) use git::{git_query, run_git, same_directory};
 use hunks::{Hunk, parse_unified_diff};
 use prefix::{from_prefix, hunks_from, paths_from, working_prefix};
-pub use uncommitted::{Uncommitted, uncommitted_paths};
+pub use uncommitted::{Uncommitted, diverging_from, uncommitted_paths};
 
 /// The well-known SHA for the empty git tree.
 ///
@@ -339,12 +339,7 @@ async fn since_diff(
     mode: &str,
 ) -> Result<String, GitError> {
     for candidate in [Some(git_ref), tip].into_iter().flatten() {
-        if candidate.starts_with('-') {
-            return Err(GitError::NonZero {
-                code: None,
-                stderr: format!("ref `{candidate}` looks like a flag; refusing to pass it to git"),
-            });
-        }
+        refuse_flag_like(candidate)?;
     }
     // An explicit tip names the commit the caller means, which is not always
     // the checked-out one. The pre-push hook is the case that forced this:
@@ -374,6 +369,22 @@ async fn since_diff(
     };
     let spec = format!("{git_ref}...{ref_b}");
     git_diff(root, &[mode, &spec], GitEnv::Scrubbed).await
+}
+
+/// Refuse a ref that git would parse as an option.
+///
+/// Every query that hands a caller's ref to git applies it before spawning,
+/// for the reason [`since_diff`] gives: `--output=<file>` in a ref position is
+/// an option to `git diff`, and `--` cannot help because what follows it is a
+/// path.
+pub(crate) fn refuse_flag_like(candidate: &str) -> Result<(), GitError> {
+    if candidate.starts_with('-') {
+        return Err(GitError::NonZero {
+            code: None,
+            stderr: format!("ref `{candidate}` looks like a flag; refusing to pass it to git"),
+        });
+    }
+    Ok(())
 }
 
 /// Output mode: just the paths.
