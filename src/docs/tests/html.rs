@@ -463,3 +463,36 @@ fn a_tag_holding_a_code_span_over_a_line_ending_is_still_blanked_on_both_lines()
         Check::BareUrl,
     );
 }
+
+// `html::spans` is checked directly as well: a tag's closing `>` is never part
+// of a URL or a bracket count, so no finding can show whether it was covered.
+
+/// The raw HTML ranges `html::spans` reports for each line of `content`.
+fn spans_of(content: &str) -> Vec<Vec<std::ops::Range<usize>>> {
+    let lines: Vec<crate::docs::Line<'_>> = content
+        .lines()
+        .zip(1..)
+        .map(|(text, number)| crate::docs::Line {
+            number,
+            text,
+            in_fence: false,
+        })
+        .collect();
+    crate::docs::html::spans(&lines)
+}
+
+#[test]
+fn a_span_covers_a_tag_through_its_closing_bracket() {
+    assert_eq!(spans_of("<b>x</b>"), vec![vec![0..3, 4..8]]);
+    assert_eq!(spans_of("a <!-- c --> b"), vec![vec![2..12]]);
+}
+
+#[test]
+fn a_span_over_a_line_ending_is_split_at_it() {
+    // Line 1 is `x <img`, line 2 is ` src="y"> z`: each keeps only its own
+    // columns, and the second ends after the `>`.
+    assert_eq!(
+        spans_of("x <img\n src=\"y\"> z"),
+        vec![vec![2..6], vec![0..9]]
+    );
+}

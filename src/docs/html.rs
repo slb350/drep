@@ -130,16 +130,21 @@ fn block_comment(
     if line.in_fence {
         return None;
     }
-    let chars: Vec<char> = line.text.chars().collect();
-    let indent = chars.iter().take_while(|c| **c == ' ').count();
-    if indent > 3 || match_comment(&chars, indent).is_some() {
-        return None;
-    }
     // Spaces are one byte and one character, so the count indexes both.
-    if !line.text[indent..].starts_with("<!--") {
+    let indent = line.text.bytes().take_while(|b| *b == b' ').count();
+    if indent > 3 || !line.text[indent..].starts_with("<!--") {
         return None;
     }
-    let (close, after) = (open + 1..lines.len()).find_map(|index| {
+    // Only an opener's characters are collected: every other line returns
+    // above without allocating.
+    let chars: Vec<char> = line.text.chars().collect();
+    if match_comment(&chars, indent).is_some() {
+        return None;
+    }
+    // From `open`, not `open + 1`: the opening line holds no `-->`, or
+    // `match_comment` would have matched it, so skipping that line by hand
+    // would be an unobservable difference.
+    let (close, after) = (open..lines.len()).find_map(|index| {
         let text = lines[index].text;
         text.find("-->")
             .map(|byte| (index, text[..byte].chars().count() + "-->".len()))
