@@ -118,6 +118,51 @@ pub async fn uncommitted_paths(root: &Path) -> Result<Uncommitted, GitError> {
     })
 }
 
+/// What the working tree does not hold of commit `commit`, each path named
+/// from the directory drep runs in.
+///
+/// The branch queries (`--diff`, `--tip`, a pre-commit pre-push range) review
+/// one commit's diff while the deterministic tools read the working tree, which
+/// differs from that commit whenever the pushed ref is not the one checked out
+/// or the checkout carries edits of its own. Linting it there judged content
+/// the push does not contain, so a lint-failing pushed commit passed.
+///
+/// The working tree holds a path of `commit` whenever it holds the committing
+/// index's entry and that entry is `commit`'s, so the answer is
+/// [`uncommitted_paths`] together with every path where the index and `commit`
+/// differ, deletions in either direction included. A path that differs from
+/// the index but has been restored to `commit`'s content is listed too: that is
+/// the conservative direction, because the alternative is a second definition
+/// of "differs" beside the one staged mode already trusts.
+pub async fn diverging_from(root: &Path, commit: &str) -> Result<Uncommitted, GitError> {
+    super::refuse_flag_like(commit)?;
+    let view = StagedView::of(root).await?;
+    let recorded_args = [
+        "--no-optional-locks",
+        "diff",
+        "--cached",
+        "--name-only",
+        "-z",
+        "--ignore-submodules=none",
+        "--no-relative",
+        "--no-ext-diff",
+        "--no-textconv",
+        commit,
+        "--",
+    ];
+    let (worktree, recorded) = tokio::join!(
+        uncommitted_paths(root),
+        spawn_git_bytes(root, &recorded_args, view.env())
+    );
+    let mut uncommitted = worktree?;
+    uncommitted
+        .differing
+        .extend(paths_from(listed(&recorded?).collect(), &view.prefix));
+    uncommitted.differing.sort();
+    uncommitted.differing.dedup();
+    Ok(uncommitted)
+}
+
 /// Tracked files whose index entries tell git not to compare them
 /// (`assume-unchanged`, `skip-worktree`) and whose working-tree state differs
 /// from the committing index all the same. `git diff` trusts the flags and
