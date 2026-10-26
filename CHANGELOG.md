@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Security:** the lockfile takes `rustls-webpki` 0.103.15 to 0.103.16, the version RustSec lists as
+  patched - `>=0.103.16, <0.104.0-alpha.1` - for `RUSTSEC-2026-0382` (CVE-2026-111943), which its own
+  text describes as certificate paths containing distrusted emSign intermediate public keys being
+  accepted when the configured trust anchors allow such paths, those private keys now being well
+  known, and 0.103.16 rejecting paths that carry them. `rustls-webpki` is not a dependency of drep:
+  `Cargo.lock` records it because it is `rustls`' certificate verifier and `reqwest` lists that TLS
+  backend among its optional features, which neither drep (`native-tls-vendored`) nor `open-agent-sdk`
+  0.11.7 (`json`, `stream`) enables, so `cargo tree --all-features --target all -i rustls-webpki`
+  resolves nothing and no gate compiles it - the 1.88 build reaches `hyper-tls` and `native-tls` and
+  stops there. The lockfile is therefore the whole fix: a `Cargo.toml` requirement cannot name a crate
+  this one does not depend on, and adding one would build a second TLS stack into every release binary.
+  No advisory is ignored or allowlisted: no `audit.toml` and no ignore entry exists.
+- The rest of the Rust 1.88-compatible lockfile refresh: `open-agent-sdk` 0.11.6 to 0.11.7, `tokio`
+  1.53.3 to 1.54.1, `cc` 1.8.0 to 1.10.0 with `find-msvc-tools` 0.1.14 to 0.1.15, the `icu_*` crates
+  2.3.x to 2.4.0 with `tinystr` 0.8.5, `yoke` 0.8.4, `zerovec` 0.11.9 and `zerovec-derive` 0.11.7,
+  `crc32fast` 1.5.2 to 1.5.3 and `smallvec` 1.16.3 to 1.16.4. `cc` is the build-dependency of the
+  vendored OpenSSL the aarch64 Linux cross-build compiles, the `icu_*` line sits under `url` and so
+  under `reqwest`, and `crc32fast` under the `flate2` that serves `reqwest`' `gzip` feature. A
+  mid-stream Anthropic `error` event of a kind other than `overloaded_error`, `rate_limit_error` or
+  `api_error` - `invalid_request_error`, say - is what open-agent-sdk 0.11.7 changes: it now reaches
+  the caller as `Error::Api` with no status instead of a retryable `Error::Stream`, so the SDK's own
+  retry no longer re-sends a request the server rejected for a fault in the request itself, and no
+  public API changed.
+  tokio 1.54.0 raises its own minimum to 1.85, still under this crate's 1.88 floor, and moves Unix
+  child stdio onto `mio::unix::pipe`; 1.54.1 reverts its "remove the runtime handle from timers".
+- Two packages are held back and neither is behind an advisory. `reqwest` stays at 0.12.28, behind
+  0.13.5: 0.13 is semver-major and so outside `Cargo.toml`' `0.12`, and `open-agent-sdk` 0.11.7's
+  index entry still requires `reqwest ^0.12.28`, whose copy drep shares rather than building a second
+  one - the index gives 0.13.5 `rust_version` 1.85.0, so this hold is not the MSRV. `ordered-float`
+  stays at 5.4.0, behind 5.5.0, which declares `rust_version` 1.90 against this crate's 1.88 floor;
+  it reaches the development graph through `saphyr` alone, so no release binary carries it.
+
 ### Fixed
 
 - `lint-docs` no longer reports a URL inside a raw HTML tag or comment that runs over several lines.

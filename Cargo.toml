@@ -102,7 +102,10 @@ assert_cmd = "2.2"
 # own MSRV (1.85) sits at or under this crate's 1.88 floor; `serde-saphyr` and
 # `noyalib` both declare 1.89. Its `encoding` feature is off because it exists
 # to decode non-UTF-8 byte streams and pulls a second `encoding_rs` copy into
-# the dev graph.
+# the dev graph. Its own dependency `ordered-float` is held at 5.4.0 by an
+# MSRV-compatible update because 5.5.0 declares `rust_version` 1.90, above this
+# floor; it reaches the graph through `saphyr` alone, so no release binary
+# carries it.
 saphyr = { version = "0.2.2", default-features = false }
 wiremock = "0.6"
 
