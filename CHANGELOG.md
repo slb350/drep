@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.1.4] - 2026-10-27
+
 ### Changed
 
 - **Security:** the lockfile takes `rustls-webpki` 0.103.15 to 0.103.16, the version RustSec lists as
@@ -62,7 +64,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a `<!--` opening a line (at most three spaces in) runs over blank lines to its `-->` as an HTML
   block does. A tag or comment that is never closed is still plain text, as is anything past a blank
   line that ends a paragraph. A code span is recognised over a line ending in the same scan, so a
-  backticked `<!--` still opens nothing. The scan lives in `docs::html` with the tag grammar that
+  backticked comment opener still opens nothing. The scan lives in `docs::html` with the tag grammar that
   moved out of `docs::links`.
 
 ## [3.1.3] - 2026-10-20
@@ -1206,7 +1208,8 @@ LLM for review, and gates commits and pushes on the result. That is all it does.
 - Python, JavaScript, TypeScript, Go and Rust are all first-class. Adding a
   language is an entry in one table.
 
-[Unreleased]: https://github.com/slb350/drep/compare/v3.1.3...HEAD
+[Unreleased]: https://github.com/slb350/drep/compare/v3.1.4...HEAD
+[3.1.4]: https://github.com/slb350/drep/compare/v3.1.3...v3.1.4
 [3.1.3]: https://github.com/slb350/drep/compare/v3.1.2...v3.1.3
 [3.1.2]: https://github.com/slb350/drep/compare/v3.1.1...v3.1.2
 [3.1.1]: https://github.com/slb350/drep/compare/v3.1.0...v3.1.1
