@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [3.1.4] - 2026-10-27
+## [3.1.4] - 2026-10-28
 
 ### Changed
 
@@ -64,8 +64,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a `<!--` opening a line (at most three spaces in) runs over blank lines to its `-->` as an HTML
   block does. A tag or comment that is never closed is still plain text, as is anything past a blank
   line that ends a paragraph. A code span is recognised over a line ending in the same scan, so a
-  backticked comment opener still opens nothing. The scan lives in `docs::html` with the tag grammar that
-  moved out of `docs::links`.
+  backticked comment opener still opens nothing. The scan lives in `docs::html` with the tag grammar
+  that moved out of `docs::links`.
 
 ## [3.1.3] - 2026-10-20
 
