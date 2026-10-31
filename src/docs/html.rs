@@ -61,9 +61,9 @@ pub(super) fn spans(lines: &[Line<'_>]) -> Vec<Vec<Range<usize>>> {
     spans
 }
 
-/// Whether `line` belongs to a paragraph: outside a fence and not blank.
+/// Whether `line` belongs to a paragraph: not code and not blank.
 fn is_prose(line: &Line<'_>) -> bool {
-    !line.in_fence && !line.text.trim().is_empty()
+    !line.in_code && !line.text.trim().is_empty()
 }
 
 /// Record the tags and comments in one paragraph.
@@ -119,15 +119,15 @@ fn record(
 ///
 /// A comment closed on its own line is left to the paragraph scan, which
 /// treats it exactly like one in the middle of a sentence, and so is a comment
-/// with four or more spaces before it: indented code is not modelled, so that
-/// opener is ordinary text.
+/// with four or more spaces before it: that is indented code, or prose under a
+/// list item, and either way not a block comment.
 fn block_comment(
     lines: &[Line<'_>],
     open: usize,
     spans: &mut [Vec<Range<usize>>],
 ) -> Option<usize> {
     let line = &lines[open];
-    if line.in_fence {
+    if line.in_code {
         return None;
     }
     // Spaces are one byte and one character, so the count indexes both.

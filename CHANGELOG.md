@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `lint-docs` no longer reports a `bare_url`, a `tab_character`, a heading defect, a `long_line` or a
+  `link_syntax_invalid` inside an indented code block (CommonMark 0.31.2, section 4.4). Four columns
+  of indentation, a tab counting to the next tab stop, make a line code when it follows a blank line,
+  another code line, a fence or the top of the file; blank lines between two code lines belong to the
+  block, so they no longer count as a run of `multiple_blank_lines`. A line indented under a list
+  item, and one that continues a paragraph, is still prose, because the item's content offset is not
+  tracked and a miss there would hide a real finding. `trailing_whitespace` still fires in code. The
+  rule lives in `docs::indented` and folds into the same per-line flag the fence check feeds, now
+  named `Line::in_code`.
+
 ## [3.1.4] - 2026-10-28
 
 ### Changed
