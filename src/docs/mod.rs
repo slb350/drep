@@ -10,6 +10,7 @@
 //! - `fence` answers "is this line inside a code fence", once per file, for
 //!   every check that asks. See its module doc for why that is not a per-check
 //!   concern.
+//! - `indented` extends that answer to indented code blocks.
 //! - `lines` holds the checks that look at one line in isolation.
 //! - `html` finds the raw HTML tags and comments, which may run over several
 //!   lines, for `links` to skip.
@@ -22,6 +23,7 @@
 mod blocks;
 mod fence;
 mod html;
+mod indented;
 mod lines;
 mod links;
 
@@ -165,8 +167,9 @@ pub(crate) struct Line<'a> {
     pub number: u32,
     /// The line as written, without its terminator.
     pub text: &'a str,
-    /// True iff a fence delimiter or a line between two of them.
-    pub in_fence: bool,
+    /// True iff the line is code: a fence delimiter, a line between two of
+    /// them, or a line of an indented code block.
+    pub in_code: bool,
 }
 
 /// Build a [`Finding`] for `check` at a position.
@@ -203,14 +206,16 @@ pub fn analyze(path: &Path, content: &str) -> Vec<Finding> {
     let raw: Vec<&str> = content.lines().collect();
     let fences = fence::Fences::scan(&raw);
 
+    let code = indented::mask(&raw, fences.mask());
+
     let lines: Vec<Line<'_>> = raw
         .iter()
-        .zip(fences.mask())
+        .zip(&code)
         .enumerate()
-        .map(|(index, (text, in_fence))| Line {
+        .map(|(index, (text, in_code))| Line {
             number: index as u32 + 1,
             text,
-            in_fence: *in_fence,
+            in_code: *in_code,
         })
         .collect();
 

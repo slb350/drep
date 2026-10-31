@@ -29,7 +29,7 @@ fn is_blank(line: &Line<'_>) -> bool {
 fn multiple_blank_lines(lines: &[Line<'_>], file_path: &str, out: &mut Vec<Finding>) {
     let mut run: usize = 0;
     for line in lines {
-        if line.in_fence || !is_blank(line) {
+        if line.in_code || !is_blank(line) {
             run = 0;
             continue;
         }

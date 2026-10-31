@@ -45,7 +45,7 @@ pub fn check(
     file_path: &str,
     out: &mut Vec<Finding>,
 ) {
-    if line.in_fence {
+    if line.in_code {
         return;
     }
 
