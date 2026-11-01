@@ -25,7 +25,7 @@ use crate::docs::{Check, LONG_LINE_MAX, Line, finding};
 ///   code sample alike, and unlike a tab it carries no meaning in either.
 pub fn check(line: &Line<'_>, chars: &[char], file_path: &str, out: &mut Vec<Finding>) {
     trailing_whitespace(line, chars, file_path, out);
-    if !line.in_fence {
+    if !line.in_code {
         tab_character(line, chars, file_path, out);
         heading(line, chars, file_path, out);
         long_line(line, chars, file_path, out);

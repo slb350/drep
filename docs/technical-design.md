@@ -324,7 +324,11 @@ Fences are CommonMark 0.31.2's fenced code blocks: a run of three or more
 backticks or tildes opens one, only the same character, at least as long and
 followed by nothing, closes it, and a block left open runs to the end of the
 file. The one deliberate relaxation is indentation, which is unbounded so a
-fence inside a list item is still a fence. The link checks treat an
+fence inside a list item is still a fence. An indented code block (section
+4.4) is code too: four columns after a blank line, another code line, a fence
+or the top of the file. An indented line under a list item stays prose, since
+the item's content offset is not tracked, and one that follows paragraph text
+is a continuation. The link checks treat an
 `<https://...>` autolink as a link.
 
 Severity answers whether the finding changes how the document renders, which is

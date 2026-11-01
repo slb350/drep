@@ -73,7 +73,7 @@ fn trailing_whitespace_counts_the_run() {
 #[test]
 fn tab_column_is_the_first_tab_not_the_last() {
     fires_once_at("a\tb\tc", Check::TabCharacter, 1, 2);
-    fires_once_at("\ta", Check::TabCharacter, 1, 1);
+    fires_once_at("x\n\ta", Check::TabCharacter, 2, 1);
     silent("a    b", Check::TabCharacter);
 }
 

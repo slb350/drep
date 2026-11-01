@@ -392,12 +392,13 @@ fn a_comment_that_starts_a_line_may_hold_blank_lines() {
 
 #[test]
 fn a_comment_opening_four_spaces_in_is_not_a_block_comment() {
-    // Indented code is not modelled, so this stays the ordinary inline rule:
-    // a comment that has not closed by the end of its paragraph is text.
+    // Under a list item four spaces are not known to be code, so this stays the
+    // ordinary inline rule: a comment that has not closed by the end of its
+    // paragraph is text.
     fires_once_at(
-        "    <!-- x\n\nhttps://example.com\n-->",
+        "- item\n\n    <!-- x\n\nhttps://example.com\n-->",
         Check::BareUrl,
-        3,
+        5,
         1,
     );
 }
@@ -475,7 +476,7 @@ fn spans_of(content: &str) -> Vec<Vec<std::ops::Range<usize>>> {
         .map(|(text, number)| crate::docs::Line {
             number,
             text,
-            in_fence: false,
+            in_code: false,
         })
         .collect();
     crate::docs::html::spans(&lines)

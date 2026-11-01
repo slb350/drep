@@ -15,7 +15,7 @@ use crate::docs::Check;
 use crate::docs::tests::{fires_once_at, of_kind, run, silent, wide};
 
 /// Snippets that must fire in prose and stay silent inside a fence.
-fn fence_sensitive() -> Vec<(Check, String)> {
+pub(super) fn fence_sensitive() -> Vec<(Check, String)> {
     vec![
         (Check::EmptyHeading, "##".to_owned()),
         // The specific false positive the mask was built for: a shebang at the
@@ -32,7 +32,7 @@ fn fence_sensitive() -> Vec<(Check, String)> {
 ///
 /// One member, deliberately. Trailing whitespace is the only check whose
 /// advice - "remove it" - is equally correct in prose and in a code sample.
-fn fence_blind() -> Vec<(Check, String)> {
+pub(super) fn fence_blind() -> Vec<(Check, String)> {
     vec![(Check::TrailingWhitespace, "text  ".to_owned())]
 }
 
