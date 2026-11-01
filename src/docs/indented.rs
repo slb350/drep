@@ -103,8 +103,11 @@ fn mark_blanks_between_code<S: AsRef<str>>(lines: &[S], fenced: &[bool], out: &m
 }
 
 /// The width of the leading whitespace, counting a tab as advancing to the
-/// next multiple of four columns.
-fn indent_columns(line: &str) -> usize {
+/// next multiple of four columns (CommonMark 0.31.2, section 2.2).
+///
+/// Visible to the docs tests because no document can observe the exact width:
+/// see `indent_columns_expands_a_tab_to_the_next_stop`.
+pub(super) fn indent_columns(line: &str) -> usize {
     let mut columns = 0;
     for byte in line.bytes() {
         match byte {

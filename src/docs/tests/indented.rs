@@ -254,3 +254,28 @@ fn blank_runs_at_either_end_of_a_file_are_runs() {
     fires_once_at("\n\n\n    a\n", Check::MultipleBlankLines, 1, 1);
     fires_once_at("    a\n\n\n\n", Check::MultipleBlankLines, 2, 1);
 }
+
+#[test]
+fn indent_columns_expands_a_tab_to_the_next_stop() {
+    // `mask` only compares the width against zero and four, and any tab within
+    // the first four columns reaches four however it is counted, so no document
+    // can tell an exact count from an inflated one. The width is pinned here.
+    for (line, columns) in [
+        ("", 0),
+        ("x", 0),
+        ("   x", 3),
+        ("    x", 4),
+        ("\tx", 4),
+        (" \tx", 4),
+        ("   \tx", 4),
+        ("\t x", 5),
+        ("    \tx", 8),
+        ("\t\tx", 8),
+    ] {
+        assert_eq!(
+            crate::docs::indented::indent_columns(line),
+            columns,
+            "{line:?}"
+        );
+    }
+}
