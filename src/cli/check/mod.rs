@@ -551,7 +551,7 @@ fn provider_uses(chain: &ProviderChain) -> Vec<ProviderUse> {
         .map(|(index, provider)| ProviderUse {
             index,
             model: provider.model().to_owned(),
-            location: provider.location().to_owned(),
+            location: provider.location().into_owned(),
             files: provider.served(),
         })
         .collect()

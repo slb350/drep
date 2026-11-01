@@ -559,6 +559,69 @@ async fn a_literal_key_is_never_echoed() {
 }
 
 #[tokio::test]
+async fn a_key_mixing_a_literal_with_a_reference_is_never_echoed() {
+    // Only an `api_key` that is exactly one `${NAME}` is safe to print. Echoing
+    // any value that merely contains a reference put the literal half of
+    // `sk-live-secret-${SUFFIX}` - most of a live key - in the report.
+    let dir = tempfile::tempdir().expect("tempdir");
+    write_py(dir.path());
+    std::fs::write(
+        dir.path().join("drep.toml"),
+        "[[llm]]\nendpoint = \"http://e/v1\"\nmodel = \"m\"\napi_key = \"sk-live-secret-${DREP_TEST_KEY_SUFFIX}\"\n",
+    )
+    .expect("config");
+
+    let report = report_with_empty_store(dir.path()).await;
+
+    assert!(
+        !report.contains("sk-live-secret"),
+        "the literal part of the key reached the report: {report}"
+    );
+    assert!(report.contains("a literal value"), "got {report}");
+}
+
+#[tokio::test]
+async fn an_exact_reference_is_still_echoed() {
+    // The other side of the line above: a bare `${NAME}` holds no secret, and
+    // naming the variable is the whole point of reading the raw tree.
+    let dir = tempfile::tempdir().expect("tempdir");
+    write_py(dir.path());
+    std::fs::write(
+        dir.path().join("drep.toml"),
+        "[[llm]]\nendpoint = \"http://e/v1\"\nmodel = \"m\"\napi_key = \"${DREP_TEST_EXACT_KEY}\"\n",
+    )
+    .expect("config");
+
+    let report = report_with_empty_store(dir.path()).await;
+
+    assert!(report.contains("${DREP_TEST_EXACT_KEY} ("), "got {report}");
+}
+
+#[tokio::test]
+async fn an_endpoint_credential_is_never_echoed() {
+    // reqwest sends an endpoint's `user:password@` as HTTP Basic auth, so it is
+    // as much a credential as a literal `api_key`.
+    let dir = tempfile::tempdir().expect("tempdir");
+    write_py(dir.path());
+    std::fs::write(
+        dir.path().join("drep.toml"),
+        "[[llm]]\nendpoint = \"https://drep:gateway-secret@gateway.example/v1\"\nmodel = \"m\"\n",
+    )
+    .expect("config");
+
+    let report = report_with_empty_store(dir.path()).await;
+
+    assert!(
+        !report.contains("gateway-secret") && !report.contains("drep:gateway"),
+        "the endpoint credential reached the report: {report}"
+    );
+    assert!(
+        report.contains("m at https://<redacted>@gateway.example/v1"),
+        "got {report}"
+    );
+}
+
+#[tokio::test]
 async fn a_provider_with_no_key_anywhere_says_where_to_get_one() {
     let dir = tempfile::tempdir().expect("tempdir");
     write_py(dir.path());

@@ -189,6 +189,22 @@ fn a_missing_field_is_named_rather_than_omitted() {
 }
 
 #[test]
+fn an_endpoint_credential_is_never_shown() {
+    // The summary is printed before asking whether to replace the file; an
+    // endpoint's `user:password@` is sent as HTTP Basic auth and must not be.
+    let dir = root(Some(
+        "[[llm]]\nendpoint = \"https://drep:gateway-secret@gateway.example/v1\"\nmodel = \"m\"\n",
+    ));
+
+    let lines = describe(&dir.path().join("drep.toml"));
+
+    assert_eq!(
+        lines,
+        vec!["m at https://<redacted>@gateway.example/v1".to_owned()]
+    );
+}
+
+#[test]
 fn an_unparseable_config_still_lets_the_user_answer() {
     // The file is about to be discarded. Turning the prompt into an error about
     // it would leave the user unable to say yes to replacing the very thing

@@ -49,6 +49,7 @@
 //! used. The command sits above the store for the same reason: a file naming a
 //! command has not left the question unanswered.
 
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
@@ -363,6 +364,59 @@ fn lower_authority(rest: &str) -> String {
         rest[..host_len].to_ascii_lowercase(),
         &rest[host_len..]
     )
+}
+
+/// What an endpoint prints as wherever drep shows one to a person or a log.
+const REDACTED: &str = "<redacted>";
+
+/// An endpoint as drep prints it: without the credential a URL can carry.
+///
+/// An endpoint's `user:password@` is a credential, not an address. reqwest
+/// removes it from the URL and sends it as HTTP Basic auth, so a gateway behind
+/// a password is configured as `https://drep:${GATEWAY_PASSWORD}@host/v1`, and
+/// by the time a report prints the loaded config the variable holds the secret.
+/// Every place an endpoint is shown - `check`'s failover block and JSON,
+/// `doctor`, `init`, `auth`, and `Debug` - goes through here, and prints
+/// `https://<redacted>@host/v1` instead: the credential's presence stays
+/// visible, its value does not.
+///
+/// The URL is read with the parser reqwest itself uses, rather than by finding
+/// an `@`, so this strips what would be sent: `http://evil.example\@host/v1`
+/// names the host `evil.example` and carries no credential, and is printed as
+/// written. An endpoint without one is returned untouched, spelling and all.
+/// One that does not parse, or parses with no host (a scheme-less
+/// `user:pass@localhost:1234/v1` reads as an opaque path), cannot be split
+/// reliably, so it prints as `<redacted>` whole when it contains an `@`.
+///
+/// Display only. The cache identity keeps the raw endpoint, so rotating a
+/// password still starts the cache cold.
+pub fn display_endpoint(endpoint: &str) -> Cow<'_, str> {
+    let unsplittable = || {
+        Cow::Borrowed(if endpoint.contains('@') {
+            REDACTED
+        } else {
+            endpoint
+        })
+    };
+    let Ok(mut url) = reqwest::Url::parse(endpoint) else {
+        return unsplittable();
+    };
+    if url.username().is_empty() && url.password().is_none() {
+        return if url.has_host() {
+            Cow::Borrowed(endpoint)
+        } else {
+            unsplittable()
+        };
+    }
+    // Cannot fail: only a URL with no host, or a `file:` one, refuses a
+    // username, and neither parses with a credential in the first place.
+    if url.set_username("").and(url.set_password(None)).is_err() {
+        return Cow::Borrowed(REDACTED);
+    }
+    match url.as_str().split_once("://") {
+        Some((scheme, rest)) => Cow::Owned(format!("{scheme}://{REDACTED}@{rest}")),
+        None => Cow::Borrowed(REDACTED),
+    }
 }
 
 /// Fill in keys the config left unset, and report where each one came from.

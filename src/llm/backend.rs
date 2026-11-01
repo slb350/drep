@@ -1,5 +1,7 @@
 //! Backend-specific request machinery behind the provider-chain contract.
 
+use std::borrow::Cow;
+
 use crate::config::{BackendKind, LlmConfig};
 use crate::llm::client::LlmClient;
 use crate::llm::codex::{CodexClient, CodexRuntime, CodexSettings};
@@ -30,10 +32,14 @@ impl ProviderBackend {
     }
 
     /// Backend-neutral location shown in reports.
-    pub fn location(&self) -> &str {
+    ///
+    /// Never the endpoint's `user:password@`: that is the HTTP Basic credential
+    /// reqwest sends, and this is printed in the failover block and
+    /// `--format json`. [`Self::identity`] is the one that keeps it.
+    pub fn location(&self) -> Cow<'_, str> {
         match self {
-            Self::Http(client) => client.endpoint(),
-            Self::Codex(_) => "codex://chatgpt",
+            Self::Http(client) => crate::auth::display_endpoint(client.endpoint()),
+            Self::Codex(_) => Cow::Borrowed("codex://chatgpt"),
         }
     }
 

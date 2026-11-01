@@ -252,7 +252,11 @@ pub(crate) fn describe(path: &Path) -> Vec<String> {
                     field("model")
                 )
             } else {
-                format!("{} at {}{disabled}", field("model"), field("endpoint"))
+                format!(
+                    "{} at {}{disabled}",
+                    field("model"),
+                    crate::auth::display_endpoint(&field("endpoint"))
+                )
             }
         })
         .collect()

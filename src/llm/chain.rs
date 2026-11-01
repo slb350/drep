@@ -105,7 +105,7 @@ impl Provider {
     }
 
     /// The backend-neutral location this provider talks to.
-    pub fn location(&self) -> &str {
+    pub fn location(&self) -> std::borrow::Cow<'_, str> {
         self.backend.location()
     }
 

@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Security:** an endpoint's `user:password@` no longer reaches drep's output. reqwest takes it out of
+  the URL and sends it as HTTP Basic auth, so a gateway behind a password is configured as
+  `endpoint = "https://drep:${GATEWAY_PASSWORD}@host/v1"`, and `${VAR}` expansion puts the secret in the
+  loaded endpoint. `check`'s failover block and its `--format json` `endpoint` field printed that
+  endpoint whole for every provider that served a file after a failover, which put the password in CI
+  logs and saved reports. `drep doctor`'s and `drep init`'s provider listings, `drep auth list`, `login`
+  and `logout`, and the `Debug` output of `LlmConfig` and `LlmClient` printed it too. Each now prints the
+  endpoint as `https://<redacted>@host/v1` through `auth::display_endpoint`, which reads the URL with the
+  parser reqwest uses and prints an endpoint that does not parse, or parses with no host, as
+  `<redacted>` when it contains an `@`. An endpoint without a credential prints as written. The cache
+  identity keeps the raw endpoint, so changing the password still starts the cache cold. `drep doctor`
+  also no longer echoes an `api_key` that only *contains* a `${VAR}`: `sk-live-secret-${SUFFIX}` printed
+  the literal part of the key, which is most of it. Only a value that is exactly one `${NAME}` is shown;
+  any other value reads as "a literal value".
 - `lint-docs` no longer reports a `bare_url`, a `tab_character`, a heading defect, a `long_line` or a
   `link_syntax_invalid` inside an indented code block (CommonMark 0.31.2, section 4.4). Four columns
   of indentation, a tab counting to the next tab stop, make a line code when it follows a blank line,
