@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- The Rust 1.88-compatible lockfile refresh, with no advisory behind any of it: `cargo audit` and
+  `osv-scanner` reported no vulnerability, warning or OSV finding against `Cargo.lock` before the
+  update and none after it. `open-agent-sdk` 0.11.7 to 0.11.8; `ignore` 0.4.33 to 0.4.34 with
+  `globset` 0.4.20 to 0.4.21; `encoding_rs` 0.8.42 to 0.8.44 and `utf8_iter` 1.0.4 to 1.1.0, both
+  under `reqwest` through `url` and `idna`, and the latter now listing `utf_types` 1.0.0 - the one
+  package the lock gains, `Apache-2.0 OR MIT`, `rust-version` 1.83, published from
+  `github.com/hsivonen/utf_types` by the author of `utf8_iter`; `log` 0.4.34 to 0.4.35 and
+  `openssl-probe` 0.2.1 to 0.2.2, both on the native-TLS path (`log` also under `ignore`);
+  `rustix` 1.1.5 to 1.1.6 through `tempfile`; and the `wasm-bindgen` family 0.2.129 to 0.2.130 with
+  `wasm-bindgen-futures` 0.4.79 to 0.4.80 and `js-sys` and `web-sys` 0.3.106 to 0.3.107, which
+  resolve only for `wasm32` targets and so compile into no drep binary. No `Cargo.toml` requirement
+  changed, so each of these sits inside a bound this file already declared.
+- open-agent-sdk 0.11.8 is the entry that changes what a review does at runtime, and its changelog
+  is the source for this: a stream from an OpenAI-compatible server that omits `id`, `object`,
+  `created` or `model` from its chunks - fields the SDK never reads, only `choices` - is no longer
+  rejected with `Failed to parse SSE event data: missing field`, which lost the whole response as a
+  retryable stream error, and a missing field now deserializes to its empty value. No public API
+  changed, so `run_one_query` needs none. That release also moved the SDK's own `rustls-webpki`
+  lock entry to 0.103.16 for `RUSTSEC-2026-0382`; drep took that version in 3.1.4, so this update
+  carries no security fix of its own.
+- Three packages are held back and none is behind an advisory. `reqwest` stays at 0.12.28, behind
+  0.13.5: 0.13 is semver-major and so outside `Cargo.toml`' `0.12`, and `open-agent-sdk` 0.11.8's
+  index entry still requires `reqwest ^0.12.28`, whose copy drep shares rather than building a
+  second one - the index gives 0.13.5 `rust_version` 1.85.0, so this hold is not the MSRV.
+  `ordered-float` stays at 5.4.0, behind 5.5.1, which declares `rust_version` 1.90 against this
+  crate's 1.88 floor; it reaches the development graph through `saphyr` alone, so no release binary
+  carries it. `saphyr` stays at 0.2.2, behind 0.3.3, whose index entry declares `rust_version`
+  1.85.0: unlike `ordered-float` this hold is the declared requirement rather than the MSRV, because
+  within `0.x` a minor version is an API break, and taking 0.3 is a migration of the release-contract
+  test rather than a lockfile refresh.
+
 ### Fixed
 
 - `lint-docs` no longer reports a `bare_url`, a `tab_character`, a heading defect, a `long_line` or a
