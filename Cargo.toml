@@ -103,9 +103,12 @@ assert_cmd = "2.2"
 # `noyalib` both declare 1.89. Its `encoding` feature is off because it exists
 # to decode non-UTF-8 byte streams and pulls a second `encoding_rs` copy into
 # the dev graph. Its own dependency `ordered-float` is held at 5.4.0 by an
-# MSRV-compatible update because 5.5.0 declares `rust_version` 1.90, above this
+# MSRV-compatible update because 5.5.x declares `rust_version` 1.90, above this
 # floor; it reaches the graph through `saphyr` alone, so no release binary
-# carries it.
+# carries it. `saphyr` 0.3.3 is held back by this requirement, not by the floor:
+# it declares `rust_version` 1.85.0, but within `0.x` a minor version is an API
+# break, so adopting it means migrating the release-contract test rather than
+# running `cargo update`.
 saphyr = { version = "0.2.2", default-features = false }
 wiremock = "0.6"
 
