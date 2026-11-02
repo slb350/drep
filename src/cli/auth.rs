@@ -18,7 +18,7 @@ use anyhow::{Result, anyhow};
 use clap::{Args, Subcommand};
 
 use crate::Exit;
-use crate::auth::{AuthStore, default_path};
+use crate::auth::{AuthStore, default_path, display_endpoint};
 use crate::cli::init::presets;
 use crate::cli::init::wizard::{Console, Terminal};
 
@@ -95,9 +95,10 @@ fn list<W: Write>(out: &mut W, path: &Path) -> Result<Exit> {
     for endpoint in store.endpoints() {
         // The preset name, when one matches, is what a user actually recognises;
         // the endpoint alone reads as a URL they half remember configuring.
+        let shown = display_endpoint(endpoint);
         match matching_preset(endpoint).map(|p| p.display_name) {
-            Some(name) => writeln!(out, "  {endpoint}  ({name})")?,
-            None => writeln!(out, "  {endpoint}")?,
+            Some(name) => writeln!(out, "  {shown}  ({name})")?,
+            None => writeln!(out, "  {shown}")?,
         }
     }
     Ok(Exit::Clean)
@@ -106,17 +107,18 @@ fn list<W: Write>(out: &mut W, path: &Path) -> Result<Exit> {
 /// Read a key and store it for the resolved endpoint.
 fn login(console: &mut dyn Console, args: &LoginArgs, path: &Path) -> Result<Exit> {
     let endpoint = resolve_endpoint(args)?;
+    let shown = display_endpoint(&endpoint);
     let mut store = AuthStore::load(path)?;
 
     if store.get(&endpoint).is_some() {
-        console.say(&format!("Replacing the key stored for {endpoint}."))?;
+        console.say(&format!("Replacing the key stored for {shown}."))?;
     }
 
     if let Some(url) = matching_preset(&endpoint).and_then(|preset| preset.key_url()) {
         console.say(&format!("Get a key: {url}"))?;
     }
 
-    let key = console.ask_secret(&format!("Paste the key for {endpoint}"))?;
+    let key = console.ask_secret(&format!("Paste the key for {shown}"))?;
     // An empty paste is a cancellation, not a key. `AuthStore::set` would refuse
     // it anyway; saying so here is the difference between "you changed your
     // mind" and "something went wrong".
@@ -127,21 +129,22 @@ fn login(console: &mut dyn Console, args: &LoginArgs, path: &Path) -> Result<Exi
 
     store.set(&endpoint, &key)?;
     store.save(path)?;
-    console.say(&format!("✓ Stored a key for {endpoint}"))?;
+    console.say(&format!("✓ Stored a key for {shown}"))?;
     Ok(Exit::Clean)
 }
 
 /// Forget the key for an endpoint.
 fn logout<W: Write>(out: &mut W, args: &LogoutArgs, path: &Path) -> Result<Exit> {
     let mut store = AuthStore::load(path)?;
+    let shown = display_endpoint(&args.endpoint);
 
     if !store.remove(&args.endpoint) {
-        writeln!(out, "No key was stored for {}.", args.endpoint)?;
+        writeln!(out, "No key was stored for {shown}.")?;
         return Ok(Exit::Clean);
     }
 
     store.save(path)?;
-    writeln!(out, "✓ Forgot the key for {}", args.endpoint)?;
+    writeln!(out, "✓ Forgot the key for {shown}")?;
     Ok(Exit::Clean)
 }
 

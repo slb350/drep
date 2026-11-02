@@ -5,6 +5,7 @@
 //! left four files of tests uncompiled in this repository while the count still
 //! looked right.
 
+mod display;
 mod key_command;
 mod resolve;
 mod store;

@@ -184,3 +184,26 @@ fn debug_prints_header_names_and_never_their_values() {
         "the long-lived identity must not retain header plaintext"
     );
 }
+
+/// The base URL is printed, but never the `user:password@` reqwest would send
+/// as HTTP Basic auth.
+#[test]
+fn debug_prints_the_endpoint_without_its_credential() {
+    let config = crate::config::LlmConfig {
+        endpoint: Some("http://drep:gateway-secret@e/v1".to_owned()),
+        model: Some("m".to_owned()),
+        ..crate::config::LlmConfig::default()
+    };
+
+    let client = LlmClient::new(&config).expect("client");
+    let rendered = format!("{client:?}");
+
+    assert!(
+        !rendered.contains("gateway-secret") && !rendered.contains("drep:"),
+        "an endpoint credential must never reach a log: {rendered}"
+    );
+    assert!(
+        rendered.contains("\"http://<redacted>@e/v1\""),
+        "got {rendered}"
+    );
+}

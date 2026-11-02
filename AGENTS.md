@@ -626,6 +626,19 @@ comes back.
 - **`LlmConfig` hand-writes `Debug` to redact `api_key`**, for the same reason
   `LlmClient` does. `Config` derives `Debug` and holds them, so a derived one
   meant any `{:?}` on a loaded config emitted a live credential.
+- **An endpoint's `user:password@` is a credential, and is printed only through
+  `auth::display_endpoint`.** reqwest removes it from the URL and sends it as
+  HTTP Basic auth, and `${VAR}` expansion fills it with the secret, so the
+  loaded endpoint is a credential. `check`'s failover block and JSON
+  `endpoint`, the `doctor`, `init` and `auth` listings, and the `Debug` of
+  `LlmConfig` and `LlmClient` all printed it whole. Every place an endpoint is
+  shown goes through `display_endpoint`, which uses reqwest's own URL parser
+  rather than looking for an `@`: `http://a\@b/v1` names the host `a` and holds
+  no credential. `ProviderBackend::location` returns the redacted form. The
+  cache identity (`ProviderBackend::identity`) and the store key keep the raw
+  endpoint, so a rotated password still starts the cache cold. On the same
+  grounds `doctor` echoes an `api_key` only when it is exactly one `${NAME}`.
+  A value that merely contained a reference printed its literal part.
 - **Provider demotion is sticky for the run, and re-checked after the limiter.**
   The failure classes that fail over are endpoint-level, so one dead endpoint
   must not cost every file the SDK's full backoff schedule. Files run

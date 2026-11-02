@@ -58,6 +58,84 @@ fn list_prints_the_endpoints_and_never_the_keys() {
 }
 
 #[test]
+fn list_and_logout_never_print_an_endpoint_credential() {
+    // An endpoint's `user:password@` is sent as HTTP Basic auth; it is a key in
+    // all but name, and this output is what lands in a bug report.
+    let (_dir, path) = temp_store();
+    let endpoint = "https://drep:gateway-secret@gateway.example/v1";
+    let mut store = AuthStore::new();
+    store.set(endpoint, "k").expect("set");
+    store.save(&path).expect("save");
+
+    let listed = output(AuthCommand::List, &path);
+    let forgot = output(
+        AuthCommand::Logout(LogoutArgs {
+            endpoint: endpoint.to_owned(),
+        }),
+        &path,
+    );
+    let absent = output(
+        AuthCommand::Logout(LogoutArgs {
+            endpoint: endpoint.to_owned(),
+        }),
+        &path,
+    );
+
+    for rendered in [&listed, &forgot, &absent] {
+        assert!(
+            !rendered.contains("gateway-secret") && !rendered.contains("drep:"),
+            "an endpoint credential was printed: {rendered}"
+        );
+        assert!(
+            rendered.contains("https://<redacted>@gateway.example/v1"),
+            "got {rendered}"
+        );
+    }
+}
+
+#[test]
+fn login_never_prints_an_endpoint_credential() {
+    // Each of login's three lines names the endpoint: replacing, the secret
+    // prompt, and the confirmation.
+    use crate::cli::init::wizard::tests::Scripted;
+
+    let (_dir, path) = temp_store();
+    let endpoint = "https://drep:gateway-secret@gateway.example/v1";
+    let mut store = AuthStore::new();
+    store.set(endpoint, "old").expect("set");
+    store.save(&path).expect("save");
+    let mut console = Scripted::new(&["new-key"]);
+
+    login(
+        &mut console,
+        &LoginArgs {
+            endpoint: Some(endpoint.to_owned()),
+            provider: None,
+        },
+        &path,
+    )
+    .expect("login succeeds");
+
+    let transcript = console.transcript();
+    assert!(
+        !transcript.contains("gateway-secret") && !transcript.contains("drep:"),
+        "an endpoint credential was printed: {transcript}"
+    );
+    assert_eq!(
+        transcript
+            .matches("https://<redacted>@gateway.example/v1")
+            .count(),
+        3,
+        "{transcript}"
+    );
+    assert_eq!(
+        AuthStore::load(&path).expect("reload").get(endpoint),
+        Some("new-key"),
+        "the key is still stored under the real endpoint"
+    );
+}
+
+#[test]
 fn list_names_the_preset_serving_an_endpoint_it_recognises() {
     // A bare URL reads as something half-remembered; the preset name is what a
     // user recognises as the thing they set up.

@@ -98,16 +98,16 @@ fn providers_keep_their_order_with_their_own_model_and_endpoint() {
     };
 
     let chain = ProviderChain::new(&[&first, &second]).expect("chain builds");
-    let seen: Vec<(&str, &str)> = chain
+    let seen: Vec<(&str, String)> = chain
         .providers()
         .iter()
-        .map(|p| (p.model(), p.location()))
+        .map(|p| (p.model(), p.location().into_owned()))
         .collect();
     assert_eq!(
         seen,
         vec![
-            ("model-one", "http://first/v1"),
-            ("model-two", "http://second/v1"),
+            ("model-one", "http://first/v1".to_owned()),
+            ("model-two", "http://second/v1".to_owned()),
         ]
     );
 }

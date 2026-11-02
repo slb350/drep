@@ -295,3 +295,60 @@ fn the_failure_block_is_preceded_by_a_blank_line_when_findings_were_printed() {
         "the two blocks must be separated: {text:?}"
     );
 }
+
+/// A credential in an endpoint's userinfo authenticates the request, so the
+/// report names the provider without it.
+///
+/// reqwest moves `user:password@` out of the URL into an `Authorization: Basic`
+/// header, which the mock requires before it answers: the userinfo is a live
+/// credential, typically supplied as `${VAR}` so it never sits in the file.
+/// Printing the expanded endpoint in the failover block or the JSON
+/// `endpoint` field would hand that secret to every terminal and CI log.
+#[tokio::test]
+async fn provider_uses_never_report_an_endpoint_credential() {
+    use crate::llm::chain::ProviderChain;
+    use crate::test_support::{cfg_for, fast_retry_chain, server_failing_with, sse, temp_cache};
+    use wiremock::matchers::{header, method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let dead = server_failing_with(500).await;
+    let gateway = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/chat/completions"))
+        .and(header(
+            "authorization",
+            "Basic ZHJlcDpnYXRld2F5LXNlY3JldA==",
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(
+            sse(&[r#"{"issues": [], "summary": "ok"}"#]),
+            "text/event-stream",
+        ))
+        .expect(1)
+        .mount(&gateway)
+        .await;
+    let address = gateway.address();
+    let mut fallback = cfg_for(&gateway, "model-b", 1);
+    fallback.endpoint = Some(format!("http://drep:gateway-secret@{address}/v1"));
+    fallback.api_key = None;
+    let (cache, _dir) = temp_cache();
+    let chain: ProviderChain = fast_retry_chain(&[cfg_for(&dead, "model-a", 1), fallback]);
+
+    chain
+        .complete_json("system", "content", &cache)
+        .await
+        .expect("the credentialed fallback answers");
+
+    let uses = super::super::provider_uses(&chain);
+    assert_eq!(uses.len(), 1, "only the fallback served");
+    assert_eq!(uses[0].location, format!("http://<redacted>@{address}/v1"));
+    let outcome = outcome_serving(uses);
+    let text = rendered(&outcome, OutputFormat::Text);
+    let json = rendered_json(&outcome).to_string();
+    for report in [&text, &json] {
+        assert!(
+            !report.contains("gateway-secret") && !report.contains("drep:"),
+            "an endpoint credential reached the report: {report}"
+        );
+    }
+    assert!(text.contains("model-b at http://<redacted>@"), "{text}");
+}

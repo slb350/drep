@@ -183,6 +183,28 @@ fn debug_redacts_the_api_key() {
     );
 }
 
+/// An endpoint's `user:password@` is a credential: reqwest strips it from the
+/// URL and sends it as HTTP Basic auth. `Debug` is what a `dbg!` or a tracing
+/// line prints, so it must print the endpoint without it.
+#[test]
+fn debug_redacts_an_endpoint_credential() {
+    let cfg = LlmConfig {
+        endpoint: Some("https://drep:gateway-secret@gateway.example/v1".to_owned()),
+        model: Some("m".to_owned()),
+        ..LlmConfig::default()
+    };
+
+    let printed = format!("{cfg:?}");
+    assert!(
+        !printed.contains("gateway-secret") && !printed.contains("drep:"),
+        "an endpoint credential must never reach a log: {printed}"
+    );
+    assert!(
+        printed.contains("\"https://<redacted>@gateway.example/v1\""),
+        "the endpoint is still printed, with the credential marked: {printed}"
+    );
+}
+
 #[test]
 fn a_protocol_name_is_read_and_parsed() {
     let temp = tempfile::tempdir().expect("tempdir");

@@ -154,7 +154,11 @@ impl std::fmt::Debug for LlmConfig {
         f.debug_struct("LlmConfig")
             .field("enabled", &self.enabled)
             .field("backend", &self.backend)
-            .field("endpoint", &self.endpoint)
+            // `user:password@` in an endpoint is a Basic-auth credential.
+            .field(
+                "endpoint",
+                &self.endpoint.as_deref().map(crate::auth::display_endpoint),
+            )
             .field("model", &self.model)
             .field(
                 "api_key",

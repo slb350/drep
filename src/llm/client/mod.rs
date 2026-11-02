@@ -109,11 +109,13 @@ pub struct LlmClient {
 /// Hand-written so the API key cannot reach a log.
 ///
 /// A derived `Debug` prints every field, so any `{:?}`, `dbg!` or tracing line
-/// touching the client would emit a live credential.
+/// touching the client would emit a live credential. The base URL is one too
+/// when it carries `user:password@`, so it prints through
+/// [`crate::auth::display_endpoint`].
 impl std::fmt::Debug for LlmClient {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("LlmClient")
-            .field("base_url", &self.base_url)
+            .field("base_url", &crate::auth::display_endpoint(&self.base_url))
             .field("model", &self.model)
             .field("api_key", &"<redacted>")
             .field("protocol", &self.protocol.as_str())

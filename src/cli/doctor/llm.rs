@@ -194,7 +194,10 @@ pub(super) async fn write_llm_section<W: Write>(
         let description = if is_codex {
             format!("{model} via ChatGPT/Codex subscription")
         } else {
-            format!("{model} at {endpoint}{protocol}")
+            format!(
+                "{model} at {}{protocol}",
+                crate::auth::display_endpoint(endpoint)
+            )
         };
         if entry_is_enabled(entry) {
             enabled_count += 1;
@@ -328,12 +331,12 @@ async fn key_source_line(
     match (source, api_key) {
         // The reference is shown verbatim - that is the whole reason doctor
         // reads the raw tree rather than the loaded config.
-        // Only a `${VAR}` reference is echoed. `api_key` may hold a literal
-        // secret - `config::load` accepts one - and doctor's output is what
-        // people paste into bug reports and CI logs.
-        (KeySource::Config, Some(reference))
-            if !config::env_var_refs_in(&Value::String(reference.to_string())).is_empty() =>
-        {
+        // Only a value that is exactly one `${VAR}` is echoed. `api_key` may
+        // hold a literal secret - `config::load` accepts one - and doctor's
+        // output is what people paste into bug reports and CI logs. Echoing
+        // any value that merely *contained* a reference printed the literal
+        // part of `sk-live-secret-${SUFFIX}`, which is most of the key.
+        (KeySource::Config, Some(reference)) if is_exactly_one_reference(reference) => {
             format!("{reference} ({})", KeySource::Config.label())
         }
         (KeySource::Config, _) => format!(
@@ -349,6 +352,20 @@ async fn key_source_line(
             "not set; configured headers may supply authentication".to_owned()
         }
         (source, _) => source.label().to_string(),
+    }
+}
+
+/// Whether `value` is one `${NAME}` and nothing else, so printing it prints no
+/// part of a key.
+fn is_exactly_one_reference(value: &str) -> bool {
+    match config::env_var_refs(value).as_slice() {
+        [name] => {
+            value
+                .strip_prefix("${")
+                .and_then(|rest| rest.strip_suffix('}'))
+                == Some(name)
+        }
+        _ => false,
     }
 }
 
