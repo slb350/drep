@@ -238,13 +238,118 @@ fn an_item_continuation_keeps_the_list_open_across_a_blank_line() {
 }
 
 #[test]
-fn a_heading_does_not_end_a_block_by_itself() {
-    // After an ATX heading no blank line is needed in CommonMark, but drep
-    // reads the heading as text and so leaves the next line prose.
+fn an_atx_heading_ends_the_paragraph_so_an_indented_line_is_code() {
+    // A heading is a leaf block: no blank line is needed before the block.
+    for heading in [
+        "# Title",
+        "###### Six",
+        "   ## Indented",
+        "#",
+        "## Closed ##",
+    ] {
+        silent(
+            &format!("{heading}\n    see https://example.com/x\n"),
+            Check::BareUrl,
+        );
+    }
+}
+
+#[test]
+fn text_that_only_resembles_a_heading_does_not_end_the_paragraph() {
+    // Seven markers, no space after them and a four-column indent are not ATX
+    // headings, so the indented line continues a paragraph.
+    for text in ["####### Seven", "#hashtag", "\\# escaped"] {
+        fires_once_at(
+            &format!("{text}\n    see https://example.com/x\n"),
+            Check::BareUrl,
+            2,
+            9,
+        );
+    }
+}
+
+#[test]
+fn a_thematic_break_ends_the_paragraph_so_an_indented_line_is_code() {
+    for rule in [
+        "---", "***", "___", "- - -", " * * * *", "_\t_\t_", "-----   ",
+    ] {
+        silent(
+            &format!("Text.\n{rule}\n    see https://example.com/x\n"),
+            Check::BareUrl,
+        );
+    }
+}
+
+#[test]
+fn two_marks_are_not_a_thematic_break() {
     fires_once_at(
-        "# Title\n    see https://example.com/x\n",
+        "Text.\n--\n    see https://example.com/x\n",
         Check::BareUrl,
-        2,
+        3,
+        9,
+    );
+    // Mixed marks are not a break either.
+    fires_once_at(
+        "Text.\n-*-\n    see https://example.com/x\n",
+        Check::BareUrl,
+        3,
+        9,
+    );
+}
+
+#[test]
+fn a_thematic_break_that_looks_like_a_list_item_opens_no_list() {
+    silent("- - -\n\n    see https://example.com/x\n", Check::BareUrl);
+}
+
+#[test]
+fn an_unindented_leaf_block_closes_a_list() {
+    // Neither a heading nor a break can continue an item without indentation.
+    silent(
+        "- item\n# Title\n    see https://example.com/x\n",
+        Check::BareUrl,
+    );
+    silent(
+        "- item\n***\n    see https://example.com/x\n",
+        Check::BareUrl,
+    );
+}
+
+#[test]
+fn an_indented_leaf_block_leaves_the_list_open() {
+    fires_once_at(
+        "- item\n  # Title\n    see https://example.com/x\n",
+        Check::BareUrl,
+        3,
+        9,
+    );
+    fires_once_at(
+        "- item\n\n  ***\n    see https://example.com/x\n",
+        Check::BareUrl,
+        4,
+        9,
+    );
+}
+
+#[test]
+fn an_indented_hash_line_is_code_not_a_heading() {
+    silent(
+        "Intro.\n\n    # see https://example.com/x\n",
+        Check::BareUrl,
+    );
+    silent(
+        "Intro.\n\n    ---\n    see https://example.com/x\n",
+        Check::BareUrl,
+    );
+}
+
+#[test]
+fn a_heading_line_inside_a_fence_ends_nothing() {
+    // The `#` line is a shell comment: the list stays open around the fence.
+    fires_once_at(
+        "- item\n  ```sh\n# comment\n  ```\n\n    see https://example.com/x\n",
+        Check::BareUrl,
+        6,
         9,
     );
 }

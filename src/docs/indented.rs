@@ -10,7 +10,8 @@
 //!
 //! - **A paragraph continuation.** An indented line cannot interrupt a
 //!   paragraph, so it must follow a blank line, another code line, the top of
-//!   the file or a fence.
+//!   the file, a fence, an ATX heading or a thematic break. The last two are
+//!   leaf blocks that no paragraph continues past, so no blank line is needed.
 //! - **Under a list item.** The item's content offset decides whether four
 //!   columns is code, and drep does not track it, so an indented line is
 //!   prose from a list marker until a blank line is followed by an unindented
@@ -30,7 +31,10 @@ enum Previous {
     Code,
     /// A fence delimiter or a line inside a fence.
     Fence,
-    /// Anything else: a paragraph, a heading, a list item.
+    /// An ATX heading or a thematic break: a one-line block that ends the
+    /// paragraph before it and that no later line continues.
+    Leaf,
+    /// Anything else: a paragraph, a list item, a quote.
     Text,
 }
 
@@ -59,10 +63,16 @@ pub fn mask<S: AsRef<str>>(lines: &[S], fenced: &[bool]) -> Vec<bool> {
             continue;
         }
         let indent = indent_columns(line);
+        // Inside a fence a `#` line is a comment and `---` is content.
+        let leaf = !*fenced && indent < CODE_INDENT && is_leaf(line);
         // A fence delimiter is a line like any other as far as a list is
         // concerned, so the list bookkeeping runs before the fence test.
         if indent < CODE_INDENT {
-            if starts_list_item(line) {
+            if leaf {
+                // Without indentation it is not item content, and neither a
+                // heading nor a break can be a lazy continuation line.
+                in_list &= indent != 0;
+            } else if starts_list_item(line) {
                 in_list = true;
             } else if indent == 0 && previous == Previous::Blank {
                 in_list = false;
@@ -71,6 +81,9 @@ pub fn mask<S: AsRef<str>>(lines: &[S], fenced: &[bool]) -> Vec<bool> {
         if *fenced {
             out.push(true);
             previous = Previous::Fence;
+        } else if leaf {
+            out.push(false);
+            previous = Previous::Leaf;
         } else if indent >= CODE_INDENT && previous.permits_code() && !in_list {
             out.push(true);
             previous = Previous::Code;
@@ -117,6 +130,42 @@ pub(super) fn indent_columns(line: &str) -> usize {
         }
     }
     columns
+}
+
+/// Whether the line, less up to three columns of indentation, is an ATX heading
+/// or a thematic break (CommonMark 0.31.2, sections 4.1 and 4.2).
+///
+/// A heading is one to six `#` followed by whitespace or the line's end, so
+/// `#hashtag` and seven markers are paragraph text. A break is three or more
+/// of one of `-`, `*` and `_`, with spaces and tabs allowed between them. It is
+/// tested ahead of the list marker because `- - -` is a break, not an item.
+/// A setext underline needs no case of its own: `---` is a break either way,
+/// and `===` is left as text.
+///
+/// Called only for an indent under four, so trimming all leading whitespace
+/// removes exactly the indentation.
+fn is_leaf(line: &str) -> bool {
+    let rest = line.trim_start();
+    let markers = rest.bytes().take_while(|b| *b == b'#').count();
+    if (1..=6).contains(&markers) {
+        return rest[markers..].is_empty() || rest[markers..].starts_with([' ', '\t']);
+    }
+    let Some(mark) = rest
+        .bytes()
+        .next()
+        .filter(|b| matches!(b, b'-' | b'*' | b'_'))
+    else {
+        return false;
+    };
+    let mut count = 0;
+    for byte in rest.bytes() {
+        if byte == mark {
+            count += 1;
+        } else if byte != b' ' && byte != b'\t' {
+            return false;
+        }
+    }
+    count >= 3
 }
 
 /// Whether the line, less up to three columns of indentation, opens with a
