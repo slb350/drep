@@ -302,10 +302,13 @@ impl StagedView {
 
     /// The content the commit records for `path`: its blob in the index, as UTF-8 text.
     ///
-    /// The `:<path>` spec is built from the path's bytes, so a name that is not
-    /// UTF-8, which `quoting::decode` keeps exactly, reaches git unchanged.
+    /// The `:0:<path>` spec is built from the path's bytes, so a name that is not
+    /// UTF-8, which `quoting::decode` keeps exactly, reaches git unchanged. The
+    /// stage is always explicit because git reads `:<n>:<rest>` as `<rest>` at
+    /// merge stage `n`: with a bare `:` prefix, a staged `0:guide.md` would
+    /// name the different file `guide.md`.
     async fn content(&self, root: &Path, path: &Path) -> std::io::Result<String> {
-        let mut spec = OsString::from(":");
+        let mut spec = OsString::from(":0:");
         spec.push(path);
         let args = [OsStr::new("cat-file"), OsStr::new("blob"), &spec];
         let blob = spawn_git_bytes(root, &args, self.env())

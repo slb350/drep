@@ -77,12 +77,12 @@ pub struct Work {
     ///
     /// Paths mode records the canonical target directory after resolving an
     /// explicit symlink and reads from that same canonical path. Diff modes
-    /// record the repository-relative hunk locations because deleted files may
-    /// no longer exist on disk. Keeping this beside the work set makes policy
-    /// scope a property of the bytes that were resolved, not a second walk over
-    /// display paths that can point somewhere else. It remains empty when the
-    /// loaded site policy names no refusal markers, avoiding path allocations on
-    /// unaffected machines.
+    /// record `root`, whose repository git read every hunk from, beside the
+    /// repository-relative hunk locations, which may no longer exist on disk.
+    /// Keeping this beside the work set makes policy scope a property of the
+    /// bytes that were resolved, not a second walk over display paths that can
+    /// point somewhere else. It remains empty when the loaded site policy names
+    /// no refusal markers, avoiding path allocations on unaffected machines.
     pub(super) reviewed_directories: BTreeSet<PathBuf>,
     /// Files whose working-tree state the reviewed commit does not hold:
     /// tracked files whose working-tree content differs from it, plus
@@ -368,10 +368,17 @@ fn resolve_paths(paths: &[PathBuf], root: &Path, collect_policy_scope: bool) -> 
 
 /// Repository-discovery starting points for diff-backed hunks.
 ///
-/// These paths may name deleted files, so canonicalizing them would turn a
-/// valid diff into an input failure. Git produced every hunk relative to
-/// `root`; its lexical parent is therefore the directory whose repository must
-/// answer the policy query.
+/// `root` itself is always among them: git read every hunk from the object
+/// store of the repository at `root`, so that repository is a source of this
+/// run whatever the working tree holds. Probing only the working-tree parents
+/// would let a directory symbolic link - recorded by the checked-out commit or
+/// left unstaged - hand the question to whichever repository it points into
+/// while the marked one's committed source is sent.
+///
+/// Each hunk's lexical parent is kept too, because a user's
+/// `diff.submodule=diff` makes git print a submodule's own files, and that
+/// submodule's policy then applies. These paths may name deleted files, so
+/// canonicalizing them would turn a valid diff into an input failure.
 fn hunk_directories(
     root: &Path,
     by_file: &[Vec<Hunk>],
@@ -384,5 +391,6 @@ fn hunk_directories(
         .iter()
         .filter_map(|hunks| hunks.first())
         .filter_map(|hunk| root.join(&hunk.file_path).parent().map(Path::to_path_buf))
+        .chain(std::iter::once(root.to_path_buf()))
         .collect()
 }

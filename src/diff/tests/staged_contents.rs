@@ -92,3 +92,42 @@ async fn a_name_that_is_not_utf8_is_read_by_its_bytes() {
     assert_eq!(path, &PathBuf::from(name));
     assert_eq!(content.as_deref().expect("readable"), "# Café\n");
 }
+
+/// A staged name that begins with a stage number and a colon is read as itself.
+///
+/// Git reads `:<n>:<path>` as the index entry for `<path>` at merge stage `n`,
+/// so a bare `:0:guide.md` spec names the clean `guide.md` in place of the
+/// staged `0:guide.md`, and `:1:guide.md` names a conflict stage that does not
+/// exist.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_name_that_looks_like_a_stage_number_is_read_as_itself() {
+    let repo = GitRepo::init().await;
+    let root = repo.root();
+    fs::write(root.join("guide.md"), "# Clean\n").expect("write");
+    fs::write(root.join("0:guide.md"), "# Zero\n\n```\n").expect("write");
+    fs::write(root.join("1:guide.md"), "# One\n").expect("write");
+    run_in(root, &["add", "--", "guide.md", "0:guide.md", "1:guide.md"]).await;
+
+    let contents = staged_contents(root, files::is_markdown)
+        .await
+        .expect("staged_contents");
+
+    let read: Vec<_> = contents
+        .iter()
+        .map(|(path, content)| {
+            (
+                path.clone(),
+                content.as_deref().map_err(|err| err.to_string()),
+            )
+        })
+        .collect();
+    assert_eq!(
+        read,
+        [
+            (PathBuf::from("0:guide.md"), Ok("# Zero\n\n```\n")),
+            (PathBuf::from("1:guide.md"), Ok("# One\n")),
+            (PathBuf::from("guide.md"), Ok("# Clean\n")),
+        ]
+    );
+}
