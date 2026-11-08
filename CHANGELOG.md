@@ -15,8 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `bare_url`, `tab_character` or `long_line` inside the sample that follows. `---` ends the paragraph
   above it whether it is a setext underline or a break. An unindented heading or break also closes an
   open list, and `- - -` is a break rather than a list item. `#hashtag`, seven `#`, a four-column
-  indented `#` line and a `#` line inside a fence stay as they were. A `===` underline is still read
-  as text.
+  indented `#` line and a `#` line inside a fence stay as they were. A setext underline that is not
+  also a break (`=` of any length, or `-` and `--`) is still read as text.
 
 ## [3.1.5] - 2026-11-04
 

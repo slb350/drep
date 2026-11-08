@@ -139,8 +139,10 @@ pub(super) fn indent_columns(line: &str) -> usize {
 /// `#hashtag` and seven markers are paragraph text. A break is three or more
 /// of one of `-`, `*` and `_`, with spaces and tabs allowed between them. It is
 /// tested ahead of the list marker because `- - -` is a break, not an item.
-/// A setext underline needs no case of its own: `---` is a break either way,
-/// and `===` is left as text.
+/// A setext underline (section 4.3) is a leaf only when it is also a break:
+/// `---` ends the paragraph either way, while `=` runs and `-` or `--` are
+/// left as text, because telling an underline from a lazy list or quote
+/// continuation needs container state this module does not track.
 ///
 /// Called only for an indent under four, so trimming all leading whitespace
 /// removes exactly the indentation.

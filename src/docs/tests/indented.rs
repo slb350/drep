@@ -282,19 +282,38 @@ fn a_thematic_break_ends_the_paragraph_so_an_indented_line_is_code() {
 
 #[test]
 fn two_marks_are_not_a_thematic_break() {
+    // Each opens a paragraph after the blank line, so the indented line
+    // continues it. Directly under a paragraph `--` would be a setext
+    // underline instead (see the next test).
     fires_once_at(
-        "Text.\n--\n    see https://example.com/x\n",
+        "Text.\n\n--\n    see https://example.com/x\n",
         Check::BareUrl,
-        3,
+        4,
         9,
     );
     // Mixed marks are not a break either.
     fires_once_at(
-        "Text.\n-*-\n    see https://example.com/x\n",
+        "Text.\n\n-*-\n    see https://example.com/x\n",
         Check::BareUrl,
-        3,
+        4,
         9,
     );
+}
+
+#[test]
+fn a_setext_underline_that_is_not_a_break_does_not_end_a_block_by_itself() {
+    // CommonMark 0.31.2, section 4.3: an underline of any length turns the
+    // paragraph above into a heading, so the next line could be code. Telling
+    // an underline from a lazy list or quote continuation needs container
+    // state drep does not track, so these stay text and the line stays prose.
+    for underline in ["--", "-", "===", "="] {
+        fires_once_at(
+            &format!("Text.\n{underline}\n    see https://example.com/x\n"),
+            Check::BareUrl,
+            3,
+            9,
+        );
+    }
 }
 
 #[test]
