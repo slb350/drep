@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `lint-docs` now reads an indented line directly after an ATX heading or a thematic break as code
+  (CommonMark 0.31.2, sections 4.1, 4.2 and 4.4). Both are one-line blocks that end the paragraph
+  before them, so no blank line is needed, yet drep treated them as paragraph text and reported a
+  `bare_url`, `tab_character` or `long_line` inside the sample that follows. `---` ends the paragraph
+  above it whether it is a setext underline or a break. An unindented heading or break also closes an
+  open list, and `- - -` is a break rather than a list item. `#hashtag`, seven `#`, a four-column
+  indented `#` line and a `#` line inside a fence stay as they were. A setext underline that is not
+  also a break (`=` of any length, or `-` and `--`) is still read as text.
+
 ## [3.1.5] - 2026-11-04
 
 ### Changed
