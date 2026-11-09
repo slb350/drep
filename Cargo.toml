@@ -85,6 +85,13 @@ rpassword = "7.5"
 # One GET, no streaming and no retry, which is why it does not go through
 # open-agent-sdk - that crate owns the completion path and its retry policy.
 # Already present transitively via the SDK, so this costs no new build.
+#
+# 0.13 is published and deliberately not taken, and this is the one place to say
+# why it is not an MSRV hold: the crates.io index gives 0.13.5 `rust_version`
+# 1.85.0, under the floor above. The hold is that 0.13 is semver-major and so
+# outside this bound, and that open-agent-sdk's own index entry still requires
+# `reqwest ^0.12.28` - drep shares the SDK's copy rather than building a second
+# HTTP and TLS stack into every binary. Move to 0.13 only when the SDK does.
 reqwest = { version = "0.12", features = ["json", "gzip"] }
 
 # The SDK enables reqwest's default native TLS backend. Only this cross target
