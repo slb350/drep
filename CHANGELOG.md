@@ -54,6 +54,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Security:** a site policy's `refuse_markers` now covers a staged or branch review whose working
+  tree holds a directory symbolic link. Staged, `--diff` and `--pre-commit-push` runs read every hunk
+  from the object store of the repository they run in, but the marker probe asked git only about each
+  hunk's working-tree directory. When the checked-out commit recorded `pkg` as a link into another,
+  unmarked repository, or the working tree had an unstaged one, pushing a branch whose tip held
+  `pkg/a.py` sent that file from the marked repository to the model, because the link target's
+  repository answered the policy question. The repository the run is rooted in is now always probed as
+  well. Each hunk's own directory is still probed, so a submodule printed under `diff.submodule=diff`
+  keeps its own policy.
+- **Security:** `lint-docs --staged`, the hook `drep init` installs, now lints the staged document whose
+  name begins with a stage number and a colon. It read each staged file as `:<path>`, and git reads
+  `:0:doc.md` as `doc.md` at merge stage 0. So a staged `0:doc.md` was linted with the content of the
+  `doc.md` beside it, and its unclosed fence passed the hook. A staged `1:doc.md` failed the commit
+  because merge stage 1 was not there. The stage is now always given explicitly, as `:0:<path>`.
 - `lint-docs` now reads an indented line directly after an ATX heading or a thematic break as code
   (CommonMark 0.31.2, sections 4.1, 4.2 and 4.4). Both are one-line blocks that end the paragraph
   before them, so no blank line is needed, yet drep treated them as paragraph text and reported a

@@ -96,6 +96,36 @@ async fn the_threshold_applies_in_staged_mode() {
     assert_eq!(report_only.exit, Exit::Clean);
 }
 
+/// The hook gates the staged document itself, even when its name begins with
+/// what git's index syntax reads as a stage number, so `0:doc.md` is never
+/// linted as the clean `doc.md` beside it.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_stage_number_shaped_name_cannot_borrow_another_documents_verdict() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    git_init(dir.path());
+    fs::write(dir.path().join("doc.md"), "# Clean\n").expect("write");
+    fs::write(dir.path().join("0:doc.md"), "# Title\n\n```rust\n").expect("write");
+    add(dir.path(), "doc.md");
+    add(dir.path(), "0:doc.md");
+
+    let mut args = staged_args();
+    args.fail_on = Some(crate::analysis::findings::Severity::Error);
+    let outcome = crate::cli::lint_docs::outcome_for(&args, dir.path())
+        .await
+        .expect("staged run");
+
+    assert_eq!(outcome.exit, Exit::FoundIssues, "{:?}", outcome.findings);
+    assert!(
+        outcome
+            .findings
+            .iter()
+            .any(|f| f.file_path.ends_with("0:doc.md") && f.kind == "unclosed_code_fence"),
+        "{:?}",
+        outcome.findings
+    );
+}
+
 /// `git add`, through the crate helper that scrubs `GIT_DIR`, `GIT_WORK_TREE`
 /// and `GIT_INDEX_FILE` from the environment.
 ///

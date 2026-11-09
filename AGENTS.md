@@ -504,14 +504,18 @@ comes back.
   because silently dropping a site-only spelling creates a false claim of
   enforcement. Policy scope follows the bytes semantic review sends: paths
   mode canonicalizes a named source symlink, reads from that target and probes
-  that target's repository; diff modes retain hunk parents because deleted
-  paths cannot be canonicalized. Those directories are collected only when the
-  loaded policy names markers, and their bounded ordered Git-resolution stream
-  returns on the first refusal or error rather than waiting for every probe. A
-  refusal neither constructs provider state nor reads, creates, writes or evicts
-  the cache, and `doctor` must reach the same answer from its discovered source
-  directories without opening the auth store, running a helper or probing
-  Codex.
+  that target's repository. Diff modes always probe the run's own root,
+  because git read every hunk from that repository's object store, and a
+  working-tree directory symlink otherwise handed the question to the
+  repository it pointed into. They also retain hunk parents, so a
+  `diff.submodule=diff` submodule keeps its own policy, without
+  canonicalizing them, because deleted paths cannot be canonicalized. Those
+  directories are collected only when the loaded policy names markers, and
+  their bounded ordered Git-resolution stream returns on the first refusal or
+  error rather than waiting for every probe. A refusal neither constructs
+  provider state nor reads, creates, writes or evicts the cache, and `doctor`
+  must reach the same answer from its discovered source directories without
+  opening the auth store, running a helper or probing Codex.
 - **`SiteConfig::has_refuse_markers` is a load-bearing preflight, even though
   `refusal_among` also guards an empty marker list.** The outer check prevents
   callers from collecting source directories and attempting Git resolution
@@ -1127,6 +1131,11 @@ comes back.
   rather than closing the file or reattributing its later hunks.
   `src/diff/tests/output_format.rs` runs real git under each setting and name,
   and `src/diff/tests/review_evasion.rs` under each kind of content.
+- **A staged blob is read as `:0:<path>`, never `:<path>`.** git reads
+  `:<n>:<rest>` as `<rest>` at merge stage `n`, so `lint-docs --staged` read a
+  staged `0:doc.md` as the `doc.md` beside it and passed its unclosed fence,
+  and a staged `1:doc.md` failed on a missing conflict stage. Any revision
+  spec drep builds from a repository path states its stage or tree explicitly.
 - **`LintOutcome` carries the gate's `Gating`, and the renderer reports it.**
   The footer needs to say whether the findings on screen blocked the run, and
   asking that question a second time in `render` is what `check` documents on

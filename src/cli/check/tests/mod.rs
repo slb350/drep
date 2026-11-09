@@ -16,6 +16,7 @@ mod failures;
 mod gating;
 mod input;
 mod marker_refusal;
+mod marker_refusal_diff;
 mod marker_refusal_modes;
 mod marker_refusal_scope;
 mod output;
