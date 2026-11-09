@@ -7,6 +7,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- The Rust 1.88-compatible lockfile refresh, with no advisory behind any of it: `cargo audit` and
+  `osv-scanner` reported no vulnerability, no warning and no OSV finding against the committed
+  `Cargo.lock` before the update, and none after it, so nothing is traced to a `Cargo.toml`
+  requirement and no advisory is ignored or allowlisted. 15 packages moved and the lock still holds
+  255 of them - no package was added or removed and no dependency edge changed, only versions and
+  checksums. The two direct dependencies are `open-agent-sdk` 0.11.8 to 0.11.9 and `toml` 1.1.8 to
+  1.2.1, whose index entries declare `rust_version` 1.85 and so sit under this crate's 1.88 floor.
+  The rest arrive through them: the `gzip` path that decodes the compressed models.dev response -
+  `async-compression` 0.4.51 to 0.4.52 with `compression-codecs` 0.4.46 to 0.4.47, `flate2` 1.1.10
+  to 1.1.11 and `crc32fast` 1.5.3 to 1.5.4 - the native-TLS path - `openssl` 0.10.81 to 0.10.82 with
+  `openssl-sys` 0.9.117 to 0.9.118, `mime` 0.3.17 to 0.3.18 and `cc` 1.10.0 to 1.11.1 - and
+  `smallvec` 1.16.4 to 1.16.5 with `winnow` 1.0.4 to 1.0.5 and the `toml` support crates
+  `serde_spanned` and `toml_datetime` 1.1.2 to 1.1.3 and `toml_writer` 1.1.3 to 1.2.0.
+- Two of these are worth a run's attention, each from the upstream source fetched for it.
+  open-agent-sdk 0.11.9: a tool-call delta streamed without an `index`, or with `null`, is now
+  delivered instead of failing the whole stream with a `missing field` parse error, which was a
+  retryable stream error that lost the model's call; a delta with no index but an `id` opens a new
+  call emitted in arrival order and one with neither continues the most recent such call, indexed
+  streams are unchanged, and the delta type is internal, so no public API changed. `openssl`
+  0.10.82 fixes three memory-safety defects in its own changelog - an out-of-bounds write in
+  `CipherCtxRef::cipher_update`, `cipher_update_vec` and `cipher_update_inplace` with the Triple-DES
+  key wrap ciphers, an out-of-bounds write in `PkeyCtxRef::verify_recover` when the output buffer is
+  shorter than the recovered data, and a use-after-free in `X509StoreContextRef::verify_cert` and
+  `current_cert` called after `init` returned - and `openssl-sys` 0.9.118 accompanies it. No RustSec
+  or OSV record covers either, drep's own audits included, so that bump is preventive rather than
+  the fix for a listed advisory. Everything else is narrower: `flate2` 1.1.11 completes sync flushes
+  across output-buffer boundaries and keeps gzip header read progress across an input error,
+  `crc32fast` 1.5.4 bounds-checks its x86 SIMD loads and denies unsafe code outside the SIMD
+  backends, `mime` 0.3.18 replaces a recursion with a loop to avoid a stack overflow, `cc` 1.11.1
+  fixes `wasm32-none-component` target parsing, `winnow` 1.0.5 supports `usize` with `hex_uint`, and
+  the `toml` family's 1.2 line is listed as performance work on serialization and deserialization
+  with no parse-behaviour change - which matters because `drep.toml` is parsed with it.
+- Three packages are held back, none forced and none behind an advisory. `reqwest` stays at 0.12.28
+  behind 0.13.5: the index gives 0.13.5 `rust_version` 1.85.0, so this hold is not the MSRV but the
+  semver-major jump plus `open-agent-sdk` 0.11.9's own index entry still requiring
+  `reqwest ^0.12.28`, whose copy drep shares rather than building a second one - now recorded in the
+  `Cargo.toml` comment next to the requirement. `ordered-float` stays at 5.4.0 behind 5.5.1, which
+  declares `rust_version` 1.90 against the 1.88 floor and so is the one MSRV hold; it reaches the
+  development graph through `saphyr` alone, so no release binary carries it. `saphyr` stays at 0.2.2
+  behind 0.3.3, whose index entry declares `rust_version` 1.85.0: that hold is the declared
+  requirement, not the floor, because within `0.x` a minor version is an API break and taking 0.3 is
+  a migration of the release-contract test rather than a refresh.
+
 ### Fixed
 
 - **Security:** a site policy's `refuse_markers` now covers a staged or branch review whose working
