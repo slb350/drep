@@ -477,6 +477,7 @@ fn spans_of(content: &str) -> Vec<Vec<std::ops::Range<usize>>> {
             number,
             text,
             in_code: false,
+            in_html: false,
         })
         .collect();
     crate::docs::html::spans(&lines)

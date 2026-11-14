@@ -1088,7 +1088,13 @@ comes back.
   ending is whitespace between a tag's parts and may sit inside a quoted value
   or a comment; a `<!--` opening a line (three spaces of indentation at most)
   also runs over blank lines to its `-->`. A tag or comment that is never
-  closed within its scope is plain text.
+  closed within its scope is plain text. An HTML block (section 4.6) is raw
+  throughout: `docs::html_block::mask` marks `Line::in_html`, which the heading
+  and link checks skip and `tab_character`, `long_line` and
+  `trailing_whitespace` ignore. A marker-ended block (conditions 1, 3-5) whose
+  marker never arrives is plain text rather than running to end of file, because
+  one stray `<pre` would otherwise silence every later check. Condition 7 never
+  interrupts a paragraph. Comments stay with `html::spans`.
 - **Doc-check severity is "does it change how the document renders".** An
   unclosed fence turns every line below it into code, so it alone is `error`;
   a heading or link that renders wrong is `warning`; whitespace and line

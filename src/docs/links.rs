@@ -45,7 +45,7 @@ pub fn check(
     file_path: &str,
     out: &mut Vec<Finding>,
 ) {
-    if line.in_code {
+    if line.in_code || line.in_html {
         return;
     }
 

@@ -301,7 +301,10 @@ part of it. A fence nested in a list item may be indented by any amount. A URL
 inside an `<https://...>` autolink is already a link and is not reported as a
 bare URL, and neither is one in the attribute of a raw HTML tag
 (`<img src="https://...">`), including a tag that runs over several lines, or
-inside an HTML comment, including one that runs over several lines.
+inside an HTML comment, including one that runs over several lines. An HTML block
+(`<pre>`, `<div>`, `<details>`, a tag alone on its line, and the other starts
+CommonMark lists) is raw HTML to its end, so a `#` line or a URL inside it is
+reported as neither a heading nor a bare URL.
 
 ## Configuration
 

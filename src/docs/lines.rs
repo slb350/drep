@@ -16,6 +16,8 @@ use crate::docs::{Check, LONG_LINE_MAX, Line, finding};
 ///   sample is a shebang, not a malformed heading - the specific false positive
 ///   the fence mask was built for - and a 200-character line of code is not a
 ///   paragraph that needs wrapping.
+/// - Headings also skip an HTML block, where a `#` line is raw HTML (`#include`
+///   in a `<pre>`); tabs and long lines do not, since their advice is still right.
 /// - Tabs: "replace tabs with spaces" is *wrong* inside a fence. A ```` ```make ````
 ///   sample whose recipe lines are indented with tabs stops being a Makefile if
 ///   you follow the advice. A check which cannot give correct advice about a
@@ -27,8 +29,10 @@ pub fn check(line: &Line<'_>, chars: &[char], file_path: &str, out: &mut Vec<Fin
     trailing_whitespace(line, chars, file_path, out);
     if !line.in_code {
         tab_character(line, chars, file_path, out);
-        heading(line, chars, file_path, out);
         long_line(line, chars, file_path, out);
+        if !line.in_html {
+            heading(line, chars, file_path, out);
+        }
     }
 }
 
