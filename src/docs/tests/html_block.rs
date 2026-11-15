@@ -176,9 +176,21 @@ fn a_tag_alone_on_its_line_may_follow_a_block_or_a_fence() {
 
 #[test]
 fn an_unclosed_raw_tag_is_not_a_tag_alone_on_its_line() {
-    // The four raw names are excluded from the tag-alone rule, so an unclosed
-    // one has no other way to start a block.
+    // `<textarea>` meets condition 1, whose end tag never comes, so it is
+    // plain text rather than falling through to the tag-alone rule.
     fires_once_at(&format!("<textarea>\n{URL}"), Check::BareUrl, 2, 1);
+}
+
+#[test]
+fn a_raw_name_is_barred_from_the_tag_alone_rule() {
+    // A `/` after the name fails condition 1, and condition 7 bars the four
+    // raw names from an open tag, so `<pre/>` starts no block at all.
+    for name in ["pre", "SCRIPT", "style", "textarea"] {
+        fires_once_at(&format!("<{name}/>\n{URL}"), Check::BareUrl, 2, 1);
+    }
+    // The bar covers an open tag alone, and the whole name alone.
+    silent(&format!("</pre>\n{URL}"), Check::BareUrl);
+    silent(&format!("<pre-x/>\n{URL}"), Check::BareUrl);
 }
 
 #[test]

@@ -152,12 +152,11 @@ fn unindented(text: &str) -> Option<&str> {
 ///
 /// Whatever a closed comment holds is the comment's, so no block starts in it.
 fn comment_end<S: AsRef<str>>(lines: &[S], open: usize) -> Option<usize> {
-    let rest = unindented(lines[open].as_ref())?.strip_prefix("<!--")?;
-    // `<!-->` is complete: the search for `-->` begins inside the opener.
-    if rest.starts_with('>') || rest.starts_with("->") || rest.contains("-->") {
-        return Some(open);
-    }
-    (open + 1..lines.len()).find(|i| lines[*i].as_ref().contains("-->"))
+    unindented(lines[open].as_ref())?.strip_prefix("<!--")?;
+    // The search includes the opening line itself. Only indentation precedes
+    // its `<!--`, so a `-->` there either follows the opener or overlaps it,
+    // and the two overlaps, `<!-->` and `<!--->`, are complete comments.
+    (open..lines.len()).find(|i| lines[*i].as_ref().contains("-->"))
 }
 
 /// The last line of the block that starts at `start`, if one does.
@@ -171,8 +170,10 @@ fn block_end<S: AsRef<str>>(lines: &[S], start: usize, paragraph: bool) -> Optio
                     .any(|window| window.eq_ignore_ascii_case(marker.as_bytes()))
             })
         }),
+        // `mask` never starts a block on a blank line, so the search may
+        // include `start`.
         End::Blank => Some(
-            (start + 1..lines.len())
+            (start..lines.len())
                 .find(|i| lines[*i].as_ref().trim().is_empty())
                 .unwrap_or(lines.len())
                 - 1,
