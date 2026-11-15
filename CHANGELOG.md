@@ -24,6 +24,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   existing handling, and containers such as a quote are not tracked. `tab_character`, `long_line` and
   `trailing_whitespace` still fire inside a block.
 
+### Changed
+
+- The `check` unit tests that run the built binary find it under Rust 1.100's Cargo, whose new
+  build-directory layout (Rust 1.100.0 release notes, cargo#17354) puts a unit-test executable
+  under `<profile>/build/<package>/<hash>/out/` instead of `<profile>/deps/`. `assert_cmd`'s
+  fallback looks beside `deps/` only, so 13 of them panicked with "`CARGO_BIN_EXE_drep` is unset".
+  The fixture now walks up from the test executable to the nearest directory holding `drep`,
+  stopping at Cargo's `CACHEDIR.TAG`. The old layout still resolves. No shipped behaviour changes.
+
 ## [3.1.6] - 2026-11-12
 
 ### Changed

@@ -1090,8 +1090,8 @@ comes back.
   also runs over blank lines to its `-->`. A tag or comment that is never
   closed within its scope is plain text. An HTML block (section 4.6) is raw
   throughout: `docs::html_block::mask` marks `Line::in_html`, which the heading
-  and link checks skip and `tab_character`, `long_line` and
-  `trailing_whitespace` ignore. A marker-ended block (conditions 1, 3-5) whose
+  and link checks skip, while `tab_character`, `long_line` and
+  `trailing_whitespace` still fire there. A marker-ended block (conditions 1, 3-5) whose
   marker never arrives is plain text rather than running to end of file, because
   one stray `<pre` would otherwise silence every later check. Condition 7 never
   interrupts a paragraph. Comments stay with `html::spans`.
