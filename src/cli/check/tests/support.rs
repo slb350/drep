@@ -67,8 +67,7 @@ fn spawn_drep(
     first_on_path: Option<&Path>,
     args: &[&str],
 ) -> std::process::Output {
-    let bin = assert_cmd::cargo::cargo_bin("drep");
-    let mut command = Command::new(bin);
+    let mut command = Command::new(drep_binary());
     command
         .args(args)
         .current_dir(dir)
@@ -92,6 +91,37 @@ fn spawn_drep(
         );
     }
     command.output().expect("drep spawns and finishes")
+}
+
+/// The built `drep` binary, which a unit test can only find from its own path.
+///
+/// Cargo sets `CARGO_BIN_EXE_drep` for integration tests, not unit tests, and
+/// `assert_cmd::cargo::cargo_bin` falls back to the test executable's parent
+/// directory, minus a trailing `deps`. Cargo 1.100's build-dir layout puts a
+/// unit test under `<profile>/build/<package>/<hash>/out/` instead, where that
+/// fallback finds nothing. Under both layouts the binary is uplifted to the
+/// profile directory, which is the nearest ancestor holding it. The walk stops
+/// at the directory Cargo marks with `CACHEDIR.TAG`, so a `drep` above the
+/// build tree is never run in its place.
+fn drep_binary() -> PathBuf {
+    if let Some(path) = std::env::var_os("CARGO_BIN_EXE_drep") {
+        return path.into();
+    }
+    let exe = std::env::current_exe().expect("the test executable has a path");
+    let name = format!("drep{}", std::env::consts::EXE_SUFFIX);
+    for dir in exe.ancestors().skip(1) {
+        let candidate = dir.join(&name);
+        if candidate.is_file() {
+            return candidate;
+        }
+        if dir.join("CACHEDIR.TAG").is_file() {
+            break;
+        }
+    }
+    panic!(
+        "no built drep binary above {}; build every target (`cargo test --all-targets`)",
+        exe.display()
+    );
 }
 
 /// A `CheckOutcome` with everything empty and the gate clean.

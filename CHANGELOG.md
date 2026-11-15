@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `lint-docs` no longer reports a `bare_url`, a `link_syntax_invalid`, an `empty_heading` or a
+  `missing_space_after_heading` inside an HTML block (CommonMark 0.31.2, section 4.6). A `<pre>`
+  holding a `#include` or a `#!` line was reported as a malformed heading, and the text of a
+  `<div>`, `<details>` or `<p align="center">` block as markdown, though a renderer passes all of it
+  through as raw HTML. The new `docs::html_block` marks the lines of blocks that start at an
+  indentation under four columns: `<pre`, `<script`, `<style` or `<textarea` (start condition 1) to a
+  line holding any of their end tags, a processing instruction, declaration or CDATA section
+  (conditions 3 to 5) to its closing marker, and a block-level tag from the spec's list
+  (condition 6) or any complete tag alone on its line (condition 7) to the next blank line.
+  Condition 7 cannot interrupt a paragraph, and no block starts inside a code fence or a closed
+  comment. A block whose end marker never comes is plain text, as an unclosed comment already is,
+  so one stray `<pre` does not silence the rest of the file. Comments (condition 2) keep their
+  existing handling, and containers such as a quote are not tracked. `tab_character`, `long_line` and
+  `trailing_whitespace` still fire inside a block.
+
+### Changed
+
+- The `check` unit tests that run the built binary find it under Rust 1.100's Cargo, whose new
+  build-directory layout (Rust 1.100.0 release notes, cargo#17354) puts a unit-test executable
+  under `<profile>/build/<package>/<hash>/out/` instead of `<profile>/deps/`. `assert_cmd`'s
+  fallback looks beside `deps/` only, so 13 of them panicked with "`CARGO_BIN_EXE_drep` is unset".
+  The fixture now walks up from the test executable to the nearest directory holding `drep`,
+  stopping at Cargo's `CACHEDIR.TAG`. The old layout still resolves. No shipped behaviour changes.
+
 ## [3.1.6] - 2026-11-12
 
 ### Changed

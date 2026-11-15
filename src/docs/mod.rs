@@ -12,6 +12,7 @@
 //!   concern.
 //! - `indented` extends that answer to indented code blocks.
 //! - `lines` holds the checks that look at one line in isolation.
+//! - `html_block` marks the lines of HTML blocks, which are raw HTML throughout.
 //! - `html` finds the raw HTML tags and comments, which may run over several
 //!   lines, for `links` to skip.
 //! - `links` holds the two that need markdown's link grammar.
@@ -23,6 +24,7 @@
 mod blocks;
 mod fence;
 mod html;
+mod html_block;
 mod indented;
 mod lines;
 mod links;
@@ -170,6 +172,8 @@ pub(crate) struct Line<'a> {
     /// True iff the line is code: a fence delimiter, a line between two of
     /// them, or a line of an indented code block.
     pub in_code: bool,
+    /// True iff the line is in an HTML block: raw HTML, which is not markdown.
+    pub in_html: bool,
 }
 
 /// Build a [`Finding`] for `check` at a position.
@@ -208,14 +212,18 @@ pub fn analyze(path: &Path, content: &str) -> Vec<Finding> {
 
     let code = indented::mask(&raw, fences.mask());
 
+    let html_blocks = html_block::mask(&raw, fences.mask());
+
     let lines: Vec<Line<'_>> = raw
         .iter()
         .zip(&code)
+        .zip(&html_blocks)
         .enumerate()
-        .map(|(index, (text, in_code))| Line {
+        .map(|(index, ((text, in_code), in_html))| Line {
             number: index as u32 + 1,
             text,
             in_code: *in_code,
+            in_html: *in_html,
         })
         .collect();
 

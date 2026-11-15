@@ -63,7 +63,7 @@ pub(super) fn spans(lines: &[Line<'_>]) -> Vec<Vec<Range<usize>>> {
 
 /// Whether `line` belongs to a paragraph: not code and not blank.
 fn is_prose(line: &Line<'_>) -> bool {
-    !line.in_code && !line.text.trim().is_empty()
+    !line.in_code && !line.in_html && !line.text.trim().is_empty()
 }
 
 /// Record the tags and comments in one paragraph.
@@ -179,7 +179,7 @@ fn match_comment(chars: &[char], start: usize) -> Option<usize> {
 
 /// Match an open or closing tag starting at `start`, returning the index of its
 /// `>`.
-fn match_tag(chars: &[char], start: usize) -> Option<usize> {
+pub(super) fn match_tag(chars: &[char], start: usize) -> Option<usize> {
     debug_assert_eq!(chars[start], '<');
     let closing = chars.get(start + 1) == Some(&'/');
     let name = start + 1 + usize::from(closing);
