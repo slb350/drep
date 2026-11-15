@@ -144,6 +144,31 @@ async fn forbidden_tool_activity_is_a_sticky_contract_failure() {
 }
 
 #[tokio::test]
+async fn a_hostile_item_type_reaches_the_contract_failure_without_control_characters() {
+    let (dir, client) = fake_client(concat!(
+        "#!/bin/sh\n",
+        "sed -n '1,$p' >/dev/null\n",
+        "printf '%s\\n' '{\"type\":\"item.completed\",\"item\":{\"type\":\"x\\u001b]52;c;Zm9v\\u0007\\nforged\"}}'\n",
+        fake_codex_clean_review!(),
+    ));
+    let err = client
+        .complete_json("review", "payload")
+        .await
+        .expect_err("unknown items fail closed");
+    match err {
+        LlmError::Backend {
+            kind: BackendErrorKind::Contract,
+            message,
+        } => assert_eq!(
+            message,
+            "Codex attempted forbidden item type `x ]52;c;Zm9v forged`"
+        ),
+        other => panic!("unexpected classification: {other:?}"),
+    }
+    drop(dir);
+}
+
+#[tokio::test]
 async fn unknown_nonzero_exit_is_not_classified_from_stderr_prose() {
     let (dir, client) = fake_client(concat!(
         "#!/bin/sh\n",

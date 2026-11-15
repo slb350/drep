@@ -10,6 +10,11 @@ use thiserror::Error;
 use crate::text::excerpt;
 
 const EVENT_LINE_MAX_BYTES: usize = 1024 * 1024;
+/// How much of a refused event or item `type` a failure quotes. Codex's own
+/// names are short identifiers; anything longer is not one of them.
+const KIND_EXCERPT_CHARS: usize = 64;
+/// How much of Codex's error text or a decoder error a failure quotes.
+const DETAIL_EXCERPT_CHARS: usize = 400;
 
 #[derive(Debug, Error, PartialEq, Eq)]
 pub(crate) enum EventError {
@@ -87,7 +92,12 @@ pub(crate) fn parse_jsonl(input: impl Read) -> Result<Value, EventError> {
                             .ok_or_else(|| EventError::MalformedFinal("missing text".to_owned()))?;
                         final_message = Some(text.into_owned());
                     }
-                    other => return Err(EventError::ForbiddenItem(other.to_owned())),
+                    other => {
+                        return Err(EventError::ForbiddenItem(excerpt(
+                            other,
+                            KIND_EXCERPT_CHARS,
+                        )));
+                    }
                 }
             }
             "turn.completed" => {
@@ -101,9 +111,12 @@ pub(crate) fn parse_jsonl(input: impl Read) -> Result<Value, EventError> {
                     .message
                     .or_else(|| event.error.and_then(|error| error.message))
                     .unwrap_or(Cow::Borrowed("no diagnostic message"));
-                return Err(EventError::ReportedError(excerpt(message.as_ref(), 400)));
+                return Err(EventError::ReportedError(excerpt(
+                    message.as_ref(),
+                    DETAIL_EXCERPT_CHARS,
+                )));
             }
-            other => return Err(EventError::UnknownEvent(other.to_owned())),
+            other => return Err(EventError::UnknownEvent(excerpt(other, KIND_EXCERPT_CHARS))),
         }
     }
 
@@ -155,7 +168,7 @@ fn decode_line<'a, T: Deserialize<'a>>(
 ) -> Result<T, EventError> {
     serde_json::from_slice(line).map_err(|err| EventError::MalformedLine {
         line: line_number,
-        message: err.to_string(),
+        message: excerpt(&err.to_string(), DETAIL_EXCERPT_CHARS),
     })
 }
 

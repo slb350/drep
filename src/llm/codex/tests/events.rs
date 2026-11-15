@@ -119,6 +119,64 @@ fn error_events_retain_only_a_bounded_sanitized_message() {
     }
 }
 
+/// An event or item `type` the parser refuses is Codex's text, decoded from a
+/// JSON escape into a real ESC and newline: quoted raw, it reached the
+/// failure block as an OSC 52 clipboard write and a forged report line.
+#[test]
+fn a_refused_event_or_item_type_is_quoted_as_a_bounded_excerpt() {
+    let hostile = "x\\u001b]52;c;Zm9v\\u0007\\nforged line";
+    let unknown = format!("{{\"type\":\"{hostile}\"}}\n");
+    assert_eq!(
+        parse_jsonl(unknown.as_bytes()).expect_err("unknown event"),
+        EventError::UnknownEvent("x ]52;c;Zm9v forged line".to_owned())
+    );
+    let forbidden = format!("{{\"type\":\"item.started\",\"item\":{{\"type\":\"{hostile}\"}}}}\n");
+    assert_eq!(
+        parse_jsonl(forbidden.as_bytes()).expect_err("forbidden item"),
+        EventError::ForbiddenItem("x ]52;c;Zm9v forged line".to_owned())
+    );
+
+    // 64 characters survive, then the ellipsis.
+    let long = "t".repeat(65);
+    let unknown = format!("{{\"type\":\"{long}\"}}\n");
+    assert_eq!(
+        parse_jsonl(unknown.as_bytes()).expect_err("unknown event"),
+        EventError::UnknownEvent(format!("{}…", "t".repeat(64)))
+    );
+    let forbidden = format!("{{\"type\":\"item.completed\",\"item\":{{\"type\":\"{long}\"}}}}\n");
+    assert_eq!(
+        parse_jsonl(forbidden.as_bytes()).expect_err("forbidden item"),
+        EventError::ForbiddenItem(format!("{}…", "t".repeat(64)))
+    );
+    let exact = "t".repeat(64);
+    let unknown = format!("{{\"type\":\"{exact}\"}}\n");
+    assert_eq!(
+        parse_jsonl(unknown.as_bytes()).expect_err("unknown event"),
+        EventError::UnknownEvent(exact)
+    );
+}
+
+/// serde_json quotes a mistyped string value in its error, escaped but whole,
+/// so one line just under the 1 MiB ceiling became a 1 MiB failure message.
+#[test]
+fn a_malformed_line_reports_a_bounded_excerpt_of_the_decoder_error() {
+    let line = format!(
+        "{{\"type\":\"item.completed\",\"item\":\"{}\"}}\n",
+        "y".repeat(100_000)
+    );
+    match parse_jsonl(line.as_bytes()).expect_err("item is not an object") {
+        EventError::MalformedLine { line: 1, message } => {
+            assert!(
+                message.starts_with("invalid type: string \"yyy"),
+                "{message}"
+            );
+            assert_eq!(message.chars().count(), 401, "{message}");
+            assert!(message.ends_with('…'), "{message}");
+        }
+        other => panic!("unexpected event error: {other:?}"),
+    }
+}
+
 #[test]
 fn duplicate_or_post_completion_events_are_rejected() {
     let duplicate = format!("{CLEAN_FINAL_MESSAGE}{CLEAN_FINAL_MESSAGE}");
