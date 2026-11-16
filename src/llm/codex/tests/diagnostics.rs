@@ -264,3 +264,14 @@ fn diagnostic_executable(dir: &std::path::Path, bytes: Vec<u8>) -> std::path::Pa
     );
     executable
 }
+
+/// `codexVersion` is printed by `doctor` and the init wizard as it stands.
+/// It deserializes into a borrowed `&str`, which serde_json cannot produce
+/// from an escaped string, and JSON forbids a raw control character, so a
+/// version that would carry one is refused rather than printed.
+#[test]
+fn a_version_holding_an_escaped_control_character_is_refused() {
+    let hostile = CHATGPT.replace("\"0.148.0\"", "\"0.148.0\\u001b]52;c;Zm9v\\u0007\"");
+    assert_ne!(hostile, CHATGPT);
+    assert_eq!(parse(hostile.as_bytes()), Err(DiagnosticError::InvalidJson));
+}

@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- A Codex backend failure no longer prints Codex CLI text raw. An event or item `type` the JSONL
+  parser refused was quoted whole in the failure, and a JSON `\u001b` escape in it decodes into a
+  real escape character, so a type holding one put an OSC 52 clipboard write or a forged report line
+  into `drep check`'s failure block. The refused type is now quoted through `text::excerpt` at 64
+  characters. A malformed event line's decoder error, which serde_json writes with the offending
+  string value in full, is excerpted at 400 characters rather than reaching the terminal at up to
+  1 MiB.
+
 ### Fixed
 
 - `lint-docs` no longer reports a `bare_url`, a `link_syntax_invalid`, an `empty_heading` or a

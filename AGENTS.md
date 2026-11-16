@@ -1043,6 +1043,13 @@ comes back.
   reason is built. A malformed finding quotes the model's unknown `severity`
   through `excerpt` at `MALFORMED_VALUE_EXCERPT_MAX`; quoted raw it carried an
   OSC 52 clipboard write, forged lines and a flood into the failure block.
+  Every `codex::events::EventError` that quotes Codex's text builds it through
+  `excerpt`: a refused event or item `type` at `KIND_EXCERPT_CHARS`, Codex's
+  error message and a malformed line's decoder error at
+  `DETAIL_EXCERPT_CHARS`. serde_json writes a mistyped string value whole into
+  its error, so that decoder text is Codex's as well. `map_event_error`
+  forwards these messages unchanged into `LlmError::Backend`, and `one_line`
+  prints them that way.
   A file name is the one exception to excerpting, because a shortened name
   names another file: every text report prints one through
   `text::path_label`, which quotes and escapes a name holding a control
