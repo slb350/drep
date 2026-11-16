@@ -31,7 +31,6 @@ pub static PYTHON: LanguageSupport = LanguageSupport {
     filename_prefixes: &[],
     tools: &[&RUFF],
     conventions: &[
-        "Follows PEP 8 naming and structure",
         "Type hints on public APIs, and correct use of Optional/None",
         "Context managers for resources rather than manual cleanup",
         "Mutable default arguments, and late-binding closures in loops",
