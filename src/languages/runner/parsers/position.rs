@@ -19,7 +19,7 @@ use crate::languages::spec::ToolSpec;
 /// that `go vet` and most Go tooling emit.
 ///
 /// The optional `vet: ` prefix and the `^` anchor matter: Go interleaves
-/// `# example.com/pkg` package headers, and we skip those by *not* matching.
+/// `# example.com/pkg` package headers, and we skip those by *not* matching. `go vet` writes the prefix on a type-check or syntax failure and on nothing else, so a prefixed line becomes a [`TYPE_CHECK_KIND`] finding.
 ///
 /// The file group is lazy rather than colon-free. Forbidding a colon dropped
 /// `C:\src\main.go:12:6: message` outright, and because this parser skips
@@ -29,9 +29,14 @@ use crate::languages::spec::ToolSpec;
 /// wins - while a package header, having no such suffix, still fails to
 /// match.
 static POSITION: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"^(?:vet:\s*)?(?P<file>\S.*?):(?P<line>\d+):(?P<col>\d+):\s*(?P<message>.+)$")
+    Regex::new(r"^(?P<vet>vet:\s*)?(?P<file>\S.*?):(?P<line>\d+):(?P<col>\d+):\s*(?P<message>.+)$")
         .expect("POSITION regex compiles")
 });
+
+/// The kind of a finding that says a package did not compile, so nothing in it was checked.
+///
+/// Narrowing keeps these wherever they point. A commit that changes a signature in `a.go` breaks a call in `b.go`, and `go vet` reports it only there.
+pub(crate) const TYPE_CHECK_KIND: &str = "typecheck";
 
 /// `src/app.ts(14,22): error TS2345: message` - the tsc shape.
 static TSC: LazyLock<Regex> = LazyLock::new(|| {
@@ -82,8 +87,13 @@ pub(super) fn parse_positions(spec: &ToolSpec, output: &str) -> Vec<Finding> {
             .name("message")
             .map(|m| m.as_str().trim())
             .unwrap_or("");
+        let kind = if caps.name("vet").is_some() {
+            TYPE_CHECK_KIND
+        } else {
+            spec.name
+        };
         findings.push(Finding::deterministic(
-            spec.name.to_owned(),
+            kind.to_owned(),
             Severity::Error,
             file.strip_prefix("./").unwrap_or(file).to_owned(),
             line_num,

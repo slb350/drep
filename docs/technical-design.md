@@ -91,7 +91,7 @@ Three rules govern them:
 
 A whole-project tool is invoked bare and its findings narrowed to the files
 being checked: `cargo clippy` rejects path arguments, and passing paths to
-`tsc` makes it ignore `tsconfig.json`, so both use `accepts_files = false`.
+`tsc` makes it ignore `tsconfig.json`, so both use `ToolArguments::Project`. `go vet` uses `ToolArguments::GoPackages`: it is handed each changed file's package directory once, as `./dir`, because handed files it type-checks them as a package of their own, and its findings are narrowed the same way. `go list -e -json` runs first, because one directory with no buildable file or one package that fails to load aborts vet for every package in the call: a file the build excludes is reported in `ToolOutcome::excluded` and leaves the batch, neither failed nor compiled, and a package's load errors become its findings in place of a vet run. A type-check or load failure is kept through narrowing wherever it points, since the package it names was not vetted. So is a finding in a directory vet was not handed, which is a dependency that did not compile.
 Clippy's process ceiling is 30 minutes because Cargo's build-lock wait happens
 inside that process; other tools retain the two-minute default.
 

@@ -1,7 +1,8 @@
 //! The Go ecosystem: gofmt and go vet over `.go`.
 
 use crate::languages::spec::{
-    DEFAULT_TOOL_TIMEOUT_SECS, DiagnosticsStream, LanguageSupport, OutputFormat, ToolSpec,
+    DEFAULT_TOOL_TIMEOUT_SECS, DiagnosticsStream, LanguageSupport, OutputFormat, ToolArguments,
+    ToolSpec,
 };
 
 /// Go formatting checker - lists files whose formatting drifts from `gofmt`'s.
@@ -20,7 +21,7 @@ pub static GOFMT: ToolSpec = ToolSpec {
     timeout_context: None,
     establishes_compilation: false,
     serial_in_repository: false,
-    accepts_files: true,
+    arguments: ToolArguments::Files,
     reads_other_sources: false,
 };
 
@@ -28,6 +29,8 @@ pub static GOFMT: ToolSpec = ToolSpec {
 ///
 /// Not -json: that only emits JSON once the package compiles, and a package
 /// that does not compile is exactly when vet has the most to say.
+///
+/// Handed package directories, not files. See [`ToolArguments::GoPackages`].
 pub static GO_VET: ToolSpec = ToolSpec {
     name: "go vet",
     command: &["go", "vet"],
@@ -40,7 +43,7 @@ pub static GO_VET: ToolSpec = ToolSpec {
     timeout_context: None,
     establishes_compilation: true,
     serial_in_repository: false,
-    accepts_files: true,
+    arguments: ToolArguments::GoPackages,
     reads_other_sources: true,
 };
 

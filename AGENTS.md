@@ -744,8 +744,8 @@ comes back.
   justification for a case truncation does not cover. Repeated gated runs
   showed different files failing each time, and each analyzed cleanly when
   asked again. The empty-vs-non-empty split was verified the same way.
-- **`cargo clippy` takes no file arguments** (`ToolSpec::accepts_files =
-  false`). It checks a crate and rejects a path outright, so appending files
+- **`cargo clippy` takes no file arguments** (`ToolSpec::arguments =
+  ToolArguments::Project`). It checks a crate and rejects a path outright, so appending files
   makes every Rust run `Unavailable`. A whole-project tool is invoked bare and
   its findings are narrowed to the files
   being checked, or a commit gate blocks on pre-existing issues elsewhere.
@@ -754,6 +754,8 @@ comes back.
 - **`tsc` also takes no file arguments from drep.** Passing a source path makes
   TypeScript ignore `tsconfig.json`, so it runs the configured project and its
   diagnostics are narrowed back to the requested files just like clippy.
+- **`go vet` is handed package directories, not files** (`ToolArguments::GoPackages`). Handed files, it type-checks them as a package of their own: a diff touching one file of a multi-file package reports every symbol its siblings declare as `undefined`, and a diff spanning two directories fails with "named files must all be in one directory", which is `Unavailable` and exit 2. Each directory goes once as `./dir`, since `go` reads an unprefixed one as an import path, and the findings are narrowed back to the requested files like clippy's.
+- **`go vet` is all-or-nothing for one call, so `go list -e -json` runs first** (`runner/go_packages.rs`). A directory with no buildable file (`//go:build tools`) or a package with an unresolvable import aborts every other package in the call, which reported a real finding elsewhere as nothing at all. A file the build excludes goes to `ToolOutcome::excluded` and leaves the batch: not failed, not compiled, as CI's `go vet ./...` treats it. A package that fails to load contributes its load errors as findings and vet does not run. A file with a malformed `//go:build` line is listed under `InvalidGoFiles`, which counts as in the build so the package error reaches the reader instead of the file being skipped; a directory with no `Dir` in `go list`'s answer is `Unavailable`. Those, and every `vet: `-prefixed type-check failure, are `TYPE_CHECK_KIND` findings that narrowing keeps wherever they point: a commit that changes a signature in `a.go` breaks the call in `b.go`, and the package that did not compile was not vetted. A finding in a directory vet was not handed is kept too. Vet analyzes only the packages it is handed, so that finding is a dependency that failed to compile, printed with no `vet:` prefix, and `go list` does not see it because it loads without type-checking. Such a finding names a file nobody asked about, so `run_one` respells it from the repository root rather than the module root.
 - **A non-zero exit with zero parsed findings is `Unavailable` whenever the
   parser skips input it does not recognise.** The position/tsc/MSBuild parsers
   skip by design, so a run whose every diagnostic is of a shape they do not

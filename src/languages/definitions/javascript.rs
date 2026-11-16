@@ -6,7 +6,8 @@
 //! the parser plugins live when the project has them.
 
 use crate::languages::spec::{
-    DEFAULT_TOOL_TIMEOUT_SECS, DiagnosticsStream, LanguageSupport, OutputFormat, ToolSpec,
+    DEFAULT_TOOL_TIMEOUT_SECS, DiagnosticsStream, LanguageSupport, OutputFormat, ToolArguments,
+    ToolSpec,
 };
 
 /// Package installs and build outputs shared by the JavaScript ecosystem.
@@ -38,7 +39,7 @@ pub static ESLINT: ToolSpec = ToolSpec {
     timeout_context: None,
     establishes_compilation: false,
     serial_in_repository: false,
-    accepts_files: true,
+    arguments: ToolArguments::Files,
     reads_other_sources: true,
 };
 
@@ -57,7 +58,7 @@ pub static TSC: ToolSpec = ToolSpec {
     serial_in_repository: false,
     // Passing source files makes tsc ignore tsconfig.json. Run the configured
     // project and filter its diagnostics back to the requested files.
-    accepts_files: false,
+    arguments: ToolArguments::Project,
     reads_other_sources: true,
 };
 

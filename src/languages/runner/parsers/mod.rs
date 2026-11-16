@@ -35,6 +35,8 @@ mod sarif;
 mod shellcheck;
 mod sqlfluff;
 
+pub(crate) use position::TYPE_CHECK_KIND;
+
 /// Convert a tool's diagnostics into Findings.
 ///
 /// Every tool's own shape is normalised here, so nothing downstream of this

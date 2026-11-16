@@ -98,10 +98,10 @@ pub async fn run(
 
 /// One deterministic-tool invocation: the spec and the files it should be
 /// invoked with. The tool name is on the spec, so it is not duplicated here.
-struct PlannedTask {
-    spec: &'static ToolSpec,
-    workspace_root: PathBuf,
-    files: Vec<PlannedFile>,
+pub(super) struct PlannedTask {
+    pub(super) spec: &'static ToolSpec,
+    pub(super) workspace_root: PathBuf,
+    pub(super) files: Vec<PlannedFile>,
 }
 
 /// A (tool, file) pair whose tool found no configured workspace on disk.
@@ -119,16 +119,16 @@ struct Unconfigured {
     absolute: PathBuf,
 }
 
-struct PlannedFile {
-    original: PathBuf,
-    absolute: PathBuf,
-    argument: String,
+pub(super) struct PlannedFile {
+    pub(super) original: PathBuf,
+    pub(super) absolute: PathBuf,
+    pub(super) argument: String,
 }
 
 /// Run one planned task and return its outcome alongside the files it was
 /// given. The files list is moved back out so the caller can map the
 /// outcome back to per-file failures without re-borrowing.
-async fn run_one(task: PlannedTask, root: &Path) -> (runner::ToolOutcome, Vec<PathBuf>) {
+pub(super) async fn run_one(task: PlannedTask, root: &Path) -> (runner::ToolOutcome, Vec<PathBuf>) {
     let PlannedTask {
         spec,
         workspace_root,
@@ -144,6 +144,14 @@ async fn run_one(task: PlannedTask, root: &Path) -> (runner::ToolOutcome, Vec<Pa
         original_by_absolute.insert(file.absolute, file.original);
     }
     let mut outcome = runner::run_tool_at(spec, root, &workspace_root, &arguments).await;
+    // A file the build excludes leaves the batch: no tool looked at it, so it can neither fail nor count as compiled.
+    let excluded: BTreeSet<&String> = outcome.excluded.iter().collect();
+    let originals: Vec<PathBuf> = arguments
+        .iter()
+        .zip(originals)
+        .filter(|(argument, _)| !excluded.contains(argument))
+        .map(|(_, original)| original)
+        .collect();
     // The canonical index is the second spelling `retain_requested` also
     // compares: a tool deriving paths from its own resolved cwd answers
     // through symlinks drep left alone. It is built on the first finding that
@@ -151,6 +159,7 @@ async fn run_one(task: PlannedTask, root: &Path) -> (runner::ToolOutcome, Vec<Pa
     // and resolving every planned file up front spends a `realpath` each to
     // answer a question nothing asks.
     let mut original_by_canonical: Option<BTreeMap<PathBuf, PathBuf>> = None;
+    let mut root_prefix: Option<PathBuf> = None;
     for finding in &mut outcome.findings {
         let joined = runner::joined_reported(&workspace_root, &finding.file_path);
         let original = match original_by_absolute.get(&joined) {
@@ -168,9 +177,20 @@ async fn run_one(task: PlannedTask, root: &Path) -> (runner::ToolOutcome, Vec<Pa
                     .get(&resolved)
             }),
         };
-        if let Some(original) = original {
-            finding.file_path = original.to_string_lossy().into_owned();
-        }
+        finding.file_path = match original {
+            Some(original) => original.to_string_lossy().into_owned(),
+            // A type-check failure can name a file nobody asked about. The tool spelled it from the workspace, which `configuration_root` built from the absolute, lexically normal root, so it is respelled from that same root, where the caller's own paths start.
+            None => {
+                let normal = runner::lexically_normal(&joined);
+                let prefix = root_prefix
+                    .get_or_insert_with(|| runner::lexically_normal(&runner::absolute(root)));
+                normal
+                    .strip_prefix(prefix)
+                    .unwrap_or(&normal)
+                    .to_string_lossy()
+                    .into_owned()
+            }
+        };
     }
     (outcome, originals)
 }
@@ -486,7 +506,7 @@ fn plan_tasks(work: &Work, root: &Path) -> (Vec<PlannedTask>, Vec<Unconfigured>)
 
 /// Apply one tool outcome: append findings, and — for `Unavailable` —
 /// record the per-file failure the orchestrator's exit-2 contract rests on.
-fn merge_outcome(
+pub(super) fn merge_outcome(
     outcome: runner::ToolOutcome,
     files: Vec<PathBuf>,
     failures: &mut BTreeMap<PathBuf, FailureReason>,

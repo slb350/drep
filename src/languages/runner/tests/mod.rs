@@ -22,6 +22,7 @@ mod parsers_tsc;
 mod resolve;
 mod run_tool;
 mod run_tool_exit_status;
+mod run_tool_go_packages;
 mod run_tool_narrowing;
 mod stream_detail;
 pub(crate) mod support;

@@ -176,7 +176,7 @@ fn pathdiff_relative(from: &std::path::Path, to: &std::path::Path) -> std::path:
         .unwrap_or_else(|_| to.to_path_buf())
 }
 
-/// A tool declaring `accepts_files: false` is invoked with **no** file
+/// A tool declaring `arguments: ToolArguments::Project` is invoked with **no** file
 /// arguments.
 ///
 /// `cargo clippy` checks a crate and rejects a path argument outright with
@@ -189,15 +189,7 @@ fn pathdiff_relative(from: &std::path::Path, to: &std::path::Path) -> std::path:
 async fn a_whole_project_tool_is_invoked_without_file_arguments() {
     let dir = tempfile::tempdir().expect("tempdir");
     let root = dir.path();
-    let log = root.join("argv.log");
-    install_stub(
-        root,
-        "wholeproject",
-        &format!(
-            "#!/bin/sh\nfor a in \"$@\"; do printf '%s\\n' \"$a\" >> {}; done\nprintf '[]\\n'\n",
-            log.to_string_lossy()
-        ),
-    );
+    let log = install_argv_logging_stub(root, "wholeproject");
 
     // The extra argument is the point: a whole-project tool still gets its
     // own flags, and only the file list is withheld.
@@ -209,13 +201,8 @@ async fn a_whole_project_tool_is_invoked_without_file_arguments() {
     let outcome = run_tool(&spec, root, &["a.rs".to_owned(), "b.rs".to_owned()]).await;
     assert_eq!(outcome.status, ToolStatus::Ok, "detail: {}", outcome.detail);
 
-    let recorded: Vec<String> = std::fs::read_to_string(&log)
-        .unwrap_or_default()
-        .lines()
-        .map(str::to_owned)
-        .collect();
     assert_eq!(
-        recorded,
+        logged_argv(&log),
         vec!["--flag"],
         "the declared flags are passed and the files are not"
     );

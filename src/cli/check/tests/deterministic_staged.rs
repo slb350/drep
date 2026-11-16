@@ -171,7 +171,7 @@ async fn a_source_following_tool_refuses_an_uncommitted_file_of_no_registered_la
     }
 }
 
-/// A whole-project tool (`accepts_files: false`) is invoked bare from its
+/// A whole-project tool (`arguments: ToolArguments::Project`) is invoked bare from its
 /// workspace and reads all of it, so any differing path under the workspace
 /// refuses the run.
 #[tokio::test]
