@@ -112,7 +112,7 @@ assert_cmd = "2.2"
 # the dev graph. Its own dependency `ordered-float` is held at 5.4.0 by an
 # MSRV-compatible update because 5.5.x declares `rust_version` 1.90, above this
 # floor; it reaches the graph through `saphyr` alone, so no release binary
-# carries it. `saphyr` 0.3.3 is held back by this requirement, not by the floor:
+# carries it. `saphyr` 0.3.4 is held back by this requirement, not by the floor:
 # it declares `rust_version` 1.85.0, but within `0.x` a minor version is an API
 # break, so adopting it means migrating the release-contract test rather than
 # running `cargo update`.

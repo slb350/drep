@@ -26,6 +26,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The Rust 1.88-compatible lockfile refresh, with no advisory behind any of it: `cargo audit` and
+  `osv-scanner` reported no vulnerability, no warning and no OSV finding against the committed
+  `Cargo.lock` before the update, and none after it, so no `Cargo.toml` requirement changed and no
+  advisory is ignored or allowlisted. 12 packages moved and the lock still holds 255 of them - no
+  package was added or removed and no dependency edge changed, only versions, checksums and the
+  `syn` version each proc-macro dependent names. The two direct dependencies are `open-agent-sdk`
+  0.11.9 to 0.11.10 and `rpassword` 7.5.4 to 7.5.5; the rest arrive through them and through
+  `reqwest`, `tokio` and the derive crates: `crc32fast` 1.5.4 to 1.5.5 on the `gzip` path that
+  decodes the compressed models.dev response, under `flate2`, `compression-codecs`,
+  `async-compression` and `tower-http`; `rustls-pki-types` 1.15.1 to 1.16.0 through `reqwest`;
+  `rand` 0.10.3 to 0.10.4 through `open-agent-sdk`; `mio` 1.2.4 to 1.2.5 and `errno` 0.3.14 to
+  0.3.15 under `tokio` and `tempfile`; `itoa` 1.0.18 to 1.0.19 under `http`; `syn` 3.0.9 to 3.0.10
+  for the derive macros; and `cc` 1.11.1 to 1.11.2 as `openssl-src`'s build dependency, which is the
+  vendored OpenSSL compile the arm64 Linux release cross-build does. Two entries change no shipped
+  binary: `bumpalo` 3.20.3 to 3.20.4 is reached only through `wasm-bindgen`'s macro chain, so no
+  release target compiles it, and `rustls-webpki` 0.103.16 to 0.103.17 is recorded in the lock
+  without being compiled. Both are confirmed by `cargo tree --target all -i <name>` for the targets
+  drep builds, the check already recorded for the `rustls` family.
+- Two of these are worth a run's attention, each from the upstream source fetched for it.
+  open-agent-sdk 0.11.10 lands two wire-protocol tolerances (its `CHANGELOG.md` at the repository
+  URL): a `base_url` with a trailing slash no longer posts to `/v1//chat/completions`, which strict
+  servers answer with 404 - `complete_json` hands the SDK `LlmClient::base_url` exactly as
+  `drep.toml` spells it, so an entry written `https://api.z.ai/v1/` sat in that path - and an SSE
+  event whose `data` field is empty or whitespace-only is skipped like a comment keep-alive instead
+  of failing the stream with `EOF while parsing a value`, a retryable error that lost the model's
+  answer. Its `timeout` documentation now matches reqwest's total-deadline behaviour, and no public
+  API changed. `rpassword` 7.5.5 restores the terminal's settings before raising SIGINT, on Unix and
+  Windows (v7.5.4...v7.5.5): `drep init` reads a pasted key through it, so interrupting that prompt
+  left the terminal with echo still off.
+- The rest are narrow, each from its own release notes and, where the repository publishes no
+  changelog, from the commit list between the two tags: `rustls-pki-types` 1.16.0 hardens
+  `DnsName` (it rejects confusables with IPv4 addresses, strips a single trailing dot and gains
+  `into_owned`), `crc32fast` 1.5.5 folds from 64 bytes with PMULL on aarch64, `cc` 1.11.2 keeps GCC
+  from merging identical variables under AddressSanitizer and regenerates its target info, `rand`
+  0.10.4 rejects an invalid `UniformDuration` sampler state when deserializing, `syn` 3.0.10 skips
+  rescanning an operand whose scan already failed, `itoa` 1.0.19 fixes a no-panic link failure for
+  non-constant integers, `errno` 0.3.15 adds QNX 8, mlibc and NuttX support and fixes linking on
+  Fuchsia, `mio` 1.2.5 gives every Windows named-pipe operation its own `OVERLAPPED` and adds
+  vectored I/O there, and `bumpalo` 3.20.4 stops rewriting the empty footer's `ptr` field.
+  `rustls-webpki` 0.103.17 adds RFC 6962 signed-timestamp-frame decoding, in a crate no drep target
+  compiles.
+- Three packages are held back, none forced and none behind an advisory. `reqwest` stays at 0.12.28
+  behind 0.13.5: the index gives 0.13.5 `rust_version` 1.85.0, so this hold is not the MSRV but the
+  semver-major jump plus `open-agent-sdk`'s own index entry still requiring `reqwest ^0.12.28` -
+  re-read for 0.11.10 this run - whose copy drep shares rather than building a second HTTP and TLS
+  stack into every binary. `ordered-float` stays at 5.4.0 behind 5.5.1, the one genuine MSRV hold:
+  5.5.0 and 5.5.1 both declare `rust_version` 1.90 against the 1.88 floor, and it reaches the graph
+  through the `saphyr` dev-dependency alone, so no release binary carries it. `saphyr` stays at
+  0.2.2 behind 0.3.4, whose index entry declares `rust_version` 1.85.0: that hold is the declared
+  requirement, not the floor, because within `0.x` a minor version is an API break and taking 0.3 is
+  a migration of the release-contract test rather than a `cargo update`. The `[dev-dependencies]`
+  comment now names 0.3.4, which is what this refresh reports as available.
 - The `check` unit tests that run the built binary find it under Rust 1.100's Cargo, whose new
   build-directory layout (Rust 1.100.0 release notes, cargo#17354) puts a unit-test executable
   under `<profile>/build/<package>/<hash>/out/` instead of `<profile>/deps/`. `assert_cmd`'s
