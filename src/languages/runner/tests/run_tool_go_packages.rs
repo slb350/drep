@@ -154,9 +154,9 @@ async fn a_type_check_failure_in_an_untouched_file_is_kept() {
     let root = dir.path();
     fake_go::workspace(
         root,
-        &["pkg/a.go", "pkg/b.go", "other/c.go"],
+        &["pkg/a.go", "pkg/b.go", "pkg/c.go"],
         Vet {
-            stderr: "# ex/pkg\nvet: pkg/b.go:3:29: not enough arguments in call to Foo\nother/c.go:5:2: fmt.Printf format %d has arg \"s\" of wrong type string",
+            stderr: "# ex/pkg\nvet: pkg/b.go:3:29: not enough arguments in call to Foo\npkg/c.go:5:2: fmt.Printf format %d has arg \"s\" of wrong type string",
             exit: 1,
         },
     );
@@ -222,6 +222,50 @@ async fn an_analyzer_finding_in_a_sibling_file_is_dropped() {
     let outcome = run_tool(&fake_go::spec(), root, &strings(&["pkg/asked.go"])).await;
     assert_eq!(outcome.status, ToolStatus::Ok, "detail: {}", outcome.detail);
     assert_eq!(reported(&outcome), vec!["pkg/asked.go"]);
+}
+
+/// A dependency that fails to compile is kept, because nothing in the package that imports it was vetted.
+///
+/// `go list` loads without type-checking, so it reports no error for the dependency. `go vet` then prints the compiler failure under the dependency's own `# ex/dep` header with no `vet:` prefix, in a file of a package vet was never handed. Narrowing it away left the gate passing code vet could not check. An analyzer finding in a sibling of the requested file is still dropped.
+#[tokio::test]
+async fn a_dependency_that_fails_to_compile_is_kept() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path();
+    fake_go::workspace(
+        root,
+        &["pkg/a.go", "pkg/b.go"],
+        Vet {
+            stderr: "# ex/dep\ndep/dep.go:3:9: undefined: missing\n# ex/pkg\npkg/b.go:4:2: unreachable code",
+            exit: 1,
+        },
+    );
+
+    let outcome = run_tool(&fake_go::spec(), root, &strings(&["pkg/a.go"])).await;
+    assert_eq!(outcome.status, ToolStatus::Ok, "detail: {}", outcome.detail);
+    assert_eq!(reported(&outcome), vec!["dep/dep.go"]);
+}
+
+/// A directory whose only requested file the build excludes is not handed to vet, so a compile failure there is a dependency's and is kept.
+///
+/// Counting the directory of every requested file as vetted dropped it: `x_windows.go` on a Mac sits in a package vet never analyzed, yet the package may still be a dependency of one it did.
+#[tokio::test]
+async fn a_dependency_directory_holding_only_an_excluded_requested_file_is_kept() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path();
+    let files = ["pkg/a.go", "dep/dep_ignored.go"];
+    fake_go::workspace(
+        root,
+        &files,
+        Vet {
+            stderr: "# ex/dep\ndep/dep.go:3:9: undefined: missing",
+            exit: 1,
+        },
+    );
+
+    let outcome = run_tool(&fake_go::spec(), root, &strings(&files)).await;
+    assert_eq!(outcome.status, ToolStatus::Ok, "detail: {}", outcome.detail);
+    assert_eq!(reported(&outcome), vec!["dep/dep.go"]);
+    assert_eq!(outcome.excluded, vec!["dep/dep_ignored.go"]);
 }
 
 /// `go list` writes an error's position as `file:line:col`, sometimes `file:line`, and leaves it empty when the error has none. Split from the right, so a Windows drive letter stays in the file, and a position that is not numeric is all file.

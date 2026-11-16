@@ -304,6 +304,7 @@ pub(crate) async fn run_tool_at(
     // One ceiling for the whole tool: `go list` and `go vet` share it rather than getting one each.
     let deadline = Instant::now() + Duration::from_secs(spec.timeout_secs);
     let mut excluded = Vec::new();
+    let mut directories = Vec::new();
     match spec.arguments {
         ToolArguments::Files => argv.extend(file_arguments(files)),
         ToolArguments::Project => {}
@@ -334,22 +335,24 @@ pub(crate) async fn run_tool_at(
                     )
                 };
             }
-            argv.extend(plan.directories);
+            argv.extend(plan.directories.iter().cloned());
+            directories = plan.directories;
             excluded = plan.excluded;
         }
     }
 
-    let mut outcome = execute(spec, &argv, workspace_root, files, deadline).await;
+    let mut outcome = execute(spec, &argv, workspace_root, files, &directories, deadline).await;
     outcome.excluded = excluded;
     outcome
 }
 
-/// Spawn `argv` from `workspace_root` and read its diagnostics into an outcome for `files`.
+/// Spawn `argv` from `workspace_root` and read its diagnostics into an outcome for `files`. `directories` are the package directories a [`ToolArguments::GoPackages`] tool was handed, as `./dir`, and empty for any other.
 async fn execute(
     spec: &ToolSpec,
     argv: &[String],
     workspace_root: &Path,
     files: &[String],
+    directories: &[String],
     deadline: Instant,
 ) -> ToolOutcome {
     let output = match run_bounded(&argv[0], &argv[1..], workspace_root, deadline).await {
@@ -439,7 +442,7 @@ async fn execute(
         Ok(findings) => ToolOutcome {
             tool: spec.name,
             status: ToolStatus::Ok,
-            findings: retain_requested(spec, findings, files, workspace_root),
+            findings: retain_requested(spec, findings, files, directories, workspace_root),
             detail: stream_detail(other),
             compilation_succeeded,
             excluded: Vec::new(),
