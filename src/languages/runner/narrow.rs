@@ -1,10 +1,11 @@
-//! Narrow a whole-project tool's findings to the files drep was asked to check.
+//! Narrow a whole-project or Go package tool's findings to the files drep was asked to check.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
+use super::TYPE_CHECK_KIND;
 use crate::analysis::findings::Finding;
-use crate::languages::spec::ToolSpec;
+use crate::languages::spec::{ToolArguments, ToolSpec};
 
 /// Narrow a tool's findings to the files actually being checked.
 ///
@@ -13,6 +14,8 @@ use crate::languages::spec::ToolSpec;
 /// issues in untouched code would be unusable: the author cannot fix what they
 /// did not write, and every commit would fail until the whole project was
 /// clean.
+///
+/// A Go package tool (`go vet`) is narrowed the same way: handed `./pkg`, it reports on every file in the package, test files included. A [`TYPE_CHECK_KIND`] finding is kept wherever it points; see that constant for why.
 ///
 /// A no-op for a tool that took the file list as arguments - it only reported
 /// on what it was given. cppcheck is the first shipped tool where that is not
@@ -46,7 +49,7 @@ pub(super) fn retain_requested(
     files: &[String],
     workspace_root: &Path,
 ) -> Vec<Finding> {
-    if spec.accepts_files || findings.is_empty() {
+    if spec.arguments == ToolArguments::Files || findings.is_empty() {
         return findings;
     }
     let wanted: BTreeSet<PathBuf> = files
@@ -57,6 +60,9 @@ pub(super) fn retain_requested(
     findings
         .into_iter()
         .filter(|finding| {
+            if finding.kind == TYPE_CHECK_KIND {
+                return true;
+            }
             let joined = joined_reported(workspace_root, &finding.file_path);
             wanted.contains(&joined) || wanted_canonical.contains(joined.canonicalize().ok())
         })

@@ -1,6 +1,8 @@
 //! The Rust ecosystem: clippy over `.rs`.
 
-use crate::languages::spec::{DiagnosticsStream, LanguageSupport, OutputFormat, ToolSpec};
+use crate::languages::spec::{
+    DiagnosticsStream, LanguageSupport, OutputFormat, ToolArguments, ToolSpec,
+};
 
 /// Rust linter - emits structured JSON via cargo's message-format.
 pub static CLIPPY: ToolSpec = ToolSpec {
@@ -19,8 +21,8 @@ pub static CLIPPY: ToolSpec = ToolSpec {
     establishes_compilation: true,
     serial_in_repository: true,
     // `cargo clippy` checks a crate, not files: a path argument is rejected
-    // with "unexpected argument". See `ToolSpec::accepts_files`.
-    accepts_files: false,
+    // with "unexpected argument". See `ToolArguments::Project`.
+    arguments: ToolArguments::Project,
     reads_other_sources: true,
 };
 

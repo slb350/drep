@@ -1,7 +1,8 @@
 //! The Python ecosystem: ruff over `.py`.
 
 use crate::languages::spec::{
-    DEFAULT_TOOL_TIMEOUT_SECS, DiagnosticsStream, LanguageSupport, OutputFormat, ToolSpec,
+    DEFAULT_TOOL_TIMEOUT_SECS, DiagnosticsStream, LanguageSupport, OutputFormat, ToolArguments,
+    ToolSpec,
 };
 
 /// Python deterministic checker.
@@ -17,7 +18,7 @@ pub static RUFF: ToolSpec = ToolSpec {
     timeout_context: None,
     establishes_compilation: false,
     serial_in_repository: false,
-    accepts_files: true,
+    arguments: ToolArguments::Files,
     reads_other_sources: true,
 };
 

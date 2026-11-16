@@ -1,7 +1,8 @@
 //! Lua: luacheck over `.lua`.
 
 use crate::languages::spec::{
-    DEFAULT_TOOL_TIMEOUT_SECS, DiagnosticsStream, LanguageSupport, OutputFormat, ToolSpec,
+    DEFAULT_TOOL_TIMEOUT_SECS, DiagnosticsStream, LanguageSupport, OutputFormat, ToolArguments,
+    ToolSpec,
 };
 
 /// Lua deterministic checker.
@@ -28,7 +29,7 @@ pub static LUACHECK: ToolSpec = ToolSpec {
     timeout_context: None,
     establishes_compilation: false,
     serial_in_repository: false,
-    accepts_files: true,
+    arguments: ToolArguments::Files,
     reads_other_sources: true,
 };
 

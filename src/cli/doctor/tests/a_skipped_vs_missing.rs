@@ -11,7 +11,9 @@
 //! pins the rendering directly via `missing_tools_line`.
 
 use crate::cli::doctor::{DoctorArgs, missing_tools_line};
-use crate::languages::spec::{DiagnosticsStream, LanguageSupport, OutputFormat, ToolSpec};
+use crate::languages::spec::{
+    DiagnosticsStream, LanguageSupport, OutputFormat, ToolArguments, ToolSpec,
+};
 use crate::test_support::write_executable;
 
 fn args(path: &std::path::Path) -> DoctorArgs {
@@ -140,7 +142,7 @@ static GHOST_TOOL: ToolSpec = ToolSpec {
     timeout_context: None,
     establishes_compilation: false,
     serial_in_repository: false,
-    accepts_files: true,
+    arguments: ToolArguments::Files,
     reads_other_sources: true,
 };
 

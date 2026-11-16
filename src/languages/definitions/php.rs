@@ -1,7 +1,8 @@
 //! PHP: PHP_CodeSniffer over `.php`.
 
 use crate::languages::spec::{
-    DEFAULT_TOOL_TIMEOUT_SECS, DiagnosticsStream, LanguageSupport, OutputFormat, ToolSpec,
+    DEFAULT_TOOL_TIMEOUT_SECS, DiagnosticsStream, LanguageSupport, OutputFormat, ToolArguments,
+    ToolSpec,
 };
 
 /// PHP deterministic checker.
@@ -22,7 +23,7 @@ pub static PHPCS: ToolSpec = ToolSpec {
     timeout_context: None,
     establishes_compilation: false,
     serial_in_repository: false,
-    accepts_files: true,
+    arguments: ToolArguments::Files,
     reads_other_sources: true,
 };
 

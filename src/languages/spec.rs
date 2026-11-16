@@ -64,6 +64,25 @@ pub enum DiagnosticsStream {
     Stderr,
 }
 
+/// What a tool is handed on its command line after its own flags.
+///
+/// Anything but [`ToolArguments::Files`] reports on more than the files being checked, so its findings are narrowed back to them. Without that a commit gate would block on pre-existing issues in code the commit never touched.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToolArguments {
+    /// The files being checked.
+    Files,
+    /// The Go package directory each file being checked sits in, each once, as `./dir`, after `go list` has said which of the files the build includes.
+    ///
+    /// `go vet` checks a package, and a Go package is a directory. Handed files, it type-checks them as a package of their own: a diff touching one file of a multi-file package reported every symbol its siblings declare as `undefined`, and a diff spanning two directories failed with "named files must all be in one directory". The `./` prefix is what makes `go` read the argument as a path rather than an import path.
+    ///
+    /// A directory is all-or-nothing for the whole call, so `go list -e -json` runs first. A file build constraints exclude (`//go:build tools`, `x_windows.go` on a Mac) is reported in [`ToolOutcome::excluded`](crate::languages::runner::ToolOutcome::excluded) and its directory is left out: `go vet ./tools` on a directory with no buildable file fails, and that failure aborts every other package in the call. A package that fails to load, an unresolvable import say, aborts the call the same way, so its load errors become the findings and vet does not run.
+    GoPackages,
+    /// Nothing: the tool checks its whole project.
+    ///
+    /// `cargo clippy` checks a *crate*, and a path argument is rejected outright with "unexpected argument". Appending files to it therefore made every run fail, so every Rust file came back `Unavailable` and `drep check` exited 2 on any Rust repository - the deterministic half for Rust never ran at all.
+    Project,
+}
+
 /// A deterministic checker for one language.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ToolSpec {
@@ -102,19 +121,8 @@ pub struct ToolSpec {
     pub establishes_compilation: bool,
     /// Whether invocations of this tool must be serialized within a repo.
     pub serial_in_repository: bool,
-    /// Whether the tool accepts file paths as arguments.
-    ///
-    /// `cargo clippy` does not: it checks a *crate*, and a path argument is
-    /// rejected outright with "unexpected argument". Appending files to it
-    /// therefore made every run fail, so every Rust file came back
-    /// `Unavailable` and `drep check` exited 2 on any Rust repository - the
-    /// deterministic half for Rust never ran at all.
-    ///
-    /// A tool with `accepts_files: false` is invoked bare and reports on the
-    /// whole project, so its findings are filtered down to the files actually
-    /// being checked. Without that filter a commit gate would block on
-    /// pre-existing issues in code the commit never touched.
-    pub accepts_files: bool,
+    /// What the tool is handed after its own flags. See [`ToolArguments`].
+    pub arguments: ToolArguments,
     /// Whether the tool, given files, may also read other files: an import it
     /// follows (eslint, `go vet`), a sourced script (ShellCheck), a package
     /// marker whose presence it checks (ruff's `__init__.py`), a schema a
@@ -128,9 +136,7 @@ pub struct ToolSpec {
     /// under any name, and in another language drep registers. Only a tool that reads nothing but the files it
     /// is given, as `gofmt` formats each one alone, says false; saying true
     /// of one that does not only costs a refusal, while saying false of one
-    /// that does lets an uncommitted file decide a commit's lint. A
-    /// whole-project tool (`accepts_files: false`) reads beyond any files by
-    /// definition and must say true, which the registry's tests hold.
+    /// that does lets an uncommitted file decide a commit's lint. A tool not handed exactly its files ([`ToolArguments::GoPackages`] or [`ToolArguments::Project`]) reads beyond them by definition and must say true, which the registry's tests hold.
     pub reads_other_sources: bool,
 }
 
@@ -148,7 +154,7 @@ impl Default for ToolSpec {
             timeout_context: None,
             establishes_compilation: false,
             serial_in_repository: false,
-            accepts_files: true,
+            arguments: ToolArguments::Files,
             reads_other_sources: true,
         }
     }

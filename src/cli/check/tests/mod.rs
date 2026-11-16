@@ -8,6 +8,7 @@
 
 mod credentials;
 mod deterministic;
+mod deterministic_go;
 mod deterministic_markers;
 mod deterministic_push;
 mod deterministic_staged;

@@ -14,21 +14,27 @@
 //!   **Not** a pass - reporting it as clean is the same "unanalyzed is not
 //!   clean" mistake that would let a commit gate rubber-stamp commits.
 
+use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
-use std::process::Stdio;
+use std::process::{Output, Stdio};
 use std::time::Duration;
 
 use tokio::process::Command;
+use tokio::time::Instant;
 
 use crate::analysis::findings::Finding;
-use crate::languages::spec::{DEFAULT_TOOL_TIMEOUT_SECS, DiagnosticsStream, ToolSpec};
+use crate::languages::spec::{
+    DEFAULT_TOOL_TIMEOUT_SECS, DiagnosticsStream, ToolArguments, ToolSpec,
+};
 
 mod ancestry;
+mod go_packages;
 mod markers;
 mod narrow;
 pub mod parsers;
 mod uri;
 
+pub(crate) use parsers::TYPE_CHECK_KIND;
 pub use parsers::parse_output;
 
 pub(crate) use ancestry::absolute;
@@ -71,6 +77,8 @@ pub struct ToolOutcome {
     pub findings: Vec<Finding>,
     pub detail: String,
     pub compilation_succeeded: bool,
+    /// Requested files the tool did not check because the project's build excludes them, as given: a `//go:build tools` file, an `x_windows.go` on a Mac. Not failures and not compiled, the same as CI's `go vet ./...` treats them. See [`ToolArguments::GoPackages`].
+    pub excluded: Vec<String>,
 }
 
 impl ToolOutcome {
@@ -98,6 +106,7 @@ impl ToolOutcome {
             findings: Vec::new(),
             detail,
             compilation_succeeded: false,
+            excluded: Vec::new(),
         }
     }
 }
@@ -292,56 +301,66 @@ pub(crate) async fn run_tool_at(
         argv.push(flag.to_owned());
         argv.push(config);
     }
-    // A repository can contain a file whose name begins with `-`, and every
-    // checker here would read `--fix` as an option rather than a path. `--`
-    // is the conventional guard but is not universally supported across
-    // ruff/eslint/tsc/gofmt/go vet/clippy, whereas a `./` prefix is
-    // unambiguous to any argument parser and leaves ordinary paths untouched.
-    // A whole-project tool is invoked bare. `cargo clippy` rejects a path
-    // argument outright ("unexpected argument"), so appending files made every
-    // Rust run fail - reported honestly as `Unavailable`, which is why it
-    // surfaced as exit 2 on every Rust repository rather than as wrong
-    // findings. Its output is narrowed back to `files` after parsing.
-    if spec.accepts_files {
-        argv.extend(files.iter().map(|f| {
-            if f.starts_with('-') {
-                format!("./{f}")
-            } else {
-                f.clone()
+    // One ceiling for the whole tool: `go list` and `go vet` share it rather than getting one each.
+    let deadline = Instant::now() + Duration::from_secs(spec.timeout_secs);
+    let mut excluded = Vec::new();
+    match spec.arguments {
+        ToolArguments::Files => argv.extend(file_arguments(files)),
+        ToolArguments::Project => {}
+        ToolArguments::GoPackages => {
+            let plan = match go_packages::plan(&executable, workspace_root, files, deadline).await {
+                Ok(plan) => plan,
+                Err(detail) => return ToolOutcome::unavailable(spec, detail),
+            };
+            // See `ToolArguments::GoPackages`: a load error aborts the whole vet call, so it is the answer.
+            if !plan.load_errors.is_empty() {
+                return ToolOutcome {
+                    findings: plan.load_errors,
+                    excluded: plan.excluded,
+                    ..ToolOutcome::empty(
+                        spec,
+                        ToolStatus::Ok,
+                        "a package failed to load".to_owned(),
+                    )
+                };
             }
-        }));
+            if plan.directories.is_empty() {
+                return ToolOutcome {
+                    excluded: plan.excluded,
+                    ..ToolOutcome::empty(
+                        spec,
+                        ToolStatus::Skipped,
+                        "the build excludes every file".to_owned(),
+                    )
+                };
+            }
+            argv.extend(plan.directories);
+            excluded = plan.excluded;
+        }
     }
 
-    let mut command = Command::new(&argv[0]);
-    command.args(&argv[1..]);
-    command.current_dir(workspace_root);
-    command.stdin(Stdio::null());
-    command.stdout(Stdio::piped());
-    command.stderr(Stdio::piped());
-    command.kill_on_drop(true);
+    let mut outcome = execute(spec, &argv, workspace_root, files, deadline).await;
+    outcome.excluded = excluded;
+    outcome
+}
 
-    let child = match command.spawn() {
-        Ok(child) => child,
-        Err(err) => {
+/// Spawn `argv` from `workspace_root` and read its diagnostics into an outcome for `files`.
+async fn execute(
+    spec: &ToolSpec,
+    argv: &[String],
+    workspace_root: &Path,
+    files: &[String],
+    deadline: Instant,
+) -> ToolOutcome {
+    let output = match run_bounded(&argv[0], &argv[1..], workspace_root, deadline).await {
+        Ok(output) => output,
+        Err(Bounded::Failed(err)) => {
             return ToolOutcome::unavailable(
                 spec,
                 format!("{} could not be executed: {err}", spec.name),
             );
         }
-    };
-
-    // `wait_with_output` drains both pipes into buffers before returning,
-    // and rejects on any IO error from the spawn or the read.
-    let timeout = Duration::from_secs(spec.timeout_secs);
-    let output = match tokio::time::timeout(timeout, child.wait_with_output()).await {
-        Ok(Ok(output)) => output,
-        Ok(Err(err)) => {
-            return ToolOutcome::unavailable(
-                spec,
-                format!("{} could not be executed: {err}", spec.name),
-            );
-        }
-        Err(_) => {
+        Err(Bounded::TimedOut) => {
             let context = spec.timeout_context.unwrap_or_default();
             return ToolOutcome::unavailable(
                 spec,
@@ -423,12 +442,57 @@ pub(crate) async fn run_tool_at(
             findings: retain_requested(spec, findings, files, workspace_root),
             detail: stream_detail(other),
             compilation_succeeded,
+            excluded: Vec::new(),
         },
         Err(err) => ToolOutcome::unavailable(
             spec,
             format!("{err}. other stream: {}", stream_detail(other)),
         ),
     }
+}
+
+/// Why [`run_bounded`] produced no output.
+pub(super) enum Bounded {
+    /// The process could not be spawned, or its streams could not be read.
+    Failed(std::io::Error),
+    /// The process was still running at the deadline, and was killed.
+    TimedOut,
+}
+
+/// Run `program` with `args` from `cwd`, stdin closed and both streams captured, killing it if it is still running at `deadline`.
+///
+/// `wait_with_output` drains both pipes into buffers before returning, and rejects on any IO error from the spawn or the read. `kill_on_drop` is what kills the process when the deadline drops that future.
+pub(super) async fn run_bounded(
+    program: impl AsRef<OsStr>,
+    args: impl IntoIterator<Item = impl AsRef<OsStr>>,
+    cwd: &Path,
+    deadline: Instant,
+) -> Result<Output, Bounded> {
+    let mut command = Command::new(program);
+    command.args(args);
+    command.current_dir(cwd);
+    command.stdin(Stdio::null());
+    command.stdout(Stdio::piped());
+    command.stderr(Stdio::piped());
+    command.kill_on_drop(true);
+    let child = command.spawn().map_err(Bounded::Failed)?;
+    match tokio::time::timeout_at(deadline, child.wait_with_output()).await {
+        Ok(result) => result.map_err(Bounded::Failed),
+        Err(_) => Err(Bounded::TimedOut),
+    }
+}
+
+/// The files a [`ToolArguments::Files`] tool is handed.
+///
+/// A repository can contain a file whose name begins with `-`, and every checker here would read `--fix` as an option rather than a path. `--` is the conventional guard but is not universally supported across ruff/eslint/tsc/gofmt/go vet/clippy, whereas a `./` prefix is unambiguous to any argument parser and leaves ordinary paths untouched. A Go package directory already carries one.
+fn file_arguments(files: &[String]) -> impl Iterator<Item = String> + '_ {
+    files.iter().map(|f| {
+        if f.starts_with('-') {
+            format!("./{f}")
+        } else {
+            f.clone()
+        }
+    })
 }
 
 pub(crate) fn tool_status_at(
