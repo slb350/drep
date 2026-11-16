@@ -120,25 +120,31 @@ async fn when_the_build_excludes_every_file_vet_is_not_run() {
 
 /// A package that fails to load reports its load errors as findings wherever they point, and vet is not run.
 ///
-/// An unresolvable import in one package aborts `go vet` for every package in the call, so running it would analyze nothing. The error usually sits in a file the commit did not touch, and narrowing it away reported a clean pass over code that was never vetted.
+/// An unresolvable import in one package aborts `go vet` for every package in the call, so running it would analyze nothing. The error usually sits in a file the commit did not touch, and narrowing it away reported a clean pass over code that was never vetted. A requested file the build excludes is still reported as excluded.
 #[tokio::test]
 async fn a_package_that_fails_to_load_reports_its_errors_and_vet_is_not_run() {
     let dir = tempfile::tempdir().expect("tempdir");
     let root = dir.path();
     let log = fake_go::workspace(
         root,
-        &["broken/a.go", "broken/b.go", "pkg/a.go"],
+        &[
+            "broken/a.go",
+            "broken/b.go",
+            "pkg/a.go",
+            "tools/tools_ignored.go",
+        ],
         Vet::default(),
     );
 
     let outcome = run_tool(
         &fake_go::spec(),
         root,
-        &strings(&["broken/a.go", "pkg/a.go"]),
+        &strings(&["broken/a.go", "pkg/a.go", "tools/tools_ignored.go"]),
     )
     .await;
     assert_eq!(outcome.status, ToolStatus::Ok, "detail: {}", outcome.detail);
     assert!(logged_argv(&log).is_empty(), "vet must not run");
+    assert_eq!(outcome.excluded, vec!["tools/tools_ignored.go"]);
     assert_eq!(reported(&outcome), vec!["broken/b.go"]);
     assert_eq!(outcome.findings[0].line, 3);
     assert!(outcome.findings[0].message.contains("ex/nope"));
@@ -283,4 +289,25 @@ fn a_load_error_position_is_split_from_the_right() {
     );
     assert_eq!(position("broken/b.go"), Some(("broken/b.go", 1, None)));
     assert_eq!(position(""), None);
+}
+
+/// A sibling's analyzer finding is dropped when the tool spells its directory with `..` segments, as tflint `--recursive` does.
+///
+/// The exact comparison misses `pkg/../pkg`, which resolves to the vetted `pkg`, so only the canonical one places the finding in a directory vet was handed. Without it the finding is taken for a dependency's compile failure and kept.
+#[tokio::test]
+async fn a_sibling_finding_spelled_with_dot_dot_segments_is_still_dropped() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path();
+    fake_go::workspace(
+        root,
+        &["pkg/asked.go", "pkg/sibling.go"],
+        Vet {
+            stderr: "pkg/../pkg/sibling.go:9:2: unreachable code",
+            exit: 1,
+        },
+    );
+
+    let outcome = run_tool(&fake_go::spec(), root, &strings(&["pkg/asked.go"])).await;
+    assert_eq!(outcome.status, ToolStatus::Ok, "detail: {}", outcome.detail);
+    assert!(reported(&outcome).is_empty(), "{:?}", outcome.findings);
 }
