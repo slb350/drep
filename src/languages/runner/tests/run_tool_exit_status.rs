@@ -113,7 +113,7 @@ async fn a_nonzero_exit_with_only_unmatched_lines_is_unavailable_for_skip_parser
             config_files: &["marker"],
             output_format: format,
             diagnostics_stream: stream,
-            accepts_files: false,
+            arguments: ToolArguments::Project,
             ..ToolSpec::default()
         };
 
@@ -164,7 +164,7 @@ async fn a_nonzero_exit_with_parsed_findings_is_still_ok() {
         config_files: &["marker"],
         output_format: OutputFormat::Msbuild,
         diagnostics_stream: DiagnosticsStream::Stdout,
-        accepts_files: false,
+        arguments: ToolArguments::Project,
         ..ToolSpec::default()
     };
 

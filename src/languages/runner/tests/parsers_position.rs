@@ -55,3 +55,18 @@ fn position_parser_reads_a_windows_drive_letter_path() {
     assert_eq!(findings[0].line, 12);
     assert_eq!(findings[0].column, Some(6));
 }
+
+/// `go vet` prefixes a type-check or syntax failure with `vet: `, and only those. They are marked [`TYPE_CHECK_KIND`] so narrowing can keep them: a package that did not compile was not vetted.
+#[test]
+fn a_vet_prefixed_line_is_a_type_check_failure() {
+    let spec = go_vet_like_spec();
+    let findings = parse_output(
+        &spec,
+        "vet: pkg/b.go:3:29: not enough arguments in call to Foo\npkg/a.go:5:24: fmt.Printf format %d has arg",
+        "",
+    )
+    .expect("parses");
+    let kinds: Vec<&str> = findings.iter().map(|f| f.kind.as_str()).collect();
+    assert_eq!(kinds, vec![TYPE_CHECK_KIND, "go vet"]);
+    assert_eq!(findings[0].file_path, "pkg/b.go");
+}

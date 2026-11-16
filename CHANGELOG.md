@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.1.7] - 2026-11-16
+
 ### Security
 
 - A Codex backend failure no longer prints Codex CLI text raw. An event or item `type` the JSONL
@@ -33,6 +35,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   so one stray `<pre` does not silence the rest of the file. Comments (condition 2) keep their
   existing handling, and containers such as a quote are not tracked. `tab_character`, `long_line` and
   `trailing_whitespace` still fire inside a block.
+- `go vet` is handed the package directory of each changed file, once, as `./dir`, in place of the files themselves. Handed files, it type-checks them as a package of their own, so a diff touching one file of a multi-file package reported every symbol the package's other files declare as an `undefined` finding, and a diff spanning two directories failed with "named files must all be in one directory", which made `drep check` exit 2 on any Go change across packages. Its findings are now narrowed back to the changed files, as clippy's and tsc's are, so a pre-existing finding in an untouched file of the same package does not block. `ToolSpec::accepts_files` is replaced by `ToolSpec::arguments`, a `ToolArguments` of `Files`, `GoPackages` or `Project`.
+- `go list -e -json` runs before `go vet`, because one directory with no buildable file, such as a `tools.go` behind `//go:build tools`, or one package with an unresolvable import aborts vet for every package in the call. A changed file the build excludes is now reported in the new `ToolOutcome::excluded` and is neither failed nor counted as compiled, the same as CI's `go vet ./...` treats it, and a package that fails to load reports its load errors as findings. A file whose `//go:build` line does not parse is vetted, not excluded, so it surfaces as that package's load error, and a directory `go` cannot place in the workspace makes the tool `Unavailable` with `go`'s own reason. Those, and every type-check failure `go vet` reports, block wherever they point: a commit that changes a signature in one file breaks the call in another, and the package that did not compile was not vetted. Such a finding in a file the commit did not touch is named from the repository root. A compile failure in a dependency, which `go list` does not see and `go vet` prints with no `vet:` prefix in a directory it was not handed, is kept the same way.
 
 ### Changed
 
@@ -1430,7 +1434,8 @@ LLM for review, and gates commits and pushes on the result. That is all it does.
 - Python, JavaScript, TypeScript, Go and Rust are all first-class. Adding a
   language is an entry in one table.
 
-[Unreleased]: https://github.com/slb350/drep/compare/v3.1.6...HEAD
+[Unreleased]: https://github.com/slb350/drep/compare/v3.1.7...HEAD
+[3.1.7]: https://github.com/slb350/drep/compare/v3.1.6...v3.1.7
 [3.1.6]: https://github.com/slb350/drep/compare/v3.1.5...v3.1.6
 [3.1.5]: https://github.com/slb350/drep/compare/v3.1.4...v3.1.5
 [3.1.4]: https://github.com/slb350/drep/compare/v3.1.3...v3.1.4

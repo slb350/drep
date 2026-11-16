@@ -21,33 +21,44 @@ fn tsc_stream_is_stdout_go_vet_stream_is_stderr() {
 /// Project compilers run from configuration and cannot take file args.
 ///
 /// Pinned explicitly because the failure is invisible in unit tests: with
-/// `accepts_files: true`, clippy is invoked as `cargo clippy ... a.rs` and
+/// `arguments: ToolArguments::Files`, clippy is invoked as `cargo clippy ... a.rs` and
 /// exits 1 with "unexpected argument", so drep reports every Rust file
 /// `Unavailable` and exits 2 on any Rust repository. Nothing in the suite
 /// noticed - it took running drep against its own source to find it, and a
 /// well-meant "why is this field false?" edit would put it straight back.
 #[test]
 fn project_compilers_do_not_take_file_arguments() {
-    assert!(
-        !definitions::CLIPPY.accepts_files,
+    assert_eq!(
+        definitions::CLIPPY.arguments,
+        spec::ToolArguments::Project,
         "cargo clippy checks a crate; a path argument is rejected outright"
     );
-    assert!(
-        !definitions::TSC.accepts_files,
+    assert_eq!(
+        definitions::TSC.arguments,
+        spec::ToolArguments::Project,
         "passing paths makes tsc ignore tsconfig.json"
     );
-    for spec in [
+    for tool in [
         &definitions::RUFF,
         &definitions::ESLINT,
         &definitions::GOFMT,
-        &definitions::GO_VET,
     ] {
-        assert!(
-            spec.accepts_files,
+        assert_eq!(
+            tool.arguments,
+            spec::ToolArguments::Files,
             "{} is invoked with the files it should check",
-            spec.name
+            tool.name
         );
     }
+}
+
+/// `go vet` is handed package directories, never files. See [`spec::ToolArguments::GoPackages`] for why; only the real binary decides what its arguments mean, so no stub test can see a regression here.
+#[test]
+fn go_vet_is_handed_package_directories() {
+    assert_eq!(
+        definitions::GO_VET.arguments,
+        spec::ToolArguments::GoPackages
+    );
 }
 
 /// tflint and `dotnet format` are project-level tools too: both reject or
@@ -63,12 +74,14 @@ fn project_compilers_do_not_take_file_arguments() {
 /// rediscovered.
 #[test]
 fn whole_project_linters_do_not_take_file_arguments() {
-    assert!(
-        !definitions::TFLINT.accepts_files,
+    assert_eq!(
+        definitions::TFLINT.arguments,
+        spec::ToolArguments::Project,
         "tflint dropped positional file arguments in v0.47"
     );
-    assert!(
-        !definitions::DOTNET_FORMAT.accepts_files,
+    assert_eq!(
+        definitions::DOTNET_FORMAT.arguments,
+        spec::ToolArguments::Project,
         "dotnet format checks a project, not a file list"
     );
 }
@@ -95,17 +108,14 @@ fn only_clippy_is_serialized_within_a_repository() {
     }
 }
 
-/// A whole-project tool reads beyond any files by definition, so it must say
-/// so: staged mode reads `reads_other_sources` alone to decide whether any
-/// uncommitted file refuses a tool, and a whole-project tool saying false
-/// would lint a workspace the commit does not hold.
+/// A tool not handed exactly its files reads beyond them by definition, so it must say so: staged mode reads `reads_other_sources` alone to decide whether any uncommitted file refuses a tool, and a whole-project or whole-directory tool saying false would lint a workspace the commit does not hold.
 #[test]
 fn whole_project_tools_read_other_sources() {
     for lang in all_languages() {
         for tool in lang.tools {
             assert!(
-                tool.accepts_files || tool.reads_other_sources,
-                "{} ({}) takes no files and so reads its whole workspace; it must set reads_other_sources",
+                tool.arguments == spec::ToolArguments::Files || tool.reads_other_sources,
+                "{} ({}) is not handed exactly its files and so reads beyond them; it must set reads_other_sources",
                 tool.name,
                 lang.name
             );
@@ -485,7 +495,7 @@ fn lua_tool_is_configured_exactly_as_specified() {
             timeout_context: None,
             establishes_compilation: false,
             serial_in_repository: false,
-            accepts_files: true,
+            arguments: spec::ToolArguments::Files,
             reads_other_sources: true,
         }
     );

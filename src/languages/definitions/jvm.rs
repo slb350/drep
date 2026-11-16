@@ -1,7 +1,8 @@
 //! The JVM family: Java, Kotlin and Scala, plus Groovy build scripts.
 
 use crate::languages::spec::{
-    DEFAULT_TOOL_TIMEOUT_SECS, DiagnosticsStream, LanguageSupport, OutputFormat, ToolSpec,
+    DEFAULT_TOOL_TIMEOUT_SECS, DiagnosticsStream, LanguageSupport, OutputFormat, ToolArguments,
+    ToolSpec,
 };
 
 /// Build outputs shared by the JVM languages. Gradle writes `build` and
@@ -44,7 +45,7 @@ pub static CHECKSTYLE: ToolSpec = ToolSpec {
     // javac would accept the file.
     establishes_compilation: false,
     serial_in_repository: false,
-    accepts_files: true,
+    arguments: ToolArguments::Files,
     reads_other_sources: true,
 };
 
@@ -67,7 +68,7 @@ pub static KTLINT: ToolSpec = ToolSpec {
     timeout_context: None,
     establishes_compilation: false,
     serial_in_repository: false,
-    accepts_files: true,
+    arguments: ToolArguments::Files,
     reads_other_sources: false,
 };
 

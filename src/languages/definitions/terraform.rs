@@ -1,7 +1,8 @@
 //! Terraform: tflint over `.tf` and `.tfvars`.
 
 use crate::languages::spec::{
-    DEFAULT_TOOL_TIMEOUT_SECS, DiagnosticsStream, LanguageSupport, OutputFormat, ToolSpec,
+    DEFAULT_TOOL_TIMEOUT_SECS, DiagnosticsStream, LanguageSupport, OutputFormat, ToolArguments,
+    ToolSpec,
 };
 
 /// Terraform deterministic checker.
@@ -38,7 +39,7 @@ pub static TFLINT: ToolSpec = ToolSpec {
     // as the tool failing rather than as a finding. Run the configured module
     // bare and narrow findings back to the requested files, exactly as tsc
     // and clippy do.
-    accepts_files: false,
+    arguments: ToolArguments::Project,
     reads_other_sources: true,
 };
 

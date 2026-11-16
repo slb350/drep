@@ -71,7 +71,7 @@ pub(crate) use crate::test_support::write_executable;
 
 /// The spec enums every literal below and every parser test needs; re-exported
 /// for the same reason as `write_executable`.
-pub(crate) use crate::languages::spec::{DiagnosticsStream, OutputFormat};
+pub(crate) use crate::languages::spec::{DiagnosticsStream, OutputFormat, ToolArguments};
 
 /// checkstyle emits SARIF 2.1.0 on stdout. `-c` is appended by `config_flag`
 /// rather than written here, since which ruleset a project uses is exactly
@@ -216,7 +216,7 @@ pub(crate) fn eslint_like_spec() -> ToolSpec {
 /// files it was handed - the shape `retain_requested` narrows.
 ///
 /// Named for the contract rather than for a real tool, because what the
-/// narrowing tests need is `accepts_files: false` and a parser that reads
+/// narrowing tests need is `arguments: ToolArguments::Project` and a parser that reads
 /// whatever the stub prints; which vendor behaves this way is beside the
 /// point.
 pub(crate) fn whole_project_lines_spec() -> ToolSpec {
@@ -226,13 +226,13 @@ pub(crate) fn whole_project_lines_spec() -> ToolSpec {
         local_paths: &["wholeproject"],
         config_files: &["marker"],
         output_format: OutputFormat::Lines,
-        accepts_files: false,
+        arguments: ToolArguments::Project,
         ..ToolSpec::default()
     }
 }
 
 /// The same spec for a tool that *is* handed its files, so a pair of tests
-/// can differ in `accepts_files` alone.
+/// can differ in `arguments` alone.
 pub(crate) fn per_file_lines_spec() -> ToolSpec {
     ToolSpec {
         name: "perfile",
@@ -253,4 +253,27 @@ pub(crate) fn per_file_lines_spec() -> ToolSpec {
 pub(crate) fn install_stub(root: &std::path::Path, tool: &str, stub: &str) {
     std::fs::write(root.join("marker"), "").expect("marker");
     write_executable(&root.join(tool), stub);
+}
+
+/// Install a stub named `tool` under `root` that appends each argument it receives to a log, one per line, and return the log's path.
+pub(crate) fn install_argv_logging_stub(root: &std::path::Path, tool: &str) -> std::path::PathBuf {
+    let log = root.join("argv.log");
+    install_stub(
+        root,
+        tool,
+        &format!(
+            "#!/bin/sh\nfor a in \"$@\"; do printf '%s\\n' \"$a\" >> {}; done\n",
+            log.to_string_lossy()
+        ),
+    );
+    log
+}
+
+/// The arguments a stub from [`install_argv_logging_stub`] received, in order.
+pub(crate) fn logged_argv(log: &std::path::Path) -> Vec<String> {
+    std::fs::read_to_string(log)
+        .unwrap_or_default()
+        .lines()
+        .map(str::to_owned)
+        .collect()
 }

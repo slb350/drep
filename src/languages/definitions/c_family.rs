@@ -5,7 +5,8 @@
 //! cppcheck analyzes both, and a project's build files decide how it runs.
 
 use crate::languages::spec::{
-    DEFAULT_TOOL_TIMEOUT_SECS, DiagnosticsStream, LanguageSupport, OutputFormat, ToolSpec,
+    DEFAULT_TOOL_TIMEOUT_SECS, DiagnosticsStream, LanguageSupport, OutputFormat, ToolArguments,
+    ToolSpec,
 };
 
 /// C and C++ deterministic checker.
@@ -46,7 +47,7 @@ pub static CPPCHECK: ToolSpec = ToolSpec {
     timeout_context: None,
     establishes_compilation: false,
     serial_in_repository: false,
-    accepts_files: true,
+    arguments: ToolArguments::Files,
     reads_other_sources: true,
 };
 
@@ -73,7 +74,7 @@ pub static DOTNET_FORMAT: ToolSpec = ToolSpec {
     timeout_context: Some(", including its MSBuild project load"),
     establishes_compilation: false,
     serial_in_repository: false,
-    accepts_files: false,
+    arguments: ToolArguments::Project,
     reads_other_sources: true,
 };
 

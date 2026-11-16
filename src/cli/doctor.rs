@@ -388,6 +388,7 @@ fn workspace_tool_status(
         findings: Vec::new(),
         detail,
         compilation_succeeded: false,
+        excluded: Vec::new(),
     }
 }
 

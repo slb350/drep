@@ -10,6 +10,9 @@ use std::time::Duration;
 #[path = "test_git_env.rs"]
 pub(crate) mod git_env;
 
+#[path = "test_fake_go.rs"]
+pub(crate) mod fake_go;
+
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
