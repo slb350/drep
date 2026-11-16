@@ -56,9 +56,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Windows (v7.5.4...v7.5.5): `drep init` reads a pasted key through it, so interrupting that prompt
   left the terminal with echo still off.
 - The rest are narrow, each from its own release notes and, where the repository publishes no
-  changelog, from the commit list between the two tags: `rustls-pki-types` 1.16.0 hardens `DnsName`
-  - it rejects confusables with IPv4 addresses, strips a single trailing dot and gains
-  `into_owned` - `crc32fast` 1.5.5 folds from 64 bytes with PMULL on aarch64, `cc` 1.11.2 keeps GCC
+  changelog, from the commit list between the two tags: `rustls-pki-types` 1.16.0 hardens
+  `DnsName` (it rejects confusables with IPv4 addresses, strips a single trailing dot and gains
+  `into_owned`), `crc32fast` 1.5.5 folds from 64 bytes with PMULL on aarch64, `cc` 1.11.2 keeps GCC
   from merging identical variables under AddressSanitizer and regenerates its target info, `rand`
   0.10.4 rejects an invalid `UniformDuration` sampler state when deserializing, `syn` 3.0.10 skips
   rescanning an operand whose scan already failed, `itoa` 1.0.19 fixes a no-panic link failure for
