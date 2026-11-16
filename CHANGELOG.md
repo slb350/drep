@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- The semantic review prompt for Python no longer asks the model to check PEP 8 naming and structure. ruff already enforces that style deterministically, and the semantic pass is told to omit nits, so the line only invited findings the pass is meant to skip.
+
 ## [3.1.7] - 2026-11-16
 
 ### Security
@@ -40,7 +44,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- The semantic review prompt for Python no longer asks the model to check PEP 8 naming and structure. ruff already enforces that style deterministically, and the semantic pass is told to omit nits, so the line only invited findings the pass is meant to skip.
 - The Rust 1.88-compatible lockfile refresh, with no advisory behind any of it: `cargo audit` and
   `osv-scanner` reported no vulnerability, no warning and no OSV finding against the committed
   `Cargo.lock` before the update, and none after it, so no `Cargo.toml` requirement changed and no
