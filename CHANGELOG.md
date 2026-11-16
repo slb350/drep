@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.1.7] - 2026-11-16
+
 ### Security
 
 - A Codex backend failure no longer prints Codex CLI text raw. An event or item `type` the JSONL
@@ -1431,7 +1433,8 @@ LLM for review, and gates commits and pushes on the result. That is all it does.
 - Python, JavaScript, TypeScript, Go and Rust are all first-class. Adding a
   language is an entry in one table.
 
-[Unreleased]: https://github.com/slb350/drep/compare/v3.1.6...HEAD
+[Unreleased]: https://github.com/slb350/drep/compare/v3.1.7...HEAD
+[3.1.7]: https://github.com/slb350/drep/compare/v3.1.6...v3.1.7
 [3.1.6]: https://github.com/slb350/drep/compare/v3.1.5...v3.1.6
 [3.1.5]: https://github.com/slb350/drep/compare/v3.1.4...v3.1.5
 [3.1.4]: https://github.com/slb350/drep/compare/v3.1.3...v3.1.4

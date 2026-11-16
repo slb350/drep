@@ -1245,6 +1245,11 @@ changed mutation script also checks its shared `mutants-common.sh` include.
 
 ## Releasing
 
+For manual releases, update `Cargo.toml`, the `drep-ai` entry in `Cargo.lock`,
+README's pre-commit revision, and the changelog section and comparison links
+together. Verify GitHub assets, crates.io and the Homebrew formula independently;
+apply the post-publication Homebrew audit procedure described above.
+
 Test maintenance and behavior-preserving refactors may remain under Unreleased.
 A standalone release should provide a feature, user-facing fix, or material
 runtime improvement.
