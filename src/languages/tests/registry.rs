@@ -255,6 +255,19 @@ fn every_language_declares_a_name_a_display_name_and_conventions() {
     }
 }
 
+/// ruff already enforces PEP 8 naming and layout deterministically, and the
+/// semantic pass is told to omit nits. A convention that asks the model to
+/// police the same style produces the findings that pass is meant to skip.
+#[test]
+fn python_conventions_leave_pep_8_style_to_ruff() {
+    for convention in definitions::PYTHON.conventions {
+        assert!(
+            !convention.contains("PEP 8"),
+            "ruff owns PEP 8 style, so the prompt must not ask for it: {convention:?}"
+        );
+    }
+}
+
 /// No two languages may claim the same extension or filename: the lookup
 /// answers with whichever entry registered first, so a duplicate is
 /// silently won by one side and the other language's files are never
