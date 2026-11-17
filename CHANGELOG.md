@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.1.8] - 2026-11-17
+
 ### Changed
 
 - The semantic review prompt for Python no longer asks the model to check PEP 8 naming and structure. ruff already enforces that style deterministically, and the semantic pass is told to omit nits, so the line only invited findings the pass is meant to skip.
@@ -1437,7 +1439,8 @@ LLM for review, and gates commits and pushes on the result. That is all it does.
 - Python, JavaScript, TypeScript, Go and Rust are all first-class. Adding a
   language is an entry in one table.
 
-[Unreleased]: https://github.com/slb350/drep/compare/v3.1.7...HEAD
+[Unreleased]: https://github.com/slb350/drep/compare/v3.1.8...HEAD
+[3.1.8]: https://github.com/slb350/drep/compare/v3.1.7...v3.1.8
 [3.1.7]: https://github.com/slb350/drep/compare/v3.1.6...v3.1.7
 [3.1.6]: https://github.com/slb350/drep/compare/v3.1.5...v3.1.6
 [3.1.5]: https://github.com/slb350/drep/compare/v3.1.4...v3.1.5
