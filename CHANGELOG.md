@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.1.9] - 2026-11-22
+
+### Changed
+
+- Updated the GitHub Actions pins for the Rust CI cache, the mutation-test installer, and
+  crates.io trusted publishing. The mutation workflows still install `cargo-mutants` 27.1.0.
+
 ## [3.1.8] - 2026-11-18
 
 ### Changed
@@ -1439,7 +1446,8 @@ LLM for review, and gates commits and pushes on the result. That is all it does.
 - Python, JavaScript, TypeScript, Go and Rust are all first-class. Adding a
   language is an entry in one table.
 
-[Unreleased]: https://github.com/slb350/drep/compare/v3.1.8...HEAD
+[Unreleased]: https://github.com/slb350/drep/compare/v3.1.9...HEAD
+[3.1.9]: https://github.com/slb350/drep/compare/v3.1.8...v3.1.9
 [3.1.8]: https://github.com/slb350/drep/compare/v3.1.7...v3.1.8
 [3.1.7]: https://github.com/slb350/drep/compare/v3.1.6...v3.1.7
 [3.1.6]: https://github.com/slb350/drep/compare/v3.1.5...v3.1.6
