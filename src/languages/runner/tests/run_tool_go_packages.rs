@@ -211,6 +211,31 @@ async fn a_directory_go_cannot_place_is_unavailable_with_its_reason() {
     );
 }
 
+/// go's reason for a directory it cannot place is excerpted through `stream_detail`, because go writes a directory name into it unquoted and the name is repository content.
+///
+/// A branch adding `b/<ESC>]52;...<BEL>/a.go` under a module `go.work` does not use makes Go 1.25.4 answer with those bytes JSON-escaped, which decode to a raw clipboard write, and with a newline that would start a forged line in the failure block. The detail keeps the reason and loses every control character.
+#[tokio::test]
+async fn go_s_reason_for_an_unplaced_directory_is_excerpted() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path();
+    fake_go::workspace(root, &["outside_escape/a.go"], Vet::default());
+
+    let outcome = run_tool(&fake_go::spec(), root, &strings(&["outside_escape/a.go"])).await;
+    assert_eq!(outcome.status, ToolStatus::Unavailable);
+    assert!(
+        !outcome.detail.chars().any(char::is_control),
+        "detail: {:?}",
+        outcome.detail
+    );
+    assert!(
+        outcome.detail.contains(
+            "go list could not place a requested directory: directory outside ]52;c;cHduZWQ= is contained"
+        ),
+        "detail: {:?}",
+        outcome.detail
+    );
+}
+
 /// An analyzer finding in a sibling of the requested file is narrowed away: `go vet ./pkg` reports on every file in the package, test files included.
 #[tokio::test]
 async fn an_analyzer_finding_in_a_sibling_file_is_dropped() {

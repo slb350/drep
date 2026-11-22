@@ -67,7 +67,11 @@ pub(super) async fn plan(
     let mut by_dir: HashMap<PathBuf, Package> = HashMap::new();
     for package in packages {
         let Some(dir) = package.dir.as_deref().map(canonical) else {
-            let reason = package.error.as_ref().map_or("no reason given", |e| &e.err);
+            // go writes the directory's name into this message unquoted, and the name is repository content: a raw escape sequence or a line break once it is decoded from JSON.
+            let reason = package
+                .error
+                .as_ref()
+                .map_or_else(|| "no reason given".to_owned(), |e| stream_detail(&e.err));
             return Err(format!(
                 "go list could not place a requested directory: {reason}"
             ));
