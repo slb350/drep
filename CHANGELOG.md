@@ -48,7 +48,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Four of these change what a build does beyond the advisory, each from the upstream source fetched
   for it. `toml` 1.2.2 and `toml_parser` 1.1.6 "handle a stack overflow on invalid TOML files" (their
   own `crates/toml/CHANGELOG.md` and `crates/toml_parser/CHANGELOG.md`), and that is the parser drep
-  runs over `drep.toml` and `.drep/acknowledgements.toml`, both of which a branch under review writes.
+  runs over the local `drep.toml` and over `.drep/acknowledgements.toml`, which a branch under review
+  writes.
   `walkdir` 2.5.1 detects symlink loops above the root of the walk (v2.5.0...v2.5.1), under `ignore`,
   which drives the walk `drep check` performs. `regex` 1.13.2 fixes incorrect match offsets for
   alternations whose branches start with the same repetition, a `BoundedBacktracker` panic when the
@@ -87,6 +88,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   1.85.0: the hold is the declared `0.2.2` requirement rather than the floor, because within `0.x`
   every minor version is an API break and 0.4 is two of them ahead, so taking it migrates the
   release-contract test rather than refreshing the lock.
+
+## [3.1.9] - 2026-11-22
+
+### Changed
+
+- Updated the GitHub Actions pins for the Rust CI cache, the mutation-test installer, and
+  crates.io trusted publishing. The mutation workflows still install `cargo-mutants` 27.1.0.
 
 ## [3.1.8] - 2026-11-18
 
@@ -1520,7 +1528,8 @@ LLM for review, and gates commits and pushes on the result. That is all it does.
 - Python, JavaScript, TypeScript, Go and Rust are all first-class. Adding a
   language is an entry in one table.
 
-[Unreleased]: https://github.com/slb350/drep/compare/v3.1.8...HEAD
+[Unreleased]: https://github.com/slb350/drep/compare/v3.1.9...HEAD
+[3.1.9]: https://github.com/slb350/drep/compare/v3.1.8...v3.1.9
 [3.1.8]: https://github.com/slb350/drep/compare/v3.1.7...v3.1.8
 [3.1.7]: https://github.com/slb350/drep/compare/v3.1.6...v3.1.7
 [3.1.6]: https://github.com/slb350/drep/compare/v3.1.5...v3.1.6

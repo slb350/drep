@@ -201,6 +201,9 @@ comes back.
   `brew audit --strict --online slb350/homebrew-tap/drep` after publication and
   restore the short description, inferred version and executable version smoke
   test in the tap before calling Homebrew complete.
+  If the generated alias map is empty, remove it and its install helpers.
+  Verify all supported archives contain the same `drep` executable name
+  before using a single `bin.install` call.
   Version 3.0.0 is the language-coverage boundary: repositories in thirteen
   additional ecosystems changed from a successful no-op to recognized source
   analysis with their configured deterministic tools, so upgrading can add
@@ -1267,6 +1270,11 @@ that points dist at a different changelog file.
 Everything before the formula push survives such a failure - the binaries, the
 installer and the GitHub release are already published - so the recovery is to
 push `drep.rb` from the release assets to the tap by hand and fix the section.
+
+Check that the GitHub release includes `dist-manifest.json`. If the release
+job leaves it out, download `artifacts-dist-manifest` from the successful
+release run. Verify its tag and platform archive checksums against the public
+release, then attach the manifest without replacing any existing asset.
 
 The version in `Cargo.toml` is the single source. The annotated tag `vX.Y.Z` on main drives both publication paths: `.github/workflows/release.yml` builds the four targets, creates the GitHub release and pushes the Homebrew formula, and `.github/workflows/publish-crate.yml` publishes the same tagged commit to crates.io through trusted publishing, since cargo-dist does not publish Rust crates. `publish-crate.yml` runs in the `release` environment, which deploys only from `v*` tags; a repository ruleset lets only admins create, move or delete a `v*` tag, and the crate's crates.io trusted publisher requires the environment. Run `cargo publish --dry-run --locked` before tagging. Jobsy's release flow (Scheduled maintenance, below) does both; by hand:
 
