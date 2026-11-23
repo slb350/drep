@@ -23,6 +23,7 @@ fn run_with_fake_cargo(
         .env("DREP_MUTANTS_CAPTURE_ARGS", temp.join("cargo-args"))
         .env("DREP_MUTANTS_CAPTURE_TMPDIR", temp.join("cargo-tmpdir"))
         .env("MUTANTS_OUT_DIR", temp.join("out"))
+        .env("DREP_MUTANTS_SCCACHE", "0")
         .env_remove("DREP_MUTANTS_HOST_LOCK")
         .env_remove("DREP_MUTANTS_RESULT_TOKEN");
     for (key, value) in extra_env {
@@ -57,7 +58,8 @@ fn mutation_scratch_copies_stay_off_the_tmpfs() {
         "mutation cleanup must never invoke rm or rmdir"
     );
     assert!(
-        script.contains("trap 'remove_tree \"$RUN_SCRATCH\"' EXIT"),
+        script.contains("trap cleanup_mutants_run EXIT")
+            && script.contains("remove_tree \"$RUN_SCRATCH\""),
         "the run must remove its own copies on exit"
     );
 }
@@ -248,4 +250,182 @@ fn a_run_waits_for_a_host_lock_another_sweep_holds() {
 
     assert_eq!(output.status.code(), Some(75), "{output:?}");
     assert!(!temp.path().join("cargo-args").exists());
+}
+
+/// Mutation builds disable DWARF debuginfo by default and select cargo-nextest
+/// with the `mutants` profile whenever `cargo-nextest` is available on PATH.
+#[cfg(unix)]
+#[test]
+fn mutation_runner_disables_debuginfo_and_detects_nextest() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let scratch = temp.path().join("scratch");
+    let script = format!("{}/scripts/mutants-run.sh", env!("CARGO_MANIFEST_DIR"));
+    let fake_bin = temp.path().join("fake-bin");
+    std::fs::create_dir_all(&fake_bin).expect("fake bin");
+    common::write_executable(&fake_bin.join("cargo-nextest"), "#!/bin/sh\nexit 0\n");
+
+    let run = |path_prefix: Option<&std::path::Path>, label: &str| {
+        let capture = temp.path().join(format!("capture-{label}"));
+        let mut command = std::process::Command::new("bash");
+        command
+            .args([
+                "-c",
+                "cargo() { printf 'TEST_DEBUG=%s\\nDEV_DEBUG=%s\\nNEXTEST_PROFILE=%s\\nARGS=%s\\n' \"$CARGO_PROFILE_TEST_DEBUG\" \"$CARGO_PROFILE_DEV_DEBUG\" \"${NEXTEST_PROFILE:-}\" \"$*\" >\"$CAPTURE\"; }; export -f cargo; \"$1\"",
+                "mutation-env-test",
+                &script,
+            ])
+            .env("CAPTURE", &capture)
+            .env("DREP_MUTANTS_TMPDIR", &scratch)
+            .env("MUTANTS_OUT_DIR", temp.path().join(format!("out-{label}")))
+            .env("DREP_MUTANTS_SCCACHE", "0")
+            .env_remove("DREP_MUTANTS_HOST_LOCK")
+            .env_remove("DREP_MUTANTS_RESULT_TOKEN")
+            .env_remove("DREP_MUTANTS_TEST_TOOL")
+            .env_remove("CARGO_PROFILE_TEST_DEBUG")
+            .env_remove("CARGO_PROFILE_DEV_DEBUG")
+            .env_remove("NEXTEST_PROFILE");
+        if let Some(prefix) = path_prefix {
+            command.env(
+                "PATH",
+                format!(
+                    "{}:{}",
+                    prefix.display(),
+                    std::env::var("PATH").expect("PATH")
+                ),
+            );
+        } else {
+            command.env("DREP_MUTANTS_TEST_TOOL", "cargo");
+        }
+        let output = command.output().expect("run mutants-run");
+        assert!(output.status.success(), "{label}: {output:?}");
+        std::fs::read_to_string(&capture).expect("captured env and args")
+    };
+
+    let with_nextest = run(Some(&fake_bin), "nextest");
+    assert!(with_nextest.contains("TEST_DEBUG=0\n"), "{with_nextest}");
+    assert!(with_nextest.contains("DEV_DEBUG=0\n"), "{with_nextest}");
+    assert!(
+        with_nextest.contains("NEXTEST_PROFILE=mutants\n"),
+        "{with_nextest}"
+    );
+    assert!(
+        with_nextest.contains("--test-tool nextest"),
+        "{with_nextest}"
+    );
+
+    let with_cargo = run(None, "cargo");
+    assert!(with_cargo.contains("TEST_DEBUG=0\n"), "{with_cargo}");
+    assert!(with_cargo.contains("DEV_DEBUG=0\n"), "{with_cargo}");
+    assert!(!with_cargo.contains("--test-tool nextest"), "{with_cargo}");
+}
+
+/// On a machine with `sccache` installed, `mutants-run.sh` routes rustc through
+/// a persistent bounded cache beside the checkout using a private per-run Unix
+/// socket under `$RUN_SCRATCH`, caps per-worker test threads, and stops its
+/// sccache server on exit.
+#[cfg(unix)]
+#[test]
+fn mutation_runner_configures_and_stops_private_sccache() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let scratch = temp.path().join("scratch");
+    let fake_bin = temp.path().join("fake-bin");
+    std::fs::create_dir_all(&fake_bin).expect("fake bin");
+    let sccache_log = temp.path().join("sccache.log");
+    common::write_executable(
+        &fake_bin.join("sccache"),
+        "#!/bin/sh\nprintf '%s|%s\\n' \"$SCCACHE_SERVER_UDS\" \"$*\" >>\"$SCCACHE_LOG\"\n",
+    );
+
+    let script = format!("{}/scripts/mutants-run.sh", env!("CARGO_MANIFEST_DIR"));
+    let capture = temp.path().join("cargo-env.log");
+    let mut command = std::process::Command::new("bash");
+    command
+        .args([
+            "-c",
+            "cargo() { printf 'WRAPPER=%s\\nDIR=%s\\nUDS=%s\\nSIZE=%s\\nRUST_THREADS=%s\\nNEXTEST_THREADS=%s\\n' \"${RUSTC_WRAPPER:-}\" \"${SCCACHE_DIR:-}\" \"${SCCACHE_SERVER_UDS:-}\" \"${SCCACHE_CACHE_SIZE:-}\" \"${RUST_TEST_THREADS:-}\" \"${NEXTEST_TEST_THREADS:-}\" >\"$CAPTURE\"; }; export -f cargo; \"$1\"",
+            "mutation-sccache-test",
+            &script,
+        ])
+        .env("CAPTURE", &capture)
+        .env("SCCACHE_LOG", &sccache_log)
+        .env("DREP_MUTANTS_TMPDIR", &scratch)
+        .env("MUTANTS_OUT_DIR", temp.path().join("out"))
+        .env("DREP_MUTANTS_TEST_TOOL", "cargo")
+        .env(
+            "PATH",
+            format!(
+                "{}:{}",
+                fake_bin.display(),
+                std::env::var("PATH").expect("PATH")
+            ),
+        )
+        .env_remove("DREP_MUTANTS_HOST_LOCK")
+        .env_remove("DREP_MUTANTS_RESULT_TOKEN")
+        .env_remove("DREP_MUTANTS_SCCACHE")
+        .env_remove("RUSTC_WRAPPER")
+        .env_remove("CARGO_BUILD_RUSTC_WRAPPER")
+        .env_remove("SCCACHE_DIR")
+        .env_remove("SCCACHE_SERVER_UDS")
+        .env_remove("SCCACHE_CACHE_SIZE")
+        .env_remove("RUST_TEST_THREADS")
+        .env_remove("NEXTEST_TEST_THREADS");
+
+    let output = command.output().expect("run mutants-run with fake sccache");
+    assert!(
+        output.status.success(),
+        "sccache run failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let captured = std::fs::read_to_string(&capture).expect("captured env");
+    assert!(captured.contains("WRAPPER=sccache\n"), "{captured}");
+    assert!(
+        captured.contains(&format!("DIR={}\n", scratch.join("sccache").display())),
+        "{captured}"
+    );
+    let uds = captured
+        .lines()
+        .find_map(|line| line.strip_prefix("UDS="))
+        .expect("captured UDS path");
+    assert!(
+        uds.ends_with("/s") && uds.len() < 100 && !uds.starts_with(&scratch.display().to_string()),
+        "sccache socket must live in a short private path outside deep checkout roots: {uds}"
+    );
+    assert!(
+        !std::path::Path::new(uds)
+            .parent()
+            .expect("socket parent")
+            .exists(),
+        "private sccache socket directory must be removed on exit: {uds}"
+    );
+    assert!(captured.contains("SIZE=4G\n"), "{captured}");
+    assert!(
+        captured
+            .lines()
+            .any(|l| l.starts_with("RUST_THREADS=") && l != "RUST_THREADS="),
+        "{captured}"
+    );
+    assert!(
+        captured
+            .lines()
+            .any(|l| l.starts_with("NEXTEST_THREADS=") && l != "NEXTEST_THREADS="),
+        "{captured}"
+    );
+    let sccache_log_text = std::fs::read_to_string(&sccache_log).expect("sccache log");
+    let sccache_calls: Vec<&str> = sccache_log_text.lines().collect();
+    let expected_start = format!("{uds}|--start-server");
+    let expected_stop = format!("{uds}|--stop-server");
+    assert_eq!(
+        sccache_calls,
+        vec![expected_start.as_str(), expected_stop.as_str()],
+        "runner must start and stop sccache against the exact private socket captured by Cargo"
+    );
+    assert!(
+        scratch.join("sccache").is_dir(),
+        "persistent sccache directory must survive run cleanup"
+    );
+    assert!(
+        !scratch.join("run").exists(),
+        "run scratch must still be cleaned up on exit"
+    );
 }

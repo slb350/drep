@@ -44,6 +44,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Consolidated all seven top-level integration test crates into a single binary at
+  `tests/integration/main.rs` and disabled the empty `[[bin]]` test harness (`test = false`) and
+  `[lib]` doctest pass (`doctest = false`) in `Cargo.toml`, cutting per-mutant compilation and
+  linking from 11 compilations / 10 links to 4 compilations / 3 links with zero change to test or
+  mutant coverage.
+- Accelerated mutation testing in `scripts/mutants-run.sh` and CI (`rust.yml`, `mutants.yml`)
+  without excluding any mutants: disabled DWARF debuginfo on mutation builds
+  (`CARGO_PROFILE_TEST_DEBUG=0`, `CARGO_PROFILE_DEV_DEBUG=0`), capped per-worker test threads,
+  added `.config/nextest.toml` (`[profile.mutants]` fail-fast and 10s/30s per-test timeouts so
+  infinite-loop mutants fail in seconds instead of waiting out the 120s suite floor), and wired
+  pinned `cargo-nextest@0.9.152` and `sccache@0.19.0` (private per-run Unix socket, persistent
+  bounded disk cache beside the checkout, clean server shutdown on exit).
 - The Rust 1.88-compatible lockfile refresh that carries it: `cargo audit` and `osv-scanner` reported
   that one vulnerability against `main` before the update and nothing after it, and every gate the
   refresh runs - `cargo fmt --all --check`, `cargo clippy --all-targets --all-features`,

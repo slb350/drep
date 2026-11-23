@@ -6,7 +6,7 @@
 //! ours. These assertions are deliberately textual: adding a YAML parser to
 //! state four facts about a 40-line file is a dependency for no gain.
 
-mod common;
+use super::common;
 
 /// The file with its comments stripped.
 ///
