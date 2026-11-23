@@ -141,6 +141,25 @@ comes back.
   child tests' `drep-diff-test-*` repositories, and never invokes `rm` or
   `rmdir`; broad recursive removal commands have damaged this server before.
   Do not move the scratch root back or weaken the cleanup boundary.
+- **Mutation build and test overhead stays stripped without excluding mutants.**
+  Every integration test module lives under a single crate
+  (`tests/integration/main.rs`), `[[bin]]` sets `test = false` (`src/main.rs`
+  has no inline unit tests and stays mutated and covered via
+  `tests/integration/cli.rs`), and `[lib]` sets `doctest = false` (zero
+  doctests). That cuts each mutant from 11 compilations and 10 binary links to
+  4 compilations and 3 links. `scripts/mutants-run.sh` defaults
+  `CARGO_PROFILE_TEST_DEBUG=0` and `CARGO_PROFILE_DEV_DEBUG=0`, caps per-worker
+  `RUST_TEST_THREADS` / `NEXTEST_TEST_THREADS`, uses `cargo-nextest` with
+  `.config/nextest.toml`'s `[profile.mutants]` (fail-fast plus per-test
+  timeouts that terminate infinite-loop parser mutants in 10s–30s instead of
+  burning CPU until the 120s suite floor), and routes rustc through `sccache`
+  when installed (bounded disk cache beside the checkout, private per-run Unix
+  socket under `$RUN_SCRATCH`, server stopped on EXIT). Do not turn on
+  `cargo-mutants --copy-target`: `cargo-mutants` 27.1.0 copies without
+  preserving mtimes, which causes Cargo to recompile ~117 dependencies per
+  worker anyway. On homelab-1 inside `ai-ci.slice`, measured warm per-mutant
+  builds dropped from 16s–36s to 4.6s median (2.4s min) at the role's `-j 3`
+  default; raising to `-j 6` regressed 28-mutant wall time from 114s to 155s.
 - **Every GitHub Actions job is repository-scoped and self-hosted.** Hardened,
   isolated roles on homelab-1 own Linux validation, both Linux release
   targets, cargo-dist's global release phases under the `drep-linux` label,

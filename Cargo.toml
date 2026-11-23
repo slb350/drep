@@ -24,9 +24,17 @@ categories = ["command-line-utilities", "development-tools"]
 [[bin]]
 name = "drep"
 path = "src/main.rs"
+# `src/main.rs` contains only thin CLI dispatch and zero inline unit tests; its
+# exit-code and dispatch contracts are tested end-to-end by
+# `tests/integration/cli.rs`. Skipping the empty bin test harness removes one
+# full compile and link from every `cargo test` and every mutation build.
+test = false
 
 [lib]
 name = "drep"
+# The library has no doctests; disabling the empty doctest pass skips invoking
+# `rustdoc --test` during bare `cargo test` and mutation runs.
+doctest = false
 
 # The one place warnings are denied. Previously this lived in RUSTFLAGS in CI
 # and in `-- -D warnings` in the pre-commit hook, so a developer's local

@@ -2,6 +2,8 @@ use super::{SAME_REPOSITORY_PR, common, job_guard, rust_workflow, workflow_job};
 
 const MUTANTS_RUNNER: &str = "runs-on: [self-hosted, linux, x64, homelab-1, drep-mutants]";
 const CARGO_MUTANTS_TOOL: &str = "tool: cargo-mutants@27.1.0";
+const CARGO_NEXTEST_TOOL: &str = "tool: cargo-nextest@0.9.152";
+const SCCACHE_TOOL: &str = "tool: sccache@0.19.0";
 
 fn mutation_workflow() -> String {
     common::without_comments(".github/workflows/mutants.yml")
@@ -61,6 +63,8 @@ fn mutation_ci_splits_diff_checks_from_exhaustive_sweeps() {
     );
     assert!(
         diff_mutants.contains(CARGO_MUTANTS_TOOL)
+            && diff_mutants.contains(CARGO_NEXTEST_TOOL)
+            && diff_mutants.contains(SCCACHE_TOOL)
             && diff_mutants.contains("components: clippy")
             && diff_mutants.contains(": \"${DIFF_BASE:?}\" \"${DIFF_HEAD:?}\"")
             && diff_mutants.contains(
@@ -112,8 +116,10 @@ fn mutation_ci_splits_diff_checks_from_exhaustive_sweeps() {
         "the dedicated mutation sweep needs one exact measured timeout while still releasing a wedged runner"
     );
     assert!(
-        mutants.contains(CARGO_MUTANTS_TOOL),
-        "the mutation gate must retain its verified cargo-mutants version"
+        mutants.contains(CARGO_MUTANTS_TOOL)
+            && mutants.contains(CARGO_NEXTEST_TOOL)
+            && mutants.contains(SCCACHE_TOOL),
+        "the mutation gate must retain its verified cargo-mutants, cargo-nextest, and sccache versions"
     );
     assert!(
         mutants.contains("components: clippy"),
@@ -364,6 +370,7 @@ fn run_staged(
         .env("FAKE_EVENTS", events)
         .env("LOCK_PROBE", common::LOCK_PROBE)
         .env("DREP_MUTANTS_HOST_LOCK_WAIT_SECONDS", "0")
+        .env_remove("MUTANTS_OUT_DIR")
         .env_remove("DREP_MUTANTS_TMPDIR");
     for (key, value) in extra_env {
         command.env(key, value);

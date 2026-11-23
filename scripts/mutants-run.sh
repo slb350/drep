@@ -44,14 +44,24 @@ fi
 # nothing else running. Here the copies sit on disk and a stale one costs
 # storage instead of memory.
 #
-# A sibling of the checkout rather than a child: cargo-mutants copies the checkout, so scratch inside it would be copied into every later copy (target/ included, once copy_target is on).
+# A sibling of the checkout rather than a child: cargo-mutants copies the
+# checkout, so scratch inside it would be copied into every later copy.
 RUN_SCRATCH="$MUTANTS_SCRATCH_ROOT/run"
+SCCACHE_STOP_ON_EXIT=0
+
+# shellcheck disable=SC2329  # Invoked by the EXIT trap.
+cleanup_mutants_run() {
+  if [ "$SCCACHE_STOP_ON_EXIT" -eq 1 ]; then
+    sccache --stop-server >/dev/null 2>&1 || true
+  fi
+  remove_tree "$RUN_SCRATCH"
+}
 
 # The checkout lock means no other run is using this checkout's scratch, so everything a previous run left in the run directory - tree copies and the temporary files of tests it killed - can go. cargo-mutants never sees a SIGKILL, and the runner's cancellation ends in one, so the trap below is the common case and this is the backstop.
 remove_tree "$RUN_SCRATCH"
 mkdir -p "$RUN_SCRATCH"
 export TMPDIR="$RUN_SCRATCH"
-trap 'remove_tree "$RUN_SCRATCH"' EXIT
+trap cleanup_mutants_run EXIT
 
 # A caller that mirrors results across machines needs proof that the output is from this invocation, not a previous sweep. Clear only the exact prior result tree, remove any old marker without following it, and publish the caller's unique token immediately before cargo-mutants starts.
 remove_tree "$OUT_DIR/mutants.out"
@@ -60,6 +70,77 @@ remove_tree "$RESULT_TOKEN_FILE"
 if [ -n "${DREP_MUTANTS_RESULT_TOKEN:-}" ]; then
   (umask 077; printf '%s\n' "$DREP_MUTANTS_RESULT_TOKEN" >"$RESULT_TOKEN_FILE")
 fi
+
+# Mutation runs never attach a debugger; they inspect only test exit codes.
+# Omitting DWARF debuginfo shrinks artifacts and incremental caches and speeds
+# up LLVM codegen and linking on every mutant.
+export CARGO_PROFILE_TEST_DEBUG="${CARGO_PROFILE_TEST_DEBUG:-0}"
+export CARGO_PROFILE_DEV_DEBUG="${CARGO_PROFILE_DEV_DEBUG:-0}"
+
+# When sccache is installed and the caller did not configure RUSTC_WRAPPER,
+# share compiled third-party crates across all parallel mutation workers and
+# across runs via a bounded disk cache beside the checkout (outside
+# `$RUN_SCRATCH`, so scratch sweeps preserve it). Each run uses a private Unix
+# socket inside `$RUN_SCRATCH` and stops its server on EXIT so no daemon
+# collides across runs or lingers as an orphan process.
+if [ "${DREP_MUTANTS_SCCACHE:-1}" != "0" ] && [ -z "${RUSTC_WRAPPER:-}" ] &&
+  command -v sccache >/dev/null 2>&1; then
+  SCCACHE_CACHE_DIR="$MUTANTS_SCRATCH_ROOT/sccache"
+  if [ ! -L "$SCCACHE_CACHE_DIR" ]; then
+    mkdir -p "$SCCACHE_CACHE_DIR"
+    export SCCACHE_DIR="$SCCACHE_CACHE_DIR"
+    export SCCACHE_CACHE_SIZE="${SCCACHE_CACHE_SIZE:-4G}"
+    export SCCACHE_SERVER_UDS="$RUN_SCRATCH/sccache.sock"
+    export RUSTC_WRAPPER="sccache"
+    SCCACHE_STOP_ON_EXIT=1
+  fi
+fi
+
+# Cap per-worker test concurrency so `-j N` parallel mutation workers do not
+# multiply `N * nproc` test threads spawning `git` and compiler fixtures at
+# once.
+JOBS="${MUTANTS_JOBS:-4}"
+if [ -z "${RUST_TEST_THREADS:-}" ] || [ -z "${NEXTEST_TEST_THREADS:-}" ]; then
+  cpus="$(getconf _NPROCESSORS_ONLN 2>/dev/null || nproc 2>/dev/null || echo 4)"
+  case "$cpus:$JOBS" in
+    *[!0-9:]* | :* | *: | *:0) per_worker=4 ;;
+    *)
+      per_worker=$((cpus / JOBS))
+      if [ "$per_worker" -lt 2 ]; then
+        per_worker=2
+      fi
+      ;;
+  esac
+  export RUST_TEST_THREADS="${RUST_TEST_THREADS:-$per_worker}"
+  export NEXTEST_TEST_THREADS="${NEXTEST_TEST_THREADS:-$per_worker}"
+fi
+
+# Prefer cargo-nextest when available so a caught mutant stops on the first
+# failing test (`fail-fast`) and per-test timeouts in `.config/nextest.toml`
+# kill infinite-loop mutants in seconds rather than burning CPU for the full
+# 120-second suite timeout floor. Fall back seamlessly to `cargo test` when
+# `cargo-nextest` is not installed.
+TEST_TOOL="${DREP_MUTANTS_TEST_TOOL:-}"
+if [ -z "$TEST_TOOL" ]; then
+  if command -v cargo-nextest >/dev/null 2>&1; then
+    TEST_TOOL="nextest"
+  else
+    TEST_TOOL="cargo"
+  fi
+fi
+
+EXTRA_MUTANTS_ARGS=()
+case "$TEST_TOOL" in
+  nextest)
+    export NEXTEST_PROFILE="${NEXTEST_PROFILE:-mutants}"
+    EXTRA_MUTANTS_ARGS+=(--test-tool nextest)
+    ;;
+  cargo) ;;
+  *)
+    echo "mutants-run: DREP_MUTANTS_TEST_TOOL must be cargo or nextest, got $TEST_TOOL" >&2
+    exit 64
+    ;;
+esac
 
 # --cap-lints: `[lints.rust] warnings = "deny"` in Cargo.toml applies to the
 # mutated build too, and a mutant that replaces a function body leaves the
@@ -77,12 +158,12 @@ fi
 # that and be recorded as TIMEOUT. Give it real headroom so a timeout means what
 # it should.
 #
-# MUTANTS_JOBS so the same script can be driven harder on a 32-thread box than
+# MUTANTS_JOBS so the same script can be driven harder on a multi-core box than
 # on the laptop the hook runs on; see scripts/mutants-remote.sh.
 #
 # 6<&- 9<&-: the checkout and host locks stay with this script. A test fixture that outlives its mutant must not inherit either and block the next run.
-cargo mutants -j "${MUTANTS_JOBS:-4}" --no-shuffle --minimum-test-timeout 120 \
-  --cap-lints true --output "$OUT_DIR" "$@" 6<&- 9<&- && status=0 || status=$?
+cargo mutants -j "$JOBS" --no-shuffle --minimum-test-timeout 120 \
+  --cap-lints true --output "$OUT_DIR" ${EXTRA_MUTANTS_ARGS[@]+"${EXTRA_MUTANTS_ARGS[@]}"} "$@" 6<&- 9<&- && status=0 || status=$?
 
 MISSED="$OUT_DIR/mutants.out/missed.txt"
 UNVIABLE="$OUT_DIR/mutants.out/unviable.txt"
