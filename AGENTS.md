@@ -112,6 +112,7 @@ comes back.
   lock makes the child wait on its own parent and prevents the unmutated
   baseline from completing. An unreachable host falls back to a local hook run
   *with a warning*, never a silent skip. `DREP_MUTANTS_REMOTE=0` forces local.
+  The SSH session's control pipes are made under the scratch root beside the checkout, never inside it, and removed once both ends are open: a recursive search that opens a live pipe reads the session's messages and hangs the run. The EXIT trap is installed before `mkfifo` and kills whatever session job is still running, and each run first removes the session directories a killed run left under the scratch root or `target/mutants`, failing if one cannot be removed.
   The hook sync is
   `--delete --force --delete-excluded` with a
   `P /target` filter: an excluded name *inside* a directory protects it from

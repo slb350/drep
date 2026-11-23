@@ -20,6 +20,8 @@ jobs:
     name: validate (ai-1)
     if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: [self-hosted, linux, x64, homelab-1, drep-linux]
+    # Warm runs take about two minutes. Without a limit a hung test holds this repository's only runner for GitHub's six-hour default.
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -65,6 +67,8 @@ jobs:
   test-macos:
     name: test (Mac mini)
     if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+    # The same bound as validate, for the same reason.
+    timeout-minutes: 60
     runs-on: [self-hosted, macos, arm64, drep-macos]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

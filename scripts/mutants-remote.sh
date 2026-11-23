@@ -57,6 +57,14 @@ run_local() {
 
 # The mirror writes this checkout's results, so it is this checkout's one run. Taken before anything else so a run that waits here probes the host once it has the lock, and a local fallback inherits it through exec.
 acquire_checkout_lock mutants-remote || exit $?
+# A run killed before it removed its session pipes leaves them behind, and earlier versions of this script kept them under the results directory. The checkout lock means no live session owns any of these, so a recursive search never meets a stale pipe either. Without nullglob an unmatched pattern stays literal, and remove_tree of a path that does not exist does nothing. remove_tree hides its own failures, so the check after it is what says a stale session could not go.
+for stale_session in "$MUTANTS_SCRATCH_ROOT"/remote-session-* "$MUTANTS_OUT_DIR"/remote-session-*; do
+  remove_tree "$stale_session"
+  if [ -e "$stale_session" ]; then
+    echo "mutants-remote: could not remove the stale session $stale_session" >&2
+    exit 74
+  fi
+done
 
 if [ "${DREP_MUTANTS_REMOTE:-1}" = "0" ]; then
   run_local "$@"
@@ -85,12 +93,27 @@ echo "mutants: running on $AI1_HOST as $AI1_CI_ROLE, results mirrored back to $M
 # descriptor holds the host-wide lock while this process synchronizes source,
 # runs mutation, and mirrors the matching result. Named pipes are used instead
 # of Bash 4's `coproc` because macOS still ships Bash 3.2.
+# The session's pipes live under the scratch root beside the checkout, so a search of the checkout never meets them.
 RUN_TOKEN="$$-$RANDOM-$RANDOM"
-SESSION_DIR="$MUTANTS_OUT_DIR/remote-session-$RUN_TOKEN"
+SESSION_DIR="$MUTANTS_SCRATCH_ROOT/remote-session-$RUN_TOKEN"
 CONTROL_IN="$SESSION_DIR/control-in"
 CONTROL_OUT="$SESSION_DIR/control-out"
-mkdir -p "$SESSION_DIR"
-mkfifo "$CONTROL_IN" "$CONTROL_OUT"
+
+# Kills and reaps whatever background session is still running, including one a signal interrupted before its PID was saved; a session already waited for is no longer listed.
+# shellcheck disable=SC2329  # Invoked by the EXIT trap.
+cleanup_remote_session() {
+  local session_pid
+  for session_pid in $(jobs -p); do
+    kill "$session_pid" 2>/dev/null || true
+    wait "$session_pid" 2>/dev/null || true
+  done
+  exec 7>&- 8<&-
+  remove_tree "$SESSION_DIR"
+}
+# Installed before the session dir exists, so a failed mkfifo or an early signal still removes it.
+trap cleanup_remote_session EXIT
+# A session that has ended turns the next control write into SIGPIPE, which would kill this shell before the trap above could run.
+trap 'exit 74' PIPE
 
 # shellcheck disable=SC2016  # This is the literal remote Bash program.
 REMOTE_SCRIPT='set -euo pipefail
@@ -136,25 +159,16 @@ for remote_arg in \
   REMOTE_COMMAND+=" $remote_arg_q"
 done
 
+# Made only now, so the pipes exist for as short a time as the handshake allows.
+mkdir -p "$SESSION_DIR"
+mkfifo "$CONTROL_IN" "$CONTROL_OUT"
 ai1_ssh -o BatchMode=yes "$REMOTE_COMMAND" \
   <"$CONTROL_IN" >"$CONTROL_OUT" &
 REMOTE_SESSION_PID=$!
 exec 7>"$CONTROL_IN"
 exec 8<"$CONTROL_OUT"
-remote_session_open=1
-
-# shellcheck disable=SC2329  # Invoked by the EXIT trap.
-cleanup_remote_session() {
-  if [ "$remote_session_open" -eq 1 ]; then
-    kill "$REMOTE_SESSION_PID" 2>/dev/null || true
-    wait "$REMOTE_SESSION_PID" 2>/dev/null || true
-  fi
-  exec 7>&- 8<&-
-  remove_tree "$SESSION_DIR"
-}
-trap cleanup_remote_session EXIT
-# A session that has ended turns the next control write into SIGPIPE, which would kill this shell before the trap above could run.
-trap 'exit 74' PIPE
+# Both ends are open on both sides now, so the paths can go: the open fds keep the handshake flowing, and no path to a live pipe survives for a search to open.
+remove_tree "$SESSION_DIR"
 
 exit_after_remote_session_failure() {
   if wait "$REMOTE_SESSION_PID"; then
@@ -162,7 +176,6 @@ exit_after_remote_session_failure() {
   else
     status=$?
   fi
-  remote_session_open=0
   exit "$status"
 }
 
@@ -240,7 +253,7 @@ esac
 # owns the host lock here, and its unique `.run-token` proved this run reached
 # cargo-mutants rather than exposing a previous result after an early failure.
 ai1_pull -a --timeout="$RSYNC_IO_TIMEOUT_SECONDS" \
-  "$REMOTE_DIR/$MUTANTS_OUT_DIR/" "$MUTANTS_OUT_DIR/" 2>/dev/null ||
+  "$REMOTE_DIR/$MUTANTS_OUT_DIR/" "$MUTANTS_OUT_DIR/" ||
   echo "warning: mutation completed but its result mirror failed" >&2
 printf 'mirrored\n' >&7
 
@@ -252,7 +265,6 @@ if wait "$REMOTE_SESSION_PID"; then
 else
   status=$?
 fi
-remote_session_open=0
 
 if [ "$status" -ne "$finished_status" ]; then
   echo "mutants-remote: remote status changed after the result handshake" >&2
