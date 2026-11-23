@@ -165,6 +165,55 @@ async fn a_refused_run_does_not_evict_existing_cache_entries() {
     );
 }
 
+#[tokio::test]
+async fn a_permitted_run_evicts_after_writing_but_not_on_a_read_only_cache_pass() {
+    let (dir, _server, site) = repo(&[MARKER]).await;
+    let cache_root = dir.path().join("gated-eviction-cache");
+    let seed = Cache::new(cache_root.clone(), 30, 0);
+    let key = seed.key("system", "source", "http", "m", "openai", None);
+    seed.put(&key, &serde_json::json!({"issues": []}))
+        .expect("seed cache");
+    let seeded_entry = seed.entry_path(&key);
+
+    // A cache-only check performs no puts, so it must skip walking and evicting.
+    let mut cache_only = check_args(vec![dir.path().join("lib.py")], None);
+    cache_only.cache_only = true;
+    let exit = check::run_against(
+        &cache_only,
+        dir.path(),
+        Cache::new(cache_root.clone(), 30, 0),
+        &MachineFiles {
+            auth: &dir.path().join("auth.toml"),
+            policy: &site,
+        },
+    )
+    .await
+    .expect("cache-only check");
+    assert_eq!(exit, check::Exit::CacheMiss);
+    assert!(
+        seeded_entry.exists(),
+        "a read-only check that wrote nothing must not walk and evict the cache"
+    );
+
+    // A live check writes a fresh entry, which must trigger post-run eviction.
+    let exit = check::run_against(
+        &check_args(vec![dir.path().join("lib.py")], None),
+        dir.path(),
+        Cache::new(cache_root, 30, 0),
+        &MachineFiles {
+            auth: &dir.path().join("auth.toml"),
+            policy: &site,
+        },
+    )
+    .await
+    .expect("live check");
+    assert_eq!(exit, check::Exit::Clean);
+    assert!(
+        !seeded_entry.exists(),
+        "a check that wrote to the cache must enforce max_bytes afterwards"
+    );
+}
+
 /// The discriminating half of every test above: a policy naming a marker that is
 /// absent changes nothing.
 ///

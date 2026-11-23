@@ -45,13 +45,19 @@ pub(super) struct Reservation {
 
 impl Budget {
     pub(super) async fn for_repo(root: &Path, limit: u32) -> Result<Self> {
-        let git_dir = crate::diff::git_path(root, &["rev-parse", "--git-dir"])
-            .await
-            .context("could not locate Git metadata for review-round accounting")?;
-        let identity = crate::diff::git_query(root, &["symbolic-ref", "--quiet", "HEAD"])
-            .await
-            .context("could not identify the Git branch for review-round accounting")?
-            .unwrap_or_else(|| "detached-head".to_owned());
+        let (git_dir, identity) = tokio::try_join!(
+            async {
+                crate::diff::git_path(root, &["rev-parse", "--git-dir"])
+                    .await
+                    .context("could not locate Git metadata for review-round accounting")
+            },
+            async {
+                crate::diff::git_query(root, &["symbolic-ref", "--quiet", "HEAD"])
+                    .await
+                    .context("could not identify the Git branch for review-round accounting")
+            }
+        )?;
+        let identity = identity.unwrap_or_else(|| "detached-head".to_owned());
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .context("system clock is before the Unix epoch")?

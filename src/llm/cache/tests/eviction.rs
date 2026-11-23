@@ -283,3 +283,36 @@ fn eviction_requires_the_digest_to_be_lower_hex_and_match_its_shard() {
     );
     assert!(invalid_hex_entry.exists(), "digest is not lower-case hex");
 }
+
+#[test]
+fn remove_entry_ignores_not_found_and_propagates_other_errors() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let missing = temp.path().join("already-gone.json");
+    assert!(
+        !crate::llm::cache::remove_entry(&missing).expect("missing file is a no-op"),
+        "a concurrently evicted entry must report false without error"
+    );
+
+    let dir = temp.path().join("cannot-unlink-dir");
+    std::fs::create_dir(&dir).expect("dir");
+    assert!(
+        matches!(
+            crate::llm::cache::remove_entry(&dir),
+            Err(CacheError::Remove(_, _))
+        ),
+        "non-NotFound removal failure must still surface"
+    );
+}
+
+#[test]
+fn written_flag_tracks_puts_across_clones_and_resets_on_take() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let cache = Cache::new(temp.path().to_path_buf(), 30, 1024);
+    let clone = cache.clone();
+    assert!(!cache.take_written());
+
+    let key = cache.key("sys", "body", "http://e/v1", "m", "openai", None);
+    clone.put(&key, &json!({"ok": true})).expect("put");
+    assert!(cache.take_written(), "writes through a clone set the flag");
+    assert!(!cache.take_written(), "take_written clears the flag");
+}

@@ -257,13 +257,14 @@ pub(crate) async fn run_against(
         live_answered,
     } = semantic_pass;
     // All concurrent writers have finished, so one oldest-first pass can
-    // enforce the configured disk ceiling without racing another put. Cache
-    // maintenance is best-effort: an unreadable cache must never turn an
-    // otherwise valid review into an unanalyzed file. A refusal has no semantic
-    // layer, so it neither creates this directory nor evicts entries belonging
-    // to permitted repositories.
-    if maintain_cache {
-        let _ = cache.evict_if_needed();
+    // enforce the configured disk ceiling without racing another put. Only runs
+    // when this check actually attempted a write, so `--cache-only`, warm
+    // `--push-gate` retries and empty diffs skip walking up to 256 shard
+    // directories. Cache maintenance is best-effort and offloaded off async
+    // worker threads.
+    if maintain_cache && cache.take_written() {
+        let cache = cache.clone();
+        let _ = tokio::task::spawn_blocking(move || cache.evict_if_needed()).await;
     }
 
     adjudicate_findings(

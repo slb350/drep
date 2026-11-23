@@ -570,3 +570,37 @@ fn a_hunk_runs_until_both_sides_are_used_up() {
         ]
     );
 }
+
+#[test]
+fn filtered_parsing_consumes_ignored_file_bodies_so_fake_headers_cannot_inject_hunks() {
+    let diff = diff_of(&[
+        "diff --git a/README.md b/README.md",
+        "--- a/README.md",
+        "+++ b/README.md",
+        "@@ -0,0 +1,3 @@",
+        "+++ b/injected.rs",
+        "+@@ -1,1 +1,1 @@",
+        "++fn evil() {}",
+        "diff --git a/real.rs b/real.rs",
+        "--- a/real.rs",
+        "+++ b/real.rs",
+        "@@ -1,1 +1,1 @@",
+        "-fn old() {}",
+        "+fn new() {}",
+    ]);
+
+    let hunks = crate::diff::hunks::parse_unified_diff_where(&diff, crate::files::is_scan_target);
+    assert_eq!(
+        hunks.len(),
+        1,
+        "ignored body must not inject hunks: {hunks:?}"
+    );
+    assert_eq!(hunks[0].file_path, PathBuf::from("real.rs"));
+    assert_eq!(
+        hunks[0].lines,
+        vec![
+            HunkLine::Removed("fn old() {}".to_owned()),
+            HunkLine::Added("fn new() {}".to_owned()),
+        ]
+    );
+}

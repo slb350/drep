@@ -2,10 +2,25 @@
 
 use std::path::{Path, PathBuf};
 
+use futures::StreamExt;
+
 use super::git::{GitEnv, spawn_git_bytes, spawn_git_bytes_with_input};
 use super::prefix::{from_prefix, paths_from};
 use super::quoting::path_from_bytes;
-use super::{GitError, StagedView};
+use super::{CONTENT_READ_CONCURRENCY, GitError, WorkingView};
+
+/// Common flags for NUL-delimited name-only diffs that never refresh the index
+/// and never consult external diff drivers or ignore submodules.
+const NAME_ONLY_DIFF: &[&str] = &[
+    "--no-optional-locks",
+    "diff",
+    "--name-only",
+    "-z",
+    "--ignore-submodules=none",
+    "--no-relative",
+    "--no-ext-diff",
+    "--no-textconv",
+];
 
 /// What the working tree does not hold of the committing index, each path
 /// named from the directory drep runs in.
@@ -45,29 +60,18 @@ pub struct Uncommitted {
 /// bare `ls-files` limits its answer to the working directory, so an
 /// untracked helper above it would go unlisted.
 pub async fn uncommitted_paths(root: &Path) -> Result<Uncommitted, GitError> {
-    let view = StagedView::of(root).await?;
+    let view = WorkingView::of(root).await?;
+    uncommitted_paths_with(root, &view).await
+}
+
+pub(super) async fn uncommitted_paths_with(
+    root: &Path,
+    view: &WorkingView,
+) -> Result<Uncommitted, GitError> {
     // `-z`: a name is listed unquoted, with a leading space or a newline of
     // its own intact.
     let (tracked, untracked, listing) = tokio::join!(
-        spawn_git_bytes(
-            root,
-            &[
-                // A read under a hook must not write: porcelain diff otherwise
-                // rewrites the index it compared to refresh its stat data, and
-                // that index can be the commit's own lock file.
-                "--no-optional-locks",
-                "diff",
-                "--name-only",
-                "-z",
-                // A dirty submodule a staged file builds against differs even
-                // where configuration says to ignore submodules.
-                "--ignore-submodules=none",
-                "--no-relative",
-                "--no-ext-diff",
-                "--no-textconv",
-            ],
-            view.env(),
-        ),
+        spawn_git_bytes(root, NAME_ONLY_DIFF, view.env()),
         spawn_git_bytes(
             root,
             &[
@@ -104,8 +108,8 @@ pub async fn uncommitted_paths(root: &Path) -> Result<Uncommitted, GitError> {
     );
     let listing = listing?;
     let (flagged, filtered) = tokio::join!(
-        flagged_differences(root, &view, &listing),
-        filtered_differences(root, &view, &listing)
+        flagged_differences(root, view, &listing),
+        filtered_differences(root, view, &listing)
     );
     let flagged = flagged?;
     paths.extend(filtered?);
@@ -136,22 +140,21 @@ pub async fn uncommitted_paths(root: &Path) -> Result<Uncommitted, GitError> {
 /// of "differs" beside the one staged mode already trusts.
 pub async fn diverging_from(root: &Path, commit: &str) -> Result<Uncommitted, GitError> {
     super::refuse_flag_like(commit)?;
-    let view = StagedView::of(root).await?;
-    let recorded_args = [
-        "--no-optional-locks",
-        "diff",
-        "--cached",
-        "--name-only",
-        "-z",
-        "--ignore-submodules=none",
-        "--no-relative",
-        "--no-ext-diff",
-        "--no-textconv",
-        commit,
-        "--",
-    ];
+    let view = WorkingView::of(root).await?;
+    diverging_from_with(root, &view, commit).await
+}
+
+pub(super) async fn diverging_from_with(
+    root: &Path,
+    view: &WorkingView,
+    commit: &str,
+) -> Result<Uncommitted, GitError> {
+    super::refuse_flag_like(commit)?;
+    let mut recorded_args = Vec::with_capacity(NAME_ONLY_DIFF.len() + 3);
+    recorded_args.extend_from_slice(NAME_ONLY_DIFF);
+    recorded_args.extend_from_slice(&["--cached", commit, "--"]);
     let (worktree, recorded) = tokio::join!(
-        uncommitted_paths(root),
+        uncommitted_paths_with(root, view),
         spawn_git_bytes(root, &recorded_args, view.env())
     );
     let mut uncommitted = worktree?;
@@ -174,7 +177,7 @@ pub async fn diverging_from(root: &Path, commit: &str) -> Result<Uncommitted, Gi
 /// sparse checkout's ordinary state and is index-only.
 async fn flagged_differences(
     root: &Path,
-    view: &StagedView,
+    view: &WorkingView,
     listing: &[u8],
 ) -> Result<Uncommitted, GitError> {
     const LINK: &[u8] = b"120000";
@@ -269,7 +272,7 @@ async fn submodule_differs(path: &Path, commit: &[u8]) -> Result<bool, GitError>
 /// would stream them all on each commit.
 async fn filtered_differences(
     root: &Path,
-    view: &StagedView,
+    view: &WorkingView,
     listing: &[u8],
 ) -> Result<Vec<PathBuf>, GitError> {
     let regular: Vec<IndexEntry<'_>> = index_entries(listing)
@@ -278,12 +281,9 @@ async fn filtered_differences(
     if regular.is_empty() {
         return Ok(Vec::new());
     }
-    let named: Vec<PathBuf> = regular
-        .iter()
-        .map(|entry| from_prefix(&path_from_bytes(entry.name.to_vec()), &view.prefix))
-        .collect();
     let mut input = Vec::new();
-    for path in &named {
+    for entry in &regular {
+        let path = from_prefix(&path_from_bytes(entry.name.to_vec()), &view.prefix);
         input.extend_from_slice(path.as_os_str().as_encoded_bytes());
         input.push(0);
     }
@@ -295,36 +295,45 @@ async fn filtered_differences(
     )
     .await?;
     // `path NUL filter NUL value NUL`, one record per path in the order given.
-    let values = attributes.split(|&byte| byte == 0).skip(2).step_by(3);
-    let mut differing = Vec::new();
-    for ((entry, path), value) in regular.iter().zip(named).zip(values) {
+    let mut fields = attributes.split(|&byte| byte == 0);
+    let mut candidates = Vec::new();
+    for entry in &regular {
+        let (Some(attr_path), Some(_attr), Some(value)) =
+            (fields.next(), fields.next(), fields.next())
+        else {
+            break;
+        };
         if matches!(value, b"unspecified" | b"unset" | b"set" | b"lfs") {
             continue;
         }
-        // A file absent from the working tree is `git diff`'s to report.
-        let Ok(raw) = std::fs::read(root.join(&path)) else {
-            continue;
-        };
-        let mut at = std::ffi::OsString::from("--path=");
-        at.push(&path);
-        let oid = std::ffi::OsString::from(String::from_utf8_lossy(entry.blob).as_ref());
-        let checkout = spawn_git_bytes(
-            root,
-            &[
-                std::ffi::OsString::from("cat-file"),
-                "--filters".into(),
-                at,
-                oid,
-            ],
-            view.env(),
-        )
-        .await;
-        if checkout.is_ok_and(|content| content == raw) {
-            continue;
-        }
-        differing.push(path);
+        candidates.push((entry.blob, path_from_bytes(attr_path.to_vec())));
     }
-    Ok(differing)
+    let results: Vec<Option<PathBuf>> = futures::stream::iter(candidates)
+        .map(|(blob, path)| async move {
+            // A file absent from the working tree is `git diff`'s to report.
+            let Ok(raw) = std::fs::read(root.join(&path)) else {
+                return None;
+            };
+            let mut at = std::ffi::OsString::from("--path=");
+            at.push(&path);
+            let oid = std::ffi::OsString::from(String::from_utf8_lossy(blob).as_ref());
+            let checkout = spawn_git_bytes(
+                root,
+                &[
+                    std::ffi::OsString::from("cat-file"),
+                    "--filters".into(),
+                    at,
+                    oid,
+                ],
+                view.env(),
+            )
+            .await;
+            (!checkout.is_ok_and(|content| content == raw)).then_some(path)
+        })
+        .buffered(CONTENT_READ_CONCURRENCY)
+        .collect()
+        .await;
+    Ok(results.into_iter().flatten().collect())
 }
 
 /// One `ls-files --stage -v` record.

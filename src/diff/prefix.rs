@@ -25,16 +25,31 @@ pub(super) async fn working_prefix(root: &Path) -> Result<PathBuf, GitError> {
 /// directory `prefix` names: from `sub/`, `sub/doc.md` is `doc.md` and
 /// `README.md` is `../README.md`.
 pub(super) fn from_prefix(path: &Path, prefix: &Path) -> PathBuf {
-    let prefix: Vec<Component<'_>> = prefix.components().collect();
-    let path: Vec<Component<'_>> = path.components().collect();
-    let common = prefix
-        .iter()
-        .zip(&path)
-        .take_while(|(left, right)| left == right)
-        .count();
-    std::iter::repeat_n(Component::ParentDir, prefix.len() - common)
-        .chain(path[common..].iter().copied())
-        .collect()
+    let mut prefix_components = prefix.components();
+    let mut path_components = path.components();
+    let mut out = PathBuf::new();
+    loop {
+        match (prefix_components.next(), path_components.next()) {
+            (Some(left), Some(right)) if left == right => continue,
+            (Some(_), right) => {
+                out.push(Component::ParentDir);
+                for _ in prefix_components {
+                    out.push(Component::ParentDir);
+                }
+                if let Some(right) = right {
+                    out.push(right);
+                }
+                out.extend(path_components);
+                return out;
+            }
+            (None, Some(right)) => {
+                out.push(right);
+                out.extend(path_components);
+                return out;
+            }
+            (None, None) => return out,
+        }
+    }
 }
 
 /// Each of `paths` as seen from `prefix`.

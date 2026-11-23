@@ -51,9 +51,13 @@
 //!
 //! 30 days TTL, 256 MiB max bytes.
 
+use std::ffi::OsString;
+use std::fs;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, SystemTime};
-use std::{fs, io::Write};
 
 use serde_json::Value;
 use thiserror::Error;
@@ -113,6 +117,7 @@ pub struct Cache {
     root: PathBuf,
     ttl: Duration,
     max_bytes: u64,
+    written: Arc<AtomicBool>,
 }
 
 impl Cache {
@@ -126,7 +131,54 @@ impl Cache {
             root,
             ttl: Duration::from_secs(ttl_days.saturating_mul(86_400)),
             max_bytes,
+            written: Arc::new(AtomicBool::new(false)),
         }
+    }
+
+    /// Return whether any [`Self::put`] attempted a write since the last reset,
+    /// clearing the flag.
+    pub(crate) fn take_written(&self) -> bool {
+        self.written.swap(false, Ordering::AcqRel)
+    }
+
+    /// Pre-hash the provider-independent payload prefix `(system_prompt, content)`
+    /// once so multi-provider chains can derive each provider's key by cloning
+    /// the small hasher state instead of re-hashing up to 256 KiB per provider.
+    pub(crate) fn payload_hasher(system_prompt: &str, content: &str) -> blake3::Hasher {
+        let mut hasher = blake3::Hasher::new();
+        write_field(&mut hasher, system_prompt.as_bytes());
+        write_field(&mut hasher, content.as_bytes());
+        hasher
+    }
+
+    /// Finalize a [`CacheKey`] from a [`Self::payload_hasher`] and one
+    /// provider's identity fields.
+    pub(crate) fn key_from_payload(
+        payload: &blake3::Hasher,
+        backend: &str,
+        model: &str,
+        request_identity: &str,
+        temperature: Option<f32>,
+    ) -> CacheKey {
+        let mut hasher = payload.clone();
+        write_field(&mut hasher, backend.as_bytes());
+        write_field(&mut hasher, model.as_bytes());
+        write_field(&mut hasher, request_identity.as_bytes());
+        // `{:?}` on an ordinary finite `f32` is the shortest string that
+        // round-trips, so values such as `0.2` and `0.20` share a key while
+        // neighboring finite values do not. Config validation excludes NaN;
+        // signed zero is harmlessly allowed to retain its distinct spelling.
+        //
+        // An unset temperature is a *different request* from any set one - the
+        // field is absent and the server picks - so it gets a sentinel that no
+        // formatted float can collide with, rather than being folded onto some
+        // stand-in value.
+        let temp_str = match temperature {
+            Some(value) => format!("{value:?}"),
+            None => "unset".to_string(),
+        };
+        write_field(&mut hasher, temp_str.as_bytes());
+        CacheKey(hasher.finalize().to_hex().to_string())
     }
 
     /// The conventional location: `directories::ProjectDirs::cache_dir()`,
@@ -161,33 +213,8 @@ impl Cache {
         request_identity: &str,
         temperature: Option<f32>,
     ) -> CacheKey {
-        let mut hasher = blake3::Hasher::new();
-        write_field(&mut hasher, system_prompt.as_bytes());
-        write_field(&mut hasher, content.as_bytes());
-        write_field(&mut hasher, backend.as_bytes());
-        write_field(&mut hasher, model.as_bytes());
-        write_field(&mut hasher, request_identity.as_bytes());
-        // `{:?}` on an ordinary finite `f32` is the shortest string that
-        // round-trips, so values such as `0.2` and `0.20` share a key while
-        // neighboring finite values do not. Config validation excludes NaN;
-        // signed zero is harmlessly allowed to retain its distinct spelling.
-        //
-        // This replaced `{:.6}`, whose comment claimed six decimal places were
-        // finer than `f32`'s resolution. They are not: `f32` has ~7 significant
-        // digits, not 7 decimal places, so near 1.0 its ulp is ~1.2e-7 while
-        // six decimals steps by 1e-6 - coarser, and able to collapse two
-        // genuinely different temperatures onto one key.
-        //
-        // An unset temperature is a *different request* from any set one - the
-        // field is absent and the server picks - so it gets a sentinel that no
-        // formatted float can collide with, rather than being folded onto some
-        // stand-in value.
-        let temp_str = match temperature {
-            Some(value) => format!("{value:?}"),
-            None => "unset".to_string(),
-        };
-        write_field(&mut hasher, temp_str.as_bytes());
-        CacheKey(hasher.finalize().to_hex().to_string())
+        let payload = Self::payload_hasher(system_prompt, content);
+        Self::key_from_payload(&payload, backend, model, request_identity, temperature)
     }
 
     /// Read the entry at `key`, or `None` if absent, expired, unreadable, or
@@ -199,7 +226,8 @@ impl Cache {
     /// half-deleted cache is worse than a slightly redundant one).
     pub fn get(&self, key: &CacheKey) -> Option<Value> {
         let path = self.entry_path(key);
-        let meta = std::fs::metadata(&path).ok()?;
+        let mut file = fs::File::open(&path).ok()?;
+        let meta = file.metadata().ok()?;
         let mtime = meta.modified().ok()?;
         // A future mtime (clock skew, manual planting) makes
         // `duration_since` return `Err`. Treat that as age zero rather
@@ -210,12 +238,14 @@ impl Cache {
             .duration_since(mtime)
             .unwrap_or(Duration::ZERO);
         if age > self.ttl {
+            drop(file);
             // Expired. Removing is best-effort: a stale entry is no worse
             // than a missing one, but failing to remove is not worth a Result.
             let _ = std::fs::remove_file(&path);
             return None;
         }
-        let bytes = std::fs::read(&path).ok()?;
+        let mut bytes = Vec::with_capacity(usize::try_from(meta.len()).unwrap_or(0));
+        file.read_to_end(&mut bytes).ok()?;
         serde_json::from_slice(&bytes).ok()
     }
 
@@ -224,6 +254,9 @@ impl Cache {
     /// Creates the shard directory on demand so the very first `put` into a
     /// fresh cache does not need a separate bootstrap step.
     pub fn put(&self, key: &CacheKey, value: &Value) -> Result<(), CacheError> {
+        // Marked before creating any file so even an interrupted write that
+        // leaves a temporary file behind still triggers post-run eviction.
+        self.written.store(true, Ordering::Release);
         let path = self.entry_path(key);
         let parent = path.parent().ok_or_else(|| {
             CacheError::Write(
@@ -254,7 +287,7 @@ impl Cache {
     /// total size is at or under `max_bytes`. Returns the number of bytes
     /// freed; `0` when no eviction was needed.
     pub fn evict_if_needed(&self) -> Result<u64, CacheError> {
-        let mut entries = self.collect_entries()?;
+        let (shards, mut entries) = self.collect_entries()?;
         let total: u64 = entries.iter().map(|e| e.size).sum();
         if total <= self.max_bytes {
             return Ok(0);
@@ -266,10 +299,11 @@ impl Cache {
             if current <= self.max_bytes {
                 break;
             }
-            std::fs::remove_file(&entry.path)
-                .map_err(|e| CacheError::Remove(entry.path.clone(), e))?;
+            let path = shards[entry.shard].join(&entry.name);
+            if remove_entry(&path)? {
+                freed = freed.saturating_add(entry.size);
+            }
             current = current.saturating_sub(entry.size);
-            freed = freed.saturating_add(entry.size);
         }
         Ok(freed)
     }
@@ -287,17 +321,21 @@ impl Cache {
         self.root.join(shard).join(format!("{hex}.json"))
     }
 
-    /// Walk every entry under `root` and return `(path, mtime, size)`.
+    /// Walk every entry under `root` and return its shard table plus
+    /// `(shard_index, filename, mtime, size)`.
     ///
-    /// Skips the shard-directories' own metadata (no file under them, no
-    /// entry). Entries we cannot stat are skipped silently: a transient
-    /// stat failure should not abort eviction when the tree still has
-    /// deletable members.
-    fn collect_entries(&self) -> Result<Vec<CacheEntry>, CacheError> {
+    /// Full paths are joined only when eviction actually removes an entry,
+    /// avoiding a `PathBuf` allocation per entry when the tree is under limit.
+    /// Entries we cannot stat are skipped silently: a transient stat failure
+    /// should not abort eviction when the tree still has deletable members.
+    fn collect_entries(&self) -> Result<(Vec<PathBuf>, Vec<CacheEntry>), CacheError> {
+        let mut shard_paths = Vec::new();
         let mut out = Vec::new();
         let shards = match std::fs::read_dir(&self.root) {
             Ok(shards) => shards,
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(out),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                return Ok((shard_paths, out));
+            }
             Err(err) => return Err(CacheError::Walk(err)),
         };
         for shard in shards {
@@ -319,15 +357,17 @@ impl Cache {
             if !file_type.is_dir() {
                 continue;
             }
-            if !is_shard_name(&shard.file_name()) {
+            let shard_name = shard.file_name();
+            if !is_shard_name(&shard_name) {
                 continue;
             }
             let shard_path = shard.path();
-            let shard_name = shard.file_name();
             let entries = match std::fs::read_dir(&shard_path) {
                 Ok(e) => e,
                 Err(_) => continue,
             };
+            let shard_index = shard_paths.len();
+            shard_paths.push(shard_path);
             for entry in entries {
                 let entry = match entry {
                     Ok(e) => e,
@@ -337,7 +377,6 @@ impl Cache {
                 if !is_entry_name(&shard_name, &name) && !is_temporary_name(&name) {
                     continue;
                 }
-                let path = entry.path();
                 let file_type = match entry.file_type() {
                     Ok(file_type) => file_type,
                     Err(_) => continue,
@@ -359,10 +398,25 @@ impl Cache {
                 // correctness.
                 let mtime = meta.modified().unwrap_or(SystemTime::UNIX_EPOCH);
                 let size = meta.len();
-                out.push(CacheEntry { path, mtime, size });
+                out.push(CacheEntry {
+                    shard: shard_index,
+                    name,
+                    mtime,
+                    size,
+                });
             }
         }
-        Ok(out)
+        Ok((shard_paths, out))
+    }
+}
+
+/// Remove one cache file, treating a concurrent eviction's `NotFound` as
+/// already removed rather than aborting the rest of the eviction pass.
+pub(crate) fn remove_entry(path: &Path) -> Result<bool, CacheError> {
+    match std::fs::remove_file(path) {
+        Ok(()) => Ok(true),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(err) => Err(CacheError::Remove(path.to_path_buf(), err)),
     }
 }
 
@@ -377,7 +431,8 @@ impl Cache {
 
 /// One entry on disk, pre-computed for the eviction walk.
 struct CacheEntry {
-    path: PathBuf,
+    shard: usize,
+    name: OsString,
     mtime: SystemTime,
     size: u64,
 }

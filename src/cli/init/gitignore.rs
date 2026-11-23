@@ -78,10 +78,11 @@ impl Outcome {
 ///
 /// Writes nothing when git already ignores or already tracks the path.
 pub async fn ensure(root: &Path) -> Result<Outcome> {
-    if is_tracked(root).await? {
+    let (tracked, ignored) = tokio::try_join!(is_tracked(root), is_ignored(root))?;
+    if tracked {
         return Ok(Outcome::Tracked);
     }
-    if is_ignored(root).await? {
+    if ignored {
         return Ok(Outcome::AlreadyIgnored);
     }
     append(root)

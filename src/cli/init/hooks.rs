@@ -253,13 +253,12 @@ pub async fn install<W: Write>(
     if names.is_empty() {
         return Ok(());
     }
-    let hooks_dir = locate_hooks_dir(root).await?;
-
     // Resolve every git-owned destination before writing anything. If git
     // cannot expand core.hooksPath, returning an error after installing the
     // repo-local hooks would leave a partial installation that still never
     // runs while claiming the operation failed.
-    let configured = run_git_config_path(root).await?;
+    let (hooks_dir, configured) =
+        tokio::try_join!(locate_hooks_dir(root), run_git_config_path(root))?;
     std::fs::create_dir_all(&hooks_dir)
         .with_context(|| format!("could not create {}", hooks_dir.display()))?;
 
