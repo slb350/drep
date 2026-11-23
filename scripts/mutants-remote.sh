@@ -162,7 +162,8 @@ done
 # Made only now, so the pipes exist for as short a time as the handshake allows.
 mkdir -p "$SESSION_DIR"
 mkfifo "$CONTROL_IN" "$CONTROL_OUT"
-ai1_ssh -o BatchMode=yes "$REMOTE_COMMAND" \
+# ai1_ssh_session, not ai1_ssh: its exec makes the backgrounded job ssh itself on every bash, so REMOTE_SESSION_PID and jobs -p name ssh rather than the subshell bash runs a backgrounded function in, and the cleanup reaches it.
+ai1_ssh_session -o BatchMode=yes "$REMOTE_COMMAND" \
   <"$CONTROL_IN" >"$CONTROL_OUT" &
 REMOTE_SESSION_PID=$!
 exec 7>"$CONTROL_IN"

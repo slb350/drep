@@ -204,6 +204,12 @@ fn remote_mutation_session_owns_sync_run_and_fresh_result_mirroring() {
             && script.contains("trap 'exit 74' PIPE"),
         "abnormal local exit, a dead session included, must terminate and reap the remote lock session"
     );
+    // bash 3.2 makes a trailing `command ssh` the job itself, so the shell case passes there either way; only this pin holds the session to the exec'ing form on macOS.
+    assert!(
+        script.contains("ai1_ssh_session -o BatchMode=yes \"$REMOTE_COMMAND\"")
+            && !script.contains("ai1_ssh -o BatchMode=yes \"$REMOTE_COMMAND\""),
+        "the session must start through ai1_ssh_session, whose exec makes the background job ssh itself"
+    );
     let session_start = script
         .find("REMOTE_SESSION_PID=$!")
         .expect("remote session PID assignment must exist");

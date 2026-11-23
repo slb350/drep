@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Tests for the SSH session pipes in scripts/mutants-remote.sh. They are made in one session dir under the scratch root, or under DREP_MUTANTS_TMPDIR, no pipe can be reached by path from the start of the handshake on, and no session dir survives a run that succeeds, fails, fails at mkfifo, or was killed earlier, and a stale one that cannot be removed stops the run. The ssh, rsync and mkfifo stand-ins on PATH keep every case on this machine, and every wait is bounded, so a protocol regression fails instead of hanging.
+# Tests for the SSH session pipes in scripts/mutants-remote.sh. They are made in one session dir under the scratch root, or under DREP_MUTANTS_TMPDIR, no pipe can be reached by path from the start of the handshake on, and no session dir survives a run that succeeds, fails, fails at mkfifo, or was killed earlier. A stale session that cannot be removed stops the run, a session still running at exit is killed and reaped, a local run sweeps too, and a failed result mirror says why. The ssh, rsync and mkfifo stand-ins on PATH keep every case on this machine, and every wait is bounded, so a protocol regression fails instead of hanging.
 
 set -euo pipefail
 
@@ -17,7 +17,7 @@ fail() {
 # shellcheck disable=SC2046  # One variable name per word.
 unset $(git rev-parse --local-env-vars)
 # The mutation scripts and the stand-ins read these, so a case sets each for its own run only. An inherited host lock or result token would make the run act on its parent's.
-unset DREP_MUTANTS_TMPDIR DREP_MUTANTS_REMOTE MUTANTS_OUT_DIR MUTANTS_SOURCE_DIR MUTANTS_EXTRA_FILES MUTANTS_JOBS MUTANTS_LOCAL_JOBS DREP_MUTANTS_HOST_LOCK DREP_MUTANTS_RSYNC_TIMEOUT_SECONDS DREP_MUTANTS_RESULT_TOKEN STUB_RUN_STATUS STUB_MKFIFO_FAIL
+unset DREP_MUTANTS_TMPDIR DREP_MUTANTS_REMOTE MUTANTS_OUT_DIR MUTANTS_SOURCE_DIR MUTANTS_EXTRA_FILES MUTANTS_JOBS MUTANTS_LOCAL_JOBS DREP_MUTANTS_HOST_LOCK DREP_MUTANTS_RSYNC_TIMEOUT_SECONDS DREP_MUTANTS_RESULT_TOKEN STUB_RUN_STATUS STUB_MKFIFO_FAIL STUB_SSH_MODE STUB_RSYNC_FAIL_PULL
 
 # Found before PATH gains the stand-ins, so the mkfifo stand-in can run the real one.
 REAL_MKFIFO="$(command -v mkfifo)"
@@ -54,6 +54,12 @@ command_text="${*: -1}"
 case "$command_text" in
 *" true") exit 0 ;;
 esac
+# STUB_SSH_MODE=record-and-sleep records this process's pid, answers with a bogus handshake so the run exits 74, and stays running as the same pid until something kills it.
+if [[ ${STUB_SSH_MODE:-} == record-and-sleep ]]; then
+  printf '%s\n' "$$" >"$DIR/ssh.pid"
+  printf 'bogus-handshake\n'
+  exec sleep 30
+fi
 [[ "$command_text" =~ ([0-9]+-[0-9]+-[0-9]+) ]] || exit 74
 token="${BASH_REMATCH[1]}"
 printf 'mutants-lock-ready:%s\n' "$token"
@@ -65,9 +71,13 @@ IFS= read -r -t 20 action && [[ $action == mirrored ]] || exit 74
 exit "$status"
 EOF
 
-# Copies nothing, and records every pipe under DIR at each transfer: the source push is the first thing after the handshake opens.
+# Copies nothing, and records every pipe under DIR at each transfer: the source push is the first thing after the handshake opens. With STUB_RSYNC_FAIL_PULL=1 the result pull, the one transfer whose destination is the local results directory, fails with a message.
 write_standin rsync <<'EOF'
 find "$DIR" -type p >>"$DIR/snapshot" || { echo "find failed" >>"$DIR/snapshot"; exit 74; }
+if [[ ${STUB_RSYNC_FAIL_PULL:-0} == 1 && ${*: -1} == ./target/mutants/ ]]; then
+  echo "rsync: simulated pull failure" >&2
+  exit 23
+fi
 EOF
 
 # Logs the paths it is asked for, then fails when the case says so or makes them.
@@ -81,7 +91,7 @@ EOF
 run_remote() {
   local expected="$1" status=0
   shift
-  rm -f "$SNAPSHOT" "$MKFIFO_LOG"
+  rm -f "$SNAPSHOT" "$MKFIFO_LOG" "$DIR/ssh.pid"
   (
     cd "$REPO" || exit 1
     PATH="$BIN:$PATH" env DREP_MUTANTS_HOST_LOCK_WAIT_SECONDS=0 "$@" \
@@ -151,5 +161,35 @@ else
   chmod 700 "$SCRATCH/remote-session-7-8-9"
   echo "ok $CASE"
 fi
+
+# Only cleanup_remote_session's kill and reap end this session, and only when they reach ssh itself: bash runs a backgrounded function in a subshell, and unless the function execs ssh a kill aimed at the job's pid ends that subshell and leaves ssh running. With the kill gone, the wait would block for the stand-in's 30 s sleep.
+CASE="a session still running at exit is killed"
+started=$SECONDS
+run_remote 74 STUB_SSH_MODE=record-and-sleep
+[[ $((SECONDS - started)) -lt 10 ]] || fail "the run took $((SECONDS - started)) s, so the kill did not end the session"
+[[ -f $DIR/ssh.pid ]] || fail "the stand-in ssh never recorded its pid: $(<"$LOG")"
+session_pid="$(<"$DIR/ssh.pid")"
+if kill -0 "$session_pid" 2>/dev/null; then
+  kill "$session_pid" 2>/dev/null || true
+  fail "the session $session_pid was still running after the run ended"
+fi
+echo "ok $CASE"
+
+# The sweep comes before the local branch, so DREP_MUTANTS_REMOTE=0 and the unreachable-host fallback sweep too. A stand-in mutants-run.sh keeps the local run off cargo-mutants, and is removed so no later case can fall back to it.
+CASE="a local run sweeps too"
+printf '#!/usr/bin/env bash\nexit 0\n' >"$REPO/scripts/mutants-run.sh"
+chmod +x "$REPO/scripts/mutants-run.sh"
+mkdir -p "$SCRATCH/remote-session-10-11-12"
+"$REAL_MKFIFO" "$SCRATCH/remote-session-10-11-12/control-in"
+run_remote 0 DREP_MUTANTS_REMOTE=0
+rm -f "$REPO/scripts/mutants-run.sh"
+assert_no_session_left
+echo "ok $CASE"
+
+CASE="a failed mirror says why"
+run_remote 0 STUB_RSYNC_FAIL_PULL=1
+[[ "$(<"$LOG")" == *"rsync: simulated pull failure"* && "$(<"$LOG")" == *"result mirror failed"* ]] ||
+  fail "the run did not carry rsync's message beside the mirror warning: $(<"$LOG")"
+echo "ok $CASE"
 
 echo "mutants-remote: ok"
