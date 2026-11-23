@@ -179,11 +179,13 @@ fn resolve_tool_at(
     workspace_root: &Path,
     path: Option<&std::ffi::OsStr>,
 ) -> Option<PathBuf> {
-    for directory in ancestors_within(workspace_root, repository_root) {
-        for relative in spec.local_paths {
-            let candidate = directory.join(relative);
-            if is_executable(&candidate) {
-                return Some(candidate);
+    if !spec.local_paths.is_empty() {
+        for directory in ancestors_within(workspace_root, repository_root) {
+            for relative in spec.local_paths {
+                let candidate = directory.join(relative);
+                if is_executable(&candidate) {
+                    return Some(candidate);
+                }
             }
         }
     }
@@ -193,7 +195,7 @@ fn resolve_tool_at(
     // panic here would take the whole gate down rather than reporting the
     // tool unavailable.
     let name = spec.command.first()?;
-    which_first_in(name, path?).map(PathBuf::from)
+    which_first_in(name, path?)
 }
 
 /// Look up `command` on PATH; `std::process::Command` does not expose this
@@ -214,34 +216,52 @@ fn resolve_tool_at(
 /// it. A test-local mutex cannot fix that: it excludes other tests that take
 /// the same mutex, not every reader in the process. Passing the value in
 /// removes the shared mutable state instead of guarding it.
-fn which_first_in(command: &str, path: &std::ffi::OsStr) -> Option<String> {
+fn which_first_in(command: &str, path: &std::ffi::OsStr) -> Option<PathBuf> {
     for dir in std::env::split_paths(path) {
         let candidate = dir.join(command);
         if is_executable(&candidate) {
-            return Some(candidate.to_string_lossy().into_owned());
+            return Some(candidate);
         }
     }
     None
 }
 
-/// The nearest configured ancestor for `file`, bounded by `repository_root`.
+/// Per-run memoization of the nearest configured ancestor for each file within
+/// one repository root, avoiding redundant `stat`/`read_dir` walks during
+/// `check` and `doctor` planning.
 ///
-/// Looking along the file's ancestor chain avoids both monorepo blind spots
+/// Looking along each file's ancestor chain avoids both monorepo blind spots
 /// and accidental discovery in unrelated dependency/build directories.
-pub(crate) fn configuration_root(
-    spec: &ToolSpec,
-    repository_root: &Path,
-    file: &Path,
-) -> Option<PathBuf> {
-    let repository_root = absolute(repository_root);
-    let file = if file.is_absolute() {
-        file.to_path_buf()
-    } else {
-        repository_root.join(file)
-    };
-    ancestors_within(file.parent()?, &repository_root)
-        .into_iter()
-        .find(|directory| is_configured(spec, directory))
+pub(crate) struct ConfigCache {
+    repository_root: PathBuf,
+    roots: std::collections::HashMap<(*const ToolSpec, PathBuf), Option<PathBuf>>,
+}
+
+impl ConfigCache {
+    pub(crate) fn new(repository_root: &Path) -> Self {
+        Self {
+            repository_root: absolute(repository_root),
+            roots: std::collections::HashMap::new(),
+        }
+    }
+
+    pub(crate) fn configuration_root(&mut self, spec: &ToolSpec, file: &Path) -> Option<PathBuf> {
+        let file = if file.is_absolute() {
+            file.to_path_buf()
+        } else {
+            self.repository_root.join(file)
+        };
+        let parent = file.parent()?;
+        let key = (std::ptr::from_ref(spec), parent.to_path_buf());
+        if let Some(cached) = self.roots.get(&key) {
+            return cached.clone();
+        }
+        let found = ancestors_within(parent, &self.repository_root)
+            .into_iter()
+            .find(|directory| is_configured(spec, directory));
+        self.roots.insert(key, found.clone());
+        found
+    }
 }
 
 /// Whether this tool will run here, without running it.
@@ -271,8 +291,8 @@ pub(crate) async fn run_tool_at(
     workspace_root: &Path,
     files: &[String],
 ) -> ToolOutcome {
-    let executable = match eligible_executable(spec, repository_root, workspace_root) {
-        Ok(executable) => executable,
+    let (executable, marker) = match eligible_executable(spec, repository_root, workspace_root) {
+        Ok(found) => found,
         Err(outcome) => return outcome,
     };
 
@@ -289,24 +309,21 @@ pub(crate) async fn run_tool_at(
         executable
     };
 
-    let mut argv: Vec<String> = Vec::with_capacity(spec.command.len() + files.len() + 2);
-    argv.push(executable.to_string_lossy().into_owned());
-    argv.extend(spec.command[1..].iter().map(|s| (*s).to_owned()));
+    let mut args: Vec<String> = Vec::with_capacity(spec.command.len() + files.len() + 2);
+    args.extend(spec.command[1..].iter().map(|s| (*s).to_owned()));
     // A tool that will not look for its own config gets handed the one
     // `config_files` found - through the same lookup that decided the tool was
     // configured at all, so the two cannot disagree about what counts.
-    if let Some(flag) = spec.config_flag
-        && let Some(config) = configured_marker(spec, workspace_root)
-    {
-        argv.push(flag.to_owned());
-        argv.push(config);
+    if let Some(flag) = spec.config_flag {
+        args.push(flag.to_owned());
+        args.push(marker);
     }
     // One ceiling for the whole tool: `go list` and `go vet` share it rather than getting one each.
     let deadline = Instant::now() + Duration::from_secs(spec.timeout_secs);
     let mut excluded = Vec::new();
     let mut directories = Vec::new();
     match spec.arguments {
-        ToolArguments::Files => argv.extend(file_arguments(files)),
+        ToolArguments::Files => args.extend(file_arguments(files)),
         ToolArguments::Project => {}
         ToolArguments::GoPackages => {
             let plan = match go_packages::plan(&executable, workspace_root, files, deadline).await {
@@ -335,27 +352,37 @@ pub(crate) async fn run_tool_at(
                     )
                 };
             }
-            argv.extend(plan.directories.iter().cloned());
+            args.extend(plan.directories.iter().cloned());
             directories = plan.directories;
             excluded = plan.excluded;
         }
     }
 
-    let mut outcome = execute(spec, &argv, workspace_root, files, &directories, deadline).await;
+    let mut outcome = execute(
+        spec,
+        &executable,
+        &args,
+        workspace_root,
+        files,
+        &directories,
+        deadline,
+    )
+    .await;
     outcome.excluded = excluded;
     outcome
 }
 
-/// Spawn `argv` from `workspace_root` and read its diagnostics into an outcome for `files`. `directories` are the package directories a [`ToolArguments::GoPackages`] tool was handed, as `./dir`, and empty for any other.
+/// Spawn `executable` with `args` from `workspace_root` and read its diagnostics into an outcome for `files`. `directories` are the package directories a [`ToolArguments::GoPackages`] tool was handed, as `./dir`, and empty for any other.
 async fn execute(
     spec: &ToolSpec,
-    argv: &[String],
+    executable: &Path,
+    args: &[String],
     workspace_root: &Path,
     files: &[String],
     directories: &[String],
     deadline: Instant,
 ) -> ToolOutcome {
-    let output = match run_bounded(&argv[0], &argv[1..], workspace_root, deadline).await {
+    let output = match run_bounded(executable, args, workspace_root, deadline).await {
         Ok(output) => output,
         Err(Bounded::Failed(err)) => {
             return ToolOutcome::unavailable(
@@ -513,17 +540,17 @@ fn eligible_executable(
     spec: &ToolSpec,
     repository_root: &Path,
     workspace_root: &Path,
-) -> Result<PathBuf, ToolOutcome> {
-    if !is_configured(spec, workspace_root) {
+) -> Result<(PathBuf, String), ToolOutcome> {
+    let Some(marker) = configured_marker(spec, workspace_root) else {
         return Err(ToolOutcome::skipped(spec));
-    }
+    };
     if let Some(executable) = resolve_tool_at(
         spec,
         repository_root,
         workspace_root,
         std::env::var_os("PATH").as_deref(),
     ) {
-        return Ok(executable);
+        return Ok((executable, marker));
     }
     let looked = if spec.local_paths.is_empty() {
         "PATH".to_owned()

@@ -251,12 +251,83 @@ fn a_file_above_the_root_takes_no_configuration_from_it() {
         config_files: &["eslint.config.js"],
         ..ToolSpec::default()
     };
+    let mut cache = ConfigCache::new(&sub);
     assert_eq!(
-        configuration_root(&spec, &sub, std::path::Path::new("../top.js")),
+        cache.configuration_root(&spec, std::path::Path::new("../top.js")),
         None
     );
     assert_eq!(
-        configuration_root(&spec, &sub, std::path::Path::new("lib/../a.js")),
+        cache.configuration_root(&spec, std::path::Path::new("lib/../a.js")),
         Some(sub.clone())
+    );
+}
+
+#[test]
+fn config_cache_reuses_lookup_per_tool_and_directory() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path();
+    let pkg = root.join("pkg");
+    let other = root.join("other");
+    std::fs::create_dir_all(&pkg).unwrap();
+    std::fs::create_dir_all(&other).unwrap();
+    let marker = pkg.join("eslint.config.js");
+    std::fs::write(&marker, "").unwrap();
+
+    let eslint = ToolSpec {
+        name: "eslint",
+        config_files: &["eslint.config.js"],
+        ..ToolSpec::default()
+    };
+    let ruff = ToolSpec {
+        name: "ruff",
+        config_files: &["pyproject.toml"],
+        ..ToolSpec::default()
+    };
+
+    let mut cache = ConfigCache::new(root);
+    let expected = Some(absolute(&pkg));
+    assert_eq!(
+        cache.configuration_root(&eslint, &pkg.join("a.js")),
+        expected
+    );
+
+    // Removing the marker on disk proves a second lookup in the same directory
+    // serves the memoized answer rather than re-walking ancestors.
+    std::fs::remove_file(&marker).unwrap();
+    assert_eq!(
+        cache.configuration_root(&eslint, &pkg.join("b.js")),
+        expected
+    );
+    // A different tool in the same directory and the same tool in a different
+    // directory must not collide with the cached entry.
+    assert_eq!(cache.configuration_root(&ruff, &pkg.join("a.py")), None);
+    assert_eq!(cache.configuration_root(&eslint, &other.join("c.js")), None);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_glob_config_marker_follows_file_symlinks_and_rejects_dir_symlinks() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path();
+    let target_file = root.join("real.txt");
+    let target_dir = root.join("real_dir");
+    std::fs::write(&target_file, "").unwrap();
+    std::fs::create_dir(&target_dir).unwrap();
+    std::os::unix::fs::symlink(&target_dir, root.join("DirLink.csproj")).unwrap();
+
+    let spec = ToolSpec {
+        name: "globbed",
+        config_files: &["*.csproj"],
+        ..ToolSpec::default()
+    };
+    assert!(
+        !is_configured(&spec, root),
+        "a symlink to a directory is not a project file"
+    );
+
+    std::os::unix::fs::symlink(&target_file, root.join("App.csproj")).unwrap();
+    assert!(
+        is_configured(&spec, root),
+        "a symlink to a regular file must match the glob marker"
     );
 }

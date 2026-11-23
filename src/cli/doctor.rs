@@ -329,15 +329,16 @@ fn write_tools_section<W: Write>(
     writeln!(out)?;
     writeln!(out, "Deterministic checks (these gate):")?;
     let mut missing: Vec<&'static str> = Vec::new();
+    let mut config_cache = languages::runner::ConfigCache::new(root);
     for (language, paths) in buckets {
         if language.tools.is_empty() {
             writeln!(out, "  {}: no tools wired up yet", language.display_name)?;
             continue;
         }
-        for spec in language.tools {
+        for &spec in language.tools {
             let roots: BTreeSet<PathBuf> = paths
                 .iter()
-                .filter_map(|path| languages::runner::configuration_root(spec, root, path))
+                .filter_map(|path| config_cache.configuration_root(spec, path))
                 .collect();
             let outcome = if roots.is_empty() {
                 languages::runner::tool_status(spec, root)
@@ -367,17 +368,14 @@ fn workspace_tool_status(
     root: &Path,
     roots: &BTreeSet<PathBuf>,
 ) -> languages::runner::ToolOutcome {
-    let statuses: Vec<_> = roots
+    if let Some(unavailable) = roots
         .iter()
         .map(|workspace| languages::runner::tool_status_at(spec, root, workspace))
-        .collect();
-    if let Some(unavailable) = statuses
-        .iter()
         .find(|outcome| matches!(outcome.status, languages::runner::ToolStatus::Unavailable))
     {
-        return unavailable.clone();
+        return unavailable;
     }
-    let detail = if roots.len() == 1 && roots.contains(&root.to_path_buf()) {
+    let detail = if roots.len() == 1 && roots.contains(root) {
         "ready".to_owned()
     } else {
         format!("ready in {} workspace(s)", roots.len())

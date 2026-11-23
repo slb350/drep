@@ -1,6 +1,6 @@
 //! Narrow a whole-project or Go package tool's findings to the files drep was asked to check.
 
-use std::collections::BTreeSet;
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use super::{TYPE_CHECK_KIND, lexically_normal};
@@ -53,17 +53,21 @@ pub(super) fn retain_requested(
     if spec.arguments == ToolArguments::Files || findings.is_empty() {
         return findings;
     }
-    let wanted: BTreeSet<PathBuf> = files
+    let wanted: HashSet<PathBuf> = files
         .iter()
         .map(|file| joined_reported(workspace_root, file))
         .collect();
     let mut wanted_canonical = LazyCanonical::of(&wanted);
     // `go vet` analyzes only the directories it was handed, so a finding anywhere else came from a dependency that did not compile. A directory whose only requested file the build excludes was not handed.
     let go_packages = spec.arguments == ToolArguments::GoPackages;
-    let vetted: BTreeSet<PathBuf> = directories
-        .iter()
-        .map(|directory| lexically_normal(&workspace_root.join(directory)))
-        .collect();
+    let vetted: HashSet<PathBuf> = if go_packages {
+        directories
+            .iter()
+            .map(|directory| lexically_normal(&workspace_root.join(directory)))
+            .collect()
+    } else {
+        HashSet::new()
+    };
     let mut vetted_canonical = LazyCanonical::of(&vetted);
     findings
         .into_iter()
@@ -75,10 +79,13 @@ pub(super) fn retain_requested(
             if wanted.contains(&joined) || wanted_canonical.contains(joined.canonicalize().ok()) {
                 return true;
             }
+            if !go_packages {
+                return false;
+            }
             let directory = joined.parent();
             let in_vetted_directory = directory.is_some_and(|directory| vetted.contains(directory))
                 || vetted_canonical.contains(directory.and_then(|d| d.canonicalize().ok()));
-            go_packages && !in_vetted_directory
+            !in_vetted_directory
         })
         .collect()
 }
@@ -89,12 +96,12 @@ pub(super) fn retain_requested(
 /// something has failed to match in exact form - which under an ordinary
 /// checkout is never.
 struct LazyCanonical<'a> {
-    paths: &'a BTreeSet<PathBuf>,
-    resolved: Option<BTreeSet<PathBuf>>,
+    paths: &'a HashSet<PathBuf>,
+    resolved: Option<HashSet<PathBuf>>,
 }
 
 impl<'a> LazyCanonical<'a> {
-    fn of(paths: &'a BTreeSet<PathBuf>) -> Self {
+    fn of(paths: &'a HashSet<PathBuf>) -> Self {
         Self {
             paths,
             resolved: None,

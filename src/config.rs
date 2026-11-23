@@ -367,10 +367,24 @@ where
     // document parser; the latter runs `ValueDeserializer`, which
     // parses a single TOML *value* (`42`, `"text"`) and rejects a whole document
     // with "unexpected content, expected nothing".
-    let mut tree: Value = toml::from_str(&content).map_err(|err: toml::de::Error| {
+    let tree: Value = toml::from_str(&content).map_err(|err: toml::de::Error| {
         ConfigError::Parse(path.to_path_buf(), err.message().to_owned())
     })?;
 
+    load_parsed_with_env(path, tree, lookup)
+}
+
+/// Validate and expand an already-parsed TOML document using the process
+/// environment, so callers such as `drep doctor` that inspect the raw tree do
+/// not read and parse `drep.toml` twice.
+pub(crate) fn load_parsed(path: &Path, tree: Value) -> Result<Config, ConfigError> {
+    load_parsed_with_env(path, tree, |name| std::env::var(name))
+}
+
+fn load_parsed_with_env<F>(path: &Path, mut tree: Value, lookup: F) -> Result<Config, ConfigError>
+where
+    F: Fn(&str) -> Result<String, std::env::VarError>,
+{
     // Read off the raw tree, the way `disabled_provider_indices` and
     // `backend::explicit_fields` are, and before deserialization because this
     // pass owns both the variant and the wording. `Config` denies unknown

@@ -122,17 +122,18 @@ pub(super) async fn write_llm_section<W: Write>(
                  Providers are declared as `[[llm]]`, one block per provider.",
                 config_path.display()
             )?;
-            // Fall through to `config::load` below, which names the parse
-            // error precisely.
-            report_load_failure(out, &config_path)?;
+            // Fall through to `config::load_parsed` below, which names the
+            // parse error precisely without re-reading the file.
+            report_load_result(out, &config_path, config::load_parsed(&config_path, value))?;
             return Ok(());
         }
     };
 
-    // Loaded once, and consumed twice: the credential probe needs the expanded
-    // argv, and the tail names why the file will not load. Loading again at the
-    // end would let the two disagree about the same file within one report.
-    let loaded = config::load(&config_path);
+    // Expanded from the already-parsed tree once, and consumed twice: the
+    // credential probe needs the expanded argv, and the tail names why the file
+    // will not load. Re-reading from disk would double I/O and open a TOCTOU
+    // window where the raw listing and the load error disagreed.
+    let loaded = config::load_parsed(&config_path, value.clone());
 
     // Print providers verbatim from the raw file: model and endpoint come out
     // unexpanded, so `${VAR}` shows as `${VAR}` rather than being swallowed by
@@ -400,12 +401,6 @@ async fn key_command_status(argv: Option<&[String]>) -> String {
         Ok(()) => "the command ran and printed a credential".to_owned(),
         Err(err) => format!("FAILED - {err}"),
     }
-}
-
-/// Report why the config will not load, if it will not.
-fn report_load_failure<W: Write>(out: &mut W, config_path: &Path) -> Result<()> {
-    let loaded = config::load(config_path);
-    report_load_result(out, config_path, loaded)
 }
 
 /// Shared tail of the two load-reporting paths.

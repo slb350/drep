@@ -17,13 +17,14 @@
 //! files would otherwise pay twenty `ruff` process starts. The batch lives
 //! in `run_tool`; this module just decides which files to pass.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 use futures::stream::{self, StreamExt};
 
 use crate::analysis::findings::Finding;
-use crate::analysis::result::{FailureReason, union_failures};
+use crate::analysis::result::FailureReason;
 use crate::cli::check::input::Work;
 use crate::languages;
 use crate::languages::runner::{self};
@@ -207,6 +208,15 @@ pub(super) async fn run_one(task: PlannedTask, root: &Path) -> (runner::ToolOutc
 struct Differing {
     absolute: PathBuf,
     named: PathBuf,
+    canonical: OnceLock<Option<PathBuf>>,
+}
+
+impl Differing {
+    fn canonical(&self) -> Option<&PathBuf> {
+        self.canonical
+            .get_or_init(|| self.absolute.canonicalize().ok())
+            .as_ref()
+    }
 }
 
 /// What the working tree does not hold of the commit: paths it holds
@@ -221,15 +231,37 @@ impl Differences {
     /// The paths among both that name one of `spec`'s markers in
     /// `directories`, directly or through a link, sorted.
     fn markers(&self, spec: &ToolSpec, directories: &BTreeSet<PathBuf>) -> Vec<PathBuf> {
-        let links = marker_links(spec, directories);
-        let is_marker = |path: &Differing| {
-            names_marker(spec, directories, &path.absolute) || links.contains(&path.absolute)
-        };
-        let mut paths = named_where(&self.differing, is_marker);
-        paths.extend(named_where(&self.index_only, is_marker));
-        paths.sort();
-        paths
+        markers_in(&[&self.differing, &self.index_only], spec, directories)
     }
+
+    /// The paths among `index_only` alone that name one of `spec`'s markers in
+    /// `directories`. Used when every `differing` path already refuses the task.
+    fn index_only_markers(&self, spec: &ToolSpec, directories: &BTreeSet<PathBuf>) -> Vec<PathBuf> {
+        markers_in(&[&self.index_only], spec, directories)
+    }
+}
+
+/// The paths across `slices` that name one of `spec`'s markers in
+/// `directories`, directly or through a link, sorted.
+fn markers_in(
+    slices: &[&[Differing]],
+    spec: &ToolSpec,
+    directories: &BTreeSet<PathBuf>,
+) -> Vec<PathBuf> {
+    if slices.iter().all(|slice| slice.is_empty()) {
+        return Vec::new();
+    }
+    let links = marker_links(spec, directories);
+    let mut paths: Vec<PathBuf> = slices
+        .iter()
+        .flat_map(|slice| {
+            named_where(slice, |path| {
+                names_marker(spec, directories, &path.absolute) || links.contains(&path.absolute)
+            })
+        })
+        .collect();
+    paths.sort();
+    paths
 }
 
 /// The uncommitted paths in the order `uncommitted` holds them, which is
@@ -240,6 +272,7 @@ fn differing_paths(base: &Path, uncommitted: &BTreeSet<PathBuf>) -> Vec<Differin
         .map(|named| Differing {
             absolute: runner::lexically_normal(&base.join(named)),
             named: named.clone(),
+            canonical: OnceLock::new(),
         })
         .collect()
 }
@@ -297,7 +330,7 @@ fn task_uncommitted_reads(
 ) -> Vec<PathBuf> {
     let directories =
         marker_directories(task.files.iter().map(|file| file.absolute.as_path()), base);
-    let files: Vec<PathBuf> = task
+    let files: HashSet<PathBuf> = task
         .files
         .iter()
         .map(|file| runner::lexically_normal(&file.absolute))
@@ -305,22 +338,26 @@ fn task_uncommitted_reads(
     // A marker a sparse checkout left out is still the commit's configuration,
     // and a batch file it left out is one the tool would never see, however it
     // reads, while the task would report that file checked.
-    let mut reads = differences.markers(task.spec, &directories);
+    let mut reads = if task.spec.reads_other_sources {
+        let mut reads = differences.index_only_markers(task.spec, &directories);
+        reads.extend(named_where(&differences.differing, |_| true));
+        reads
+    } else {
+        let mut reads = differences.markers(task.spec, &directories);
+        if !differences.differing.is_empty() {
+            let targets = canonical_reads(task, &directories);
+            reads.extend(named_where(&differences.differing, |path| {
+                files.contains(&path.absolute)
+                    || path
+                        .canonical()
+                        .is_some_and(|target| targets.contains(target))
+            }));
+        }
+        reads
+    };
     reads.extend(named_where(&differences.index_only, |path| {
         files.contains(&path.absolute)
     }));
-    if task.spec.reads_other_sources {
-        reads.extend(named_where(&differences.differing, |_| true));
-    } else {
-        let targets = canonical_reads(task, &directories);
-        reads.extend(named_where(&differences.differing, |path| {
-            files.contains(&path.absolute)
-                || path
-                    .absolute
-                    .canonicalize()
-                    .is_ok_and(|target| targets.contains(&target))
-        }));
-    }
     reads.sort();
     reads.dedup();
     reads
@@ -413,26 +450,45 @@ fn fail_uncommitted_markers(
     if differences.differing.is_empty() && differences.index_only.is_empty() {
         return;
     }
+    // Group by `(tool, parent directory)` so marker-symlink resolution runs
+    // once per directory rather than once per unconfigured file.
+    let mut groups: Vec<(&'static ToolSpec, Option<PathBuf>, Vec<PathBuf>)> = Vec::new();
+    let mut by_key: HashMap<(*const ToolSpec, Option<PathBuf>), usize> = HashMap::new();
     for pair in unconfigured {
-        let directories = marker_directories(std::iter::once(pair.absolute.as_path()), base);
-        let paths = differences.markers(pair.spec, &directories);
+        let parent = pair.absolute.parent().map(Path::to_path_buf);
+        let key = (std::ptr::from_ref(pair.spec), parent);
+        if let Some(&idx) = by_key.get(&key) {
+            groups[idx].2.push(pair.file);
+        } else {
+            let idx = groups.len();
+            let parent_dir = key.1.clone();
+            by_key.insert(key, idx);
+            groups.push((pair.spec, parent_dir, vec![pair.file]));
+        }
+    }
+    for (spec, parent, files) in groups {
+        let directories = parent
+            .as_deref()
+            .map(|dir| runner::ancestors_within(dir, base).into_iter().collect())
+            .unwrap_or_default();
+        let paths = differences.markers(spec, &directories);
         if !paths.is_empty() {
             let reason = FailureReason::UncommittedChanges {
-                tool: pair.spec.name.to_owned(),
+                tool: spec.name.to_owned(),
                 paths,
             };
-            fail_all([pair.file], &reason, failures);
+            fail_all(files, &reason, failures);
         }
     }
 }
 
-/// Plan the per-language, per-tool batches, alongside the (tool, file)
+/// Plan the per-tool, per-workspace batches, alongside the (tool, file)
 /// pairs that found no configured workspace.
 ///
-/// "Per-language, per-tool" because the same tool can be configured for two
-/// languages, and the spec list lives on the language, not globally. A
-/// tool that appears in two languages' specs is run twice, once per
-/// language, so the bins are disjoint.
+/// Keyed by `(tool, workspace_root)` rather than per-language: a tool shared by
+/// multiple languages in the same workspace (such as `eslint` across JS/TS/Vue/
+/// Svelte or `cppcheck` across C/C++) spawns once with all matching files
+/// instead of paying repeated cold starts.
 ///
 /// An unconfigured pair is recorded rather than discarded: in staged mode
 /// the marker may be missing from the working tree while the committing
@@ -457,19 +513,19 @@ fn plan_tasks(work: &Work, root: &Path) -> (Vec<PlannedTask>, Vec<Unconfigured>)
         .collect();
 
     let repository_root = runner::absolute(root);
-    let mut tasks = Vec::new();
+    let mut config_cache = runner::ConfigCache::new(&repository_root);
+    let mut tasks: Vec<PlannedTask> = Vec::new();
+    let mut task_index: HashMap<(*const ToolSpec, PathBuf), usize> = HashMap::new();
     let mut unconfigured = Vec::new();
     for (language, files) in languages::group_by_language(&paths) {
-        for spec in language.tools {
-            let mut workspaces: BTreeMap<PathBuf, Vec<PlannedFile>> = BTreeMap::new();
+        for &spec in language.tools {
             for file in &files {
                 let absolute = if file.is_absolute() {
                     (*file).to_path_buf()
                 } else {
                     repository_root.join(file)
                 };
-                let Some(workspace_root) = runner::configuration_root(spec, &repository_root, file)
-                else {
+                let Some(workspace_root) = config_cache.configuration_root(spec, file) else {
                     unconfigured.push(Unconfigured {
                         spec,
                         file: (*file).to_path_buf(),
@@ -481,24 +537,25 @@ fn plan_tasks(work: &Work, root: &Path) -> (Vec<PlannedTask>, Vec<Unconfigured>)
                     continue;
                 };
                 let argument = relative.to_string_lossy().into_owned();
-                workspaces
-                    .entry(workspace_root)
-                    .or_default()
-                    .push(PlannedFile {
-                        original: (*file).to_path_buf(),
-                        absolute,
-                        argument,
-                    });
-            }
-            tasks.extend(
-                workspaces
-                    .into_iter()
-                    .map(|(workspace_root, files)| PlannedTask {
+                let planned = PlannedFile {
+                    original: (*file).to_path_buf(),
+                    absolute,
+                    argument,
+                };
+                let key = (std::ptr::from_ref(spec), workspace_root);
+                if let Some(&idx) = task_index.get(&key) {
+                    tasks[idx].files.push(planned);
+                } else {
+                    let idx = tasks.len();
+                    let workspace_root = key.1.clone();
+                    task_index.insert(key, idx);
+                    tasks.push(PlannedTask {
                         spec,
                         workspace_root,
-                        files,
-                    }),
-            );
+                        files: vec![planned],
+                    });
+                }
+            }
         }
     }
     (tasks, unconfigured)
@@ -539,9 +596,7 @@ fn fail_all(
     reason: &FailureReason,
     failures: &mut BTreeMap<PathBuf, FailureReason>,
 ) {
-    let batch: BTreeMap<PathBuf, FailureReason> = files
-        .into_iter()
-        .map(|file| (file, reason.clone()))
-        .collect();
-    union_failures(failures, batch);
+    for file in files {
+        failures.entry(file).or_insert_with(|| reason.clone());
+    }
 }
