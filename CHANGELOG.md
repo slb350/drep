@@ -16,6 +16,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Made `drep init`'s `.gitignore` updates atomic via a private sibling temporary file, closing the
   in-place truncation and symlink-swap window, and fixed the dangling-symlink pre-settlement check
   in `drep init` so existing dangling symlinks are settled before keys are stored.
+- A `go vet` failure no longer prints `go list`'s reason raw. When `go list` cannot place a
+  requested directory in the workspace, as for a module `go.work` does not use, its message names
+  the directory unquoted, and its JSON escapes decode back into the directory's own bytes. A branch
+  adding a Go file under a directory whose name held an OSC 52 clipboard write put that write, and
+  the line break go adds to the message, into `drep check`'s failure block. The reason is now
+  bounded and stripped of control characters through the runner's `stream_detail`, as every other
+  tool stream already is.
+- The lockfile takes `url` 2.5.8 to 2.5.9 and `Cargo.toml` declares `url = "2.5.9"` as a floor, for
+  `RUSTSEC-2026-0592` (alias `GHSA-hrj5-67jp-wqp9`), whose own record is the source for this: through
+  2.5.8, `Url::origin()` handled a `blob:` URL by parsing its path as another URL and calling itself
+  on the result whatever that inner URL's scheme was, so `Url::parse()` of 10,000 `blob:` prefixes
+  followed by `https://example.com/` - 50,020 bytes - and one call to `origin()` overflowed the
+  default 2 MiB stack of a spawned thread. A stack overflow aborts the process and `catch_unwind()`
+  does not catch it, so one such URL crashes any program calling `Url::origin()` or
+  `url::quirks::origin()` on untrusted input. 2.5.9 follows the URL Standard: it takes the inner
+  origin only for `http`, `https` and `file`, returns an opaque origin otherwise and never calls
+  itself. The published sources agree - 2.5.8's `origin.rs` recurses unconditionally where 2.5.9's
+  matches on the inner scheme - and 2.5.9 therefore answers `blob:ws://...` and nested `blob:` with
+  an opaque origin where 2.5.8 answered with a tuple origin.
+- drep does not reach the defect today. The advisory names `url::Url::origin` and
+  `url::quirks::origin` as the affected functions; grepping every crate source the graph extracts
+  locally - 276 crate versions, including both sides of every move below - finds those two referenced
+  nowhere but inside `url` itself, and drep's own use of the crate is the single `reqwest::Url::parse`
+  in `auth::display_endpoint`. The bound closes a route rather than fixing a live defect, and the
+  comment above it says so.
+- The lockfile alone is not the fix here, unlike the `rustls` entries this lock records with no target
+  building them: `url` is compiled into every release target through the HTTP client, the lock pins
+  this checkout and a packaged build but a consumer resolving `drep-ai` from the registry takes what
+  its own resolver prefers, and neither `reqwest`'s `^2.4` nor `tower-http`'s `^2.5` can be tightened
+  from here. `^2.5.9` sits inside both, so the graph keeps one shared copy - `cargo tree -i url` still
+  prints a single `url v2.5.9` - and the bound excludes a major line, so it cannot force a second copy
+  either. No advisory is ignored or allowlisted: no `audit.toml` and no ignore entry exists.
 
 ### Fixed
 
@@ -25,13 +57,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Updated `.pre-commit-hooks.yaml` `types_or` to cover all 23 registered languages introduced in
   v3.0 (adding `c`, `c++`, `c#`, `dockerfile`, `elixir`, `groovy`, `java`, `kotlin`, `lua`, `php`,
   `ruby`, `scala`, `shell`, `sql`, `svelte`, `swift`, `terraform`, and `vue`) and pinned its
-  coverage in `tests/published_hooks.rs`.
+  coverage in `tests/integration/published_hooks.rs`.
 - Fixed `diff::uncommitted::flagged_differences` double-joining a relative `root` onto paths
   already prefixed with `root`.
 - Made `review_budget::Budget::reset` tolerate concurrent lease removals (`NotFound`) and compute
   retention in a single `read_dir` pass.
 - Updated `taiki-e/install-action` in `.github/build-setup.yml` to `v2.90.6` and regenerated
   `.github/workflows/release.yml` via `dist generate`.
+- A remote mutation run no longer leaves live named pipes in the checkout. `scripts/mutants-remote.sh` kept its SSH session's two control pipes under `target/mutants/remote-session-*` for the whole run, so a `grep -r` over the checkout could open one, read the transport's messages and hang both processes; one such search stalled a run for 25 minutes. The pipes are now made under the mutation scratch root beside the checkout and removed as soon as both ends are open. The EXIT and PIPE traps are installed before the pipes are made, the EXIT trap kills any session job still running, and each run first removes the session directories a killed run left behind in either place, stopping with an error if one cannot be removed. A failed result mirror now shows rsync's error beside its warning. `tests/mutants-remote.sh` checks this against ssh, rsync and mkfifo stand-ins, and `validate` and the macOS test job now stop after an hour instead of six.
+- A remote mutation run that ends early now stops its SSH session under bash 5. `scripts/mutants-remote.sh` backgrounded the session through a shell function, which bash runs in a subshell; bash 3.2 skipped that fork for the function's trailing `command ssh`, but bash 5 does not, so the cleanup killed and reaped the subshell and left ssh running with the checkout and host locks. The session now starts through `ai1_ssh_session`, which execs ssh, so the job is ssh itself on every bash.
 
 ### Changed
 
@@ -40,8 +74,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   transport errors.
 - Reduced git subprocess overhead in `drep check --staged` and `--diff` by sharing a single
   working-tree view, avoiding eager `has_head` probes, streaming filtered diff parsing, and running
-  independent `git` queries concurrently in `Budget::for_repo`, `gitignore::ensure`, and
-  `hooks::install`.
+  independent `git` queries concurrently in `Budget::for_repo` and `hooks::install`.
 - Gated response-cache eviction on actual writes, offloaded eviction via `spawn_blocking`, switched
   `Cache::get` to a single open/stat read, and pre-hashed `(system_prompt, content)` once per
   failover chain.
@@ -54,6 +87,69 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `docs` linting, and deferred Tokio runtime creation for synchronous CLI subcommands.
 - Consolidated atomic sibling-temp file publication (`atomic_file`), named-path rejection mapping
   (`FailureReason::from_rejected`), raw TOML entry predicates, and `diff::repository_root`.
+- Consolidated all seven top-level integration test crates into a single binary at
+  `tests/integration/main.rs` and disabled the empty `[[bin]]` test harness (`test = false`) and
+  `[lib]` doctest pass (`doctest = false`) in `Cargo.toml`, cutting per-mutant compilation and
+  linking from 11 compilations / 10 links to 4 compilations / 3 links with zero change to test or
+  mutant coverage.
+- Accelerated mutation testing in `scripts/mutants-run.sh` and CI (`rust.yml`, `mutants.yml`)
+  without excluding any mutants: disabled DWARF debuginfo on mutation builds
+  (`CARGO_PROFILE_TEST_DEBUG=0`, `CARGO_PROFILE_DEV_DEBUG=0`), capped per-worker test threads,
+  added `.config/nextest.toml` (`[profile.mutants]` fail-fast and 10s/30s per-test timeouts so
+  infinite-loop mutants fail in seconds instead of waiting out the 120s suite floor), and wired
+  pinned `cargo-nextest@0.9.152` and `sccache@0.19.0` (private per-run Unix socket, persistent
+  bounded disk cache beside the checkout, clean server shutdown on exit).
+- The Rust 1.88-compatible lockfile refresh that carries it: `cargo audit` and `osv-scanner` reported
+  that one vulnerability against `main` before the update and nothing after it, and every gate the
+  refresh runs - `cargo fmt --all --check`, `cargo clippy --all-targets --all-features`,
+  `cargo test --all-targets --all-features`, `cargo test --doc --all-features`,
+  `RUSTDOCFLAGS=-D warnings cargo doc --no-deps --all-features --document-private-items` and
+  `cargo +1.88 check` - passed after the update, so no package was held back because it broke one.
+  19 packages moved, the lock still holds 255 of them, and the only dependency-edge change is the
+  `url` floor above; every other move is a compatible bump inside a bound this file already declared.
+- Four of these change what a build does beyond the advisory, each from the upstream source fetched
+  for it. `toml` 1.2.2 and `toml_parser` 1.1.6 "handle a stack overflow on invalid TOML files" (their
+  own `crates/toml/CHANGELOG.md` and `crates/toml_parser/CHANGELOG.md`), and that is the parser drep
+  runs over the local `drep.toml` and over `.drep/acknowledgements.toml`, which a branch under review
+  writes.
+  `walkdir` 2.5.1 detects symlink loops above the root of the walk (v2.5.0...v2.5.1), under `ignore`,
+  which drives the walk `drep check` performs. `regex` 1.13.2 fixes incorrect match offsets for
+  alternations whose branches start with the same repetition, a `BoundedBacktracker` panic when the
+  haystack exceeds its capacity and a `PikeVM` panic on excess capture slots, and drep matches its
+  fence, tool-output and payload patterns through it. `bytes` 1.12.2 fixes sign extension in
+  `try_get_int` and `try_get_int_le` and preserves buffer order in `Chain::chunks_vectored`, on the
+  `h2` and `hyper` buffers a streamed review response is assembled from.
+- `url` 2.5.9 and `form_urlencoded` 1.2.3 are one release upstream (`servo/rust-url`, the tag range
+  v2.5.8...v2.5.9, whose last commit bumps both), and besides the origin fix that range carries parser
+  work the endpoint parse reaches: percent-encoding `^` in a path, preserving the host in `file:` URLs
+  containing drive letters, rejecting backslashes in the port state of non-special URLs, and a
+  quadratic parse of `..` segments after a long authority. The `form_urlencoded` half is
+  `Serializer::for_suffix`, whose published source shows a `panic!("invalid length ...")` replaced by
+  clamping `start_position` to the target's length. `clap` 4.6.9 keeps the derive from raising
+  `unused_result` and 4.6.8 reduced its `dev`-profile stack usage, while `clap_lex` 1.1.2 ships
+  sources byte-identical to 1.1.1 - the move is its lockfile and metadata alone.
+- The rest are narrow, each from its changelog or, where none is published, from the commits between
+  the two tags: `hashbrown` 0.17.2 no longer leaks the allocator when an empty table is dropped and
+  keeps `ProbeSeq::move_next` in wrapping arithmetic; `bstr` 1.14.0 moves to Unicode 18; `zeroize`
+  1.9.2 implements `optimization_barrier` with `core::hint::black_box` where `asm!` is unstable and
+  optimizes slice zeroization; `compression-codecs` 0.4.48 adds a `zrip` zstd backend, which is not
+  the backend the `gzip` feature builds; `pin-project-lite` 0.2.18 fixes a `Drop` implementation check
+  for an always-unsized type; `cc` 1.11.3 is documentation about the archiver arguments it passes on
+  MSVC targets, and `cc` is what the vendored-OpenSSL arm64 Linux cross build compiles; `smallvec`
+  1.16.6 is the repository metadata pointing at `smallvec/smallvec` plus its release workflow and
+  style, its published `src` differing only in import and `where`-clause formatting. `regex-automata`
+  0.4.19 and `regex-syntax` 0.8.12 are the same 1.13.2 release, whose changelog names the
+  `regex-syntax` fixes inside it. Neither `bstr`, `walkdir` nor `smallvec` publishes a changelog.
+- Three packages are held back, none forced and none behind an advisory. `reqwest` stays at 0.12.28,
+  behind 0.13.5: 0.13 is semver-major and so outside `Cargo.toml`'s `0.12`, and `open-agent-sdk`
+  0.11.10's index entry still requires `reqwest ^0.12.28`, whose copy drep shares rather than building
+  a second one; the index gives 0.13.5 `rust_version` 1.85.0, so this hold is not the MSRV.
+  `ordered-float` stays at 5.4.0, behind 5.5.1, whose index entry declares `rust_version` 1.90 against
+  this crate's 1.88 floor; it reaches the development graph through `saphyr` alone, so no release
+  binary carries it. `saphyr` stays at 0.2.2, behind 0.4.0, whose index entry declares `rust_version`
+  1.85.0: the hold is the declared `0.2.2` requirement rather than the floor, because within `0.x`
+  every minor version is an API break and 0.4 is two of them ahead, so taking it migrates the
+  release-contract test rather than refreshing the lock.
 
 ## [3.1.9] - 2026-11-22
 

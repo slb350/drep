@@ -9,10 +9,8 @@
 //! native-versus-cross runner mapping are parsed where formatting is not part
 //! of the contract.
 
-mod common;
-#[path = "release_config/mutation_cleanup.rs"]
+use super::common;
 mod mutation_cleanup;
-#[path = "release_config/mutation_policy.rs"]
 mod mutation_policy;
 
 fn dist_config() -> String {

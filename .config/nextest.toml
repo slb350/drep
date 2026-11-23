@@ -1,0 +1,19 @@
+# Mutation-testing nextest profile.
+#
+# Used automatically by `scripts/mutants-run.sh` when `cargo-nextest` is
+# installed (`NEXTEST_PROFILE=mutants`). Stopping on the first failing test
+# avoids running the rest of the suite once a mutant is caught, and per-test
+# timeouts terminate infinite-loop mutants in seconds instead of letting them
+# burn 100% CPU until cargo-mutants' 120-second whole-suite floor expires.
+
+[profile.mutants]
+fail-fast = true
+slow-timeout = { period = "10s", terminate-after = 3 }
+
+# Pure in-memory parsers and linters finish in < 1 ms per test and generate the
+# vast majority of infinite-loop mutants (including `uri::percent_decode`, which
+# is exercised by `parsers_sarif` and otherwise allocates unboundedly when its
+# cursor stops advancing).
+[[profile.mutants.overrides]]
+filter = 'test(/^docs::/) | test(/parsers_/) | test(/uri/) | test(/percent_decode/) | test(/quoting/) | test(/json_parsing/)'
+slow-timeout = { period = "5s", terminate-after = 2 }

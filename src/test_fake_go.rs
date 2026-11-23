@@ -25,7 +25,7 @@ pub(crate) struct Vet {
 
 /// A Go workspace at `root` configured for [`spec`]: each of `files` empty with its directories, the marker, and the stub `fakego`. Returns the log its `vet` calls append their arguments to.
 ///
-/// `fakego list` answers as `go list -e -json` would, from the files on disk. Every `*.go` file in a directory is in its package except that a `*_ignored.go` file stands for one build constraints exclude, and a `*_invalid.go` file for one with a malformed `//go:build` line, which go reports in `InvalidGoFiles` with a position-less package error. A directory whose name starts with `broken` has an unresolvable import, and one named `outside` comes back with an error and no `Dir`, as a module go.work does not use does. Any other call appends its arguments to the log one per line, refuses `.go` files from more than one directory as `go vet` does, and otherwise prints and exits as `vet` says.
+/// `fakego list` answers as `go list -e -json` would, from the files on disk. Every `*.go` file in a directory is in its package except that a `*_ignored.go` file stands for one build constraints exclude, and a `*_invalid.go` file for one with a malformed `//go:build` line, which go reports in `InvalidGoFiles` with a position-less package error. A directory whose name starts with `broken` has an unresolvable import, and one named `outside` comes back with an error and no `Dir`, as a module go.work does not use does. One named `outside_escape` comes back the same way with the message Go 1.25.4 prints for such a directory whose name holds an OSC 52 clipboard write: the name goes into `Err` unquoted, JSON-escaped only, so it decodes to raw ESC and BEL, and the message carries a newline and a tab of its own. Any other call appends its arguments to the log one per line, refuses `.go` files from more than one directory as `go vet` does, and otherwise prints and exits as `vet` says.
 pub(crate) fn workspace(root: &Path, files: &[&str], vet: Vet) -> PathBuf {
     for file in files {
         let path = root.join(file);
@@ -47,6 +47,10 @@ if [ "$1" = list ]; then
   shift
   for d in "$@"; do
     case "$d" in -*) continue ;; esac
+    case "$d" in */outside_escape)
+      printf '%s\n' '{"Error":{"ImportStack":[],"Pos":"","Err":"directory outside\u001b]52;c;cHduZWQ=\u0007 is contained in a module that is not one of the workspace modules listed in go.work. You can add the module to the workspace using:\n\tgo work use ."}}'
+      continue ;;
+    esac
     case "$d" in */outside)
       printf '{"Error":{"Err":"directory outside is contained in a module that is not one of the workspace modules"}}\n'
       continue ;;

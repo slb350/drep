@@ -57,7 +57,7 @@ fn walk_this_repo_prunes_vendored_trees_and_respects_gitignore() {
     // scan target - `check` and `lint-docs` own disjoint file classes - so
     // this list is code only, and the assertion below states the absence
     // rather than leaving it to be inferred from a missing entry.
-    for expected in ["src/lib.rs", "tests/cli.rs"] {
+    for expected in ["src/lib.rs", "tests/integration/main.rs"] {
         assert!(rel.iter().any(|p| p == expected), "missing {expected}");
     }
     assert!(

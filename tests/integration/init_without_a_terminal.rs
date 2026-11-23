@@ -10,7 +10,7 @@
 //! Running the binary with a piped stdin is the only thing that tells those two
 //! apart, which is why this lives here rather than beside the other init tests.
 
-mod common;
+use super::common;
 
 use std::process::{Command, Stdio};
 
@@ -465,7 +465,7 @@ fn fixtures_leave_the_repository_a_hook_runs_them_in_alone() {
 
     let output = Command::new(std::env::current_exe().expect("this test binary"))
         .args([
-            "a_piped_stdin_takes_the_flag_path_rather_than_prompting",
+            "init_without_a_terminal::a_piped_stdin_takes_the_flag_path_rather_than_prompting",
             "--exact",
             "--test-threads=1",
         ])

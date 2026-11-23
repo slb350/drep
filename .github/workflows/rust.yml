@@ -20,6 +20,8 @@ jobs:
     name: validate (ai-1)
     if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: [self-hosted, linux, x64, homelab-1, drep-linux]
+    # Warm runs take about two minutes. Without a limit a hung test holds this repository's only runner for GitHub's six-hour default.
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -65,6 +67,8 @@ jobs:
   test-macos:
     name: test (Mac mini)
     if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+    # The same bound as validate, for the same reason.
+    timeout-minutes: 60
     runs-on: [self-hosted, macos, arm64, drep-macos]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -112,6 +116,14 @@ jobs:
       - uses: taiki-e/install-action@75a7c0f87bd666af3cdb75c5b9e9d03ab6044e6f # v2.90.6
         with:
           tool: cargo-mutants@27.1.0
+
+      - uses: taiki-e/install-action@75a7c0f87bd666af3cdb75c5b9e9d03ab6044e6f # v2.90.6
+        with:
+          tool: cargo-nextest@0.9.152
+
+      - uses: taiki-e/install-action@75a7c0f87bd666af3cdb75c5b9e9d03ab6044e6f # v2.90.6
+        with:
+          tool: sccache@0.19.0
 
       # Three dots diff from the merge base, so a pull request's diff holds only its own changes after its base branch moves on. An empty end would read as HEAD and yield an empty diff, which cargo-mutants passes.
       - name: Materialize diff

@@ -6,7 +6,7 @@
 //! the returned code - lives in `main.rs` and is only observable from outside
 //! the process.
 
-mod common;
+use super::common;
 
 use assert_cmd::Command;
 use tempfile::TempDir;
