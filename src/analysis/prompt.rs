@@ -23,11 +23,40 @@
 //! number provenance the parser relies on to drop findings that point at
 //! code the model was never shown.
 
+use std::borrow::Cow;
+use std::collections::HashMap;
+use std::sync::LazyLock;
+
 use crate::analysis::findings::LlmSeverity;
 use crate::analysis::response_contract::{
     CATEGORY, CODE_SNIPPET, COMPILE_FAILURE, ISSUES, LINE, MESSAGE, SEVERITY, SUGGESTION, SUMMARY,
 };
 use crate::languages::spec::LanguageSupport;
+
+/// Cached system prompts for every registered language, keyed by the static
+/// `LanguageSupport` address so repeated files in one language reuse the same
+/// rendered prompt without allocating.
+static CACHED_PROMPTS: LazyLock<HashMap<usize, String>> = LazyLock::new(|| {
+    crate::languages::all_languages()
+        .iter()
+        .map(|language| {
+            (
+                std::ptr::from_ref(*language) as usize,
+                build_analysis_prompt(language),
+            )
+        })
+        .collect()
+});
+
+/// Return the code-quality system prompt for `language`, borrowing the cached
+/// prompt for every registered language.
+pub(crate) fn analysis_prompt(language: &LanguageSupport) -> Cow<'static, str> {
+    if let Some(cached) = CACHED_PROMPTS.get(&(std::ptr::from_ref(language) as usize)) {
+        Cow::Borrowed(cached.as_str())
+    } else {
+        Cow::Owned(build_analysis_prompt(language))
+    }
+}
 
 /// Build the code-quality system prompt for one language.
 ///

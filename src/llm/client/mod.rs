@@ -36,11 +36,11 @@
 //!   it. That workaround is gone.)
 
 use std::collections::BTreeMap;
+use std::sync::Mutex;
 use std::time::Duration;
 
-use futures::StreamExt;
 use open_agent::retry::{RetryConfig, retry_with_backoff_conditional};
-use open_agent::{AgentOptions, ApiProtocol, ContentBlock, FinishReason, StreamEvent, query};
+use open_agent::{AgentOptions, ApiProtocol, ContentBlock, FinishReason, Message};
 
 use crate::config::LlmConfig;
 use crate::llm::error::LlmError;
@@ -104,6 +104,11 @@ pub struct LlmClient {
     /// is deliberately omitted from `Debug`.
     request_identity: String,
     pub(crate) retry_config: RetryConfig,
+    /// Reusable SDK clients holding persistent `reqwest::Client` connection
+    /// and TLS pools across files. Clients return to the pool only after a
+    /// clean stream EOF with conversation history cleared, so errors and
+    /// cancelled futures never leak state across requests.
+    pool: Mutex<Vec<open_agent::Client>>,
 }
 
 /// Hand-written so the API key cannot reach a log.
@@ -239,7 +244,70 @@ impl LlmClient {
                 backoff_multiplier: 2.0,
                 jitter_factor: 0.1,
             },
+            pool: Mutex::new(Vec::new()),
         })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn pooled_clients(&self) -> usize {
+        self.pool
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .len()
+    }
+
+    fn build_options(&self) -> open_agent::Result<AgentOptions> {
+        let mut builder = AgentOptions::builder()
+            .model(&self.model)
+            .base_url(&self.base_url)
+            .api_key(&self.api_key)
+            .protocol(self.protocol)
+            .timeout(self.timeout_secs);
+
+        // Only send a temperature when one was configured. An unset value means the
+        // field is omitted entirely, which is the only thing that works against a
+        // model that rejects the parameter.
+        if let Some(temperature) = self.temperature {
+            builder = builder.temperature(temperature);
+        }
+
+        // Only set a ceiling when the user asked for one. open-agent-sdk 0.7.0
+        // omits `max_tokens` from the request when the setter is never called,
+        // so "unset" genuinely means "let the server decide" rather than the
+        // implicit 4096 earlier versions substituted.
+        if let Some(limit) = self.max_tokens {
+            builder = builder.max_tokens(limit);
+        }
+
+        // No ordering rule here, and that is the point: `self.headers` is
+        // already the effective set, resolved once when the client was built, so
+        // this loop cannot get the precedence between drep's own `User-Agent`
+        // and an operator's replacement for it wrong.
+        for (name, value) in &self.headers {
+            builder = builder.header(name, value);
+        }
+
+        builder.build()
+    }
+
+    fn acquire_client(&self) -> open_agent::Result<open_agent::Client> {
+        if let Some(client) = self
+            .pool
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .pop()
+        {
+            return Ok(client);
+        }
+        open_agent::Client::new(self.build_options()?)
+    }
+
+    fn release_client(&self, mut client: open_agent::Client) {
+        client.clear_history();
+        self.pool
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(client);
     }
 
     /// Send one prompt and return the extracted JSON.
@@ -261,49 +329,6 @@ impl LlmClient {
         system_prompt: &str,
         user_content: &str,
     ) -> Result<Extracted, LlmError> {
-        // Build options per request. The SDK doesn't expose a way to set
-        // `system_prompt` after `build()`, and the retry closure needs to
-        // borrow the same options across attempts.
-        let builder = AgentOptions::builder()
-            .model(&self.model)
-            .base_url(&self.base_url)
-            .api_key(&self.api_key)
-            .system_prompt(system_prompt)
-            .protocol(self.protocol)
-            .timeout(self.timeout_secs);
-
-        // Only send a temperature when one was configured. An unset value means the
-        // field is omitted entirely, which is the only thing that works against a
-        // model that rejects the parameter.
-        let builder = match self.temperature {
-            Some(temperature) => builder.temperature(temperature),
-            None => builder,
-        };
-
-        // Only set a ceiling when the user asked for one. open-agent-sdk 0.7.0
-        // omits `max_tokens` from the request when the setter is never called,
-        // so "unset" genuinely means "let the server decide" rather than the
-        // implicit 4096 earlier versions substituted.
-        let builder = match self.max_tokens {
-            Some(limit) => builder.max_tokens(limit),
-            None => builder,
-        };
-
-        // No ordering rule here, and that is the point: `self.headers` is
-        // already the effective set, resolved once when the client was built, so
-        // this loop cannot get the precedence between drep's own `User-Agent`
-        // and an operator's replacement for it wrong.
-        let mut builder = builder;
-        for (name, value) in &self.headers {
-            builder = builder.header(name, value);
-        }
-
-        let options = builder
-            .build()
-            .map_err(|e| LlmError::NotConfigured(format!("AgentOptions build failed: {e}")))?;
-
-        let prompt = user_content.to_string();
-
         // The no-JSON retry is drep's own loop, deliberately *outside* the
         // SDK's. Handing "no JSON" to the SDK by returning `Err` would work,
         // but it would surface as `LlmError::Transport` once the attempts ran
@@ -319,7 +344,7 @@ impl LlmClient {
         for _ in 0..NO_JSON_ATTEMPTS {
             let result: open_agent::Result<Answer> =
                 retry_with_backoff_conditional(self.retry_config.clone(), || {
-                    self.run_one_query(&prompt, &options)
+                    self.run_one_query(system_prompt, user_content)
                 })
                 .await;
 
@@ -375,32 +400,30 @@ impl LlmClient {
     /// the same request cannot benefit from a retry.
     async fn run_one_query(
         &self,
-        prompt: &str,
-        options: &AgentOptions,
+        system_prompt: &str,
+        user_content: &str,
     ) -> open_agent::Result<Answer> {
-        let mut stream = query(prompt, options).await?;
+        let mut client = self.acquire_client()?;
+        if !system_prompt.is_empty() {
+            client
+                .history_mut()
+                .push(Message::system(system_prompt.to_owned()));
+        }
+        client.send(user_content).await?;
         let mut text = String::new();
+        while let Some(block) = client.receive().await? {
+            if let ContentBlock::Text(t) = block {
+                text.push_str(&t.text);
+            }
+        }
         // `Unspecified` is the right default rather than a panic-if-absent:
         // several OpenAI-compatible servers never report a reason at all, and
         // "no information" is a distinct answer from "stopped normally".
-        let mut finish = FinishReason::Unspecified;
-        while let Some(event) = stream.next().await {
-            match event? {
-                // Image, ToolUse, ToolResult are not used here.
-                StreamEvent::Block(ContentBlock::Text(t)) => text.push_str(&t.text),
-                StreamEvent::Finish(reason) => finish = reason,
-                // Everything else is discarded, and that is the contract:
-                // `text` holds assistant text and nothing else. It covers the
-                // non-text blocks drep has no use for, the `Reasoning` side
-                // channel (opt-in, and drep does not opt in - chain-of-thought
-                // must never reach the text drep parses as JSON), and any
-                // variant a later SDK adds, since `StreamEvent` is
-                // `#[non_exhaustive]`. Spelled as one arm because a separate
-                // `Reasoning(_) => {}` above it does the same nothing, and an
-                // arm indistinguishable from the wildcard is dead code.
-                _ => {}
-            }
-        }
+        let finish = client
+            .finish_reason()
+            .cloned()
+            .unwrap_or(FinishReason::Unspecified);
+        self.release_client(client);
 
         // An empty body is a **transport** failure, not a parse failure.
         //

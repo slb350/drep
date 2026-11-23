@@ -309,12 +309,10 @@ impl<F: Fetch> Cached<F> {
 
 impl<F: Fetch> QuirksSource for Cached<F> {
     async fn registry(&self) -> Result<Registry, QuirksError> {
-        let cached = self.path.as_deref().and_then(Registry::load);
-        if let Some(registry) = &cached
-            && !registry.is_stale(self.now)
-        {
-            return Ok(registry.clone());
-        }
+        let cached = match self.path.as_deref().and_then(Registry::load) {
+            Some(registry) if !registry.is_stale(self.now) => return Ok(registry),
+            other => other,
+        };
 
         let fetched = self
             .fetcher

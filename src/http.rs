@@ -83,12 +83,12 @@ pub async fn read_bounded(
         .await
         .map_err(|err| ReadError::Transport(err.to_string()))?
     {
-        body.extend_from_slice(&chunk);
-        if body.len() as u64 > max_bytes {
+        if (body.len() as u64).saturating_add(chunk.len() as u64) > max_bytes {
             return Err(ReadError::Transport(format!(
                 "the response exceeded the {max_bytes}-byte limit"
             )));
         }
+        body.extend_from_slice(&chunk);
     }
 
     String::from_utf8(body)

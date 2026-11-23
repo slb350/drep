@@ -160,9 +160,14 @@ impl Provider {
     /// went missing from it: the tests spelled out `model` and `temperature` by
     /// hand and agreed with the bug.
     pub fn cache_key(&self, cache: &Cache, system_prompt: &str, user_content: &str) -> CacheKey {
-        cache.key(
-            system_prompt,
-            user_content,
+        let _ = cache;
+        let payload = Cache::payload_hasher(system_prompt, user_content);
+        self.cache_key_from_payload(&payload)
+    }
+
+    fn cache_key_from_payload(&self, payload: &blake3::Hasher) -> CacheKey {
+        Cache::key_from_payload(
+            payload,
             &self.identity,
             self.model(),
             self.backend.request_identity(),
@@ -340,6 +345,7 @@ impl ProviderChain {
         consult_cache: bool,
     ) -> Result<Served, ChainError> {
         let mut attempts: Vec<Attempt> = Vec::new();
+        let payload = Cache::payload_hasher(system_prompt, user_content);
 
         for (index, provider) in self.providers.iter().enumerate() {
             match try_provider(
@@ -347,6 +353,7 @@ impl ProviderChain {
                 provider,
                 system_prompt,
                 user_content,
+                &payload,
                 cache,
                 consult_cache,
             )
@@ -377,8 +384,9 @@ impl ProviderChain {
         user_content: &str,
         cache: &Cache,
     ) -> Option<Served> {
+        let payload = Cache::payload_hasher(system_prompt, user_content);
         for (index, provider) in self.providers.iter().enumerate() {
-            let key = provider.cache_key(cache, system_prompt, user_content);
+            let key = provider.cache_key_from_payload(&payload);
             if let Some(served) = cached_for(index, provider, &key, cache) {
                 return Some(served);
             }
@@ -424,17 +432,23 @@ async fn try_provider(
     provider: &Provider,
     system_prompt: &str,
     user_content: &str,
+    payload: &blake3::Hasher,
     cache: &Cache,
     consult_cache: bool,
 ) -> ProviderOutcome {
-    // The key is computed here, from *this* provider's model, and the `Served`
+    // The key is derived from *this* provider's identity, and the `Served`
     // carries it back so the caller cannot file the answer under a different
     // provider's key. A cache hit precedes demotion because it spends no
     // backend request and remains the preferred provider's own verdict.
-    let key = provider.cache_key(cache, system_prompt, user_content);
-    if consult_cache && let Some(served) = cached_for(index, provider, &key, cache) {
-        return ProviderOutcome::Served(served);
-    }
+    let cached_key = if consult_cache {
+        let key = provider.cache_key_from_payload(payload);
+        if let Some(served) = cached_for(index, provider, &key, cache) {
+            return ProviderOutcome::Served(served);
+        }
+        Some(key)
+    } else {
+        None
+    };
 
     // Already down: report what it said the first time rather than paying the
     // SDK's backoff schedule to be told again.
@@ -467,6 +481,7 @@ async fn try_provider(
 
     match outcome {
         Ok(extracted) => {
+            let key = cached_key.unwrap_or_else(|| provider.cache_key_from_payload(payload));
             provider.record_served();
             ProviderOutcome::Served(Served {
                 provider: index,

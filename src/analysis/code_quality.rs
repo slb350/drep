@@ -37,8 +37,8 @@ use futures::future::join_all;
 use serde_json::Value;
 
 use crate::analysis::findings::{Finding, LlmSeverity};
-use crate::analysis::payload;
-use crate::analysis::prompt::build_analysis_prompt;
+use crate::analysis::payload::{self, RenderOutcome};
+use crate::analysis::prompt::analysis_prompt;
 use crate::analysis::response_contract::{
     CATEGORY, COMPILE_FAILURE, ISSUES, LINE, MESSAGE, SEVERITY, SUGGESTION,
 };
@@ -134,33 +134,25 @@ impl CodeQualityAnalyzer {
             return AnalysisResult::default();
         };
 
-        // Rule 3: payload. `render` returns `None` only for an empty slice,
-        // which the `hunks.first()` guard above has already excluded - rule 2
-        // and rule 3 are the same check, so a second `hunks.is_empty()` here
-        // would be unreachable rather than defensive.
-        let Some(payload) = payload::render(language, hunks) else {
-            return AnalysisResult::default();
+        // Rule 3: bounded payload render. The size ceiling is enforced on the
+        // *rendered payload*, so it holds for every input mode without retaining
+        // multi-megabyte diffs in memory. Too large is a *failure*, not a skip;
+        // a file drep declined to analyze is not clean.
+        let payload = match payload::render_within(language, hunks, payload::PAYLOAD_MAX_BYTES) {
+            None => return AnalysisResult::default(),
+            Some(RenderOutcome::TooLarge { bytes }) => {
+                return AnalysisResult::failed(
+                    first.file_path.clone(),
+                    FailureReason::PayloadTooLarge {
+                        bytes,
+                        limit: payload::PAYLOAD_MAX_BYTES,
+                    },
+                );
+            }
+            Some(RenderOutcome::Ready(payload)) => payload,
         };
 
-        // The size ceiling is enforced on the *rendered payload*, so it holds
-        // for every input mode. Checking the file size during paths-mode input
-        // resolution - as this used to, and still does as a pre-filter - left
-        // `--staged` and `--diff` unguarded, which are the two modes a commit
-        // gate actually runs in: a newly-added 5 MB file reached the model
-        // whole. Too large is a *failure*, not a skip; a file drep declined to
-        // analyze is not clean.
-        let rendered = u64::try_from(payload.text.len()).unwrap_or(u64::MAX);
-        if rendered > payload::PAYLOAD_MAX_BYTES {
-            return AnalysisResult::failed(
-                first.file_path.clone(),
-                FailureReason::PayloadTooLarge {
-                    bytes: rendered,
-                    limit: payload::PAYLOAD_MAX_BYTES,
-                },
-            );
-        }
-
-        let system_prompt = build_analysis_prompt(language);
+        let system_prompt = analysis_prompt(language);
 
         // Rules 4, 5 and the failover loop all live in the chain: the cache is
         // consulted per provider (a hit costs no concurrency slot, because the

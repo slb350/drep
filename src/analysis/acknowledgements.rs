@@ -121,6 +121,9 @@ pub fn validate_fingerprint(value: &str) -> Result<()> {
 
 /// Attach source-sensitive fingerprints and remove ones already adjudicated.
 pub fn apply(findings: &mut Vec<Finding>, by_file: &[Vec<Hunk>], store: &Store) {
+    if findings.is_empty() {
+        return;
+    }
     let hunks_by_file: std::collections::BTreeMap<&Path, &[Hunk]> = by_file
         .iter()
         .filter_map(|hunks| {
@@ -145,30 +148,24 @@ pub fn apply(findings: &mut Vec<Finding>, by_file: &[Vec<Hunk>], store: &Store) 
 fn fingerprint(finding: &Finding, hunks: &[Hunk]) -> Option<String> {
     let start = finding.line.saturating_sub(CONTEXT_RADIUS);
     let end = finding.line.saturating_add(CONTEXT_RADIUS);
-    let mut context = Vec::new();
-    let mut contains_target = false;
-    for (number, content) in hunks.iter().flat_map(Hunk::numbered_new_lines) {
-        if number == finding.line {
-            contains_target = true;
-        }
-        if (start..=end).contains(&number) {
-            context.push((number == finding.line, content));
-        }
-    }
-    if !contains_target {
-        return None;
-    }
     let mut hasher = blake3::Hasher::new();
     hasher.update(b"drep-acknowledgement-v1\0");
     hasher.update(finding.file_path.as_bytes());
     hasher.update(b"\0");
     hasher.update(finding.kind.as_bytes());
-    for (is_target, line) in context {
-        hasher.update(b"\0");
-        hasher.update(if is_target { b"target\0" } else { b"context\0" });
-        hasher.update(line.as_bytes());
+    let mut contains_target = false;
+    for (number, content) in hunks.iter().flat_map(Hunk::numbered_new_lines) {
+        let is_target = number == finding.line;
+        if is_target {
+            contains_target = true;
+        }
+        if (start..=end).contains(&number) {
+            hasher.update(b"\0");
+            hasher.update(if is_target { b"target\0" } else { b"context\0" });
+            hasher.update(content.as_bytes());
+        }
     }
-    Some(hasher.finalize().to_hex().to_string())
+    contains_target.then(|| hasher.finalize().to_hex().to_string())
 }
 
 #[cfg(test)]
