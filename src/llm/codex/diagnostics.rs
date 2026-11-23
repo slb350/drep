@@ -1,20 +1,29 @@
-//! Redacted interpretation of `codex doctor --json`.
+//! Fast, redacted Codex CLI readiness check via `--version` and `login status`.
+//!
+//! `codex doctor --json` runs full SQLite integrity and session-rollout parity
+//! scans that can exceed two minutes on machines with large Codex histories,
+//! whereas drep only needs two redacted facts: the CLI version (for cache
+//! identity and reporting) and confirmation that ChatGPT-managed auth is
+//! active. `--version` and `login status` answer both in ~0.1 s without reading
+//! Codex's credential files or history databases directly.
 
+use std::ffi::OsStr;
 use std::path::Path;
-use std::process::Stdio;
+use std::process::{ExitStatus, Stdio};
 use std::time::{Duration, Instant};
 
-use serde::Deserialize;
 use thiserror::Error;
 
 use super::{
     CodexStatus,
     capture::{BoundedCapture, ReadBoundedError},
-    command::ChildEnvironment,
+    command::{ChildEnvironment, toml_override},
 };
 
 const DIAGNOSTIC_MAX_BYTES: usize = 1024 * 1024;
 pub(crate) const DIAGNOSTIC_TIMEOUT: Duration = Duration::from_secs(30);
+const VERSION_PREFIX: &str = "codex-cli ";
+const CHATGPT_LOGIN_LINE: &str = "Logged in using ChatGPT";
 
 #[derive(Debug, Error, PartialEq, Eq)]
 pub(crate) enum DiagnosticError {
@@ -28,38 +37,88 @@ pub(crate) enum DiagnosticError {
     Timeout,
     #[error("Codex CLI diagnostic output was too large")]
     OutputTooLarge,
-    #[error("Codex diagnostic output is not valid JSON")]
-    InvalidJson,
     #[error("unsupported Codex CLI diagnostic format; update drep or use a supported Codex CLI")]
     UnsupportedFormat,
     #[error("Codex authentication is not ChatGPT-managed; run `codex login`")]
     NotChatGpt,
 }
 
-/// Run the redacted diagnostic in an empty directory and retain no raw details.
+/// Verify Codex CLI version and ChatGPT-managed authentication in an empty
+/// directory, retaining only the redacted CLI version.
 pub(crate) fn probe(
     executable: &Path,
     environment: &ChildEnvironment,
     timeout: Duration,
 ) -> Result<CodexStatus, DiagnosticError> {
     let cwd = tempfile::tempdir().map_err(|_| DiagnosticError::Workspace)?;
+    let started = Instant::now();
+
+    let (version_status, version_bytes) = run_capture(
+        executable,
+        &[OsStr::new("--version")],
+        environment,
+        cwd.path(),
+        false,
+        started,
+        timeout,
+    )?;
+    if !version_status.success() {
+        return Err(DiagnosticError::Process);
+    }
+    let version = parse_version(&version_bytes)?;
+
+    let forced_login = toml_override("forced_login_method", "chatgpt");
+    let (login_status, login_bytes) = run_capture(
+        executable,
+        &[
+            OsStr::new("-c"),
+            OsStr::new(&forced_login),
+            OsStr::new("login"),
+            OsStr::new("status"),
+        ],
+        environment,
+        cwd.path(),
+        true,
+        started,
+        timeout,
+    )?;
+    parse_login_status(login_status.success(), &login_bytes)?;
+
+    Ok(CodexStatus::new(version))
+}
+
+fn run_capture(
+    executable: &Path,
+    args: &[&OsStr],
+    environment: &ChildEnvironment,
+    cwd: &Path,
+    merge_stderr: bool,
+    started: Instant,
+    timeout: Duration,
+) -> Result<(ExitStatus, Vec<u8>), DiagnosticError> {
     let mut output = BoundedCapture::new().map_err(|_| DiagnosticError::Workspace)?;
-    let child_output = output
+    let child_stdout = output
         .child_stdio()
         .map_err(|_| DiagnosticError::Workspace)?;
+    let child_stderr = if merge_stderr {
+        output
+            .child_stdio()
+            .map_err(|_| DiagnosticError::Workspace)?
+    } else {
+        Stdio::null()
+    };
     let mut command = std::process::Command::new(executable);
     command
-        .args(["doctor", "--json"])
-        .current_dir(cwd.path())
+        .args(args)
+        .current_dir(cwd)
         .stdin(Stdio::null())
-        .stdout(child_output)
-        .stderr(Stdio::null());
+        .stdout(child_stdout)
+        .stderr(child_stderr);
     environment.apply_to_std(&mut command);
     let mut child = command.spawn().map_err(|err| match err.kind() {
         std::io::ErrorKind::NotFound => DiagnosticError::MissingBinary,
         _ => DiagnosticError::Process,
     })?;
-    let started = Instant::now();
     let status = loop {
         match child.try_wait() {
             Ok(Some(status)) => break status,
@@ -86,14 +145,7 @@ pub(crate) fn probe(
             ReadBoundedError::TooLarge(_) => DiagnosticError::OutputTooLarge,
             ReadBoundedError::Io(_) => DiagnosticError::Process,
         })?;
-    // `codex doctor` reports unrelated health checks too and may exit nonzero
-    // while still emitting a complete, known authentication document. drep
-    // retains only those redacted facts, so a valid document is authoritative;
-    // a nonzero status with no document is still a process failure.
-    if !status.success() && bytes.is_empty() {
-        return Err(DiagnosticError::Process);
-    }
-    parse(bytes.as_slice())
+    Ok((status, bytes))
 }
 
 pub(super) fn stop(child: &mut std::process::Child) {
@@ -110,60 +162,38 @@ pub(crate) fn poll_before_deadline(elapsed: Duration, deadline: Duration) -> boo
     elapsed < deadline
 }
 
-/// Parse a known diagnostic schema without retaining account paths or details.
-pub(crate) fn parse(input: &[u8]) -> Result<CodexStatus, DiagnosticError> {
-    let diagnostic: Diagnostic<'_> =
-        serde_json::from_slice(input).map_err(|_| DiagnosticError::InvalidJson)?;
-
-    if diagnostic.schema_version != Some(1) {
+/// Parse `codex --version` output (`codex-cli <version>`), rejecting empty,
+/// whitespace-bearing, or control-character-bearing versions so untrusted bytes
+/// can never reach terminal output.
+pub(crate) fn parse_version(input: &[u8]) -> Result<String, DiagnosticError> {
+    let text = std::str::from_utf8(input).map_err(|_| DiagnosticError::UnsupportedFormat)?;
+    let version = text
+        .trim_end_matches(['\r', '\n'])
+        .strip_prefix(VERSION_PREFIX)
+        .ok_or(DiagnosticError::UnsupportedFormat)?;
+    if version.is_empty()
+        || version
+            .chars()
+            .any(|ch| ch.is_control() || ch.is_whitespace())
+    {
         return Err(DiagnosticError::UnsupportedFormat);
     }
-    let version = diagnostic
-        .codex_version
-        .filter(|version| !version.is_empty())
-        .ok_or(DiagnosticError::UnsupportedFormat)?;
-    let details = diagnostic
-        .checks
-        .and_then(|checks| checks.auth_credentials)
-        .and_then(|check| check.details)
-        .ok_or(DiagnosticError::UnsupportedFormat)?;
+    Ok(version.to_owned())
+}
 
-    let chatgpt = details.stored_chatgpt_tokens == Some("true")
-        && details.stored_auth_mode == Some("chatgpt");
-    if !chatgpt {
-        return Err(DiagnosticError::NotChatGpt);
+/// Interpret `codex login status` without retaining raw account details.
+///
+/// Codex prints `Logged in using ChatGPT` on stderr (or stdout in future
+/// releases) when ChatGPT-managed login is active. API-key or logged-out states
+/// map to [`DiagnosticError::NotChatGpt`]; an empty nonzero exit is a process
+/// failure.
+pub(crate) fn parse_login_status(success: bool, input: &[u8]) -> Result<(), DiagnosticError> {
+    if !success && input.is_empty() {
+        return Err(DiagnosticError::Process);
     }
-
-    Ok(CodexStatus::new(version))
-}
-
-#[derive(Deserialize)]
-struct Diagnostic<'a> {
-    #[serde(rename = "schemaVersion")]
-    schema_version: Option<u64>,
-    #[serde(rename = "codexVersion")]
-    codex_version: Option<&'a str>,
-    #[serde(borrow)]
-    checks: Option<Checks<'a>>,
-}
-
-#[derive(Deserialize)]
-struct Checks<'a> {
-    #[serde(rename = "auth.credentials")]
-    #[serde(borrow)]
-    auth_credentials: Option<AuthCheck<'a>>,
-}
-
-#[derive(Deserialize)]
-struct AuthCheck<'a> {
-    #[serde(borrow)]
-    details: Option<AuthDetails<'a>>,
-}
-
-#[derive(Deserialize)]
-struct AuthDetails<'a> {
-    #[serde(rename = "stored ChatGPT tokens")]
-    stored_chatgpt_tokens: Option<&'a str>,
-    #[serde(rename = "stored auth mode")]
-    stored_auth_mode: Option<&'a str>,
+    let text = std::str::from_utf8(input).map_err(|_| DiagnosticError::UnsupportedFormat)?;
+    if success && text.lines().any(|line| line.trim() == CHATGPT_LOGIN_LINE) {
+        return Ok(());
+    }
+    Err(DiagnosticError::NotChatGpt)
 }

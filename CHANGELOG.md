@@ -19,6 +19,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Fixed Codex readiness probing timing out on machines with large Codex session histories by
+  probing `codex --version` and `codex -c forced_login_method="chatgpt" login status` instead of
+  `codex doctor --json` (whose SQLite integrity and rollout-parity scans can exceed 2 minutes).
 - Updated `.pre-commit-hooks.yaml` `types_or` to cover all 23 registered languages introduced in
   v3.0 (adding `c`, `c++`, `c#`, `dockerfile`, `elixir`, `groovy`, `java`, `kotlin`, `lua`, `php`,
   `ruby`, `scala`, `shell`, `sql`, `svelte`, `swift`, `terraform`, and `vue`) and pinned its

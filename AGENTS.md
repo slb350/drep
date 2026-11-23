@@ -354,9 +354,11 @@ comes back.
   cwd, an allowlisted environment, read-only/no-approval isolation, a strict
   output schema and ephemeral history. Codex owns login and token refresh;
   `drep auth --provider codex` points to `codex login` and never touches the
-  endpoint-keyed store. `codex doctor --json` is reduced to version plus the
-  ChatGPT-auth fact; a valid known document wins even if doctor exits nonzero
-  for an unrelated check. The JSONL stream rejects tool activity and retains
+  endpoint-keyed store. Codex readiness uses `codex --version` plus
+  `codex -c forced_login_method="chatgpt" login status` reduced to the CLI
+  version and the ChatGPT-auth fact, avoiding `codex doctor --json`'s full
+  SQLite integrity and session-rollout scans (which can exceed the 30s
+  diagnostic timeout on large histories). The JSONL stream rejects tool activity and retains
   only bounded terminal diagnostics. Its JSONL line ceiling is enforced while
   reading, before an untrusted line can be allocated in full. Stdout and stderr
   are private bounded files rather than pipes: a tool-spawned grandchild can
