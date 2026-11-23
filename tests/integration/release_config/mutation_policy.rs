@@ -21,6 +21,10 @@ fn mutation_common_script() -> String {
     common::without_comments("scripts/mutants-common.sh")
 }
 
+fn job_has_exact_line(job: &str, expected: &str) -> bool {
+    job.lines().any(|line| line.trim() == expected)
+}
+
 /// Trusted main pushes and same-repository pull requests mutate only their production diff after validation.
 ///
 /// The exhaustive sweep remains a scheduled and explicitly dispatched backstop. It must not multiply all 1,490 mutants after every ordinary push, and forked pull-request code must never reach the homelab runner.
@@ -62,9 +66,9 @@ fn mutation_ci_splits_diff_checks_from_exhaustive_sweeps() {
         "the diff lane needs both ends of the diff in history, a clean checkout, and no persisted token for pull-request code to read"
     );
     assert!(
-        diff_mutants.contains(CARGO_MUTANTS_TOOL)
-            && diff_mutants.contains(CARGO_NEXTEST_TOOL)
-            && diff_mutants.contains(SCCACHE_TOOL)
+        job_has_exact_line(diff_mutants, CARGO_MUTANTS_TOOL)
+            && job_has_exact_line(diff_mutants, CARGO_NEXTEST_TOOL)
+            && job_has_exact_line(diff_mutants, SCCACHE_TOOL)
             && diff_mutants.contains("components: clippy")
             && diff_mutants.contains(": \"${DIFF_BASE:?}\" \"${DIFF_HEAD:?}\"")
             && diff_mutants.contains(
@@ -116,9 +120,9 @@ fn mutation_ci_splits_diff_checks_from_exhaustive_sweeps() {
         "the dedicated mutation sweep needs one exact measured timeout while still releasing a wedged runner"
     );
     assert!(
-        mutants.contains(CARGO_MUTANTS_TOOL)
-            && mutants.contains(CARGO_NEXTEST_TOOL)
-            && mutants.contains(SCCACHE_TOOL),
+        job_has_exact_line(mutants, CARGO_MUTANTS_TOOL)
+            && job_has_exact_line(mutants, CARGO_NEXTEST_TOOL)
+            && job_has_exact_line(mutants, SCCACHE_TOOL),
         "the mutation gate must retain its verified cargo-mutants, cargo-nextest, and sccache versions"
     );
     assert!(

@@ -153,8 +153,8 @@ comes back.
   `.config/nextest.toml`'s `[profile.mutants]` (fail-fast plus per-test
   timeouts that terminate infinite-loop parser mutants in 10s–30s instead of
   burning CPU until the 120s suite floor), and routes rustc through `sccache`
-  when installed (bounded disk cache beside the checkout, private per-run Unix
-  socket under `$RUN_SCRATCH`, server stopped on EXIT). Do not turn on
+  when installed (bounded disk cache beside the checkout, short private per-run
+  Unix socket directory, server verified before enabling and stopped on EXIT). Do not turn on
   `cargo-mutants --copy-target`: `cargo-mutants` 27.1.0 copies without
   preserving mtimes, which causes Cargo to recompile ~117 dependencies per
   worker anyway. On homelab-1 inside `ai-ci.slice`, measured warm per-mutant

@@ -361,6 +361,7 @@ fn mutation_runner_configures_and_stops_private_sccache() {
         .env_remove("DREP_MUTANTS_RESULT_TOKEN")
         .env_remove("DREP_MUTANTS_SCCACHE")
         .env_remove("RUSTC_WRAPPER")
+        .env_remove("CARGO_BUILD_RUSTC_WRAPPER")
         .env_remove("SCCACHE_DIR")
         .env_remove("SCCACHE_SERVER_UDS")
         .env_remove("SCCACHE_CACHE_SIZE")
@@ -380,12 +381,20 @@ fn mutation_runner_configures_and_stops_private_sccache() {
         captured.contains(&format!("DIR={}\n", scratch.join("sccache").display())),
         "{captured}"
     );
+    let uds = captured
+        .lines()
+        .find_map(|line| line.strip_prefix("UDS="))
+        .expect("captured UDS path");
     assert!(
-        captured.contains(&format!(
-            "UDS={}\n",
-            scratch.join("run/sccache.sock").display()
-        )),
-        "{captured}"
+        uds.ends_with("/s") && uds.len() < 100 && !uds.starts_with(&scratch.display().to_string()),
+        "sccache socket must live in a short private path outside deep checkout roots: {uds}"
+    );
+    assert!(
+        !std::path::Path::new(uds)
+            .parent()
+            .expect("socket parent")
+            .exists(),
+        "private sccache socket directory must be removed on exit: {uds}"
     );
     assert!(captured.contains("SIZE=4G\n"), "{captured}");
     assert!(
@@ -400,10 +409,10 @@ fn mutation_runner_configures_and_stops_private_sccache() {
             .any(|l| l.starts_with("NEXTEST_THREADS=") && l != "NEXTEST_THREADS="),
         "{captured}"
     );
-    let stopped = std::fs::read_to_string(&sccache_log).expect("sccache stop log");
+    let sccache_calls = std::fs::read_to_string(&sccache_log).expect("sccache log");
     assert!(
-        stopped.contains("--stop-server"),
-        "exit trap must stop the private sccache server: {stopped}"
+        sccache_calls.contains("--start-server") && sccache_calls.contains("--stop-server"),
+        "runner must verify server startup and stop the private sccache server on exit: {sccache_calls}"
     );
     assert!(
         scratch.join("sccache").is_dir(),

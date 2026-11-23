@@ -48,11 +48,15 @@ fi
 # checkout, so scratch inside it would be copied into every later copy.
 RUN_SCRATCH="$MUTANTS_SCRATCH_ROOT/run"
 SCCACHE_STOP_ON_EXIT=0
+SCCACHE_SOCK_DIR=""
 
 # shellcheck disable=SC2329  # Invoked by the EXIT trap.
 cleanup_mutants_run() {
   if [ "$SCCACHE_STOP_ON_EXIT" -eq 1 ]; then
     sccache --stop-server >/dev/null 2>&1 || true
+  fi
+  if [ -n "$SCCACHE_SOCK_DIR" ]; then
+    remove_tree "$SCCACHE_SOCK_DIR"
   fi
   remove_tree "$RUN_SCRATCH"
 }
@@ -77,22 +81,40 @@ fi
 export CARGO_PROFILE_TEST_DEBUG="${CARGO_PROFILE_TEST_DEBUG:-0}"
 export CARGO_PROFILE_DEV_DEBUG="${CARGO_PROFILE_DEV_DEBUG:-0}"
 
-# When sccache is installed and the caller did not configure RUSTC_WRAPPER,
+# When sccache is installed and the caller did not configure a rustc wrapper,
 # share compiled third-party crates across all parallel mutation workers and
 # across runs via a bounded disk cache beside the checkout (outside
-# `$RUN_SCRATCH`, so scratch sweeps preserve it). Each run uses a private Unix
-# socket inside `$RUN_SCRATCH` and stops its server on EXIT so no daemon
-# collides across runs or lingers as an orphan process.
-if [ "${DREP_MUTANTS_SCCACHE:-1}" != "0" ] && [ -z "${RUSTC_WRAPPER:-}" ] &&
+# `$RUN_SCRATCH`, so scratch sweeps preserve it). Place the Unix socket in a
+# short private directory so deep checkout paths never hit the ~104-byte
+# AF_UNIX sun_path ceiling, verify the private server starts before enabling
+# RUSTC_WRAPPER (falling back to direct compilation if it cannot), and stop the
+# server and remove its socket directory on EXIT.
+if [ "${DREP_MUTANTS_SCCACHE:-1}" != "0" ] &&
+  [ -z "${RUSTC_WRAPPER:-}" ] &&
+  [ -z "${CARGO_BUILD_RUSTC_WRAPPER:-}" ] &&
   command -v sccache >/dev/null 2>&1; then
   SCCACHE_CACHE_DIR="$MUTANTS_SCRATCH_ROOT/sccache"
   if [ ! -L "$SCCACHE_CACHE_DIR" ]; then
     mkdir -p "$SCCACHE_CACHE_DIR"
-    export SCCACHE_DIR="$SCCACHE_CACHE_DIR"
-    export SCCACHE_CACHE_SIZE="${SCCACHE_CACHE_SIZE:-4G}"
-    export SCCACHE_SERVER_UDS="$RUN_SCRATCH/sccache.sock"
-    export RUSTC_WRAPPER="sccache"
-    SCCACHE_STOP_ON_EXIT=1
+    sock_base="${XDG_RUNTIME_DIR:-/tmp}"
+    if sock_dir="$(mktemp -d "${sock_base%/}/drep-scc.XXXXXX" 2>/dev/null)"; then
+      chmod 700 "$sock_dir" 2>/dev/null || true
+      sock_path="$sock_dir/s"
+      cache_size="${SCCACHE_CACHE_SIZE:-4G}"
+      if SCCACHE_DIR="$SCCACHE_CACHE_DIR" \
+        SCCACHE_CACHE_SIZE="$cache_size" \
+        SCCACHE_SERVER_UDS="$sock_path" \
+        sccache --start-server >/dev/null 2>&1 6<&- 9<&-; then
+        SCCACHE_SOCK_DIR="$sock_dir"
+        SCCACHE_STOP_ON_EXIT=1
+        export SCCACHE_DIR="$SCCACHE_CACHE_DIR"
+        export SCCACHE_CACHE_SIZE="$cache_size"
+        export SCCACHE_SERVER_UDS="$sock_path"
+        export RUSTC_WRAPPER="sccache"
+      else
+        remove_tree "$sock_dir"
+      fi
+    fi
   fi
 fi
 
