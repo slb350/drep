@@ -14,9 +14,10 @@ ai1_role_check() {
   return 2
 }
 
-# ai1_ssh [-o OPTION]... COMMAND...: run COMMAND on homelab-1 as the role.
-ai1_ssh() {
-  local options=() command_text
+# ai1_ssh_args [-o OPTION]... COMMAND... parses the ssh options and fills the caller's array ssh_args with the whole ssh argument list: the options, the host, and the role's command text. Each caller declares ssh_args local, so bash's dynamic scoping keeps it to that call. ai1_ssh and ai1_ssh_session share it so the two cannot drift.
+ai1_ssh_args() {
+  local command_text
+  ssh_args=()
   while [ "$#" -gt 0 ]; do
     case "$1" in
     -o)
@@ -24,7 +25,7 @@ ai1_ssh() {
         printf 'CI transport: -o requires a value\n' >&2
         return 2
       fi
-      options+=("$1" "$2")
+      ssh_args+=("$1" "$2")
       shift 2
       ;;
     -*)
@@ -45,7 +46,29 @@ ai1_ssh() {
     printf -v command_text '%q ' "$@"
   fi
   printf -v command_text 'sudo %s %q %q' "$AI1_OFFLOAD" "$AI1_CI_ROLE" "$command_text"
-  command ssh ${options[@]+"${options[@]}"} "$AI1_HOST" "$command_text"
+  ssh_args+=("$AI1_HOST" "$command_text")
+}
+
+# ai1_ssh [-o OPTION]... COMMAND...: run COMMAND on homelab-1 as the role. It never execs, because the reachability probe calls it in the foreground, where an exec would replace the calling script.
+ai1_ssh() {
+  local ssh_args
+  ai1_ssh_args "$@" || return $?
+  command ssh "${ssh_args[@]}"
+}
+
+# ai1_ssh_session [-o OPTION]... COMMAND...: the same command as ai1_ssh, ending in exec, for use as `ai1_ssh_session ... &`. It is refused in the top-level shell, where the exec would replace the calling script and skip its traps; a call inside a subshell still execs and replaces that subshell. bash runs a backgrounded function in a subshell; bash 3.2 skipped that fork for a trailing `command ssh` and bash 5 does not, so without the exec $! and jobs -p name the subshell and a kill leaves ssh running. It execs the binary type -P finds, because `exec command ssh` would run an external `command` where one exists and fail where none does. A missing ssh returns 127, as it does for ai1_ssh.
+ai1_ssh_session() {
+  local ssh_args ssh_bin
+  if [ "${BASH_SUBSHELL:-0}" -eq 0 ]; then
+    printf 'CI transport: ai1_ssh_session must run in the background\n' >&2
+    return 2
+  fi
+  ai1_ssh_args "$@" || return $?
+  ssh_bin="$(type -P ssh)" || {
+    printf 'CI transport: ssh not found\n' >&2
+    return 127
+  }
+  exec "$ssh_bin" "${ssh_args[@]}"
 }
 
 # ai1_push [OPTION]... LOCAL... REMOTE and ai1_pull [OPTION]... REMOTE LOCAL copy between local paths and a path relative to the role's home on homelab-1. The caller names which side is remote, so no operand is ever read as a host.

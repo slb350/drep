@@ -101,6 +101,24 @@ rpassword = "7.5"
 # `reqwest ^0.12.28` - drep shares the SDK's copy rather than building a second
 # HTTP and TLS stack into every binary. Move to 0.13 only when the SDK does.
 reqwest = { version = "0.12", features = ["json", "gzip"] }
+# A version floor, not a use. drep calls no `url` API except the one `reqwest`
+# re-exports (`auth::display_endpoint` parses an endpoint with `reqwest::Url`,
+# which is `url::Url`), and the crate reaches the graph through `reqwest`'s `^2.4`
+# and `tower-http`'s `^2.5`, with `wiremock` as the only development parent.
+# `RUSTSEC-2026-0592` (alias `GHSA-hrj5-67jp-wqp9`) reports `Url::origin()` and
+# `url::quirks::origin()` recursing once per `blob:` prefix, so one URL holding
+# 10,000 of them overflowed the stack - an abort `catch_unwind` cannot catch -
+# and 2.5.9 is the release that stops recursing. `url` is compiled into every
+# release target through the HTTP client, so unlike the `rustls` entries
+# `Cargo.lock` records without any target building them, this advisory is not
+# fixed by the lockfile alone: the lock pins what this checkout and a packaged
+# build resolve, while a consumer resolving this crate from the registry takes
+# whatever its own resolver prefers. `^2.5.9` sits inside both parents'
+# requirements, so it shares their copy rather than adding a second one, and
+# excludes a major line, so it cannot force one either. Nothing in the resolved
+# graph calls `origin()` today, so this closes a route rather than a live defect;
+# keep it until `reqwest` itself requires the patched line.
+url = "2.5.9"
 
 # The SDK enables reqwest's default native TLS backend. Only this cross target
 # needs to compile OpenSSL rather than discover it in the host's system paths.
@@ -120,10 +138,10 @@ assert_cmd = "2.2"
 # the dev graph. Its own dependency `ordered-float` is held at 5.4.0 by an
 # MSRV-compatible update because 5.5.x declares `rust_version` 1.90, above this
 # floor; it reaches the graph through `saphyr` alone, so no release binary
-# carries it. `saphyr` 0.3.4 is held back by this requirement, not by the floor:
-# it declares `rust_version` 1.85.0, but within `0.x` a minor version is an API
-# break, so adopting it means migrating the release-contract test rather than
-# running `cargo update`.
+# carries it. `saphyr` 0.4.0 is held back by this requirement, not by the floor:
+# it declares `rust_version` 1.85.0, but within `0.x` every minor version is an
+# API break and 0.4 is two of them ahead, so adopting it means migrating the
+# release-contract test rather than running `cargo update`.
 saphyr = { version = "0.2.2", default-features = false }
 wiremock = "0.6"
 

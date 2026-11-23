@@ -208,10 +208,17 @@ fn remote_mutation_session_owns_sync_run_and_fresh_result_mirroring() {
         "one remote lock session must prove that mirrored results belong to the current run"
     );
     assert!(
-        script.contains("kill \"$REMOTE_SESSION_PID\"")
-            && script.contains("wait \"$REMOTE_SESSION_PID\"")
+        script.contains("for session_pid in $(jobs -p); do")
+            && script.contains("kill \"$session_pid\"")
+            && script.contains("wait \"$session_pid\"")
             && script.contains("trap 'exit 74' PIPE"),
         "abnormal local exit, a dead session included, must terminate and reap the remote lock session"
+    );
+    // bash 3.2 makes a trailing `command ssh` the job itself, so the shell case passes there either way; only this pin holds the session to the exec'ing form on macOS.
+    assert!(
+        script.contains("ai1_ssh_session -o BatchMode=yes \"$REMOTE_COMMAND\"")
+            && !script.contains("ai1_ssh -o BatchMode=yes \"$REMOTE_COMMAND\""),
+        "the session must start through ai1_ssh_session, whose exec makes the background job ssh itself"
     );
     let session_start = script
         .find("REMOTE_SESSION_PID=$!")
@@ -334,32 +341,10 @@ fn staged_fixture(temp: &std::path::Path) -> std::path::PathBuf {
     );
     std::fs::write(repository.join(".gitignore"), "target/\n").expect("gitignore");
     std::fs::write(repository.join("lib.rs"), "fn one() {}\n").expect("source");
-    staged_git(&repository, &["init", "-q", "-b", "main"]);
-    staged_git(&repository, &["add", "."]);
-    staged_git(
-        &repository,
-        &[
-            "-c",
-            "user.name=Fixture",
-            "-c",
-            "user.email=fixture@example.invalid",
-            "-c",
-            "commit.gpgsign=false",
-            "commit",
-            "-qm",
-            "fixture",
-        ],
-    );
+    common::git_init(&repository);
+    common::git_must(&repository, &["add", "."]);
+    common::git_must(&repository, &["commit", "-qm", "fixture"]);
     repository
-}
-
-#[cfg(unix)]
-fn staged_git(repository: &std::path::Path, arguments: &[&str]) {
-    let output = common::without_outer_git("git", repository)
-        .args(arguments)
-        .output()
-        .expect("run git");
-    assert!(output.status.success(), "git {arguments:?}: {output:?}");
 }
 
 #[cfg(unix)]
@@ -390,7 +375,7 @@ fn staged_run_tests_the_index_under_the_checkout_lock() {
     let repository = staged_fixture(temp.path());
     let events = temp.path().join("events");
     std::fs::write(repository.join("lib.rs"), "fn two() {}\n").expect("staged source");
-    staged_git(&repository, &["add", "lib.rs"]);
+    common::git_must(&repository, &["add", "lib.rs"]);
     std::fs::write(repository.join("lib.rs"), "fn unstaged() {}\n").expect("unstaged edit");
     std::fs::write(repository.join("untracked.rs"), "fn untracked() {}\n").expect("untracked file");
 
@@ -438,7 +423,7 @@ fn a_change_staged_during_the_run_is_refused() {
     let repository = staged_fixture(temp.path());
     let events = temp.path().join("events");
     std::fs::write(repository.join("lib.rs"), "fn two() {}\n").expect("staged source");
-    staged_git(&repository, &["add", "lib.rs"]);
+    common::git_must(&repository, &["add", "lib.rs"]);
 
     let output = run_staged(&repository, &events, &[("FAKE_RESTAGE", "1")]);
 
@@ -457,7 +442,7 @@ fn a_commit_without_rust_changes_does_not_wait_for_a_running_sweep() {
     let repository = staged_fixture(temp.path());
     let events = temp.path().join("events");
     std::fs::write(repository.join("notes.md"), "notes\n").expect("staged prose");
-    staged_git(&repository, &["add", "notes.md"]);
+    common::git_must(&repository, &["add", "notes.md"]);
     std::fs::create_dir_all(repository.join("target")).expect("target");
     let mut sweep = common::hold_lock(&repository.join("target/mutants.lock"), "30");
 
@@ -518,18 +503,31 @@ fn mutation_host_lock_wait_policy_has_one_definition() {
     }
 }
 
-#[test]
-fn ai1_transport_fails_closed_without_bypassing_the_sandbox() {
-    let output = std::process::Command::new("bash")
-        .arg("tests/ai1-transport.sh")
-        .current_dir(env!("CARGO_MANIFEST_DIR"))
-        .output()
-        .expect("transport contract must execute");
+/// Runs a shell contract under `tests/` with bash, clear of any hook's git environment, and fails with everything it printed.
+fn run_shell_contract(script: &str) {
+    let output =
+        common::without_outer_git("bash", std::path::Path::new(env!("CARGO_MANIFEST_DIR")))
+            .arg(script)
+            .output()
+            .unwrap_or_else(|err| panic!("{script} must run: {err}"));
     assert!(
         output.status.success(),
-        "{}",
+        "{script}:\n{}{}",
+        String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
+}
+
+#[test]
+fn ai1_transport_fails_closed_without_bypassing_the_sandbox() {
+    run_shell_contract("tests/ai1-transport.sh");
+}
+
+/// A search over the checkout during a remote run must never open one of the session's named pipes and swallow its messages.
+#[cfg(unix)]
+#[test]
+fn remote_session_pipes_never_outlive_the_handshake() {
+    run_shell_contract("tests/mutants-remote.sh");
 }
 
 /// The staged run hands the wrapper a snapshot of the index: the sync ships that tree and a local fallback builds it.
