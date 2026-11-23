@@ -23,6 +23,7 @@ fn run_with_fake_cargo(
         .env("DREP_MUTANTS_CAPTURE_ARGS", temp.join("cargo-args"))
         .env("DREP_MUTANTS_CAPTURE_TMPDIR", temp.join("cargo-tmpdir"))
         .env("MUTANTS_OUT_DIR", temp.join("out"))
+        .env("DREP_MUTANTS_SCCACHE", "0")
         .env_remove("DREP_MUTANTS_HOST_LOCK")
         .env_remove("DREP_MUTANTS_RESULT_TOKEN");
     for (key, value) in extra_env {
@@ -276,6 +277,7 @@ fn mutation_runner_disables_debuginfo_and_detects_nextest() {
             .env("CAPTURE", &capture)
             .env("DREP_MUTANTS_TMPDIR", &scratch)
             .env("MUTANTS_OUT_DIR", temp.path().join(format!("out-{label}")))
+            .env("DREP_MUTANTS_SCCACHE", "0")
             .env_remove("DREP_MUTANTS_HOST_LOCK")
             .env_remove("DREP_MUTANTS_RESULT_TOKEN")
             .env_remove("DREP_MUTANTS_TEST_TOOL")
@@ -409,10 +411,14 @@ fn mutation_runner_configures_and_stops_private_sccache() {
             .any(|l| l.starts_with("NEXTEST_THREADS=") && l != "NEXTEST_THREADS="),
         "{captured}"
     );
-    let sccache_calls = std::fs::read_to_string(&sccache_log).expect("sccache log");
-    assert!(
-        sccache_calls.contains("--start-server") && sccache_calls.contains("--stop-server"),
-        "runner must verify server startup and stop the private sccache server on exit: {sccache_calls}"
+    let sccache_log_text = std::fs::read_to_string(&sccache_log).expect("sccache log");
+    let sccache_calls: Vec<&str> = sccache_log_text.lines().collect();
+    let expected_start = format!("{uds}|--start-server");
+    let expected_stop = format!("{uds}|--stop-server");
+    assert_eq!(
+        sccache_calls,
+        vec![expected_start.as_str(), expected_stop.as_str()],
+        "runner must start and stop sccache against the exact private socket captured by Cargo"
     );
     assert!(
         scratch.join("sccache").is_dir(),

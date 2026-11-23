@@ -90,8 +90,8 @@ export CARGO_PROFILE_DEV_DEBUG="${CARGO_PROFILE_DEV_DEBUG:-0}"
 # RUSTC_WRAPPER (falling back to direct compilation if it cannot), and stop the
 # server and remove its socket directory on EXIT.
 if [ "${DREP_MUTANTS_SCCACHE:-1}" != "0" ] &&
-  [ -z "${RUSTC_WRAPPER:-}" ] &&
-  [ -z "${CARGO_BUILD_RUSTC_WRAPPER:-}" ] &&
+  [ -z "${RUSTC_WRAPPER+x}" ] &&
+  [ -z "${CARGO_BUILD_RUSTC_WRAPPER+x}" ] &&
   command -v sccache >/dev/null 2>&1; then
   SCCACHE_CACHE_DIR="$MUTANTS_SCRATCH_ROOT/sccache"
   if [ ! -L "$SCCACHE_CACHE_DIR" ]; then
@@ -125,11 +125,17 @@ JOBS="${MUTANTS_JOBS:-4}"
 if [ -z "${RUST_TEST_THREADS:-}" ] || [ -z "${NEXTEST_TEST_THREADS:-}" ]; then
   cpus="$(getconf _NPROCESSORS_ONLN 2>/dev/null || nproc 2>/dev/null || echo 4)"
   case "$cpus:$JOBS" in
-    *[!0-9:]* | :* | *: | *:0) per_worker=4 ;;
+    *[!0-9:]* | :* | *:) per_worker=4 ;;
     *)
-      per_worker=$((cpus / JOBS))
-      if [ "$per_worker" -lt 2 ]; then
-        per_worker=2
+      cpus_dec=$((10#$cpus))
+      jobs_dec=$((10#$JOBS))
+      if [ "$jobs_dec" -le 0 ]; then
+        per_worker=4
+      else
+        per_worker=$((cpus_dec / jobs_dec))
+        if [ "$per_worker" -lt 2 ]; then
+          per_worker=2
+        fi
       fi
       ;;
   esac
