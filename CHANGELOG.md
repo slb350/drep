@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.1.10] - 2026-11-23
+
 ### Security
 
 - Redacted endpoint credentials (`user:password@`) across all remaining `Debug` and error paths
@@ -1590,7 +1592,8 @@ LLM for review, and gates commits and pushes on the result. That is all it does.
 - Python, JavaScript, TypeScript, Go and Rust are all first-class. Adding a
   language is an entry in one table.
 
-[Unreleased]: https://github.com/slb350/drep/compare/v3.1.9...HEAD
+[Unreleased]: https://github.com/slb350/drep/compare/v3.1.10...HEAD
+[3.1.10]: https://github.com/slb350/drep/compare/v3.1.9...v3.1.10
 [3.1.9]: https://github.com/slb350/drep/compare/v3.1.8...v3.1.9
 [3.1.8]: https://github.com/slb350/drep/compare/v3.1.7...v3.1.8
 [3.1.7]: https://github.com/slb350/drep/compare/v3.1.6...v3.1.7
