@@ -200,3 +200,53 @@ fn a_preset_presuming_no_model_needs_one() {
 
     assert!(err.to_string().contains("--model"), "got {err}");
 }
+
+#[test]
+fn plan_and_choice_debug_redact_endpoint_credentials() {
+    let secret_endpoint = "https://drep:gateway-secret@gateway.example/v1";
+    let mut plan = plan_from_flags(
+        &InitArgs {
+            provider: Some("custom".to_string()),
+            endpoint: Some(secret_endpoint.to_string()),
+            model: Some("m".to_string()),
+            ..args()
+        },
+        &AuthStore::new(),
+    )
+    .expect("plan");
+    plan.new_keys
+        .push((secret_endpoint.to_string(), "sk-pasted".to_string()));
+
+    let choice_debug = format!("{:?}", plan.choices[0]);
+    assert!(
+        !choice_debug.contains("gateway-secret"),
+        "Choice Debug leaked endpoint credentials: {choice_debug}"
+    );
+    assert!(
+        choice_debug.contains("https://<redacted>@gateway.example/v1"),
+        "expected redacted endpoint in Choice Debug: {choice_debug}"
+    );
+
+    let plan_debug = format!("{plan:?}");
+    assert!(
+        !plan_debug.contains("gateway-secret") && !plan_debug.contains("sk-pasted"),
+        "Plan Debug leaked credentials: {plan_debug}"
+    );
+    assert!(
+        plan_debug.contains("https://<redacted>@gateway.example/v1"),
+        "expected redacted endpoint in Plan Debug: {plan_debug}"
+    );
+
+    let codex_plan = plan_from_flags(
+        &InitArgs {
+            provider: Some("codex".to_string()),
+            ..args()
+        },
+        &AuthStore::new(),
+    )
+    .expect("codex plan");
+    assert!(
+        format!("{:?}", codex_plan.choices[0]).contains("Codex"),
+        "Codex Choice Debug must still name Codex"
+    );
+}

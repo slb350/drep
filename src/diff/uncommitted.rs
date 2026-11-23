@@ -214,7 +214,7 @@ async fn flagged_differences(
         args.extend(
             batch
                 .iter()
-                .map(|(named, _)| root.join(named).into_os_string()),
+                .map(|(named, _)| named.as_os_str().to_os_string()),
         );
         let hashes = spawn_git_bytes(root, &args, view.env()).await?;
         let mut hashes = hashes.split(|&byte| byte == b'\n');

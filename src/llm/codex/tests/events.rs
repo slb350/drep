@@ -249,6 +249,22 @@ fn an_event_line_exactly_one_mebibyte_is_accepted() {
     );
 }
 
+#[test]
+fn a_malformed_final_message_reports_a_bounded_sanitized_error() {
+    let output = concat!(
+        "{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":\"not-json\"}}\n",
+        "{\"type\":\"turn.completed\"}\n",
+    );
+    match parse_jsonl(output.as_bytes()).expect_err("malformed final JSON") {
+        EventError::MalformedFinal(message) => {
+            assert!(!message.is_empty());
+            assert!(!message.chars().any(char::is_control), "{message:?}");
+            assert!(message.chars().count() <= 401, "{message}");
+        }
+        other => panic!("unexpected event error: {other:?}"),
+    }
+}
+
 struct Fragmented<'a> {
     bytes: &'a [u8],
     chunk: usize,

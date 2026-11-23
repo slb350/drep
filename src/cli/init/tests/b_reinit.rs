@@ -296,3 +296,26 @@ async fn replacing_the_config_does_not_authorise_clobbering_a_foreign_hook() {
         "the foreign hook was not touched"
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn a_dangling_symlink_config_is_settled_before_running_the_wizard() {
+    let dir = root(None);
+    let path = dir.path().join("drep.toml");
+    std::os::unix::fs::symlink(dir.path().join("missing-target.toml"), &path)
+        .expect("dangling symlink");
+
+    let mut non_interactive = Scripted::new(&[]);
+    let err = existing_config(dir.path(), &args(), false, &mut non_interactive)
+        .expect_err("a dangling symlink must be refused without --force");
+    assert!(err.to_string().contains("--force"), "got {err}");
+
+    let mut declining = Scripted::new(&["n"]);
+    let decision = existing_config(dir.path(), &args(), true, &mut declining).expect("decides");
+    assert_eq!(decision, None);
+    assert!(declining.is_drained());
+
+    let mut accepting = Scripted::new(&["y"]);
+    let force = existing_config(dir.path(), &args(), true, &mut accepting).expect("decides");
+    assert_eq!(force, Some(true));
+}

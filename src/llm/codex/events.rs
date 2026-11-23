@@ -124,7 +124,8 @@ pub(crate) fn parse_jsonl(input: impl Read) -> Result<Value, EventError> {
     if !turn_completed {
         return Err(EventError::MissingTurnCompletion);
     }
-    serde_json::from_str(&message).map_err(|err| EventError::MalformedFinal(err.to_string()))
+    serde_json::from_str(&message)
+        .map_err(|err| EventError::MalformedFinal(excerpt(&err.to_string(), DETAIL_EXCERPT_CHARS)))
 }
 
 /// Read one JSONL record without ever growing the returned buffer past the

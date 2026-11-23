@@ -125,7 +125,7 @@ pub(crate) async fn run(
     check_capture_size("stderr", &stderr, CAPTURE_FILE_MAX_BYTES)?;
     let stdout = stdout
         .read_bounded(STDOUT_MAX_BYTES)
-        .map_err(|err| stream_error("stdout", err))?;
+        .map_err(|err| stream_error("stdout", err.into_io()))?;
     let stderr = stderr
         .read_prefix(STDERR_MAX_BYTES)
         .map_err(|err| stream_error("stderr", err))?;

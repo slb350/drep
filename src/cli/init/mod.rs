@@ -185,7 +185,10 @@ pub(crate) fn existing_config(
     console: &mut dyn wizard::Console,
 ) -> Result<Option<bool>> {
     let path = root.join(crate::config::default_config_path());
-    if args.force || !path.exists() {
+    // Inspect the directory entry without following symlinks: a dangling
+    // `drep.toml` symlink makes `path.exists()` return false while
+    // `persist_noclobber` later fails with `AlreadyExists` after storing keys.
+    if args.force || std::fs::symlink_metadata(&path).is_err() {
         return Ok(Some(args.force));
     }
 

@@ -2,7 +2,7 @@
 #
 #   repos:
 #     - repo: https://github.com/slb350/drep
-#       rev: v2.5.1
+#       rev: v3.1.9
 #       hooks:
 #         - id: drep-check-push
 #
@@ -20,7 +20,7 @@
   entry: drep check --staged
   language: rust
   pass_filenames: false
-  types_or: [python, javascript, jsx, ts, tsx, go, rust]
+  types_or: [python, javascript, jsx, ts, tsx, vue, svelte, go, rust, java, kotlin, scala, groovy, shell, swift, c, c++, "c#", ruby, php, terraform, elixir, sql, dockerfile, lua]
 
 - id: drep-check-push
   name: drep code quality check (pre-push)
@@ -32,7 +32,7 @@
   # code around a small fix.
   pass_filenames: false
   stages: [pre-push]
-  types_or: [python, javascript, jsx, ts, tsx, go, rust]
+  types_or: [python, javascript, jsx, ts, tsx, vue, svelte, go, rust, java, kotlin, scala, groovy, shell, swift, c, c++, "c#", ruby, php, terraform, elixir, sql, dockerfile, lua]
 
 - id: drep-check-all
   name: drep full check
@@ -40,7 +40,7 @@
   entry: drep check
   language: rust
   pass_filenames: false
-  types_or: [python, javascript, jsx, ts, tsx, go, rust]
+  types_or: [python, javascript, jsx, ts, tsx, vue, svelte, go, rust, java, kotlin, scala, groovy, shell, swift, c, c++, "c#", ruby, php, terraform, elixir, sql, dockerfile, lua]
 
 # `--fail-on error`, not `--strict`. Severity here answers one question: does
 # the finding change how the document renders? An unclosed fence does - the

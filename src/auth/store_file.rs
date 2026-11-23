@@ -199,14 +199,17 @@ fn write_private_with(
     sync_parent(parent).map_err(|err| AuthError::Write(path.to_path_buf(), err))
 }
 
-#[cfg(unix)]
 fn sync_directory(path: &Path) -> std::io::Result<()> {
-    fs::File::open(path)?.sync_all()
-}
+    #[cfg(unix)]
+    {
+        fs::File::open(path)?.sync_all()
+    }
 
-#[cfg(not(unix))]
-fn sync_directory(_path: &Path) -> std::io::Result<()> {
-    Ok(())
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+        Ok(())
+    }
 }
 
 pub(crate) fn temporary_parent(path: &Path) -> &Path {
@@ -215,19 +218,22 @@ pub(crate) fn temporary_parent(path: &Path) -> &Path {
         .unwrap_or_else(|| Path::new("."))
 }
 
-#[cfg(unix)]
 pub(crate) fn restrict(path: &Path, mode: u32) -> Result<(), AuthError> {
-    use std::os::unix::fs::PermissionsExt;
-    fs::set_permissions(path, fs::Permissions::from_mode(mode))
-        .map_err(|err| AuthError::Write(path.to_path_buf(), err))
-}
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(path, fs::Permissions::from_mode(mode))
+            .map_err(|err| AuthError::Write(path.to_path_buf(), err))
+    }
 
-#[cfg(not(unix))]
-// Windows has no Unix mode bits. ProjectDirs places the store under the
-// current user's roaming profile, where new files inherit that profile's ACL;
-// applying a numeric 0600 would neither describe nor improve that boundary.
-pub(crate) fn restrict(_path: &Path, _mode: u32) -> Result<(), AuthError> {
-    Ok(())
+    #[cfg(not(unix))]
+    {
+        // Windows has no Unix mode bits. ProjectDirs places the store under the
+        // current user's roaming profile, where new files inherit that profile's ACL;
+        // applying a numeric 0600 would neither describe nor improve that boundary.
+        let _ = (path, mode);
+        Ok(())
+    }
 }
 
 #[cfg(test)]

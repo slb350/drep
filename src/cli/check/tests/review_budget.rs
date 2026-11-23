@@ -394,3 +394,74 @@ async fn linked_worktrees_store_their_budgets_in_separate_git_directories() {
         1
     );
 }
+
+#[test]
+fn reset_tolerates_a_raced_removal_after_lock_and_still_fails_on_unreadable_state() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let budget = Budget::at(dir.path(), "refs/heads/raced-reset", 3, 1_000);
+
+    // A concurrent clean check may remove `budget.directory()` between the
+    // unlocked pre-check and acquiring the lock.
+    assert!(
+        !budget
+            .reset_locked()
+            .expect("missing directory after lock must be a clean no-op")
+    );
+
+    // A non-NotFound read_dir failure must still propagate fail-closed.
+    std::fs::create_dir_all(budget.directory().parent().expect("cycles root"))
+        .expect("cycles root");
+    std::fs::write(budget.directory(), "not a directory").expect("file at directory path");
+    assert!(
+        budget.reset_locked().is_err(),
+        "a non-directory at the budget path must fail reset"
+    );
+}
+
+#[test]
+fn reset_removes_empty_branch_and_cycles_directories() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let budget = Budget::at(dir.path(), "refs/heads/cleanup", 3, 1_000);
+    committed_round(budget.claim().expect("round"));
+
+    assert!(budget.reset().expect("reset"));
+    assert!(
+        !budget.directory().exists(),
+        "empty branch state must be removed"
+    );
+    assert!(
+        !budget.directory().parent().expect("cycles root").exists(),
+        "empty cycles root must be removed"
+    );
+}
+
+#[test]
+fn concurrent_resets_never_fail_when_the_first_removes_the_directory() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let budget = Arc::new(Budget::at(
+        dir.path(),
+        "refs/heads/concurrent-reset",
+        3,
+        1_000,
+    ));
+    committed_round(budget.claim().expect("round"));
+    let barrier = Arc::new(Barrier::new(8));
+    let handles: Vec<_> = (0..8)
+        .map(|_| {
+            let budget = Arc::clone(&budget);
+            let barrier = Arc::clone(&barrier);
+            std::thread::spawn(move || {
+                barrier.wait();
+                budget.reset().expect("concurrent reset must succeed")
+            })
+        })
+        .collect();
+
+    let removed_count = handles
+        .into_iter()
+        .map(|handle| handle.join().expect("thread"))
+        .filter(|removed| *removed)
+        .count();
+    assert_eq!(removed_count, 1);
+    assert!(!budget.directory().exists());
+}

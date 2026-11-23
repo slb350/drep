@@ -84,7 +84,7 @@ const SAME_REPOSITORY_PR: &str =
 const RUST_TOOLCHAIN_ACTION: &str =
     "dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87";
 const SETUP_ZIG_ACTION: &str = "mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29";
-const INSTALL_ACTION: &str = "taiki-e/install-action@4cef1412cce204788f482e778a0b9187f9626a29";
+const INSTALL_ACTION: &str = "taiki-e/install-action@75a7c0f87bd666af3cdb75c5b9e9d03ab6044e6f";
 const CARGO_ZIGBUILD_TOOL: &str = "cargo-zigbuild@0.23.4";
 struct ReleaseTarget {
     triple: &'static str,

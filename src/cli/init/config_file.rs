@@ -17,7 +17,7 @@ use super::presets::{LlmPreset, PresetBackend};
 use crate::llm::quirks::Quirks;
 
 /// Fields used by exactly one execution backend.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 enum ChoiceBackend {
     Http {
         endpoint: String,
@@ -25,6 +25,24 @@ enum ChoiceBackend {
         quirks: Quirks,
     },
     Codex,
+}
+
+impl std::fmt::Debug for ChoiceBackend {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Http {
+                endpoint,
+                key_in_store,
+                quirks,
+            } => f
+                .debug_struct("Http")
+                .field("endpoint", &crate::auth::display_endpoint(endpoint))
+                .field("key_in_store", key_in_store)
+                .field("quirks", quirks)
+                .finish(),
+            Self::Codex => f.write_str("Codex"),
+        }
+    }
 }
 
 /// One provider the user chose, ready to render.

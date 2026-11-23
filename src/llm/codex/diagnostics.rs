@@ -7,7 +7,11 @@ use std::time::{Duration, Instant};
 use serde::Deserialize;
 use thiserror::Error;
 
-use super::{CodexStatus, capture::BoundedCapture, command::ChildEnvironment};
+use super::{
+    CodexStatus,
+    capture::{BoundedCapture, ReadBoundedError},
+    command::ChildEnvironment,
+};
 
 const DIAGNOSTIC_MAX_BYTES: usize = 1024 * 1024;
 pub(crate) const DIAGNOSTIC_TIMEOUT: Duration = Duration::from_secs(30);
@@ -76,15 +80,12 @@ pub(crate) fn probe(
             }
         }
     };
-    if output
-        .exceeds(DIAGNOSTIC_MAX_BYTES)
-        .map_err(|_| DiagnosticError::Process)?
-    {
-        return Err(DiagnosticError::OutputTooLarge);
-    }
     let bytes = output
         .read_bounded(DIAGNOSTIC_MAX_BYTES)
-        .map_err(|_| DiagnosticError::Process)?;
+        .map_err(|err| match err {
+            ReadBoundedError::TooLarge(_) => DiagnosticError::OutputTooLarge,
+            ReadBoundedError::Io(_) => DiagnosticError::Process,
+        })?;
     // `codex doctor` reports unrelated health checks too and may exit nonzero
     // while still emitting a complete, known authentication document. drep
     // retains only those redacted facts, so a valid document is authoritative;

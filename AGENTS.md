@@ -112,35 +112,34 @@ comes back.
   lock makes the child wait on its own parent and prevents the unmutated
   baseline from completing. An unreachable host falls back to a local hook run
   *with a warning*, never a silent skip. `DREP_MUTANTS_REMOTE=0` forces local.
-  The hook sync is
-  `--delete --force --delete-excluded` with a
-  `P /target` filter: an excluded name *inside* a directory protects it from
-  deletion, so without `--delete-excluded` a deleted directory survives on the
-  remote and the sweep tests a tree the commit does not have; without the
-  protect rule, `--delete-excluded` takes `target/` and every run is a cold
-  build. `scripts/mutants-common.sh` holds the one definition of
-  `target/mutants` and the host-lock wait default and validation shared by the
-  remote and direct runners; a file the sync would skip is named by the caller in
+  The hook sync is `--delete --force --delete-excluded` with `target/`
+  excluded: an excluded name *inside* a directory protects it from deletion, so
+  without `--delete-excluded` a deleted directory survives on the remote and
+  the sweep tests a tree the commit does not have; `cargo-mutants` 27.1.0 does
+  not copy `target/` into per-job scratch copies unless `copy_target` is set,
+  so excluding `target/` without protecting it keeps remote results clean.
+  `scripts/mutants-common.sh` holds the one definition of `target/mutants` and
+  the host-lock wait default and validation shared by the remote and direct
+  runners; a file the sync would skip is named by the caller in
   `MUTANTS_EXTRA_FILES` rather than recovered by the transport script parsing
   cargo-mutants' flags. The remote command appends its `%q`-quoted arguments
   only when at least one exists: formatting an empty `"$@"` produces the
   literal argument `''`, which makes the no-argument full sweep fail usage
-  before its baseline. Raising `MUTANTS_JOBS` is a trap: every job copies the
-  tree including `target/`, so the same scope measured 38s at `-j 4`, 54s at `-j 8`
-  and 72s at `-j 16` on a 32-thread box. It is I/O-bound, not CPU-bound.
-  Those per-job copies go to `$TMPDIR`, which `mutants-run.sh` sets to a
-  sibling of the checkout (`<checkout>.mutants-tmp`, override with
-  `DREP_MUTANTS_TMPDIR`) and sweeps of stale `cargo-mutants-*.tmp` before and
-  after each run. cargo-mutants deletes its copies only on a clean exit, so a
-  cancelled or timed-out job strands them. The former Strix host mounted
-  `/tmp` as tmpfs, where five killed runs once pinned 31 GiB of RAM; the
-  dedicated homelab-1 path is disk-backed. A sibling rather than a child of the checkout
-  because the copy excludes only `mutants.out`, so a copy under `target/`
-  would be copied into every later one. Cleanup uses a depth-first,
-  prefix-scoped `find -delete` for both `cargo-mutants-*.tmp` and interrupted
-  child tests' `drep-diff-test-*` repositories, and never invokes `rm` or
-  `rmdir`; broad recursive removal commands have damaged this server before.
-  Do not move the scratch root back or weaken the cleanup boundary.
+  before its baseline. Raising `MUTANTS_JOBS` is a trap: each job cold-builds
+  dependencies in its own copy of the tree, so the same scope measured 38s at
+  `-j 4`, 54s at `-j 8` and 72s at `-j 16` on a 32-thread box. Those per-job
+  copies go to `$TMPDIR`, which `mutants-run.sh` sets to `$MUTANTS_SCRATCH_ROOT/run`
+  beside the checkout (`<checkout>.mutants-tmp`, override with
+  `DREP_MUTANTS_TMPDIR`) and sweeps before and after each run. cargo-mutants
+  deletes its copies only on a clean exit, so a cancelled or timed-out job
+  strands them. The former Strix host mounted `/tmp` as tmpfs, where five
+  killed runs once pinned 31 GiB of RAM; the dedicated homelab-1 path is
+  disk-backed. A sibling rather than a child of the checkout because
+  cargo-mutants copies the checkout, so scratch inside it would be copied into
+  every later copy. Cleanup uses `remove_tree` (a depth-first `find -delete`
+  that never follows a symlink root or invokes `rm`/`rmdir`); broad recursive
+  removal commands have damaged this server before. Do not move the scratch
+  root back or weaken the cleanup boundary.
 - **Every GitHub Actions job is repository-scoped and self-hosted.** Hardened,
   isolated roles on homelab-1 own Linux validation, both Linux release
   targets, cargo-dist's global release phases under the `drep-linux` label,

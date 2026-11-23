@@ -129,16 +129,14 @@ pub async fn run<S: ModelSource, Q: QuirksSource>(
 /// same reason `LlmConfig`, `LlmClient` and `AuthStore` all write theirs.
 impl std::fmt::Debug for Plan {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let key_endpoints: Vec<_> = self
+            .new_keys
+            .iter()
+            .map(|(endpoint, _)| crate::auth::display_endpoint(endpoint))
+            .collect();
         f.debug_struct("Plan")
             .field("choices", &self.choices)
-            .field(
-                "new_keys",
-                &self
-                    .new_keys
-                    .iter()
-                    .map(|(endpoint, _)| endpoint.as_str())
-                    .collect::<Vec<_>>(),
-            )
+            .field("new_keys", &key_endpoints)
             .field("hooks", &self.hooks)
             .field("gitignore", &self.gitignore)
             .finish()

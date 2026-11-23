@@ -3,6 +3,23 @@
 use std::io::{Read, Seek, SeekFrom};
 use std::process::Stdio;
 
+/// Why reading a bounded capture file failed.
+pub(super) enum ReadBoundedError {
+    TooLarge(usize),
+    Io(std::io::Error),
+}
+
+impl ReadBoundedError {
+    pub(super) fn into_io(self) -> std::io::Error {
+        match self {
+            Self::TooLarge(limit) => {
+                std::io::Error::other(format!("Codex output exceeded {limit} bytes"))
+            }
+            Self::Io(err) => err,
+        }
+    }
+}
+
 /// A private temporary file that can be handed to a child and read back with a
 /// caller-selected bound.
 pub(super) struct BoundedCapture {
@@ -22,12 +39,12 @@ impl BoundedCapture {
         self.file.metadata().map(|meta| meta.len() > limit as u64)
     }
 
-    pub(super) fn read_bounded(&mut self, limit: usize) -> std::io::Result<Vec<u8>> {
-        let bytes = self.read_prefix(limit.saturating_add(1))?;
+    pub(super) fn read_bounded(&mut self, limit: usize) -> Result<Vec<u8>, ReadBoundedError> {
+        let bytes = self
+            .read_prefix(limit.saturating_add(1))
+            .map_err(ReadBoundedError::Io)?;
         if bytes.len() > limit {
-            return Err(std::io::Error::other(format!(
-                "Codex output exceeded {limit} bytes"
-            )));
+            return Err(ReadBoundedError::TooLarge(limit));
         }
         Ok(bytes)
     }
