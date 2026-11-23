@@ -96,6 +96,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   every minor version is an API break and 0.4 is two of them ahead, so taking it migrates the
   release-contract test rather than refreshing the lock.
 
+### Fixed
+
+- A remote mutation run no longer leaves live named pipes in the checkout. `scripts/mutants-remote.sh` kept its SSH session's two control pipes under `target/mutants/remote-session-*` for the whole run, so a `grep -r` over the checkout could open one, read the transport's messages and hang both processes; one such search stalled a run for 25 minutes. The pipes are now made under the mutation scratch root beside the checkout and removed as soon as both ends are open. The EXIT and PIPE traps are installed before the pipes are made, the EXIT trap kills any session job still running, and each run first removes the session directories a killed run left behind in either place, stopping with an error if one cannot be removed. A failed result mirror now shows rsync's error beside its warning. `tests/mutants-remote.sh` checks this against ssh, rsync and mkfifo stand-ins, and `validate` and the macOS test job now stop after an hour instead of six.
+- A remote mutation run that ends early now stops its SSH session under bash 5. `scripts/mutants-remote.sh` backgrounded the session through a shell function, which bash runs in a subshell; bash 3.2 skipped that fork for the function's trailing `command ssh`, but bash 5 does not, so the cleanup killed and reaped the subshell and left ssh running with the checkout and host locks. The session now starts through `ai1_ssh_session`, which execs ssh, so the job is ssh itself on every bash.
+
 ## [3.1.9] - 2026-11-22
 
 ### Changed
