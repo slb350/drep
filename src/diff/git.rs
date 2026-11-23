@@ -130,7 +130,16 @@ pub(super) async fn spawn_git(
     env: GitEnv<'_>,
 ) -> Result<String, GitError> {
     let stdout = spawn_git_bytes(root, args, env).await?;
-    Ok(String::from_utf8_lossy(&stdout).trim().to_owned())
+    Ok(match String::from_utf8(stdout) {
+        Ok(mut text) => {
+            let end = text.trim_end().len();
+            text.truncate(end);
+            let start = text.len() - text.trim_start().len();
+            text.drain(..start);
+            text
+        }
+        Err(err) => String::from_utf8_lossy(err.as_bytes()).trim().to_owned(),
+    })
 }
 
 /// [`spawn_git`]'s output as git wrote it: a blob's content is neither trimmed nor decoded.

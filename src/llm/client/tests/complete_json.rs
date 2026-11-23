@@ -494,3 +494,82 @@ async fn an_error_body_is_bounded_and_stripped_of_control_characters() {
         message.chars().count()
     );
 }
+
+/// Sequential requests reuse the pooled SDK client without leaking prior
+/// conversation history or system prompts, and an empty system prompt sends no
+/// system message.
+#[tokio::test]
+async fn pooled_client_is_reused_without_leaking_history_or_system_prompt() {
+    let server = server_returning(&[r#"{"issues":[]}"#]).await;
+    let client = fast_retry_client(&cfg_for(&server, "m", 1));
+    assert_eq!(client.pooled_clients(), 0);
+
+    client
+        .complete_json("system-one", "user-one")
+        .await
+        .expect("first call");
+    assert_eq!(
+        client.pooled_clients(),
+        1,
+        "a clean completion must return the SDK client to the pool"
+    );
+
+    client
+        .complete_json("system-two", "user-two")
+        .await
+        .expect("second call");
+    assert_eq!(client.pooled_clients(), 1);
+
+    client
+        .complete_json("", "user-three")
+        .await
+        .expect("third call without system prompt");
+    assert_eq!(client.pooled_clients(), 1);
+
+    let reqs = server.received_requests().await.expect("requests");
+    assert_eq!(reqs.len(), 3);
+    let body = |idx: usize| -> serde_json::Value {
+        serde_json::from_slice(&reqs[idx].body).expect("request JSON")
+    };
+    assert_eq!(
+        body(0)["messages"],
+        json!([
+            {"role": "system", "content": "system-one"},
+            {"role": "user", "content": "user-one"}
+        ])
+    );
+    assert_eq!(
+        body(1)["messages"],
+        json!([
+            {"role": "system", "content": "system-two"},
+            {"role": "user", "content": "user-two"}
+        ])
+    );
+    assert_eq!(
+        body(2)["messages"],
+        json!([{"role": "user", "content": "user-three"}])
+    );
+}
+
+/// A transport error discards the SDK client instead of returning it to the
+/// pool.
+#[tokio::test]
+async fn failed_request_does_not_return_client_to_pool() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/chat/completions"))
+        .respond_with(ResponseTemplate::new(400).set_body_string("bad"))
+        .mount(&server)
+        .await;
+
+    let client = fast_retry_client(&cfg_for(&server, "m", 1));
+    let _ = client
+        .complete_json("sys", "user")
+        .await
+        .expect_err("400 fails");
+    assert_eq!(
+        client.pooled_clients(),
+        0,
+        "a client that encountered a transport error must not re-enter the pool"
+    );
+}

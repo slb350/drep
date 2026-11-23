@@ -168,3 +168,27 @@ fn prompt_sets_a_high_signal_merge_review_threshold() {
         "the exact response example must not offer low-signal severities: {prompt}"
     );
 }
+
+#[test]
+fn analysis_prompt_borrows_registered_languages_and_matches_builder() {
+    use crate::analysis::prompt::analysis_prompt;
+    use std::borrow::Cow;
+
+    let cached = analysis_prompt(&PYTHON);
+    assert!(matches!(cached, Cow::Borrowed(_)));
+    assert_eq!(cached.as_ref(), build_analysis_prompt(&PYTHON));
+
+    let synthetic = LanguageSupport {
+        name: "python",
+        display_name: "CustomPython",
+        extensions: &[".py"],
+        filenames: &[],
+        filename_prefixes: &[],
+        tools: &[],
+        conventions: &[],
+        vendored_dirs: &[],
+    };
+    let uncached = analysis_prompt(&synthetic);
+    assert!(matches!(uncached, Cow::Owned(_)));
+    assert_eq!(uncached.as_ref(), build_analysis_prompt(&synthetic));
+}

@@ -132,12 +132,17 @@ pub struct AuthStore {
 ///
 /// The same reasoning as `LlmConfig` and `LlmClient`: a derived `Debug` prints
 /// every value, so one `{:?}` anywhere would emit every credential the user has.
-/// The endpoints are printed because they are not secret and they are the useful
-/// half when debugging.
+/// The endpoints are printed redacted through [`display_endpoint`] so URL
+/// userinfo credentials never leak either.
 impl std::fmt::Debug for AuthStore {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let endpoints: Vec<Cow<'_, str>> = self
+            .keys
+            .keys()
+            .map(|endpoint| display_endpoint(endpoint))
+            .collect();
         f.debug_struct("AuthStore")
-            .field("endpoints", &self.keys.keys().collect::<Vec<_>>())
+            .field("endpoints", &endpoints)
             .finish()
     }
 }
@@ -242,9 +247,12 @@ impl AuthStore {
     /// only the wording is here, because a paste at the prompt and a helper's
     /// stdout send the reader to different fixes.
     pub fn set(&mut self, endpoint: &str, key: &str) -> Result<(), AuthError> {
-        let key = vet(key).map_err(|defect| match defect {
-            CredentialDefect::Empty => AuthError::EmptyKey(endpoint.to_string()),
-            CredentialDefect::Unusable => AuthError::UnusableKey(endpoint.to_string()),
+        let key = vet(key).map_err(|defect| {
+            let shown = display_endpoint(endpoint).into_owned();
+            match defect {
+                CredentialDefect::Empty => AuthError::EmptyKey(shown),
+                CredentialDefect::Unusable => AuthError::UnusableKey(shown),
+            }
         })?;
         let endpoint = normalise(endpoint);
         self.keys.insert(endpoint.clone(), key);

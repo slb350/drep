@@ -15,7 +15,7 @@
 //! gitignore: the user naming a path is a stronger signal than a repo-wide
 //! pattern. `expand_paths` enforces that; `walk_targets` enforces the inverse.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use ignore::{DirEntry, WalkBuilder};
@@ -50,16 +50,26 @@ const SHARED_IGNORED_DIRS: &[&str] = &[".git", "build", "dist", ".cache"];
 /// are the same on a case-insensitive filesystem, and matching only one of
 /// them would walk it anyway — defeating the whole point of having the list.
 pub fn is_ignored_dir(name: &str) -> bool {
-    let folded = name.to_ascii_lowercase();
-    if folded.ends_with(".egg-info") {
+    if ends_with_ignore_ascii_case(name, ".egg-info") {
         return true;
     }
-    if SHARED_IGNORED_DIRS.iter().any(|d| *d == folded) {
+    if SHARED_IGNORED_DIRS
+        .iter()
+        .any(|d| d.eq_ignore_ascii_case(name))
+    {
         return true;
     }
     crate::languages::vendored_dirs()
         .iter()
         .any(|d| d.eq_ignore_ascii_case(name))
+}
+
+fn ends_with_ignore_ascii_case(value: &str, suffix: &str) -> bool {
+    value
+        .len()
+        .checked_sub(suffix.len())
+        .and_then(|start| value.get(start..))
+        .is_some_and(|tail| tail.eq_ignore_ascii_case(suffix))
 }
 
 /// Walk `root` and collect every regular file matching `predicate`.
@@ -153,7 +163,7 @@ pub fn expand_named(paths: &[PathBuf], root: &Path, predicate: fn(&Path) -> bool
 }
 
 fn expand(paths: &[PathBuf], predicate: fn(&Path) -> bool) -> Expansion {
-    let mut targets = BTreeSet::new();
+    let mut targets = Vec::new();
     let mut rejected = BTreeMap::new();
     for named in paths {
         let verdict = match std::fs::metadata(named) {
@@ -163,7 +173,7 @@ fn expand(paths: &[PathBuf], predicate: fn(&Path) -> bool) -> Expansion {
                 None
             }
             Ok(meta) if meta.is_file() && predicate(named) => {
-                targets.insert(named.clone());
+                targets.push(named.clone());
                 None
             }
             Ok(_) => Some(Rejected::Unanalyzable),
@@ -172,10 +182,9 @@ fn expand(paths: &[PathBuf], predicate: fn(&Path) -> bool) -> Expansion {
             rejected.insert(named.clone(), verdict);
         }
     }
-    Expansion {
-        targets: targets.into_iter().collect(),
-        rejected,
-    }
+    targets.sort();
+    targets.dedup();
+    Expansion { targets, rejected }
 }
 
 /// The subcommand that does analyze `path`, if any.

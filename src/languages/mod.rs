@@ -1,6 +1,6 @@
 //! Language registry: resolve a `Path` to the language that owns its extension.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 use std::path::Path;
 use std::sync::LazyLock;
 
@@ -38,18 +38,67 @@ fn detect_index(path: &Path) -> Option<usize> {
     by_filename(name).or_else(|| by_filename_stem(name))
 }
 
+/// Precomputed O(1) lookup tables over [`all_languages`].
+struct RegistryIndex {
+    /// Bare lower-case extension (no leading dot) -> first owning language index.
+    extensions: HashMap<&'static str, usize>,
+    /// Length of the longest registered extension (without dot), so longer inputs
+    /// reject without copying into the stack fold buffer.
+    max_ext_len: usize,
+    /// Compact list of `(exact_filename, language_index)` claims.
+    filenames: Vec<(&'static str, usize)>,
+    /// Compact list of `(stem_prefix, language_index)` claims.
+    filename_prefixes: Vec<(&'static str, usize)>,
+}
+
+const MAX_STACK_EXT_BYTES: usize = 32;
+
+static REGISTRY_INDEX: LazyLock<RegistryIndex> = LazyLock::new(|| {
+    let mut extensions = HashMap::new();
+    let mut max_ext_len = 0usize;
+    let mut filenames = Vec::new();
+    let mut filename_prefixes = Vec::new();
+    for (index, lang) in all_languages().iter().enumerate() {
+        for ext in lang.extensions {
+            let bare = &ext[1..];
+            max_ext_len = max_ext_len.max(bare.len());
+            extensions.entry(bare).or_insert(index);
+        }
+        for name in lang.filenames {
+            filenames.push((*name, index));
+        }
+        for prefix in lang.filename_prefixes {
+            filename_prefixes.push((*prefix, index));
+        }
+    }
+    debug_assert!(
+        max_ext_len <= MAX_STACK_EXT_BYTES,
+        "registered extension exceeds stack buffer"
+    );
+    RegistryIndex {
+        extensions,
+        max_ext_len,
+        filenames,
+        filename_prefixes,
+    }
+});
+
 /// The language claiming `ext`, which carries no leading dot.
 ///
-/// No allocation: the table's extensions are ASCII literals that all begin
-/// with a dot, so `[1..]` is the bare suffix and `eq_ignore_ascii_case` does
-/// the case folding that `to_lowercase()` used to do into two throwaway
-/// `String`s per call - on a function called once per walked file.
+/// Zero heap allocation: ASCII case folding happens in a small stack buffer
+/// before querying [`REGISTRY_INDEX`], keeping file-walk classification O(1).
 fn by_extension(ext: &str) -> Option<usize> {
-    all_languages().iter().position(|lang| {
-        lang.extensions
-            .iter()
-            .any(|known| known[1..].eq_ignore_ascii_case(ext))
-    })
+    let index = &*REGISTRY_INDEX;
+    let bytes = ext.as_bytes();
+    if bytes.len() > index.max_ext_len {
+        return None;
+    }
+    let mut folded = [0u8; MAX_STACK_EXT_BYTES];
+    for (dst, &src) in folded[..bytes.len()].iter_mut().zip(bytes) {
+        *dst = src.to_ascii_lowercase();
+    }
+    let key = std::str::from_utf8(&folded[..bytes.len()]).ok()?;
+    index.extensions.get(key).copied()
 }
 
 /// The language claiming the whole file name `name`.
@@ -60,11 +109,11 @@ fn by_extension(ext: &str) -> Option<usize> {
 /// Case-insensitive, matching the extension lookup and the rest of drep's
 /// file-target policy.
 fn by_filename(name: &str) -> Option<usize> {
-    all_languages().iter().position(|lang| {
-        lang.filenames
-            .iter()
-            .any(|known| known.eq_ignore_ascii_case(name))
-    })
+    REGISTRY_INDEX
+        .filenames
+        .iter()
+        .find(|(known, _)| known.eq_ignore_ascii_case(name))
+        .map(|(_, index)| *index)
 }
 
 /// The language claiming `name` as a dotted variant of a claimed stem, e.g.
@@ -84,11 +133,11 @@ fn by_filename_stem(name: &str) -> Option<usize> {
     if variant.is_empty() {
         return None;
     }
-    all_languages().iter().position(|lang| {
-        lang.filename_prefixes
-            .iter()
-            .any(|stem| stem.eq_ignore_ascii_case(head))
-    })
+    REGISTRY_INDEX
+        .filename_prefixes
+        .iter()
+        .find(|(stem, _)| stem.eq_ignore_ascii_case(head))
+        .map(|(_, index)| *index)
 }
 
 /// Bucket `paths` by the language that owns them.

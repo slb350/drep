@@ -174,12 +174,24 @@ impl Hunk {
 /// - A malformed `@@` produces no hunk, and nothing after it is attributed to
 ///   the hunk before it.
 pub fn parse_unified_diff(diff_text: &str) -> Vec<Hunk> {
+    parse_unified_diff_where(diff_text, |_| true)
+}
+
+/// Parse `diff_text` while retaining only hunks whose file satisfies `wanted`.
+///
+/// Unwanted files still track their `@@` body counts so a line inside an
+/// ignored file's body (such as an added `++ b/other.rs` line) can never be
+/// mistaken for a later file header, while avoiding allocating `HunkLine`
+/// strings for files the caller will drop anyway (such as lockfiles).
+pub(crate) fn parse_unified_diff_where(diff_text: &str, wanted: fn(&Path) -> bool) -> Vec<Hunk> {
+    enum CurrentFile {
+        None,
+        Ignored,
+        Wanted(PathBuf),
+    }
+
     let mut hunks: Vec<Hunk> = Vec::new();
-    // `None` means "no file to attribute a hunk to" - either we have not
-    // reached this file's `+++` line yet, or it was a deletion. A `@@` seen
-    // while it is `None` produces no hunk, which is what drops a deleted
-    // file's body without a separate flag to track.
-    let mut current_file: Option<PathBuf> = None;
+    let mut current_file = CurrentFile::None;
     let mut body: Option<Body> = None;
 
     for line in diff_text.lines() {
@@ -189,39 +201,54 @@ pub fn parse_unified_diff(diff_text: &str) -> Vec<Hunk> {
             if open.accept(line) {
                 continue;
             }
-            hunks.extend(body.take().map(Body::finish));
+            if let Some(hunk) = body.take().and_then(Body::finish) {
+                hunks.push(hunk);
+            }
         }
 
         if line.starts_with("diff --git ") {
-            current_file = None;
+            current_file = CurrentFile::None;
         } else if let Some(label) = line.strip_prefix("+++ ") {
-            current_file = new_file_path(label);
+            current_file = match new_file_path(label) {
+                Some(path) if wanted(&path) => CurrentFile::Wanted(path),
+                Some(_) => CurrentFile::Ignored,
+                None => CurrentFile::None,
+            };
         } else if let Some(after_marker) = line.strip_prefix("@@") {
-            body = parse_hunk_header(after_marker).and_then(|(os, oc, ns, nc)| {
-                current_file.clone().map(|file_path| Body {
-                    hunk: Hunk {
-                        file_path,
-                        old_start: os,
-                        old_count: oc,
-                        new_start: ns,
-                        new_count: nc,
-                        lines: Vec::new(),
-                    },
-                    old_left: oc,
-                    new_left: nc,
-                })
-            });
+            body =
+                parse_hunk_header(after_marker).and_then(|(os, oc, ns, nc)| match &current_file {
+                    CurrentFile::Wanted(file_path) => Some(Body {
+                        hunk: Some(Hunk {
+                            file_path: file_path.clone(),
+                            old_start: os,
+                            old_count: oc,
+                            new_start: ns,
+                            new_count: nc,
+                            lines: Vec::new(),
+                        }),
+                        old_left: oc,
+                        new_left: nc,
+                    }),
+                    CurrentFile::Ignored => Some(Body {
+                        hunk: None,
+                        old_left: oc,
+                        new_left: nc,
+                    }),
+                    CurrentFile::None => None,
+                });
         }
     }
 
-    hunks.extend(body.map(Body::finish));
+    if let Some(hunk) = body.and_then(Body::finish) {
+        hunks.push(hunk);
+    }
     hunks
 }
 
 /// A hunk whose body is still being read, with the lines each side of its
 /// `@@` header has left to account for.
 struct Body {
-    hunk: Hunk,
+    hunk: Option<Hunk>,
     old_left: u32,
     new_left: u32,
 }
@@ -229,11 +256,10 @@ struct Body {
 impl Body {
     /// Take `line` into the body, or `false` when it cannot belong there.
     fn accept(&mut self, line: &str) -> bool {
-        let (entry, old, new) = match line.as_bytes().first() {
-            Some(b' ') => (HunkLine::Context(line[1..].to_owned()), 1, 1),
-            None => (HunkLine::Context(String::new()), 1, 1),
-            Some(b'-') => (HunkLine::Removed(line[1..].to_owned()), 1, 0),
-            Some(b'+') => (HunkLine::Added(line[1..].to_owned()), 0, 1),
+        let (old, new) = match line.as_bytes().first() {
+            Some(b' ') | None => (1, 1),
+            Some(b'-') => (1, 0),
+            Some(b'+') => (0, 1),
             Some(b'\\') => return true,
             Some(_) => return false,
         };
@@ -245,11 +271,20 @@ impl Body {
         };
         self.old_left = old_left;
         self.new_left = new_left;
-        self.hunk.lines.push(entry);
+        if let Some(hunk) = &mut self.hunk {
+            let entry = match line.as_bytes().first() {
+                Some(b' ') => HunkLine::Context(line[1..].to_owned()),
+                None => HunkLine::Context(String::new()),
+                Some(b'-') => HunkLine::Removed(line[1..].to_owned()),
+                Some(b'+') => HunkLine::Added(line[1..].to_owned()),
+                Some(_) => unreachable!("non-body prefix returned above"),
+            };
+            hunk.lines.push(entry);
+        }
         true
     }
 
-    fn finish(self) -> Hunk {
+    fn finish(self) -> Option<Hunk> {
         self.hunk
     }
 }

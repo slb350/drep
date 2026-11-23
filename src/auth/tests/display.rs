@@ -100,3 +100,50 @@ fn a_scheme_less_endpoint_without_one_is_returned_as_written() {
 
     assert_eq!(display_endpoint(endpoint), endpoint);
 }
+
+#[test]
+fn auth_store_debug_and_set_errors_redact_endpoint_credentials() {
+    let secret_endpoint = "https://drep:gateway-secret@gateway.example/v1";
+    let mut store = AuthStore::new();
+    store
+        .set(secret_endpoint, "sk-header-key")
+        .expect("store valid key");
+
+    let debug = format!("{store:?}");
+    assert!(
+        !debug.contains("gateway-secret") && !debug.contains("sk-header-key"),
+        "AuthStore Debug leaked credentials: {debug}"
+    );
+    assert!(
+        debug.contains("https://<redacted>@gateway.example/v1"),
+        "expected redacted endpoint in Debug: {debug}"
+    );
+
+    let empty_err = store
+        .set(secret_endpoint, "   ")
+        .expect_err("empty key must fail");
+    assert!(
+        !empty_err.to_string().contains("gateway-secret"),
+        "EmptyKey leaked endpoint credentials: {empty_err}"
+    );
+    assert!(
+        empty_err
+            .to_string()
+            .contains("https://<redacted>@gateway.example/v1"),
+        "unexpected EmptyKey error: {empty_err}"
+    );
+
+    let unusable_err = store
+        .set(secret_endpoint, "sk-bad\nkey")
+        .expect_err("control char must fail");
+    assert!(
+        !unusable_err.to_string().contains("gateway-secret"),
+        "UnusableKey leaked endpoint credentials: {unusable_err}"
+    );
+    assert!(
+        unusable_err
+            .to_string()
+            .contains("https://<redacted>@gateway.example/v1"),
+        "unexpected UnusableKey error: {unusable_err}"
+    );
+}

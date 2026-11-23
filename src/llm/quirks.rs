@@ -43,12 +43,13 @@
 //! stop `drep init`.
 
 use std::collections::BTreeMap;
-use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+
+use crate::atomic_file::{self, Mode};
 
 /// Where the raw document lives.
 pub const REGISTRY_URL: &str = "https://models.dev/api.json";
@@ -309,12 +310,10 @@ impl<F: Fetch> Cached<F> {
 
 impl<F: Fetch> QuirksSource for Cached<F> {
     async fn registry(&self) -> Result<Registry, QuirksError> {
-        let cached = self.path.as_deref().and_then(Registry::load);
-        if let Some(registry) = &cached
-            && !registry.is_stale(self.now)
-        {
-            return Ok(registry.clone());
-        }
+        let cached = match self.path.as_deref().and_then(Registry::load) {
+            Some(registry) if !registry.is_stale(self.now) => return Ok(registry),
+            other => other,
+        };
 
         let fetched = self
             .fetcher
@@ -386,16 +385,8 @@ impl Registry {
         // over the target. A predictable `.tmp` name lets a planted symlink
         // redirect `fs::write` into another file before the rename. The random
         // sibling also isolates concurrent `drep init` runs from one another.
-        let mut temporary =
-            tempfile::NamedTempFile::new_in(parent.unwrap_or_else(|| Path::new(".")))
-                .map_err(|err| QuirksError::Cache(path.to_path_buf(), err.to_string()))?;
-        temporary
-            .write_all(body.as_bytes())
-            .map_err(|err| QuirksError::Cache(path.to_path_buf(), err.to_string()))?;
-        temporary
-            .persist(path)
-            .map(|_| ())
-            .map_err(|err| QuirksError::Cache(path.to_path_buf(), err.error.to_string()))
+        atomic_file::publish(path, body.as_bytes(), Mode::Replace)
+            .map_err(|err| QuirksError::Cache(path.to_path_buf(), err.to_string()))
     }
 
     /// Distil models.dev's document down to what drep reads.

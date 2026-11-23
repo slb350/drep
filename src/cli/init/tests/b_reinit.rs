@@ -296,3 +296,41 @@ async fn replacing_the_config_does_not_authorise_clobbering_a_foreign_hook() {
         "the foreign hook was not touched"
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn a_dangling_symlink_config_is_settled_before_running_the_wizard() {
+    let dir = root(None);
+    let path = dir.path().join("drep.toml");
+    std::os::unix::fs::symlink(dir.path().join("missing-target.toml"), &path)
+        .expect("dangling symlink");
+
+    let mut non_interactive = Scripted::new(&[]);
+    let err = existing_config(dir.path(), &args(), false, &mut non_interactive)
+        .expect_err("a dangling symlink must be refused without --force");
+    assert!(err.to_string().contains("--force"), "got {err}");
+
+    let mut declining = Scripted::new(&["n"]);
+    let decision = existing_config(dir.path(), &args(), true, &mut declining).expect("decides");
+    assert_eq!(decision, None);
+    assert!(declining.is_drained());
+
+    let mut accepting = Scripted::new(&["y"]);
+    let force = existing_config(dir.path(), &args(), true, &mut accepting).expect("decides");
+    assert_eq!(force, Some(true));
+}
+
+#[test]
+fn a_metadata_error_on_config_path_fails_before_running_the_wizard() {
+    let dir = root(None);
+    let blocker = dir.path().join("not-a-dir");
+    std::fs::write(&blocker, "blocker").expect("blocker file");
+
+    let mut console = Scripted::new(&[]);
+    let err = existing_config(&blocker, &args(), true, &mut console)
+        .expect_err("a non-NotFound metadata failure must abort before the wizard");
+    assert!(
+        err.to_string().contains("could not inspect"),
+        "expected inspection error, got {err}"
+    );
+}

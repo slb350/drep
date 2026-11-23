@@ -12,6 +12,7 @@
 //! thresholds over LLM output never were.
 
 pub mod analysis;
+mod atomic_file;
 pub mod auth;
 pub mod cli;
 pub mod config;

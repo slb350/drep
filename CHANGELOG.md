@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- Redacted endpoint credentials (`user:password@`) across all remaining `Debug` and error paths
+  (`AuthStore::Debug`, `AuthStore::set` errors, `wizard::Plan::Debug`, and `ChoiceBackend::Debug`).
+- Bounded Codex `MalformedFinal` error excerpts (`DETAIL_EXCERPT_CHARS`) and preserved structured
+  `ReadBoundedError` variants across Codex capture readers.
+- Made `drep init`'s `.gitignore` updates atomic via a private sibling temporary file, closing the
+  in-place truncation and symlink-swap window, and fixed the dangling-symlink pre-settlement check
+  in `drep init` so existing dangling symlinks are settled before keys are stored.
 - A `go vet` failure no longer prints `go list`'s reason raw. When `go list` cannot place a
   requested directory in the workspace, as for a module `go.work` does not use, its message names
   the directory unquoted, and its JSON escapes decode back into the directory's own bytes. A branch
@@ -42,8 +49,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   prints a single `url v2.5.9` - and the bound excludes a major line, so it cannot force a second copy
   either. No advisory is ignored or allowlisted: no `audit.toml` and no ignore entry exists.
 
+### Fixed
+
+- Fixed Codex readiness probing timing out on machines with large Codex session histories by
+  probing `codex --version` and `codex -c forced_login_method="chatgpt" login status` instead of
+  `codex doctor --json` (whose SQLite integrity and rollout-parity scans can exceed 2 minutes).
+- Updated `.pre-commit-hooks.yaml` `types_or` to cover all 23 registered languages introduced in
+  v3.0 (adding `c`, `c++`, `c#`, `dockerfile`, `elixir`, `groovy`, `java`, `kotlin`, `lua`, `php`,
+  `ruby`, `scala`, `shell`, `sql`, `svelte`, `swift`, `terraform`, and `vue`) and pinned its
+  coverage in `tests/integration/published_hooks.rs`.
+- Fixed `diff::uncommitted::flagged_differences` double-joining a relative `root` onto paths
+  already prefixed with `root`.
+- Made `review_budget::Budget::reset` tolerate concurrent lease removals (`NotFound`) and compute
+  retention in a single `read_dir` pass.
+- Updated `taiki-e/install-action` in `.github/build-setup.yml` to `v2.90.6` and regenerated
+  `.github/workflows/release.yml` via `dist generate`.
+- A remote mutation run no longer leaves live named pipes in the checkout. `scripts/mutants-remote.sh` kept its SSH session's two control pipes under `target/mutants/remote-session-*` for the whole run, so a `grep -r` over the checkout could open one, read the transport's messages and hang both processes; one such search stalled a run for 25 minutes. The pipes are now made under the mutation scratch root beside the checkout and removed as soon as both ends are open. The EXIT and PIPE traps are installed before the pipes are made, the EXIT trap kills any session job still running, and each run first removes the session directories a killed run left behind in either place, stopping with an error if one cannot be removed. A failed result mirror now shows rsync's error beside its warning. `tests/mutants-remote.sh` checks this against ssh, rsync and mkfifo stand-ins, and `validate` and the macOS test job now stop after an hour instead of six.
+- A remote mutation run that ends early now stops its SSH session under bash 5. `scripts/mutants-remote.sh` backgrounded the session through a shell function, which bash runs in a subshell; bash 3.2 skipped that fork for the function's trailing `command ssh`, but bash 5 does not, so the cleanup killed and reaped the subshell and left ssh running with the checkout and host locks. The session now starts through `ai1_ssh_session`, which execs ssh, so the job is ssh itself on every bash.
+
 ### Changed
 
+- Pooled `open_agent::Client` instances inside `LlmClient` to reuse HTTP/TLS connections across
+  files while clearing conversation history on every clean completion and discarding clients on
+  transport errors.
+- Reduced git subprocess overhead in `drep check --staged` and `--diff` by sharing a single
+  working-tree view, avoiding eager `has_head` probes, streaming filtered diff parsing, and running
+  independent `git` queries concurrently in `Budget::for_repo` and `hooks::install`.
+- Gated response-cache eviction on actual writes, offloaded eviction via `spawn_blocking`, switched
+  `Cache::get` to a single open/stat read, and pre-hashed `(system_prompt, content)` once per
+  failover chain.
+- Memoized deterministic tool workspace root discovery (`ConfigCache`), merged shared cross-language
+  tools (`eslint`, `cppcheck`) into one invocation per workspace, scanned glob config markers with a
+  single `read_dir`, and parsed `drep.toml` once in `drep doctor`.
+- Bounded payload rendering memory (`render_within`), cached per-language system prompts, avoided
+  cloning the model-quirks registry on cache hits, avoided allocating on clean `json_parsing`,
+  `acknowledgements`, `files::is_ignored_dir`, and `languages::detect` lookups, accelerated
+  `docs` linting, and deferred Tokio runtime creation for synchronous CLI subcommands.
+- Consolidated atomic sibling-temp file publication (`atomic_file`), named-path rejection mapping
+  (`FailureReason::from_rejected`), raw TOML entry predicates, and `diff::repository_root`.
 - Consolidated all seven top-level integration test crates into a single binary at
   `tests/integration/main.rs` and disabled the empty `[[bin]]` test harness (`test = false`) and
   `[lib]` doctest pass (`doctest = false`) in `Cargo.toml`, cutting per-mutant compilation and
@@ -107,11 +150,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   1.85.0: the hold is the declared `0.2.2` requirement rather than the floor, because within `0.x`
   every minor version is an API break and 0.4 is two of them ahead, so taking it migrates the
   release-contract test rather than refreshing the lock.
-
-### Fixed
-
-- A remote mutation run no longer leaves live named pipes in the checkout. `scripts/mutants-remote.sh` kept its SSH session's two control pipes under `target/mutants/remote-session-*` for the whole run, so a `grep -r` over the checkout could open one, read the transport's messages and hang both processes; one such search stalled a run for 25 minutes. The pipes are now made under the mutation scratch root beside the checkout and removed as soon as both ends are open. The EXIT and PIPE traps are installed before the pipes are made, the EXIT trap kills any session job still running, and each run first removes the session directories a killed run left behind in either place, stopping with an error if one cannot be removed. A failed result mirror now shows rsync's error beside its warning. `tests/mutants-remote.sh` checks this against ssh, rsync and mkfifo stand-ins, and `validate` and the macOS test job now stop after an hour instead of six.
-- A remote mutation run that ends early now stops its SSH session under bash 5. `scripts/mutants-remote.sh` backgrounded the session through a shell function, which bash runs in a subshell; bash 3.2 skipped that fork for the function's trailing `command ssh`, but bash 5 does not, so the cleanup killed and reaped the subshell and left ssh running with the checkout and host locks. The session now starts through `ai1_ssh_session`, which execs ssh, so the job is ssh itself on every bash.
 
 ## [3.1.9] - 2026-11-22
 

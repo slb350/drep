@@ -31,6 +31,7 @@
 //! - **`fuzzy_inference`.** It guessed field values out of prose with
 //!   per-field regexes; a wrong finding is worse than a missing one.
 
+use std::borrow::Cow;
 use std::sync::LazyLock;
 
 use regex::Regex;
@@ -117,16 +118,16 @@ static FENCE_RE: LazyLock<Regex> = LazyLock::new(|| {
 /// parsing as `Complete` with the string value silently rewritten from `,}` to
 /// `}`. That is the same defect class as the single-quote repair this module
 /// deliberately does not implement - a repair that damages valid input.
-fn strip_trailing_commas(s: &str) -> String {
+fn strip_trailing_commas(s: &str) -> Cow<'_, str> {
     let bytes = s.as_bytes();
-    let mut out = String::with_capacity(s.len());
+    let mut out: Option<String> = None;
+    let mut copied = 0usize;
     let mut in_string = false;
     let mut escape = false;
 
     for (i, ch) in s.char_indices() {
         if escape {
             escape = false;
-            out.push(ch);
             continue;
         }
         if in_string {
@@ -135,12 +136,10 @@ fn strip_trailing_commas(s: &str) -> String {
                 '"' => in_string = false,
                 _ => {}
             }
-            out.push(ch);
             continue;
         }
         if ch == '"' {
             in_string = true;
-            out.push(ch);
             continue;
         }
         if ch == ',' {
@@ -150,12 +149,19 @@ fn strip_trailing_commas(s: &str) -> String {
             let rest = &bytes[i + 1..];
             let next = rest.iter().find(|b| !b.is_ascii_whitespace());
             if matches!(next, Some(b'}') | Some(b']')) {
-                continue;
+                let buf = out.get_or_insert_with(|| String::with_capacity(s.len()));
+                buf.push_str(&s[copied..i]);
+                copied = i + 1;
             }
         }
-        out.push(ch);
     }
-    out
+    match out {
+        Some(mut buf) => {
+            buf.push_str(&s[copied..]);
+            Cow::Owned(buf)
+        }
+        None => Cow::Borrowed(s),
+    }
 }
 
 /// Run the strategy ladder against one LLM response and return the first thing
@@ -168,6 +174,7 @@ pub fn extract_json(content: &str) -> Option<Extracted> {
     // ladder, because the reasoning routinely contains a fence of its own and
     // `FENCE_RE` takes the *first* one.
     let content = strip_reasoning_block(content);
+    let trimmed = content.trim();
 
     // Strategy 1: parse the whole response first, before looking for a fence.
     //
@@ -182,28 +189,32 @@ pub fn extract_json(content: &str) -> Option<Extracted> {
     // Trying the whole thing first costs one `serde_json::from_str` on a string
     // that is usually not JSON, and cannot mis-fire: if the content parses, it
     // *is* the answer.
-    if let Ok(value) = serde_json::from_str::<Value>(content.trim()) {
+    if let Ok(value) = serde_json::from_str::<Value>(trimmed) {
         return Some(Extracted::Complete(value));
     }
 
-    // Strategy 2: extract from a markdown fence if one is present. The fence
-    // path applies even when the body itself fails to parse; strategies 3-5
-    // then run on the body alone.
-    let working = FENCE_RE
+    // Strategy 2 & 3: extract from a markdown fence if one is present and parse
+    // the fenced body directly. When no fence is present, Strategy 1 already
+    // tried parsing `trimmed`, so we skip straight to Strategy 4 without
+    // copying or reparsing.
+    let fenced = FENCE_RE
         .captures(content)
-        .map(|caps| caps.get(1).unwrap().as_str().trim().to_string())
-        .unwrap_or_else(|| content.to_string());
-
-    // Strategy 3: direct parse of the fenced body.
-    if let Ok(value) = serde_json::from_str::<Value>(&working) {
+        .map(|caps| caps.get(1).unwrap().as_str().trim());
+    if let Some(body) = fenced
+        && let Ok(value) = serde_json::from_str::<Value>(body)
+    {
         return Some(Extracted::Complete(value));
     }
+    let working = fenced.unwrap_or(trimmed);
 
     // Strategy 4: repair trailing commas. This is the only repair we attempt
     // - single-quote substitution is deliberately omitted because it
-    // corrupts apostrophes inside strings.
-    let repaired = strip_trailing_commas(&working);
-    if let Ok(value) = serde_json::from_str::<Value>(&repaired) {
+    // corrupts apostrophes inside strings. Only re-parse when at least one
+    // trailing comma was actually removed.
+    let repaired = strip_trailing_commas(working);
+    if let Cow::Owned(ref changed) = repaired
+        && let Ok(value) = serde_json::from_str::<Value>(changed)
+    {
         return Some(Extracted::Complete(value));
     }
 
@@ -217,10 +228,11 @@ pub fn extract_json(content: &str) -> Option<Extracted> {
     // and so is invisible to the stripper. Appending the closers first turns it
     // into `{"a":1,}`, which the stripper then repairs. Doing it the other way
     // round leaves the comma in place and the parse fails.
-    if let Some(balanced) = balance_unclosed(&repaired).map(|b| strip_trailing_commas(&b))
-        && let Ok(value) = serde_json::from_str::<Value>(&balanced)
-    {
-        return Some(Extracted::Truncated(value));
+    if let Some(balanced) = balance_unclosed(&repaired) {
+        let stripped = strip_trailing_commas(&balanced);
+        if let Ok(value) = serde_json::from_str::<Value>(&stripped) {
+            return Some(Extracted::Truncated(value));
+        }
     }
 
     None

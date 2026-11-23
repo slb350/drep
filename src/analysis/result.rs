@@ -183,6 +183,19 @@ impl FailureReason {
         }
     }
 
+    /// Translate one named-path rejection from [`crate::files::expand_named`]
+    /// into the gate's failure vocabulary, shared by `check` and `lint-docs`.
+    pub(crate) fn from_rejected(path: &std::path::Path, why: crate::files::Rejected) -> Self {
+        match why {
+            crate::files::Rejected::Missing => {
+                FailureReason::Unreadable("no such file or directory".to_owned())
+            }
+            crate::files::Rejected::Unanalyzable => {
+                FailureReason::unsupported(path, crate::files::redirect_hint(path))
+            }
+        }
+    }
+
     /// A single line suitable for a terminal, derived from the variant.
     ///
     /// The HTTP status is rendered next to the message so a 429 is visible

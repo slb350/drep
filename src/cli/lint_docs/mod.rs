@@ -120,6 +120,21 @@ pub async fn run(args: &LintDocsArgs, root: &Path) -> Result<Exit> {
     Ok(outcome.exit)
 }
 
+/// Synchronous entry point for non-`--staged` `lint-docs` invocations, so the
+/// CLI can lint local files without starting a Tokio runtime.
+pub fn run_local(args: &LintDocsArgs, root: &Path) -> Result<Exit> {
+    let outcome = analyze(args, root);
+    render::render(&outcome)?;
+    Ok(outcome.exit)
+}
+
+/// Asynchronous entry point for `--staged` `lint-docs` invocations.
+pub async fn run_staged(args: &LintDocsArgs, root: &Path) -> Result<Exit> {
+    let outcome = outcome_staged(args, root).await?;
+    render::render(&outcome)?;
+    Ok(outcome.exit)
+}
+
 /// The outcome for one invocation, in whichever input mode it names.
 ///
 /// `async` for exactly one reason: `--staged` asks git which documents this
@@ -130,7 +145,10 @@ pub(crate) async fn outcome_for(args: &LintDocsArgs, root: &Path) -> Result<Lint
     if !args.staged {
         return Ok(analyze(args, root));
     }
+    outcome_staged(args, root).await
+}
 
+async fn outcome_staged(args: &LintDocsArgs, root: &Path) -> Result<LintOutcome> {
     // Straight to the reader, not through `files::expand_named`: git has
     // already answered both questions the expander exists to answer - these
     // paths exist and they are markdown - and the expander resolves an *empty*
@@ -212,14 +230,7 @@ fn resolve(
     let files::Expansion { targets, rejected } =
         files::expand_named(paths, root, files::is_markdown);
     for (path, why) in rejected {
-        let reason = match why {
-            files::Rejected::Missing => {
-                FailureReason::Unreadable("no such file or directory".to_owned())
-            }
-            files::Rejected::Unanalyzable => {
-                FailureReason::unsupported(&path, files::redirect_hint(&path))
-            }
-        };
+        let reason = FailureReason::from_rejected(&path, why);
         failures.insert(path, reason);
     }
     targets

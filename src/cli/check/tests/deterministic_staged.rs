@@ -295,3 +295,32 @@ async fn a_whole_project_tool_refuses_an_untracked_file_under_its_workspace() {
         other => panic!("expected UncommittedChanges for {file:?}, got {other:?}"),
     }
 }
+
+/// A source-following tool (`reads_other_sources`) is also refused when a
+/// sparse checkout leaves a nearer config marker out of the working tree
+/// (`index_only`), even when `uncommitted` is empty.
+#[tokio::test]
+async fn a_source_following_tool_refuses_an_index_only_config_marker() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let argv = ruff_fixture(dir.path());
+    let sub = dir.path().join("sub");
+    std::fs::create_dir(&sub).expect("sub dir");
+    let a = sub.join("a.py");
+    std::fs::write(&a, "a = 1\n").expect("a.py");
+
+    let mut work = work_for(std::slice::from_ref(&a));
+    work.index_only = [PathBuf::from("sub/pyproject.toml")].into_iter().collect();
+    let (_findings, failures, _compiled) = deterministic::run(&work, dir.path()).await;
+
+    assert!(
+        !argv.exists(),
+        "ruff must not run while a sparse-omitted config marker exists in an ancestor"
+    );
+    match failures.get(&a) {
+        Some(FailureReason::UncommittedChanges { tool, paths }) => {
+            assert_eq!(tool, "ruff");
+            assert_eq!(paths, &[PathBuf::from("sub/pyproject.toml")]);
+        }
+        other => panic!("expected UncommittedChanges for {a:?}, got {other:?}"),
+    }
+}

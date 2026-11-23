@@ -306,16 +306,36 @@ fn find_url(chars: &[char]) -> Option<usize> {
 /// sentence like "see the note (below" is bad prose, not broken markdown, and
 /// this check has no business having an opinion about it.
 fn link_syntax(line: &Line<'_>, blanked: &[char], file_path: &str, out: &mut Vec<Finding>) {
-    let count = |target: char| blanked.iter().filter(|c| **c == target).count();
-    let (open_square, close_square) = (count('['), count(']'));
-    let (open_round, close_round) = (count('('), count(')'));
+    let (mut open_square, mut close_square, mut open_round, mut close_round): (
+        usize,
+        usize,
+        usize,
+        usize,
+    ) = (0, 0, 0, 0);
+    let mut has_link_boundary = false;
+    let mut prev = '\0';
+    for &c in blanked {
+        match c {
+            '[' => open_square += 1,
+            ']' => close_square += 1,
+            '(' => {
+                open_round += 1;
+                if prev == ']' {
+                    has_link_boundary = true;
+                }
+            }
+            ')' => close_round += 1,
+            _ => {}
+        }
+        prev = c;
+    }
     // The counts reach the message, not just the comparison. A reader fixing
     // the line needs to know which way it is unbalanced, and a message that
     // depends only on `a != b` is one a miscounting implementation still
     // renders correctly.
     let detail = if open_square != close_square {
         format!("{open_square} `[` against {close_square} `]`")
-    } else if blanked.windows(2).any(|w| w == [']', '(']) && open_round != close_round {
+    } else if has_link_boundary && open_round != close_round {
         format!("{open_round} `(` against {close_round} `)`")
     } else {
         return;

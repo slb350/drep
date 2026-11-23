@@ -59,6 +59,56 @@ pub struct Payload {
     pub valid_lines: BTreeSet<u32>,
 }
 
+/// Outcome of bounded payload rendering.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum RenderOutcome {
+    /// Rendered payload within the caller's byte ceiling.
+    Ready(Payload),
+    /// The rendered payload would exceed the ceiling; `bytes` is its exact byte
+    /// length, counted without retaining the full text in memory.
+    TooLarge { bytes: u64 },
+}
+
+/// Sink that buffers rendered text while within `max_bytes`, then releases the
+/// buffer and counts only the remaining length so an oversized diff cannot
+/// spike memory while still reporting its exact rendered byte count.
+struct BoundedBuffer {
+    text: String,
+    bytes: u64,
+    max_bytes: u64,
+}
+
+impl BoundedBuffer {
+    fn new(capacity: usize, max_bytes: u64) -> Self {
+        Self {
+            text: String::with_capacity(capacity),
+            bytes: 0,
+            max_bytes,
+        }
+    }
+
+    fn push_str(&mut self, s: &str) {
+        self.bytes = self.bytes.saturating_add(s.len() as u64);
+        if self.bytes > self.max_bytes {
+            self.text = String::new();
+            return;
+        }
+        self.text.push_str(s);
+    }
+
+    fn push(&mut self, ch: char) {
+        let mut buf = [0u8; 4];
+        self.push_str(ch.encode_utf8(&mut buf));
+    }
+}
+
+impl std::fmt::Write for BoundedBuffer {
+    fn write_str(&mut self, s: &str) -> std::fmt::Result {
+        self.push_str(s);
+        Ok(())
+    }
+}
+
 /// Render every hunk belonging to one file into a single payload.
 ///
 /// The file path is taken from the hunks themselves rather than passed
@@ -73,18 +123,40 @@ pub struct Payload {
 /// registry key (`"rust"`) where the prompt wants `"Rust"`, with nothing to
 /// catch it.
 pub fn render(language: &LanguageSupport, hunks: &[Hunk]) -> Option<Payload> {
+    match render_within(language, hunks, u64::MAX)? {
+        RenderOutcome::Ready(payload) => Some(payload),
+        RenderOutcome::TooLarge { .. } => {
+            unreachable!("a rendered payload cannot exceed u64::MAX")
+        }
+    }
+}
+
+/// Render every hunk belonging to one file while bounding retained memory to
+/// `max_bytes`. Returns [`RenderOutcome::TooLarge`] with the exact rendered
+/// byte count when the output would exceed `max_bytes`.
+pub(crate) fn render_within(
+    language: &LanguageSupport,
+    hunks: &[Hunk],
+    max_bytes: u64,
+) -> Option<RenderOutcome> {
     let file_path = &hunks.first()?.file_path;
 
     let mut sorted: Vec<&Hunk> = hunks.iter().collect();
     sorted.sort_by_key(|h| h.new_start);
 
-    let mut text = String::new();
+    let estimated = sorted
+        .iter()
+        .flat_map(|h| &h.lines)
+        .map(|l| l.content().len().saturating_add(12))
+        .fold(256usize, usize::saturating_add)
+        .min(usize::try_from(max_bytes).unwrap_or(usize::MAX));
+    let mut text = BoundedBuffer::new(estimated, max_bytes);
     let mut valid_lines: BTreeSet<u32> = BTreeSet::new();
 
     // `write!` into the buffer rather than `push_str(&format!(..))`: the latter
     // allocates a throwaway `String` for every rendered line, and a payload is
-    // routinely well over a thousand lines. Writing to a `String` cannot fail,
-    // so the `Result` is discarded deliberately.
+    // routinely well over a thousand lines. Writing to a `BoundedBuffer` cannot
+    // fail, so the `Result` is discarded deliberately.
     let _ = writeln!(text, "File: {}", file_path.display());
     let _ = writeln!(text, "Language: {}", language.display_name);
     text.push('\n');
@@ -106,7 +178,9 @@ pub fn render(language: &LanguageSupport, hunks: &[Hunk]) -> Option<Payload> {
             match number {
                 Some(n) => {
                     let _ = writeln!(text, "{}{n:>6} | {}", line.marker(), line.content());
-                    valid_lines.insert(n);
+                    if text.bytes <= max_bytes {
+                        valid_lines.insert(n);
+                    }
                     last_numbered = Some(n);
                 }
                 // A removed line: six spaces where the number goes. It has no
@@ -119,7 +193,14 @@ pub fn render(language: &LanguageSupport, hunks: &[Hunk]) -> Option<Payload> {
         }
     }
 
-    Some(Payload { text, valid_lines })
+    if text.bytes > max_bytes {
+        Some(RenderOutcome::TooLarge { bytes: text.bytes })
+    } else {
+        Some(RenderOutcome::Ready(Payload {
+            text: text.text,
+            valid_lines,
+        }))
+    }
 }
 
 /// Pick the right scope sentence for this set of hunks.

@@ -45,13 +45,19 @@ pub(super) struct Reservation {
 
 impl Budget {
     pub(super) async fn for_repo(root: &Path, limit: u32) -> Result<Self> {
-        let git_dir = crate::diff::git_path(root, &["rev-parse", "--git-dir"])
-            .await
-            .context("could not locate Git metadata for review-round accounting")?;
-        let identity = crate::diff::git_query(root, &["symbolic-ref", "--quiet", "HEAD"])
-            .await
-            .context("could not identify the Git branch for review-round accounting")?
-            .unwrap_or_else(|| "detached-head".to_owned());
+        let (git_dir, identity) = tokio::try_join!(
+            async {
+                crate::diff::git_path(root, &["rev-parse", "--git-dir"])
+                    .await
+                    .context("could not locate Git metadata for review-round accounting")
+            },
+            async {
+                crate::diff::git_query(root, &["symbolic-ref", "--quiet", "HEAD"])
+                    .await
+                    .context("could not identify the Git branch for review-round accounting")
+            }
+        )?;
+        let identity = identity.unwrap_or_else(|| "detached-head".to_owned());
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .context("system clock is before the Unix epoch")?
@@ -100,14 +106,20 @@ impl Budget {
             return Ok(false);
         }
         let _lock = lock_at(&self.lock_path)?;
+        self.reset_locked()
+    }
+
+    pub(super) fn reset_locked(&self) -> Result<bool> {
         let entries = match fs::read_dir(&self.directory) {
             Ok(entries) => entries,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(false),
             Err(err) => {
                 return Err(err)
                     .with_context(|| format!("could not read {}", self.directory.display()));
             }
         };
         let mut removed = false;
+        let mut kept_any = false;
         for entry in entries {
             let entry = entry
                 .with_context(|| format!("could not enumerate {}", self.directory.display()))?;
@@ -118,19 +130,17 @@ impl Budget {
                     format!("could not reset review slot {}", entry.path().display())
                 })?;
                 removed = true;
+            } else {
+                kept_any = true;
             }
         }
-        if fs::read_dir(&self.directory)
-            .with_context(|| format!("could not read {}", self.directory.display()))?
-            .next()
-            .is_none()
-        {
+        if !kept_any {
             fs::remove_dir(&self.directory)
                 .with_context(|| format!("could not remove {}", self.directory.display()))?;
-        }
-        if fs::read_dir(&self.cycles_root).is_ok_and(|mut entries| entries.next().is_none()) {
-            fs::remove_dir(&self.cycles_root)
-                .with_context(|| format!("could not remove {}", self.cycles_root.display()))?;
+            if fs::read_dir(&self.cycles_root).is_ok_and(|mut entries| entries.next().is_none()) {
+                fs::remove_dir(&self.cycles_root)
+                    .with_context(|| format!("could not remove {}", self.cycles_root.display()))?;
+            }
         }
         Ok(removed)
     }

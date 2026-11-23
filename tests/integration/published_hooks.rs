@@ -87,3 +87,73 @@ fn the_repository_pre_push_hook_uses_the_push_gate_and_ref_adapter() {
         "drep must test the same pre-commit ref adapter it publishes"
     );
 }
+
+/// Every published code-check hook must trigger on every registered language.
+///
+/// The registry grew by thirteen ecosystems in 3.0.0; pinning the `types_or`
+/// tag list against `languages::all_languages` prevents a newly added language
+/// from being silently skipped by pre-commit consumers.
+#[test]
+fn published_check_hooks_cover_every_registered_language() {
+    let yaml = hooks_yaml();
+    let expected_tags: Vec<&str> = drep::languages::all_languages()
+        .iter()
+        .flat_map(|language| match language.name {
+            "python" => &["python"][..],
+            "javascript" => &["javascript", "jsx"][..],
+            "typescript" => &["ts", "tsx"][..],
+            "vue" => &["vue"][..],
+            "svelte" => &["svelte"][..],
+            "go" => &["go"][..],
+            "rust" => &["rust"][..],
+            "java" => &["java"][..],
+            "kotlin" => &["kotlin"][..],
+            "scala" => &["scala"][..],
+            "groovy" => &["groovy"][..],
+            "shell" => &["shell"][..],
+            "swift" => &["swift"][..],
+            "c" => &["c"][..],
+            "cpp" => &["c++"][..],
+            "csharp" => &["c#"][..],
+            "ruby" => &["ruby"][..],
+            "php" => &["php"][..],
+            "terraform" => &["terraform"][..],
+            "elixir" => &["elixir"][..],
+            "sql" => &["sql"][..],
+            "docker" => &["dockerfile"][..],
+            "lua" => &["lua"][..],
+            other => panic!("map registered language `{other}` to its pre-commit identify tag(s)"),
+        })
+        .copied()
+        .collect();
+
+    for hook_id in ["drep-check", "drep-check-push", "drep-check-all"] {
+        let marker = format!("- id: {hook_id}\n");
+        let start = yaml
+            .find(&marker)
+            .unwrap_or_else(|| panic!("published hooks must declare {hook_id}"));
+        let block = &yaml[start..];
+        let end = block[1..]
+            .find("\n- id:")
+            .map_or(block.len(), |offset| offset + 1);
+        let block = &block[..end];
+        let raw_list = block
+            .lines()
+            .find_map(|line| line.trim().strip_prefix("types_or:"))
+            .unwrap_or_else(|| panic!("{hook_id} must declare types_or: {block}"))
+            .trim();
+        let inner = raw_list
+            .strip_prefix('[')
+            .and_then(|s| s.strip_suffix(']'))
+            .unwrap_or_else(|| panic!("{hook_id} types_or must be a YAML flow list: {raw_list}"));
+        let declared: Vec<&str> = inner
+            .split(',')
+            .map(|item| item.trim().trim_matches('"').trim_matches('\''))
+            .filter(|item| !item.is_empty())
+            .collect();
+        assert_eq!(
+            declared, expected_tags,
+            "{hook_id} types_or drifted from registered languages"
+        );
+    }
+}

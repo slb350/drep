@@ -33,9 +33,10 @@ mod uncommitted;
 
 use git::{GitEnv, committing_index, spawn_git, spawn_git_bytes};
 pub(crate) use git::{git_query, run_git, same_directory};
-use hunks::{Hunk, parse_unified_diff};
+use hunks::{Hunk, parse_unified_diff_where};
 use prefix::{from_prefix, hunks_from, paths_from, working_prefix};
 pub use uncommitted::{Uncommitted, diverging_from, uncommitted_paths};
+use uncommitted::{diverging_from_with, uncommitted_paths_with};
 
 /// The well-known SHA for the empty git tree.
 ///
@@ -238,8 +239,9 @@ pub async fn staged_contents(
     root: &Path,
     wanted: fn(&Path) -> bool,
 ) -> Result<Vec<(PathBuf, std::io::Result<String>)>, GitError> {
-    let view = StagedView::of(root).await?;
-    let paths = filter_paths(&view.diff(root, NAMES).await?, wanted);
+    let (head, view) = tokio::join!(has_head(root), WorkingView::of(root));
+    let view = view?;
+    let paths = filter_paths(&view.staged_diff(root, head, NAMES).await?, wanted);
     let view = &view;
     Ok(futures::stream::iter(paths)
         .map(|path| async move {
@@ -261,25 +263,26 @@ pub async fn staged_contents(
 /// in scope: drep would analyze a file the gate never listed, which is exactly
 /// the class of failure this module exists to prevent.
 async fn staged_diff(root: &Path, mode: &str) -> Result<(String, PathBuf), GitError> {
-    let view = StagedView::of(root).await?;
-    Ok((view.diff(root, mode).await?, view.prefix))
+    let (head, view) = tokio::join!(has_head(root), WorkingView::of(root));
+    let view = view?;
+    Ok((view.staged_diff(root, head, mode).await?, view.prefix))
 }
 
-/// What the staged queries read: whether HEAD exists, the index the commit is being made from, and where `root` sits in the working tree.
+/// What the working-tree and index queries share: the index the commit is being
+/// made from, and where `root` sits in the working tree.
 ///
-/// Built once per query so the file list and the content read for it come from the same index.
-struct StagedView {
-    head: bool,
+/// Built once per command resolution so staged/branch hunks and uncommitted
+/// path checks share a single `working_prefix` and `committing_index` probe
+/// without spawning redundant git processes.
+struct WorkingView {
     index: Option<PathBuf>,
     prefix: PathBuf,
 }
 
-impl StagedView {
+impl WorkingView {
     async fn of(root: &Path) -> Result<Self, GitError> {
-        let (head, index, prefix) =
-            tokio::join!(has_head(root), committing_index(root), working_prefix(root));
+        let (index, prefix) = tokio::join!(committing_index(root), working_prefix(root));
         Ok(Self {
-            head,
             index: index?,
             prefix: prefix?,
         })
@@ -291,8 +294,8 @@ impl StagedView {
             .map_or(GitEnv::Scrubbed, GitEnv::Index)
     }
 
-    async fn diff(&self, root: &Path, mode: &str) -> Result<String, GitError> {
-        let selection: &[&str] = if self.head {
+    async fn staged_diff(&self, root: &Path, head: bool, mode: &str) -> Result<String, GitError> {
+        let selection: &[&str] = if head {
             &["--cached", mode]
         } else {
             &["--cached", mode, EMPTY_TREE]
@@ -321,6 +324,46 @@ impl StagedView {
             )
         })
     }
+}
+
+/// Staged hunks and uncommitted working-tree differences resolved from one
+/// shared [`WorkingView`].
+pub(crate) async fn staged_work(
+    root: &Path,
+    wanted: fn(&Path) -> bool,
+) -> Result<(Vec<Hunk>, Uncommitted), GitError> {
+    let (head, view) = tokio::join!(has_head(root), WorkingView::of(root));
+    let view = view?;
+    let unified = unified();
+    let (diff, uncommitted) = tokio::join!(
+        view.staged_diff(root, head, &unified),
+        uncommitted_paths_with(root, &view)
+    );
+    Ok((
+        hunks_from(hunks_for(&diff?, wanted), &view.prefix),
+        uncommitted?,
+    ))
+}
+
+/// Branch-range hunks and differences from the range tip, resolved from one
+/// shared [`WorkingView`] while overlapping `git diff` with view discovery.
+pub(crate) async fn branch_work(
+    root: &Path,
+    git_ref: &str,
+    tip: Option<&str>,
+    wanted: fn(&Path) -> bool,
+) -> Result<(Vec<Hunk>, Uncommitted), GitError> {
+    let unified = unified();
+    let commit = tip.unwrap_or("HEAD");
+    let (diff, view_and_diverging) =
+        tokio::join!(since_diff(root, git_ref, tip, &unified), async {
+            let view = WorkingView::of(root).await?;
+            let diverging = diverging_from_with(root, &view, commit).await?;
+            Ok::<_, GitError>((view.prefix, diverging))
+        });
+    let diff = diff?;
+    let (prefix, diverging) = view_and_diverging?;
+    Ok((hunks_from(hunks_for(&diff, wanted), &prefix), diverging))
 }
 
 /// `git diff <ref>...<HEAD|empty-tree>` in whichever output mode is wanted.
@@ -358,20 +401,20 @@ async fn since_diff(
     // diff; it only turned "this repo has no commits" into a confusing message
     // about symmetric differences. A repo with an unborn HEAD also has no ref
     // to diff *from*, so there is nothing to salvage - say so plainly.
-    let ref_b = match tip {
-        Some(tip) => tip,
-        None if has_head(root).await => "HEAD",
-        None => {
-            return Err(GitError::NonZero {
+    let ref_b = tip.unwrap_or("HEAD");
+    let spec = format!("{git_ref}...{ref_b}");
+    match git_diff(root, &[mode, &spec], GitEnv::Scrubbed).await {
+        Ok(diff) => Ok(diff),
+        Err(GitError::NonZero { .. }) if tip.is_none() && !has_head(root).await => {
+            Err(GitError::NonZero {
                 code: None,
                 stderr: "this repository has no commits yet, so there is nothing to \
                          diff against; use --staged before the first commit"
                     .to_owned(),
-            });
+            })
         }
-    };
-    let spec = format!("{git_ref}...{ref_b}");
-    git_diff(root, &[mode, &spec], GitEnv::Scrubbed).await
+        Err(err) => Err(err),
+    }
 }
 
 /// Refuse a ref that git would parse as an option.
@@ -446,9 +489,7 @@ fn unified() -> String {
 /// their caller, so a command cannot get one of them right and the other
 /// wrong.
 fn hunks_for(diff_text: &str, wanted: fn(&Path) -> bool) -> Vec<Hunk> {
-    let mut hunks = parse_unified_diff(diff_text);
-    hunks.retain(|hunk| wanted(&hunk.file_path));
-    hunks
+    parse_unified_diff_where(diff_text, wanted)
 }
 
 /// Hunks for what this branch changed relative to `git_ref`.

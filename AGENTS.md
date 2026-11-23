@@ -112,36 +112,43 @@ comes back.
   lock makes the child wait on its own parent and prevents the unmutated
   baseline from completing. An unreachable host falls back to a local hook run
   *with a warning*, never a silent skip. `DREP_MUTANTS_REMOTE=0` forces local.
-  The SSH session's control pipes are made under the scratch root beside the checkout, never inside it, and removed once both ends are open: a recursive search that opens a live pipe reads the session's messages and hangs the run. The EXIT trap is installed before `mkfifo` and kills whatever session job is still running, and each run first removes the session directories a killed run left under the scratch root or `target/mutants`, failing if one cannot be removed. The session starts through `ai1_ssh_session`, which execs ssh: bash runs a backgrounded function in a subshell, so without the exec the job is that subshell and a kill leaves ssh running.
-  The hook sync is
-  `--delete --force --delete-excluded` with a
-  `P /target` filter: an excluded name *inside* a directory protects it from
-  deletion, so without `--delete-excluded` a deleted directory survives on the
-  remote and the sweep tests a tree the commit does not have; without the
-  protect rule, `--delete-excluded` takes `target/` and every run is a cold
-  build. `scripts/mutants-common.sh` holds the one definition of
-  `target/mutants` and the host-lock wait default and validation shared by the
-  remote and direct runners; a file the sync would skip is named by the caller in
+  The SSH session's control pipes are made under the scratch root beside the
+  checkout, never inside it, and removed once both ends are open: a recursive
+  search that opens a live pipe reads the session's messages and hangs the run.
+  The EXIT trap is installed before `mkfifo` and kills whatever session job is
+  still running, and each run first removes the session directories a killed run
+  left under the scratch root or `target/mutants`, failing if one cannot be
+  removed. The session starts through `ai1_ssh_session`, which execs ssh: bash
+  runs a backgrounded function in a subshell, so without the exec the job is
+  that subshell and a kill leaves ssh running.
+  The hook sync is `--delete --force --delete-excluded` with `target/`
+  excluded: an excluded name *inside* a directory protects it from deletion, so
+  without `--delete-excluded` a deleted directory survives on the remote and
+  the sweep tests a tree the commit does not have; `cargo-mutants` 27.1.0 does
+  not copy `target/` into per-job scratch copies unless `copy_target` is set,
+  so excluding `target/` without protecting it keeps remote results clean.
+  `scripts/mutants-common.sh` holds the one definition of `target/mutants` and
+  the host-lock wait default and validation shared by the remote and direct
+  runners; a file the sync would skip is named by the caller in
   `MUTANTS_EXTRA_FILES` rather than recovered by the transport script parsing
   cargo-mutants' flags. The remote command appends its `%q`-quoted arguments
   only when at least one exists: formatting an empty `"$@"` produces the
   literal argument `''`, which makes the no-argument full sweep fail usage
-  before its baseline. Raising `MUTANTS_JOBS` is a trap: every job copies the
-  tree including `target/`, so the same scope measured 38s at `-j 4`, 54s at `-j 8`
-  and 72s at `-j 16` on a 32-thread box. It is I/O-bound, not CPU-bound.
-  Those per-job copies go to `$TMPDIR`, which `mutants-run.sh` sets to a
-  sibling of the checkout (`<checkout>.mutants-tmp`, override with
-  `DREP_MUTANTS_TMPDIR`) and sweeps of stale `cargo-mutants-*.tmp` before and
-  after each run. cargo-mutants deletes its copies only on a clean exit, so a
-  cancelled or timed-out job strands them. The former Strix host mounted
-  `/tmp` as tmpfs, where five killed runs once pinned 31 GiB of RAM; the
-  dedicated homelab-1 path is disk-backed. A sibling rather than a child of the checkout
-  because the copy excludes only `mutants.out`, so a copy under `target/`
-  would be copied into every later one. Cleanup uses a depth-first,
-  prefix-scoped `find -delete` for both `cargo-mutants-*.tmp` and interrupted
-  child tests' `drep-diff-test-*` repositories, and never invokes `rm` or
-  `rmdir`; broad recursive removal commands have damaged this server before.
-  Do not move the scratch root back or weaken the cleanup boundary.
+  before its baseline. Raising `MUTANTS_JOBS` is a trap: each job cold-builds
+  dependencies in its own copy of the tree, so the same scope measured 38s at
+  `-j 4`, 54s at `-j 8` and 72s at `-j 16` on a 32-thread box. Those per-job
+  copies go to `$TMPDIR`, which `mutants-run.sh` sets to `$MUTANTS_SCRATCH_ROOT/run`
+  beside the checkout (`<checkout>.mutants-tmp`, override with
+  `DREP_MUTANTS_TMPDIR`) and sweeps before and after each run. cargo-mutants
+  deletes its copies only on a clean exit, so a cancelled or timed-out job
+  strands them. The former Strix host mounted `/tmp` as tmpfs, where five
+  killed runs once pinned 31 GiB of RAM; the dedicated homelab-1 path is
+  disk-backed. A sibling rather than a child of the checkout because
+  cargo-mutants copies the checkout, so scratch inside it would be copied into
+  every later copy. Cleanup uses `remove_tree` (a depth-first `find -delete`
+  that never follows a symlink root or invokes `rm`/`rmdir`); broad recursive
+  removal commands have damaged this server before. Do not move the scratch
+  root back or weaken the cleanup boundary.
 - **Mutation build and test overhead stays stripped without excluding mutants.**
   Every integration test module lives under a single crate
   (`tests/integration/main.rs`), `[[bin]]` sets `test = false` (`src/main.rs`
@@ -155,12 +162,13 @@ comes back.
   timeouts that terminate infinite-loop parser mutants in 10s–30s instead of
   burning CPU until the 120s suite floor), and routes rustc through `sccache`
   when installed (bounded disk cache beside the checkout, short private per-run
-  Unix socket directory, server verified before enabling and stopped on EXIT). Do not turn on
-  `cargo-mutants --copy-target`: `cargo-mutants` 27.1.0 copies without
-  preserving mtimes, which causes Cargo to recompile ~117 dependencies per
-  worker anyway. On homelab-1 inside `ai-ci.slice`, measured warm per-mutant
-  builds dropped from 16s–36s to 4.6s median (2.4s min) at the role's `-j 3`
-  default; raising to `-j 6` regressed 28-mutant wall time from 114s to 155s.
+  Unix socket directory, server verified before enabling and stopped on EXIT).
+  Do not turn on `cargo-mutants --copy-target`: `cargo-mutants` 27.1.0 copies
+  without preserving mtimes, which causes Cargo to recompile ~117 dependencies
+  per worker anyway. On homelab-1 inside `ai-ci.slice`, measured warm
+  per-mutant builds dropped from 16s–36s to 4.6s median (2.4s min) at the
+  role's `-j 3` default; raising to `-j 6` regressed 28-mutant wall time from
+  114s to 155s.
 - **Every GitHub Actions job is repository-scoped and self-hosted.** Hardened,
   isolated roles on homelab-1 own Linux validation, both Linux release
   targets, cargo-dist's global release phases under the `drep-linux` label,
@@ -375,9 +383,11 @@ comes back.
   cwd, an allowlisted environment, read-only/no-approval isolation, a strict
   output schema and ephemeral history. Codex owns login and token refresh;
   `drep auth --provider codex` points to `codex login` and never touches the
-  endpoint-keyed store. `codex doctor --json` is reduced to version plus the
-  ChatGPT-auth fact; a valid known document wins even if doctor exits nonzero
-  for an unrelated check. The JSONL stream rejects tool activity and retains
+  endpoint-keyed store. Codex readiness uses `codex --version` plus
+  `codex -c forced_login_method="chatgpt" login status` reduced to the CLI
+  version and the ChatGPT-auth fact, avoiding `codex doctor --json`'s full
+  SQLite integrity and session-rollout scans (which can exceed the 30s
+  diagnostic timeout on large histories). The JSONL stream rejects tool activity and retains
   only bounded terminal diagnostics. Its JSONL line ceiling is enforced while
   reading, before an untrusted line can be allocated in full. Stdout and stderr
   are private bounded files rather than pipes: a tool-spawned grandchild can

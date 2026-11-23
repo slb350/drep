@@ -122,17 +122,18 @@ pub(super) async fn write_llm_section<W: Write>(
                  Providers are declared as `[[llm]]`, one block per provider.",
                 config_path.display()
             )?;
-            // Fall through to `config::load` below, which names the parse
-            // error precisely.
-            report_load_failure(out, &config_path)?;
+            // Fall through to `config::load_parsed` below, which names the
+            // parse error precisely without re-reading the file.
+            report_load_result(out, &config_path, config::load_parsed(&config_path, value))?;
             return Ok(());
         }
     };
 
-    // Loaded once, and consumed twice: the credential probe needs the expanded
-    // argv, and the tail names why the file will not load. Loading again at the
-    // end would let the two disagree about the same file within one report.
-    let loaded = config::load(&config_path);
+    // Expanded from the already-parsed tree once, and consumed twice: the
+    // credential probe needs the expanded argv, and the tail names why the file
+    // will not load. Re-reading from disk would double I/O and open a TOCTOU
+    // window where the raw listing and the load error disagreed.
+    let loaded = config::load_parsed(&config_path, value.clone());
 
     // Print providers verbatim from the raw file: model and endpoint come out
     // unexpanded, so `${VAR}` shows as `${VAR}` rather than being swallowed by
@@ -158,7 +159,7 @@ pub(super) async fn write_llm_section<W: Write>(
     let needs_auth_store = semantic.skip_reason().is_none()
         && providers
             .iter()
-            .any(|entry| entry_is_enabled(entry) && !entry_is_codex(entry));
+            .any(|entry| config::entry_is_enabled(entry) && !config::entry_is_codex(entry));
     let store = match needs_auth_store
         .then(|| AuthStore::load(auth_path))
         .transpose()
@@ -190,7 +191,7 @@ pub(super) async fn write_llm_section<W: Write>(
             None | Some("openai") => String::new(),
             Some(other) => format!(" [{other}]"),
         };
-        let is_codex = entry_is_codex(entry);
+        let is_codex = config::entry_is_codex(entry);
         let description = if is_codex {
             format!("{model} via ChatGPT/Codex subscription")
         } else {
@@ -199,7 +200,7 @@ pub(super) async fn write_llm_section<W: Write>(
                 crate::auth::display_endpoint(endpoint)
             )
         };
-        if entry_is_enabled(entry) {
+        if config::entry_is_enabled(entry) {
             enabled_count += 1;
             writeln!(out, "  {enabled_count}. {description}")?;
             // Shown against the provider the ceiling changes, rather than
@@ -402,12 +403,6 @@ async fn key_command_status(argv: Option<&[String]>) -> String {
     }
 }
 
-/// Report why the config will not load, if it will not.
-fn report_load_failure<W: Write>(out: &mut W, config_path: &Path) -> Result<()> {
-    let loaded = config::load(config_path);
-    report_load_result(out, config_path, loaded)
-}
-
 /// Shared tail of the two load-reporting paths.
 fn report_load_result<W: Write>(
     out: &mut W,
@@ -466,29 +461,6 @@ fn header_names(configured: &std::collections::BTreeMap<String, String>) -> Stri
         })
         .collect::<Vec<_>>()
         .join(", ")
-}
-
-/// Whether this raw entry names the Codex backend.
-///
-/// Named for the same reason `entry_is_enabled` is: the two raw-tree predicates in
-/// this file were one named function and one twice-inlined comparison, and a
-/// second CLI-managed backend would have meant finding both spellings.
-fn entry_is_codex(entry: &toml::Value) -> bool {
-    entry.get("backend").and_then(toml::Value::as_str) == Some("codex")
-}
-
-/// Whether a raw `[[llm]]` table is in the failover chain.
-///
-/// The default comes from `LlmConfig::default()` rather than a literal `true`,
-/// so this cannot disagree with what `config::load` will actually decide. The
-/// raw table is read instead of the loaded config because `load` fails on an
-/// unset `${VAR}` - and a fresh clone with no key exported is exactly when this
-/// report is most useful.
-fn entry_is_enabled(entry: &toml::Value) -> bool {
-    entry
-        .get("enabled")
-        .and_then(toml::Value::as_bool)
-        .unwrap_or_else(|| config::LlmConfig::default().enabled)
 }
 
 /// What the chain will actually do, given how many providers are in it.

@@ -410,3 +410,46 @@ async fn names_an_untracked_file_above_the_subdirectory() {
         .differing;
     assert_eq!(paths, vec![PathBuf::from("../helper.py")]);
 }
+
+/// `flagged_differences` runs `git hash-object` with `current_dir(root)`, so a
+/// relative `root` like `"repo"` must not be joined onto each `named` path a
+/// second time (`repo/repo/assumed.ts`).
+#[tokio::test]
+async fn hashes_flagged_files_against_a_relative_root() {
+    let parent = tempfile::tempdir().expect("tempdir");
+    let repo = parent.path().join("repo");
+    fs::create_dir(&repo).expect("repo dir");
+    crate::test_support::git_init(&repo);
+    fs::write(repo.join("assumed.ts"), "export const a = 1;\n").expect("write");
+    run_in(&repo, &["add", "assumed.ts"]).await;
+    run_in(&repo, &["commit", "-q", "-m", "init"]).await;
+    run_in(&repo, &["update-index", "--assume-unchanged", "assumed.ts"]).await;
+    fs::write(repo.join("assumed.ts"), "export const a = 2;\n").expect("edit");
+
+    let output = std::process::Command::new(std::env::current_exe().expect("this test binary"))
+        .args([
+            "diff::tests::uncommitted::with_a_relative_root_lists_flagged_edit",
+            "--exact",
+            "--test-threads=1",
+        ])
+        .current_dir(parent.path())
+        .env("DREP_TEST_RELATIVE_ROOT", "repo")
+        .output()
+        .expect("run relative-root child test");
+    assert!(
+        output.status.success() && String::from_utf8_lossy(&output.stdout).contains("1 passed"),
+        "relative-root flagged check failed: {output:?}"
+    );
+}
+
+#[tokio::test]
+async fn with_a_relative_root_lists_flagged_edit() {
+    let Some(relative) = std::env::var_os("DREP_TEST_RELATIVE_ROOT") else {
+        return;
+    };
+    let paths = uncommitted_paths(Path::new(&relative))
+        .await
+        .expect("uncommitted_paths against relative root")
+        .differing;
+    assert_eq!(paths, vec![PathBuf::from("assumed.ts")]);
+}

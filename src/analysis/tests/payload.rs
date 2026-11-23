@@ -284,3 +284,23 @@ fn the_documented_size_ceilings_hold_their_stated_values() {
     // `cli::check::input`; clippy rejects it here because both are consts, and
     // a build failure is a better home for the invariant than a test anyway.
 }
+
+#[test]
+fn render_within_enforces_exact_boundary_and_reports_exact_byte_count() {
+    use crate::analysis::payload::{RenderOutcome, render_within};
+
+    let hunk = Hunk::whole_file(PathBuf::from("bound.rs"), "alpha\nbeta\ngamma\n");
+    let full = render(rust(), std::slice::from_ref(&hunk)).expect("full render");
+    let exact = full.text.len() as u64;
+
+    assert_eq!(
+        render_within(rust(), std::slice::from_ref(&hunk), exact),
+        Some(RenderOutcome::Ready(full.clone())),
+        "a payload at the exact limit must succeed with every valid line intact"
+    );
+    assert_eq!(
+        render_within(rust(), std::slice::from_ref(&hunk), exact - 1),
+        Some(RenderOutcome::TooLarge { bytes: exact }),
+        "one byte over the limit must report TooLarge with the exact rendered byte count"
+    );
+}

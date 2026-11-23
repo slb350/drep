@@ -284,3 +284,54 @@ async fn findings_rewrite_through_a_symlinked_checkout() {
         "the finding must come back in the spelling the user asked about"
     );
 }
+
+/// JavaScript and TypeScript share `eslint`: checking one file of each in the
+/// same configured workspace must spawn `eslint` once with both files rather
+/// than once per language.
+#[tokio::test]
+async fn shared_tool_across_languages_invokes_once_per_workspace() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path();
+    let bin = root.join("node_modules/.bin/eslint");
+    std::fs::create_dir_all(bin.parent().unwrap()).expect("bin dir");
+    let counter = root.join("counter.txt");
+    let argv = root.join("argv.txt");
+    write_executable(
+        &bin,
+        format!(
+            "#!/bin/sh\nprintf '%s\\n' called >> {}\nprintf '%s\\n' \"$@\" >> {}\nprintf '%s' '[]'\n",
+            counter.display(),
+            argv.display()
+        ),
+    );
+    std::fs::write(root.join("eslint.config.js"), "export default [];\n").expect("eslint config");
+
+    let js = root.join("a.js");
+    let ts = root.join("b.ts");
+    std::fs::write(&js, "export const a = 1;\n").expect("a.js");
+    std::fs::write(&ts, "export const b: number = 2;\n").expect("b.ts");
+
+    let work = work_for(&[js, ts]);
+    let (_findings, failures, _compiled) = deterministic::run(&work, root).await;
+
+    assert!(
+        failures.is_empty(),
+        "shared eslint batch failed: {failures:?}"
+    );
+    let calls = std::fs::read_to_string(&counter)
+        .map(|s| s.lines().count())
+        .unwrap_or(0);
+    assert_eq!(
+        calls, 1,
+        "JS and TS files in one workspace must spawn eslint once, got {calls}"
+    );
+    let passed = std::fs::read_to_string(&argv).expect("argv");
+    assert!(
+        passed.lines().any(|line| line == "a.js"),
+        "missing a.js: {passed}"
+    );
+    assert!(
+        passed.lines().any(|line| line == "b.ts"),
+        "missing b.ts: {passed}"
+    );
+}

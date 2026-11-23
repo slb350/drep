@@ -9,15 +9,17 @@
 //! TOML actually requires - it is more than the two characters this originally
 //! handled.
 
+use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Result, anyhow};
 
 use super::presets::{LlmPreset, PresetBackend};
+use crate::atomic_file::{self, Mode};
 use crate::llm::quirks::Quirks;
 
 /// Fields used by exactly one execution backend.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 enum ChoiceBackend {
     Http {
         endpoint: String,
@@ -25,6 +27,24 @@ enum ChoiceBackend {
         quirks: Quirks,
     },
     Codex,
+}
+
+impl std::fmt::Debug for ChoiceBackend {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Http {
+                endpoint,
+                key_in_store,
+                quirks,
+            } => f
+                .debug_struct("Http")
+                .field("endpoint", &crate::auth::display_endpoint(endpoint))
+                .field("key_in_store", key_in_store)
+                .field("quirks", quirks)
+                .finish(),
+            Self::Codex => f.write_str("Codex"),
+        }
+    }
 }
 
 /// One provider the user chose, ready to render.
@@ -149,10 +169,11 @@ pub fn render_chain(choices: &[Choice]) -> String {
     body.push_str("#\n");
     body.push_str("# Fresh semantic reviews are bounded per remediation cycle. Cached verdicts\n");
     body.push_str("# and deterministic tools remain available after the limit is reached.\n");
-    body.push_str(&format!(
-        "max_review_rounds = {}\n",
+    let _ = writeln!(
+        body,
+        "max_review_rounds = {}",
         crate::config::DEFAULT_MAX_REVIEW_ROUNDS
-    ));
+    );
 
     for choice in choices {
         body.push('\n');
@@ -171,14 +192,14 @@ fn render_one(body: &mut String, choice: &Choice) {
     if let (PresetBackend::Codex(codex), ChoiceBackend::Codex) = (&preset.backend, &choice.backend)
     {
         body.push_str("backend = \"codex\"\n");
-        body.push_str(&format!("model = \"{}\"\n", escape(&choice.model)));
+        let _ = writeln!(body, "model = \"{}\"", escape(&choice.model));
         if let Some(effort) = &codex.reasoning_effort {
-            body.push_str(&format!("reasoning_effort = \"{}\"\n", effort.as_str()));
+            let _ = writeln!(body, "reasoning_effort = \"{}\"", effort.as_str());
         }
         if let Some(timeout) = preset.timeout_secs {
-            body.push_str(&format!("timeout_secs = {timeout}\n"));
+            let _ = writeln!(body, "timeout_secs = {timeout}");
         }
-        body.push_str(&format!("max_concurrent = {}\n", codex.max_concurrent));
+        let _ = writeln!(body, "max_concurrent = {}", codex.max_concurrent);
         body.push_str(
             "# Reviews consume ChatGPT/Codex subscription allowance, not OpenAI API billing.\n",
         );
@@ -196,21 +217,21 @@ fn render_one(body: &mut String, choice: &Choice) {
         ) => (http, endpoint.as_str(), *key_in_store, quirks),
         _ => panic!("choice backend does not match preset `{}`", preset.key),
     };
-    body.push_str(&format!("endpoint = \"{}\"\n", escape(endpoint)));
-    body.push_str(&format!("model = \"{}\"\n", escape(&choice.model)));
+    let _ = writeln!(body, "endpoint = \"{}\"", escape(endpoint));
+    let _ = writeln!(body, "model = \"{}\"", escape(&choice.model));
 
     // Omitted entirely when the key is in the store: an explicit `api_key` wins
     // over a stored one, so writing `${VAR}` here would override the key
     // `drep init` just saved with a variable nobody set.
     if !key_in_store && let Some(env) = http.api_key_env {
-        body.push_str(&format!("api_key = \"${{{env}}}\"\n"));
+        let _ = writeln!(body, "api_key = \"${{{env}}}\"");
     }
 
     // Written only when the preset names one, so an OpenAI-compatible block
     // stays minimal.
     if let Some(protocol) = http.protocol {
         body.push_str("# This endpoint speaks Anthropic's messages API, not chat completions.\n");
-        body.push_str(&format!("protocol = \"{}\"\n", escape(protocol)));
+        let _ = writeln!(body, "protocol = \"{}\"", escape(protocol));
     }
 
     // Written only for an endpoint that refuses a request without it. Everywhere
@@ -231,7 +252,7 @@ fn render_one(body: &mut String, choice: &Choice) {
                  # set well above any review-sized response.\n",
             );
         }
-        body.push_str(&format!("max_tokens = {max_tokens}\n"));
+        let _ = writeln!(body, "max_tokens = {max_tokens}");
     }
 
     // Absent means the parameter is omitted from the request entirely, which is what
@@ -242,7 +263,7 @@ fn render_one(body: &mut String, choice: &Choice) {
             // `{:?}` rather than `{}`: Display renders `1.0` as `1`, which TOML
             // reads as an *integer* and `config::load` then refuses with a type
             // error - from a file `drep init` had just reported writing.
-            body.push_str(&format!("temperature = {temperature:?}\n"));
+            let _ = writeln!(body, "temperature = {temperature:?}");
         }
         None => {
             body.push_str("# `temperature` is deliberately absent: this model rejects the\n");
@@ -254,7 +275,7 @@ fn render_one(body: &mut String, choice: &Choice) {
         body.push_str(
             "# A reasoning model can spend minutes on one file; the wall clock has to match.\n",
         );
-        body.push_str(&format!("timeout_secs = {timeout}\n"));
+        let _ = writeln!(body, "timeout_secs = {timeout}");
     }
 
     if quirks.max_tokens.is_none() {
@@ -303,7 +324,9 @@ fn escape(s: &str) -> String {
             '\u{8}' => out.push_str("\\b"),
             '\u{c}' => out.push_str("\\f"),
             // The rest of the control range has no short form.
-            c if c.is_control() => out.push_str(&format!("\\u{:04X}", c as u32)),
+            c if c.is_control() => {
+                let _ = write!(out, "\\u{:04X}", c as u32);
+            }
             other => out.push(other),
         }
     }
@@ -316,33 +339,22 @@ fn escape(s: &str) -> String {
 /// path and points at `--force` so the user does not have to read code to
 /// learn how to recover.
 pub fn write(root: &Path, body: &str, force: bool) -> Result<PathBuf> {
-    use std::io::Write;
-
     let path = root.join(crate::config::default_config_path());
-    let mut temporary = tempfile::NamedTempFile::new_in(root)
-        .with_context(|| format!("could not write {}", path.display()))?;
-    temporary
-        .write_all(body.as_bytes())
-        .with_context(|| format!("could not write {}", path.display()))?;
-    temporary
-        .as_file()
-        .sync_all()
-        .with_context(|| format!("could not write {}", path.display()))?;
-
-    // Publish only a complete file. `persist_noclobber` keeps the no-force
-    // existence check atomic; `persist` replaces the directory entry itself,
-    // so `--force` cannot follow a symlink and overwrite its target.
-    let published = if force {
-        temporary.persist(&path)
+    // Publish only a complete file. `NoClobber` keeps the no-force existence
+    // check atomic; `Replace` swaps the directory entry itself, so `--force`
+    // cannot follow a symlink and overwrite its target.
+    let mode = if force {
+        Mode::Replace
     } else {
-        temporary.persist_noclobber(&path)
+        Mode::NoClobber
     };
-    match published {
-        Ok(_) => Ok(path),
-        Err(err) => match (force, err.error.kind()) {
+    match atomic_file::publish(&path, body.as_bytes(), mode) {
+        Ok(()) => Ok(path),
+        Err(err) => match (force, err.kind()) {
             (false, std::io::ErrorKind::AlreadyExists) => Err(already_exists(&path)),
-            _ => Err(anyhow::Error::new(err.error)
-                .context(format!("could not write {}", path.display()))),
+            _ => {
+                Err(anyhow::Error::new(err).context(format!("could not write {}", path.display())))
+            }
         },
     }
 }

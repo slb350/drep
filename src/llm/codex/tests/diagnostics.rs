@@ -1,66 +1,79 @@
-//! Only the version and ChatGPT-auth facts survive diagnostic parsing.
+//! Only the CLI version and ChatGPT-auth readiness survive diagnostic parsing.
 
 use crate::llm::codex::command::ChildEnvironment;
 use crate::llm::codex::diagnostics::{
-    DIAGNOSTIC_TIMEOUT, DiagnosticError, parse, poll_before_deadline, probe,
+    DIAGNOSTIC_TIMEOUT, DiagnosticError, parse_login_status, parse_version, poll_before_deadline,
+    probe,
 };
 
-const CHATGPT: &str = r#"{
-  "schemaVersion": 1,
-  "codexVersion": "0.148.0",
-  "checks": {
-    "auth.credentials": {
-      "details": {
-        "auth file": "/private/account/path/auth.json",
-        "stored API key": "false",
-        "stored ChatGPT tokens": "true",
-        "stored auth mode": "chatgpt"
-      }
-    }
-  }
-}"#;
-
 #[test]
-fn parser_retains_only_version_and_chatgpt_auth_state() {
-    let diagnostic = parse(CHATGPT.as_bytes()).expect("known diagnostic");
-    assert_eq!(diagnostic.cli_version(), "0.148.0");
-    assert_eq!(
-        format!("{diagnostic:?}"),
-        "CodexStatus { cli_version: \"0.148.0\" }"
-    );
-    assert!(!format!("{diagnostic:?}").contains("/private/account"));
-}
-
-#[test]
-fn api_auth_is_rejected_without_echoing_diagnostic_values() {
-    let api = CHATGPT
-        .replace(
-            "\"stored API key\": \"false\"",
-            "\"stored API key\": \"true\"",
-        )
-        .replace(
-            "\"stored ChatGPT tokens\": \"true\"",
-            "\"stored ChatGPT tokens\": \"false\"",
-        )
-        .replace(
-            "\"stored auth mode\": \"chatgpt\"",
-            "\"stored auth mode\": \"api\"",
+fn version_parser_extracts_clean_cli_version_and_rejects_malformed_or_hostile_text() {
+    assert_eq!(parse_version(b"codex-cli 0.171.0\n").unwrap(), "0.171.0");
+    assert_eq!(parse_version(b"codex-cli 0.171.0\r\n").unwrap(), "0.171.0");
+    for bad in [
+        b"" as &[u8],
+        b"codex-cli \n",
+        b"codex-cli 0.171.0 extra\n",
+        b"other-cli 0.171.0\n",
+        b"codex-cli 0.171.0\x1b]52;c;Zm9v\x07\n",
+        b"codex-cli 0.171.0\nsecond-line\n",
+        b"\xff\xfe",
+    ] {
+        assert_eq!(
+            parse_version(bad),
+            Err(DiagnosticError::UnsupportedFormat),
+            "rejected input: {bad:?}"
         );
-    let err = parse(api.as_bytes()).expect_err("API auth cannot fund subscription usage");
-    assert!(matches!(err, DiagnosticError::NotChatGpt));
-    assert!(!err.to_string().contains("api"));
+    }
 }
 
 #[test]
-fn chatgpt_auth_is_accepted_even_when_an_api_key_is_also_stored() {
-    let both = CHATGPT.replace(
-        "\"stored API key\": \"false\"",
-        "\"stored API key\": \"true\"",
+fn login_status_parser_requires_success_and_chatgpt_login_without_echoing_details() {
+    assert_eq!(
+        parse_login_status(true, b"Logged in using ChatGPT\n"),
+        Ok(())
+    );
+    assert_eq!(
+        parse_login_status(true, b"warning: notice\nLogged in using ChatGPT\n"),
+        Ok(())
     );
 
-    assert!(
-        parse(both.as_bytes()).is_ok(),
-        "forced_login_method=chatgpt, not the absence of an unrelated key, is the runtime guarantee"
+    let api_err = parse_login_status(true, b"API key configured - sk-secret\n")
+        .expect_err("API auth cannot fund subscription usage");
+    assert_eq!(api_err, DiagnosticError::NotChatGpt);
+    assert!(!api_err.to_string().contains("sk-secret"));
+
+    assert_eq!(
+        parse_login_status(true, b"Logged in using API key\n"),
+        Err(DiagnosticError::NotChatGpt)
+    );
+    assert_eq!(
+        parse_login_status(false, b"Not logged in\n"),
+        Err(DiagnosticError::NotChatGpt)
+    );
+    assert_eq!(
+        parse_login_status(true, b""),
+        Err(DiagnosticError::UnsupportedFormat)
+    );
+    assert_eq!(
+        parse_login_status(true, b"unexpected output\n"),
+        Err(DiagnosticError::UnsupportedFormat)
+    );
+    assert_eq!(
+        parse_login_status(false, b"Logged in using ChatGPT\n"),
+        Err(DiagnosticError::Process)
+    );
+    assert_eq!(
+        parse_login_status(false, b"error: unknown flag --foo\n"),
+        Err(DiagnosticError::Process)
+    );
+    assert_eq!(
+        parse_login_status(false, b""),
+        Err(DiagnosticError::Process)
+    );
+    assert_eq!(
+        parse_login_status(true, b"\xff\xfe"),
+        Err(DiagnosticError::UnsupportedFormat)
     );
 }
 
@@ -79,71 +92,94 @@ fn a_missing_binary_has_actionable_redacted_guidance() {
 
 #[test]
 #[cfg(unix)]
-fn valid_auth_diagnostic_survives_an_unrelated_nonzero_doctor_status() {
+fn probe_reads_version_from_stdout_and_chatgpt_login_from_stderr() {
     let dir = tempfile::tempdir().expect("tempdir");
     let executable = dir.path().join("fake-codex");
+    let args_log = dir.path().join("args.txt");
     crate::test_support::write_executable(
         &executable,
-        format!("#!/bin/sh\nprintf '%s' '{}'\nexit 1\n", CHATGPT),
+        "#!/bin/sh\nbase=$(dirname \"$0\")\nprintf '%s\\n' \"$*\" >> \"$base/args.txt\"\nif [ \"$1\" = \"--version\" ]; then\n  printf 'warning: noisy stderr\\n' >&2\n  printf 'codex-cli 0.171.0\\n'\n  exit 0\nfi\nprintf 'Logged in using ChatGPT\\n' >&2\nexit 0\n",
     );
 
-    let diagnostic = probe(
+    let status = probe(
         &executable,
         &ChildEnvironment::default(),
         DIAGNOSTIC_TIMEOUT,
     )
-    .expect("known redacted auth facts are usable despite an unrelated doctor warning");
-    assert_eq!(diagnostic.cli_version(), "0.148.0");
+    .expect("valid version and ChatGPT login");
+    assert_eq!(status.cli_version(), "0.171.0");
+    assert_eq!(
+        format!("{status:?}"),
+        "CodexStatus { cli_version: \"0.171.0\" }"
+    );
+    let recorded = std::fs::read_to_string(&args_log).expect("recorded args");
+    let lines: Vec<&str> = recorded.lines().collect();
+    assert_eq!(
+        lines,
+        vec![
+            "--version",
+            "-c forced_login_method=\"chatgpt\" login status"
+        ]
+    );
 }
 
 #[test]
 #[cfg(unix)]
-fn diagnostic_output_accepts_exactly_one_mebibyte() {
-    const EXPECTED_LIMIT: usize = 1024 * 1024;
-    let dir = tempfile::tempdir().expect("tempdir");
-    let executable = diagnostic_executable(dir.path(), diagnostic_with_len(EXPECTED_LIMIT));
-
-    let diagnostic = probe(
-        &executable,
-        &ChildEnvironment::default(),
-        DIAGNOSTIC_TIMEOUT,
-    )
-    .expect("the exact diagnostic ceiling is accepted");
-    assert_eq!(diagnostic.cli_version(), "0.148.0");
-}
-
-#[test]
-#[cfg(unix)]
-fn diagnostic_output_one_byte_over_the_limit_is_rejected_as_too_large() {
-    const EXPECTED_LIMIT: usize = 1024 * 1024;
-    let dir = tempfile::tempdir().expect("tempdir");
-    let executable = diagnostic_executable(dir.path(), diagnostic_with_len(EXPECTED_LIMIT + 1));
-
-    assert!(matches!(
-        probe(
-            &executable,
-            &ChildEnvironment::default(),
-            DIAGNOSTIC_TIMEOUT
-        ),
-        Err(DiagnosticError::OutputTooLarge)
-    ));
-}
-
-#[test]
-#[cfg(unix)]
-fn an_empty_nonzero_diagnostic_is_a_process_failure() {
+fn a_failing_version_command_is_a_process_failure() {
     let dir = tempfile::tempdir().expect("tempdir");
     let executable = dir.path().join("fake-codex");
     crate::test_support::write_executable(&executable, "#!/bin/sh\nexit 1\n");
 
-    assert!(matches!(
+    assert_eq!(
         probe(
             &executable,
             &ChildEnvironment::default(),
             DIAGNOSTIC_TIMEOUT
         ),
         Err(DiagnosticError::Process)
-    ));
+    );
+}
+
+#[test]
+#[cfg(unix)]
+fn an_empty_nonzero_login_status_is_a_process_failure() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let executable = dir.path().join("fake-codex");
+    crate::test_support::write_executable(
+        &executable,
+        "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then\n  printf 'codex-cli 0.171.0\\n'\n  exit 0\nfi\nexit 1\n",
+    );
+
+    assert_eq!(
+        probe(
+            &executable,
+            &ChildEnvironment::default(),
+            DIAGNOSTIC_TIMEOUT
+        ),
+        Err(DiagnosticError::Process)
+    );
+}
+
+#[test]
+#[cfg(unix)]
+fn diagnostic_output_accepts_exactly_one_mebibyte_and_rejects_one_byte_over() {
+    const EXPECTED_LIMIT: usize = 1024 * 1024;
+    let dir = tempfile::tempdir().expect("tempdir");
+
+    let exact = diagnostic_executable(dir.path(), "exact", login_payload_with_len(EXPECTED_LIMIT));
+    let status = probe(&exact, &ChildEnvironment::default(), DIAGNOSTIC_TIMEOUT)
+        .expect("the exact diagnostic ceiling is accepted");
+    assert_eq!(status.cli_version(), "0.171.0");
+
+    let over = diagnostic_executable(
+        dir.path(),
+        "over",
+        login_payload_with_len(EXPECTED_LIMIT + 1),
+    );
+    assert_eq!(
+        probe(&over, &ChildEnvironment::default(), DIAGNOSTIC_TIMEOUT),
+        Err(DiagnosticError::OutputTooLarge)
+    );
 }
 
 #[cfg(unix)]
@@ -153,10 +189,7 @@ fn a_grandchild_inheriting_stdout_cannot_hold_the_diagnostic_open() {
     let executable = dir.path().join("fake-codex");
     crate::test_support::write_executable(
         &executable,
-        format!(
-            "#!/bin/sh\ncapture=$(dirname \"$0\")\nsleep 30 &\nprintf '%s' \"$!\" > \"$capture/grandchild.pid\"\nprintf '%s' '{}'\n",
-            CHATGPT
-        ),
+        "#!/bin/sh\ncapture=$(dirname \"$0\")\nif [ \"$1\" = \"--version\" ]; then\n  sleep 30 &\n  printf '%s' \"$!\" > \"$capture/grandchild.pid\"\n  printf 'codex-cli 0.171.0\\n'\n  exit 0\nfi\nprintf 'Logged in using ChatGPT\\n' >&2\nexit 0\n",
     );
 
     let status = probe(
@@ -168,27 +201,8 @@ fn a_grandchild_inheriting_stdout_cannot_hold_the_diagnostic_open() {
     let pid = std::fs::read_to_string(dir.path().join("grandchild.pid")).expect("grandchild pid");
     let running = crate::test_support::probe_and_stop_process(&pid);
 
-    assert_eq!(status.cli_version(), "0.148.0");
+    assert_eq!(status.cli_version(), "0.171.0");
     assert!(running, "probe waited for the unrelated grandchild to exit");
-}
-
-#[test]
-fn chatgpt_tokens_and_chatgpt_mode_are_both_required() {
-    let wrong_mode = CHATGPT.replace(
-        "\"stored auth mode\": \"chatgpt\"",
-        "\"stored auth mode\": \"api\"",
-    );
-    let no_tokens = CHATGPT.replace(
-        "\"stored ChatGPT tokens\": \"true\"",
-        "\"stored ChatGPT tokens\": \"false\"",
-    );
-
-    for document in [wrong_mode, no_tokens] {
-        assert!(matches!(
-            parse(document.as_bytes()),
-            Err(DiagnosticError::NotChatGpt)
-        ));
-    }
 }
 
 #[test]
@@ -232,46 +246,31 @@ fn diagnostic_deadlines_stop_polling_and_terminate_children() {
     }
 }
 
-#[test]
-fn unknown_schema_fails_closed() {
-    let future = CHATGPT.replace("\"schemaVersion\": 1", "\"schemaVersion\": 2");
-    assert!(matches!(
-        parse(future.as_bytes()),
-        Err(DiagnosticError::UnsupportedFormat)
-    ));
-}
-
-fn diagnostic_with_len(length: usize) -> Vec<u8> {
-    let mut value: serde_json::Value = serde_json::from_str(CHATGPT).expect("fixture JSON");
-    value["padding"] = serde_json::Value::String(String::new());
-    let fixed = serde_json::to_vec(&value).expect("fixture serializes");
+fn login_payload_with_len(length: usize) -> Vec<u8> {
+    let suffix = b"\nLogged in using ChatGPT\n";
     let padding = length
-        .checked_sub(fixed.len())
+        .checked_sub(suffix.len())
         .expect("requested size fits");
-    value["padding"] = serde_json::Value::String("x".repeat(padding));
-    let bytes = serde_json::to_vec(&value).expect("padded fixture serializes");
+    let mut bytes = vec![b'x'; padding];
+    bytes.extend_from_slice(suffix);
     assert_eq!(bytes.len(), length);
     bytes
 }
 
 #[cfg(unix)]
-fn diagnostic_executable(dir: &std::path::Path, bytes: Vec<u8>) -> std::path::PathBuf {
-    let executable = dir.join("fake-codex");
-    std::fs::write(dir.join("diagnostic.json"), bytes).expect("diagnostic fixture");
+fn diagnostic_executable(
+    dir: &std::path::Path,
+    label: &str,
+    login_bytes: Vec<u8>,
+) -> std::path::PathBuf {
+    let executable = dir.join(format!("fake-codex-{label}"));
+    let payload = dir.join(format!("login-{label}.txt"));
+    std::fs::write(&payload, login_bytes).expect("login fixture");
     crate::test_support::write_executable(
         &executable,
-        "#!/bin/sh\ncapture=$(dirname \"$0\")\nexec /bin/cat \"$capture/diagnostic.json\"\n",
+        format!(
+            "#!/bin/sh\nbase=$(dirname \"$0\")\nif [ \"$1\" = \"--version\" ]; then\n  printf 'codex-cli 0.171.0\\n'\n  exit 0\nfi\nexec /bin/cat \"$base/login-{label}.txt\"\n"
+        ),
     );
     executable
-}
-
-/// `codexVersion` is printed by `doctor` and the init wizard as it stands.
-/// It deserializes into a borrowed `&str`, which serde_json cannot produce
-/// from an escaped string, and JSON forbids a raw control character, so a
-/// version that would carry one is refused rather than printed.
-#[test]
-fn a_version_holding_an_escaped_control_character_is_refused() {
-    let hostile = CHATGPT.replace("\"0.148.0\"", "\"0.148.0\\u001b]52;c;Zm9v\\u0007\"");
-    assert_ne!(hostile, CHATGPT);
-    assert_eq!(parse(hostile.as_bytes()), Err(DiagnosticError::InvalidJson));
 }

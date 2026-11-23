@@ -175,35 +175,23 @@ pub async fn resolve(args: &CheckArgs, root: &Path, collect_policy_scope: bool) 
         return resolve_pre_commit(root, &PreCommitPush::from_env()?, collect_policy_scope).await;
     }
 
-    let (hunks, uncommitted, index_only) = if args.staged {
+    let (hunks, uncommitted) = if args.staged {
         // The semantic layer reads the staged hunks while the deterministic
         // layer reads the working tree, so staged mode also asks which files
-        // differ between the two or exist untracked. An error from either
-        // query propagates, failing the command as other git errors do.
-        let (hunks, uncommitted) = tokio::join!(
-            diff::staged_hunks(root, files::is_scan_target),
-            diff::uncommitted_paths(root)
-        );
-        let uncommitted = uncommitted?;
-        (
-            hunks?,
-            uncommitted.differing.into_iter().collect(),
-            uncommitted.index_only.into_iter().collect(),
-        )
+        // differ between the two or exist untracked. Both queries share one
+        // working-tree view so prefix and index resolution happen once.
+        diff::staged_work(root, files::is_scan_target).await?
     } else if let Some(git_ref) = args.diff.as_deref() {
-        branch_hunks(root, git_ref, args.tip.as_deref()).await?
+        diff::branch_work(root, git_ref, args.tip.as_deref(), files::is_scan_target).await?
     } else {
         return resolve_paths(&args.paths, root, collect_policy_scope);
     };
-    let by_file = group_by_file(hunks);
-    Ok(Work {
-        reviewed_directories: hunk_directories(root, &by_file, collect_policy_scope),
-        by_file,
-        read_failures: BTreeMap::new(),
-        lint_only: Vec::new(),
+    Ok(work_from_diff(
+        root,
+        hunks,
         uncommitted,
-        index_only,
-    })
+        collect_policy_scope,
+    ))
 }
 
 /// Resolve an already-parsed pre-commit context.
@@ -223,45 +211,36 @@ pub(crate) async fn resolve_pre_commit(
     // watching for. Each discarded call cost two `git` spawns (~37 ms
     // measured), paid on every pre-commit and pre-push run before any useful
     // work started.
-    let (hunks, uncommitted, index_only) = match pre_commit {
-        PreCommitPush::Range { from, to } => branch_hunks(root, from, Some(to)).await?,
+    let (hunks, uncommitted) = match pre_commit {
+        PreCommitPush::Range { from, to } => {
+            diff::branch_work(root, from, Some(to), files::is_scan_target).await?
+        }
         PreCommitPush::AllFiles => return resolve_paths(&[], root, collect_policy_scope),
     };
+    Ok(work_from_diff(
+        root,
+        hunks,
+        uncommitted,
+        collect_policy_scope,
+    ))
+}
+
+/// Assemble [`Work`] from diff hunks and uncommitted working-tree paths.
+fn work_from_diff(
+    root: &Path,
+    hunks: Vec<Hunk>,
+    uncommitted: diff::Uncommitted,
+    collect_policy_scope: bool,
+) -> Work {
     let by_file = group_by_file(hunks);
-    Ok(Work {
+    Work {
         reviewed_directories: hunk_directories(root, &by_file, collect_policy_scope),
         by_file,
         read_failures: BTreeMap::new(),
         lint_only: Vec::new(),
-        uncommitted,
-        index_only,
-    })
-}
-
-/// A branch range's hunks, and what the working tree does not hold of its tip.
-///
-/// The semantic layer reads the range from git's object store while the
-/// deterministic layer reads the working tree, which need not hold the tip:
-/// the pre-push hook passes the pushed ref's oid, which may not be checked
-/// out, and a checkout can carry uncommitted edits. Listing the difference is
-/// what lets the deterministic layer refuse a linter that would judge content
-/// the range does not contain, as staged mode does for the committing index.
-async fn branch_hunks(
-    root: &Path,
-    git_ref: &str,
-    tip: Option<&str>,
-) -> Result<(Vec<Hunk>, BTreeSet<PathBuf>, BTreeSet<PathBuf>)> {
-    let (hunks, diverging) = tokio::join!(
-        diff::hunks_between(root, git_ref, tip, files::is_scan_target),
-        diff::diverging_from(root, tip.unwrap_or("HEAD"))
-    );
-    let hunks = hunks?;
-    let diverging = diverging?;
-    Ok((
-        hunks,
-        diverging.differing.into_iter().collect(),
-        diverging.index_only.into_iter().collect(),
-    ))
+        uncommitted: uncommitted.differing.into_iter().collect(),
+        index_only: uncommitted.index_only.into_iter().collect(),
+    }
 }
 
 /// Paths mode: walk the user's paths, read each file, build a whole-file
@@ -284,16 +263,7 @@ fn resolve_paths(paths: &[PathBuf], root: &Path, collect_policy_scope: bool) -> 
     let mut reviewed_directories: BTreeSet<PathBuf> = BTreeSet::new();
 
     for (path, why) in rejected {
-        let reason = match why {
-            files::Rejected::Missing => {
-                FailureReason::Unreadable("no such file or directory".to_owned())
-            }
-            // The hint comes from `files::redirect_hint`, so `check` does not
-            // hold its own opinion about which command handles markdown.
-            files::Rejected::Unanalyzable => {
-                FailureReason::unsupported(&path, files::redirect_hint(&path))
-            }
-        };
+        let reason = FailureReason::from_rejected(&path, why);
         read_failures.insert(path, reason);
     }
 

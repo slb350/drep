@@ -104,8 +104,8 @@ pub async fn run(args: &InitArgs) -> Result<Exit> {
 /// the rendered `drep.toml`, depend on whose machine the suite ran on. It would
 /// also write to it.
 pub async fn run_with<W: Write>(out: &mut W, args: &InitArgs, auth_path: &Path) -> Result<Exit> {
-    let toplevel = match diff::run_git(&args.path, &["rev-parse", "--show-toplevel"]).await {
-        Ok(s) => s,
+    let root = match diff::repository_root(&args.path).await {
+        Ok(root) => root,
         Err(err) => {
             return Err(anyhow!(
                 "{} is not inside a git repository: {err}",
@@ -113,7 +113,6 @@ pub async fn run_with<W: Write>(out: &mut W, args: &InitArgs, auth_path: &Path) 
             ));
         }
     };
-    let root = PathBuf::from(toplevel);
 
     // Read before anything is written, so a broken store fails the command
     // rather than half-applying it.
@@ -185,8 +184,21 @@ pub(crate) fn existing_config(
     console: &mut dyn wizard::Console,
 ) -> Result<Option<bool>> {
     let path = root.join(crate::config::default_config_path());
-    if args.force || !path.exists() {
-        return Ok(Some(args.force));
+    // Inspect the directory entry without following symlinks: a dangling
+    // `drep.toml` symlink makes `path.exists()` return false while
+    // `persist_noclobber` later fails with `AlreadyExists` after storing keys.
+    if args.force {
+        return Ok(Some(true));
+    }
+    match std::fs::symlink_metadata(&path) {
+        Ok(_) => {}
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(Some(false)),
+        Err(err) => {
+            return Err(anyhow::anyhow!(
+                "could not inspect {}: {err}",
+                path.display()
+            ));
+        }
     }
 
     if !interactive {
@@ -242,11 +254,12 @@ pub(crate) fn describe(path: &Path) -> Vec<String> {
                     .unwrap_or("(unset)")
                     .to_string()
             };
-            let disabled = match entry.get("enabled").and_then(toml::Value::as_bool) {
-                Some(false) => " (disabled)",
-                _ => "",
+            let disabled = if crate::config::entry_is_enabled(entry) {
+                ""
+            } else {
+                " (disabled)"
             };
-            if entry.get("backend").and_then(toml::Value::as_str) == Some("codex") {
+            if crate::config::entry_is_codex(entry) {
                 format!(
                     "{} via ChatGPT/Codex subscription{disabled}",
                     field("model")
