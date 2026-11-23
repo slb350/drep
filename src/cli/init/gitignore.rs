@@ -79,11 +79,10 @@ impl Outcome {
 ///
 /// Writes nothing when git already ignores or already tracks the path.
 pub async fn ensure(root: &Path) -> Result<Outcome> {
-    let (tracked, ignored) = tokio::try_join!(is_tracked(root), is_ignored(root))?;
-    if tracked {
+    if is_tracked(root).await? {
         return Ok(Outcome::Tracked);
     }
-    if ignored {
+    if is_ignored(root).await? {
         return Ok(Outcome::AlreadyIgnored);
     }
     append(root)
@@ -167,7 +166,12 @@ fn append(root: &Path) -> Result<Outcome> {
     body.push_str(ENTRY);
     body.push('\n');
 
-    atomic_file::publish(&path, body.as_bytes(), Mode::Replace)
+    let mode = if created {
+        Mode::NoClobber
+    } else {
+        Mode::Replace
+    };
+    atomic_file::publish(&path, body.as_bytes(), mode)
         .map_err(|err| anyhow!("could not write {}: {err}", path.display()))?;
 
     Ok(if created {

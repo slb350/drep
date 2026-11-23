@@ -66,6 +66,6 @@ pub(crate) fn marker_names_path(workspace: &Path, name: &str, path: &Path) -> bo
                     .extension()
                     .is_some_and(|ext| ext.eq_ignore_ascii_case(extension))
         }
-        None => path.strip_prefix(workspace).ok() == Some(Path::new(name)),
+        None => path == workspace.join(name),
     }
 }

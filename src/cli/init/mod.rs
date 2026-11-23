@@ -187,8 +187,18 @@ pub(crate) fn existing_config(
     // Inspect the directory entry without following symlinks: a dangling
     // `drep.toml` symlink makes `path.exists()` return false while
     // `persist_noclobber` later fails with `AlreadyExists` after storing keys.
-    if args.force || std::fs::symlink_metadata(&path).is_err() {
-        return Ok(Some(args.force));
+    if args.force {
+        return Ok(Some(true));
+    }
+    match std::fs::symlink_metadata(&path) {
+        Ok(_) => {}
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(Some(false)),
+        Err(err) => {
+            return Err(anyhow::anyhow!(
+                "could not inspect {}: {err}",
+                path.display()
+            ));
+        }
     }
 
     if !interactive {

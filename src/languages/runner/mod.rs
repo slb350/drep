@@ -234,7 +234,7 @@ fn which_first_in(command: &str, path: &std::ffi::OsStr) -> Option<PathBuf> {
 /// and accidental discovery in unrelated dependency/build directories.
 pub(crate) struct ConfigCache {
     repository_root: PathBuf,
-    roots: std::collections::HashMap<(*const ToolSpec, PathBuf), Option<PathBuf>>,
+    roots: std::collections::HashMap<(&'static [&'static str], PathBuf), Option<PathBuf>>,
 }
 
 impl ConfigCache {
@@ -252,7 +252,7 @@ impl ConfigCache {
             self.repository_root.join(file)
         };
         let parent = file.parent()?;
-        let key = (std::ptr::from_ref(spec), parent.to_path_buf());
+        let key = (spec.config_files, parent.to_path_buf());
         if let Some(cached) = self.roots.get(&key) {
             return cached.clone();
         }

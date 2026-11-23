@@ -44,7 +44,7 @@ fn login_status_parser_requires_success_and_chatgpt_login_without_echoing_detail
     assert!(!api_err.to_string().contains("sk-secret"));
 
     assert_eq!(
-        parse_login_status(true, b""),
+        parse_login_status(true, b"Logged in using API key\n"),
         Err(DiagnosticError::NotChatGpt)
     );
     assert_eq!(
@@ -52,8 +52,20 @@ fn login_status_parser_requires_success_and_chatgpt_login_without_echoing_detail
         Err(DiagnosticError::NotChatGpt)
     );
     assert_eq!(
+        parse_login_status(true, b""),
+        Err(DiagnosticError::UnsupportedFormat)
+    );
+    assert_eq!(
+        parse_login_status(true, b"unexpected output\n"),
+        Err(DiagnosticError::UnsupportedFormat)
+    );
+    assert_eq!(
         parse_login_status(false, b"Logged in using ChatGPT\n"),
-        Err(DiagnosticError::NotChatGpt)
+        Err(DiagnosticError::Process)
+    );
+    assert_eq!(
+        parse_login_status(false, b"error: unknown flag --foo\n"),
+        Err(DiagnosticError::Process)
     );
     assert_eq!(
         parse_login_status(false, b""),
@@ -86,10 +98,7 @@ fn probe_reads_version_from_stdout_and_chatgpt_login_from_stderr() {
     let args_log = dir.path().join("args.txt");
     crate::test_support::write_executable(
         &executable,
-        format!(
-            "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{}'\nif [ \"$1\" = \"--version\" ]; then\n  printf 'warning: noisy stderr\\n' >&2\n  printf 'codex-cli 0.171.0\\n'\n  exit 0\nfi\nprintf 'Logged in using ChatGPT\\n' >&2\nexit 0\n",
-            args_log.display()
-        ),
+        "#!/bin/sh\nbase=$(dirname \"$0\")\nprintf '%s\\n' \"$*\" >> \"$base/args.txt\"\nif [ \"$1\" = \"--version\" ]; then\n  printf 'warning: noisy stderr\\n' >&2\n  printf 'codex-cli 0.171.0\\n'\n  exit 0\nfi\nprintf 'Logged in using ChatGPT\\n' >&2\nexit 0\n",
     );
 
     let status = probe(
@@ -260,8 +269,7 @@ fn diagnostic_executable(
     crate::test_support::write_executable(
         &executable,
         format!(
-            "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then\n  printf 'codex-cli 0.171.0\\n'\n  exit 0\nfi\nexec /bin/cat '{}'\n",
-            payload.display()
+            "#!/bin/sh\nbase=$(dirname \"$0\")\nif [ \"$1\" = \"--version\" ]; then\n  printf 'codex-cli 0.171.0\\n'\n  exit 0\nfi\nexec /bin/cat \"$base/login-{label}.txt\"\n"
         ),
     );
     executable

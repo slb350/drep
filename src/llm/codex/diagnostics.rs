@@ -184,16 +184,32 @@ pub(crate) fn parse_version(input: &[u8]) -> Result<String, DiagnosticError> {
 /// Interpret `codex login status` without retaining raw account details.
 ///
 /// Codex prints `Logged in using ChatGPT` on stderr (or stdout in future
-/// releases) when ChatGPT-managed login is active. API-key or logged-out states
-/// map to [`DiagnosticError::NotChatGpt`]; an empty nonzero exit is a process
-/// failure.
+/// releases) when ChatGPT-managed login is active. Recognized logged-out or
+/// non-ChatGPT authentication states map to [`DiagnosticError::NotChatGpt`];
+/// other nonzero exits map to [`DiagnosticError::Process`] and unrecognized
+/// zero exits map to [`DiagnosticError::UnsupportedFormat`].
 pub(crate) fn parse_login_status(success: bool, input: &[u8]) -> Result<(), DiagnosticError> {
-    if !success && input.is_empty() {
-        return Err(DiagnosticError::Process);
-    }
     let text = std::str::from_utf8(input).map_err(|_| DiagnosticError::UnsupportedFormat)?;
-    if success && text.lines().any(|line| line.trim() == CHATGPT_LOGIN_LINE) {
+    let mut saw_chatgpt = false;
+    let mut saw_other_auth = false;
+    for line in text.lines().map(str::trim) {
+        if line == CHATGPT_LOGIN_LINE {
+            saw_chatgpt = true;
+        } else if line == "Not logged in"
+            || line.starts_with("Logged in using ")
+            || line.starts_with("API key")
+        {
+            saw_other_auth = true;
+        }
+    }
+    if success && saw_chatgpt {
         return Ok(());
     }
-    Err(DiagnosticError::NotChatGpt)
+    if saw_other_auth {
+        return Err(DiagnosticError::NotChatGpt);
+    }
+    if !success {
+        return Err(DiagnosticError::Process);
+    }
+    Err(DiagnosticError::UnsupportedFormat)
 }

@@ -74,7 +74,7 @@ pub(crate) async fn run(
         let mut child_wait = std::pin::pin!(child.wait());
         let mut send_input = std::pin::pin!(send_input);
         let mut stdin_result = None;
-        let mut size_poll = tokio::time::interval(Duration::from_millis(100));
+        let mut size_poll = tokio::time::interval(Duration::from_millis(10));
         size_poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
         let status = loop {

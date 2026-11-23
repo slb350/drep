@@ -244,7 +244,10 @@ impl Cache {
             let _ = std::fs::remove_file(&path);
             return None;
         }
-        let mut bytes = Vec::with_capacity(usize::try_from(meta.len()).unwrap_or(0));
+        let mut bytes = Vec::new();
+        if let Ok(len) = usize::try_from(meta.len()) {
+            bytes.try_reserve_exact(len).ok()?;
+        }
         file.read_to_end(&mut bytes).ok()?;
         serde_json::from_slice(&bytes).ok()
     }
