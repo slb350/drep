@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- A `go vet` failure no longer prints `go list`'s reason raw. When `go list` cannot place a
+  requested directory in the workspace, as for a module `go.work` does not use, its message names
+  the directory unquoted, and its JSON escapes decode back into the directory's own bytes. A branch
+  adding a Go file under a directory whose name held an OSC 52 clipboard write put that write, and
+  the line break go adds to the message, into `drep check`'s failure block. The reason is now
+  bounded and stripped of control characters through the runner's `stream_detail`, as every other
+  tool stream already is.
 - The lockfile takes `url` 2.5.8 to 2.5.9 and `Cargo.toml` declares `url = "2.5.9"` as a floor, for
   `RUSTSEC-2026-0592` (alias `GHSA-hrj5-67jp-wqp9`), whose own record is the source for this: through
   2.5.8, `Url::origin()` handled a `blob:` URL by parsing its path as another URL and calling itself
