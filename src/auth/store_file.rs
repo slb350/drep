@@ -2,8 +2,9 @@
 
 use std::collections::BTreeMap;
 use std::fs;
-use std::io::Write;
 use std::path::{Path, PathBuf};
+
+use crate::atomic_file::{self, Mode};
 
 use super::{AuthError, AuthStore};
 
@@ -183,19 +184,10 @@ fn write_private_with(
     sync_parent: impl FnOnce(&Path) -> std::io::Result<()>,
 ) -> Result<(), AuthError> {
     let parent = temporary_parent(path);
-    let mut temporary = tempfile::NamedTempFile::new_in(parent)
-        .map_err(|err| AuthError::Write(path.to_path_buf(), err))?;
-    temporary
-        .write_all(body.as_bytes())
-        .map_err(|err| AuthError::Write(path.to_path_buf(), err))?;
-    temporary
-        .as_file()
-        .sync_all()
-        .map_err(|err| AuthError::Write(path.to_path_buf(), err))?;
-    restrict(temporary.path(), 0o600)?;
-    temporary
-        .persist(path)
-        .map_err(|err| AuthError::Write(path.to_path_buf(), err.error))?;
+    atomic_file::publish_with(path, body.as_bytes(), Mode::Replace, |tmp| {
+        set_mode(tmp, 0o600)
+    })
+    .map_err(|err| AuthError::Write(path.to_path_buf(), err))?;
     sync_parent(parent).map_err(|err| AuthError::Write(path.to_path_buf(), err))
 }
 
@@ -213,17 +205,14 @@ fn sync_directory(path: &Path) -> std::io::Result<()> {
 }
 
 pub(crate) fn temporary_parent(path: &Path) -> &Path {
-    path.parent()
-        .filter(|parent| !parent.as_os_str().is_empty())
-        .unwrap_or_else(|| Path::new("."))
+    atomic_file::parent_dir(path)
 }
 
-pub(crate) fn restrict(path: &Path, mode: u32) -> Result<(), AuthError> {
+fn set_mode(path: &Path, mode: u32) -> std::io::Result<()> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         fs::set_permissions(path, fs::Permissions::from_mode(mode))
-            .map_err(|err| AuthError::Write(path.to_path_buf(), err))
     }
 
     #[cfg(not(unix))]
@@ -234,6 +223,10 @@ pub(crate) fn restrict(path: &Path, mode: u32) -> Result<(), AuthError> {
         let _ = (path, mode);
         Ok(())
     }
+}
+
+pub(crate) fn restrict(path: &Path, mode: u32) -> Result<(), AuthError> {
+    set_mode(path, mode).map_err(|err| AuthError::Write(path.to_path_buf(), err))
 }
 
 #[cfg(test)]

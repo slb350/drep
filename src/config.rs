@@ -51,6 +51,7 @@ pub use backend::{BackendKind, LlmConfig, ReasoningEffort};
 // and `auth` both call these, and moving them was a file-size split, not a
 // change of contract.
 use env::{disabled_provider_indices, expand_env_except};
+pub(crate) use env::{entry_is_codex, entry_is_enabled};
 pub use env::{env_var_refs, env_var_refs_in, required_env_var_refs};
 
 pub const DEFAULT_MAX_REVIEW_ROUNDS: u32 = 3;

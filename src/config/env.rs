@@ -19,27 +19,36 @@ use toml::Value;
 
 use super::{ConfigError, LlmConfig};
 
+/// Whether a raw `[[llm]]` table is enabled in the failover chain.
+///
+/// The default comes from `LlmConfig::default()` rather than a literal `true`,
+/// so every raw-tree reader (`config::env`, `doctor`, `init`) agrees with serde
+/// about what an absent `enabled` key means.
+pub(crate) fn entry_is_enabled(entry: &Value) -> bool {
+    entry
+        .get("enabled")
+        .and_then(Value::as_bool)
+        .unwrap_or_else(|| LlmConfig::default().enabled)
+}
+
+/// Whether a raw `[[llm]]` table names the Codex backend.
+pub(crate) fn entry_is_codex(entry: &Value) -> bool {
+    entry.get("backend").and_then(Value::as_str) == Some("codex")
+}
+
 /// The positions of the `[[llm]]` tables that carry `enabled = false`.
 ///
 /// Read from the raw tree because expansion runs before deserialization - and
 /// it has to, since an unset variable must be reported with the variable's name
-/// rather than as a downstream parse failure inside the substituted text. The
-/// default comes from `LlmConfig::default()` so this cannot disagree with serde
-/// about what an absent `enabled` key means.
+/// rather than as a downstream parse failure inside the substituted text.
 pub(super) fn disabled_provider_indices(tree: &Value) -> BTreeSet<usize> {
-    let default_enabled = LlmConfig::default().enabled;
     tree.get("llm")
         .and_then(Value::as_array)
         .map(|entries| {
             entries
                 .iter()
                 .enumerate()
-                .filter(|(_, entry)| {
-                    !entry
-                        .get("enabled")
-                        .and_then(Value::as_bool)
-                        .unwrap_or(default_enabled)
-                })
+                .filter(|(_, entry)| !entry_is_enabled(entry))
                 .map(|(index, _)| index)
                 .collect()
         })

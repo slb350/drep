@@ -343,10 +343,17 @@ fn the_message_names_the_counts_that_disagree() {
         found[0].message
     );
     let found = of_kind("[text](url", Check::LinkSyntaxInvalid);
-    assert!(
-        found[0].message.contains("1 `(` against 0 `)`"),
-        "{}",
-        found[0].message
+    assert_eq!(
+        found[0].message,
+        "unbalanced link syntax: 1 `(` against 0 `)`"
+    );
+    // Balanced parentheses after a surviving `](` must stay silent, and extra
+    // closing parentheses must report both counts accurately.
+    silent("](a) [", Check::LinkSyntaxInvalid);
+    let found = of_kind("](a)) [", Check::LinkSyntaxInvalid);
+    assert_eq!(
+        found[0].message,
+        "unbalanced link syntax: 1 `(` against 2 `)`"
     );
 }
 

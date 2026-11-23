@@ -28,6 +28,7 @@ use std::path::Path;
 
 use anyhow::{Result, anyhow};
 
+use crate::atomic_file::{self, Mode};
 use crate::diff;
 
 /// The entry written, and the comment that explains it.
@@ -166,7 +167,7 @@ fn append(root: &Path) -> Result<Outcome> {
     body.push_str(ENTRY);
     body.push('\n');
 
-    std::fs::write(&path, body)
+    atomic_file::publish(&path, body.as_bytes(), Mode::Replace)
         .map_err(|err| anyhow!("could not write {}: {err}", path.display()))?;
 
     Ok(if created {

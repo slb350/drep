@@ -7,6 +7,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- Redacted endpoint credentials (`user:password@`) across all remaining `Debug` and error paths
+  (`AuthStore::Debug`, `AuthStore::set` errors, `wizard::Plan::Debug`, and `ChoiceBackend::Debug`).
+- Bounded Codex `MalformedFinal` error excerpts (`DETAIL_EXCERPT_CHARS`) and preserved structured
+  `ReadBoundedError` variants across Codex capture readers.
+- Made `drep init`'s `.gitignore` updates atomic via a private sibling temporary file, closing the
+  in-place truncation and symlink-swap window, and fixed the dangling-symlink pre-settlement check
+  in `drep init` so existing dangling symlinks are settled before keys are stored.
+
+### Fixed
+
+- Updated `.pre-commit-hooks.yaml` `types_or` to cover all 23 registered languages introduced in
+  v3.0 (adding `c`, `c++`, `c#`, `dockerfile`, `elixir`, `groovy`, `java`, `kotlin`, `lua`, `php`,
+  `ruby`, `scala`, `shell`, `sql`, `svelte`, `swift`, `terraform`, and `vue`) and pinned its
+  coverage in `tests/published_hooks.rs`.
+- Fixed `diff::uncommitted::flagged_differences` double-joining a relative `root` onto paths
+  already prefixed with `root`.
+- Made `review_budget::Budget::reset` tolerate concurrent lease removals (`NotFound`) and compute
+  retention in a single `read_dir` pass.
+- Updated `taiki-e/install-action` in `.github/build-setup.yml` to `v2.90.6` and regenerated
+  `.github/workflows/release.yml` via `dist generate`.
+
+### Changed
+
+- Pooled `open_agent::Client` instances inside `LlmClient` to reuse HTTP/TLS connections across
+  files while clearing conversation history on every clean completion and discarding clients on
+  transport errors.
+- Reduced git subprocess overhead in `drep check --staged` and `--diff` by sharing a single
+  working-tree view, avoiding eager `has_head` probes, streaming filtered diff parsing, and running
+  independent `git` queries concurrently in `Budget::for_repo`, `gitignore::ensure`, and
+  `hooks::install`.
+- Gated response-cache eviction on actual writes, offloaded eviction via `spawn_blocking`, switched
+  `Cache::get` to a single open/stat read, and pre-hashed `(system_prompt, content)` once per
+  failover chain.
+- Memoized deterministic tool workspace root discovery (`ConfigCache`), merged shared cross-language
+  tools (`eslint`, `cppcheck`) into one invocation per workspace, scanned glob config markers with a
+  single `read_dir`, and parsed `drep.toml` once in `drep doctor`.
+- Bounded payload rendering memory (`render_within`), cached per-language system prompts, avoided
+  cloning the model-quirks registry on cache hits, avoided allocating on clean `json_parsing`,
+  `acknowledgements`, `files::is_ignored_dir`, and `languages::detect` lookups, accelerated
+  `docs` linting, and deferred Tokio runtime creation for synchronous CLI subcommands.
+- Consolidated atomic sibling-temp file publication (`atomic_file`), named-path rejection mapping
+  (`FailureReason::from_rejected`), raw TOML entry predicates, and `diff::repository_root`.
+
 ## [3.1.9] - 2026-11-22
 
 ### Changed

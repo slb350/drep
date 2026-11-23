@@ -211,17 +211,23 @@ fn kind(rest: &str, paragraph: bool) -> Option<End> {
     (!paragraph && is_tag_alone(rest)).then_some(End::Blank)
 }
 
-/// Whether `text` starts with a tag name from `names`, then the end of the line
-/// or one of `followers`.
+/// Whether `text` starts with a tag name from sorted ASCII slice `names`, then
+/// the end of the line or one of `followers`.
 fn named(text: &str, names: &[&str], followers: &[&str]) -> bool {
     let end = text
         .bytes()
         .position(|b| !b.is_ascii_alphanumeric())
         .unwrap_or(text.len());
     names
-        .iter()
-        .any(|name| text[..end].eq_ignore_ascii_case(name))
+        .binary_search_by(|name| cmp_ascii_case(name, &text[..end]))
+        .is_ok()
         && (end == text.len() || followers.iter().any(|f| text[end..].starts_with(f)))
+}
+
+fn cmp_ascii_case(a: &str, b: &str) -> std::cmp::Ordering {
+    a.bytes()
+        .map(|byte| byte.to_ascii_lowercase())
+        .cmp(b.bytes().map(|byte| byte.to_ascii_lowercase()))
 }
 
 /// Whether `rest` is one complete open or closing tag, then spaces and tabs

@@ -19,6 +19,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, anyhow};
 
+use crate::atomic_file::{self, Mode};
 use crate::diff;
 
 /// The marker every drep-managed hook and chainer begins with.
@@ -441,30 +442,17 @@ fn ensure_executable<W: Write>(out: &mut W, path: &Path) -> Result<()> {
 
 /// Publish a byte-for-byte backup without replacing an earlier recovery copy.
 fn write_backup(path: &Path, body: &[u8]) -> Result<()> {
-    let parent = path
-        .parent()
-        .ok_or_else(|| anyhow!("backup path {} has no parent", path.display()))?;
-    let mut temporary = tempfile::NamedTempFile::new_in(parent)
-        .with_context(|| format!("could not back up to {}", path.display()))?;
-    temporary
-        .write_all(body)
-        .with_context(|| format!("could not back up to {}", path.display()))?;
-    temporary
-        .as_file()
-        .sync_all()
-        .with_context(|| format!("could not back up to {}", path.display()))?;
-    temporary.persist_noclobber(path).map_err(|err| {
-        if err.error.kind() == std::io::ErrorKind::AlreadyExists {
-            anyhow::Error::new(err.error).context(format!(
+    atomic_file::publish(path, body, Mode::NoClobber).map_err(|err| {
+        if err.kind() == std::io::ErrorKind::AlreadyExists {
+            anyhow::Error::new(err).context(format!(
                 "could not back up to {}; move the existing backup and retry",
                 path.display()
             ))
         } else {
-            anyhow::Error::new(err.error)
+            anyhow::Error::new(err)
                 .context(format!("could not publish backup to {}", path.display()))
         }
-    })?;
-    Ok(())
+    })
 }
 
 /// Write `body` to `path` and make it executable, atomically.
@@ -475,23 +463,8 @@ fn write_backup(path: &Path, body: &[u8]) -> Result<()> {
 /// exits 0 and waves every push through. A rename is atomic on the same
 /// filesystem, so a hook is either the old one or the new one.
 fn write_executable(path: &Path, body: &str) -> Result<()> {
-    let parent = path
-        .parent()
-        .ok_or_else(|| anyhow!("hook path {} has no parent", path.display()))?;
-    let mut temporary = tempfile::NamedTempFile::new_in(parent)
-        .with_context(|| format!("could not write hook {}", path.display()))?;
-    temporary
-        .write_all(body.as_bytes())
-        .with_context(|| format!("could not write hook {}", path.display()))?;
-    set_executable(temporary.path())?;
-    temporary
-        .as_file()
-        .sync_all()
-        .with_context(|| format!("could not write hook {}", path.display()))?;
-    temporary.persist(path).map_err(|err| {
-        anyhow::Error::new(err.error).context(format!("could not install hook {}", path.display()))
-    })?;
-    Ok(())
+    atomic_file::publish_with(path, body.as_bytes(), Mode::Replace, set_executable_io)
+        .with_context(|| format!("could not install hook {}", path.display()))
 }
 
 /// Make `path` executable. A no-op where the platform has no such bit.
@@ -502,19 +475,20 @@ fn write_executable(path: &Path, body: &str) -> Result<()> {
 /// platform, so every mutation of it survives by construction and shows up in
 /// `cargo mutants` as a finding no test can ever address.
 fn set_executable(path: &Path) -> Result<()> {
+    set_executable_io(path).with_context(|| format!("could not chmod {}", path.display()))
+}
+
+fn set_executable_io(path: &Path) -> std::io::Result<()> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let mut perms = std::fs::metadata(path)
-            .with_context(|| format!("could not stat {}", path.display()))?
-            .permissions();
+        let mut perms = std::fs::metadata(path)?.permissions();
         // `| 0o111`, not `| 0o755`: adding the execute bits is the whole
         // requirement, and OR-ing 0o755 onto a deliberately-private 0o600 file
         // grants group and other read access to a file in what may be a shared
         // hooks directory.
         perms.set_mode(perms.mode() | 0o111);
-        std::fs::set_permissions(path, perms)
-            .with_context(|| format!("could not chmod {}", path.display()))?;
+        std::fs::set_permissions(path, perms)?;
     }
     #[cfg(not(unix))]
     let _ = path;

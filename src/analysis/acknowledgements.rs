@@ -1,13 +1,13 @@
 //! Persistent, source-sensitive acknowledgement of rejected LLM findings.
 
 use std::collections::BTreeSet;
-use std::io::Write;
 use std::path::Path;
 
 use anyhow::{Context, Result, anyhow};
 use serde::{Deserialize, Serialize};
 
 use crate::analysis::findings::Finding;
+use crate::atomic_file::{self, Mode};
 use crate::diff::hunks::Hunk;
 
 pub const DEFAULT_PATH: &str = ".drep/acknowledgements.toml";
@@ -74,17 +74,7 @@ impl Store {
         std::fs::create_dir_all(parent)
             .with_context(|| format!("could not create {}", parent.display()))?;
         let rendered = toml::to_string_pretty(self).context("could not render acknowledgements")?;
-        let mut temporary = tempfile::NamedTempFile::new_in(parent).with_context(|| {
-            format!("could not create a temporary file in {}", parent.display())
-        })?;
-        temporary
-            .write_all(rendered.as_bytes())
-            .and_then(|()| temporary.flush())
-            .and_then(|()| temporary.as_file().sync_all())
-            .with_context(|| format!("could not write {}", path.display()))?;
-        temporary
-            .persist(&path)
-            .map_err(|err| err.error)
+        atomic_file::publish(&path, rendered.as_bytes(), Mode::Replace)
             .with_context(|| format!("could not publish {}", path.display()))?;
         Ok(())
     }

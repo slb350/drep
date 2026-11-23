@@ -236,9 +236,13 @@ pub fn analyze(path: &Path, content: &str) -> Vec<Finding> {
     let mut chars: Vec<char> = Vec::new();
     let mut scratch: Vec<char> = Vec::new();
     for (line, html) in lines.iter().zip(&html) {
+        lines::trailing_whitespace(line, &file_path, &mut findings);
+        if line.in_code {
+            continue;
+        }
         chars.clear();
         chars.extend(line.text.chars());
-        lines::check(line, &chars, &file_path, &mut findings);
+        lines::check_prose(line, &chars, &file_path, &mut findings);
         links::check(line, &chars, html, &mut scratch, &file_path, &mut findings);
     }
     blocks::check(&lines, &fences, &file_path, &mut findings);

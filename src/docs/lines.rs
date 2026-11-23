@@ -1,13 +1,17 @@
 //! Checks that need one line and nothing else.
 //!
 //! Five of the ten. Three consult the fence mask and two deliberately do not;
-//! the rule deciding which is in [`check`]'s doc comment, because it is the
+//! the rule deciding which is in [`check_prose`]'s doc comment, because it is the
 //! kind of asymmetry that looks like an oversight until it is written down.
 
 use crate::analysis::findings::Finding;
 use crate::docs::{Check, LONG_LINE_MAX, Line, finding};
 
-/// Run the per-line checks over `line`, pushing onto `out`.
+/// Run the prose-only per-line checks over a non-code `line`, pushing onto
+/// `out`.
+///
+/// Trailing whitespace runs separately via [`trailing_whitespace`] so
+/// code-block lines avoid decoding into `Vec<char>`.
 ///
 /// **Which checks respect a code fence**: the ones whose advice would be wrong
 /// inside one.
@@ -25,41 +29,43 @@ use crate::docs::{Check, LONG_LINE_MAX, Line, finding};
 /// - Trailing whitespace: fires everywhere, because its advice is right
 ///   everywhere. Whitespace before a newline is junk in prose and junk in a
 ///   code sample alike, and unlike a tab it carries no meaning in either.
-pub fn check(line: &Line<'_>, chars: &[char], file_path: &str, out: &mut Vec<Finding>) {
-    trailing_whitespace(line, chars, file_path, out);
-    if !line.in_code {
-        tab_character(line, chars, file_path, out);
-        long_line(line, chars, file_path, out);
-        if !line.in_html {
-            heading(line, chars, file_path, out);
-        }
+pub fn check_prose(line: &Line<'_>, chars: &[char], file_path: &str, out: &mut Vec<Finding>) {
+    tab_character(line, chars, file_path, out);
+    long_line(line, chars, file_path, out);
+    if !line.in_html {
+        heading(line, chars, file_path, out);
     }
 }
 
 /// Spaces or tabs immediately before the line ending.
 ///
+/// Fires everywhere, including inside code fences and HTML blocks: whitespace
+/// before a newline is junk in prose and code samples alike. Checks `line.text`
+/// directly so clean lines never count characters and code lines skip
+/// `Vec<char>` decoding altogether.
+///
 /// The column is the first character of the trailing run, so a fix knows where
 /// to cut. Only spaces and tabs count: a trailing non-breaking space is a
 /// character the author typed on purpose (or a bug of a different kind), and
 /// silently deleting it is not this check's call.
-fn trailing_whitespace(line: &Line<'_>, chars: &[char], file_path: &str, out: &mut Vec<Finding>) {
-    let kept = chars
-        .iter()
-        .rposition(|c| *c != ' ' && *c != '\t')
-        .map_or(0, |last| last + 1);
-    if kept == chars.len() {
+pub fn trailing_whitespace(line: &Line<'_>, file_path: &str, out: &mut Vec<Finding>) {
+    let trimmed = line.text.trim_end_matches([' ', '\t']);
+    if trimmed.len() == line.text.len() {
         return;
     }
+    // Spaces and tabs are single-byte ASCII, so byte delta equals character count.
+    let trailing = line.text.len() - trimmed.len();
+    let kept = trimmed.chars().count();
     out.push(finding(
         Check::TrailingWhitespace,
         file_path,
         line.number,
         kept as u32 + 1,
-        format!("{} trailing whitespace character(s)", chars.len() - kept),
+        format!("{trailing} trailing whitespace character(s)"),
     ));
 }
 
-/// A literal tab anywhere in the line. See [`check`] for why fences are exempt.
+/// A literal tab anywhere in the line. See [`check_prose`] for why fences are exempt.
 fn tab_character(line: &Line<'_>, chars: &[char], file_path: &str, out: &mut Vec<Finding>) {
     let Some(index) = chars.iter().position(|c| *c == '\t') else {
         return;

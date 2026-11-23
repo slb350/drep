@@ -352,3 +352,35 @@ fn run_from_a_subdirectory_the_staged_gate_reviews_the_whole_commit_and_names_fi
         );
     }
 }
+
+#[test]
+fn synchronous_cli_commands_run_through_the_binary() {
+    let dir = TempDir::new().expect("temp dir");
+    let root = dir.path();
+    let doc = root.join("BROKEN.md");
+    std::fs::write(&doc, BROKEN_README).expect("write broken doc");
+
+    let lint = common::without_outer_git(env!("CARGO_BIN_EXE_drep"), root)
+        .args(["lint-docs", "--strict", "BROKEN.md"])
+        .output()
+        .expect("lint-docs must run");
+    assert_eq!(lint.status.code(), Some(1));
+    assert!(
+        String::from_utf8_lossy(&lint.stdout).contains("missing_space_after_heading"),
+        "stdout: {}",
+        String::from_utf8_lossy(&lint.stdout)
+    );
+
+    let auth = common::without_outer_git(env!("CARGO_BIN_EXE_drep"), root)
+        .env("DREP_AUTH_PATH", root.join("auth.toml"))
+        .args(["auth", "list"])
+        .output()
+        .expect("auth list must run");
+    assert_eq!(auth.status.code(), Some(0));
+
+    let ack = common::without_outer_git(env!("CARGO_BIN_EXE_drep"), root)
+        .args(["acknowledge", "not-a-fingerprint"])
+        .output()
+        .expect("acknowledge must run");
+    assert_eq!(ack.status.code(), Some(2));
+}

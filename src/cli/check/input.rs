@@ -263,16 +263,7 @@ fn resolve_paths(paths: &[PathBuf], root: &Path, collect_policy_scope: bool) -> 
     let mut reviewed_directories: BTreeSet<PathBuf> = BTreeSet::new();
 
     for (path, why) in rejected {
-        let reason = match why {
-            files::Rejected::Missing => {
-                FailureReason::Unreadable("no such file or directory".to_owned())
-            }
-            // The hint comes from `files::redirect_hint`, so `check` does not
-            // hold its own opinion about which command handles markdown.
-            files::Rejected::Unanalyzable => {
-                FailureReason::unsupported(&path, files::redirect_hint(&path))
-            }
-        };
+        let reason = FailureReason::from_rejected(&path, why);
         read_failures.insert(path, reason);
     }
 
